@@ -1,2 +1,2 @@
-# hola
+# ¡Hola!
 Home Lab automation
