@@ -1,2 +1,2 @@
-# ¡Hola!
+# ¡Hola! CLI
 Home Lab automation
