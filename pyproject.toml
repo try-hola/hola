@@ -1,0 +1,53 @@
+[tool.poetry]
+name = "hola"
+version = "0.1.0"
+description = "Hola application management platform"
+authors = ["Your Name <your.email@example.com>"]
+# Remove the packages field since we're using path dependencies
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+# Define workspace packages as path dependencies
+hola_server = {path = "hola_server", develop = true}
+hola_cli = {path = "hola_cli", develop = true}
+hola_shared = {path = "hola_shared", develop = true}
+hola_client_sdk = {path = "hola_client_sdk", develop = true}
+pydantic-settings = "^2.9.1"
+pytest-watch = "^4.2.0"
+psutil = "^7.0.0"
+python-multipart = "^0.0.20"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+pytest-cov = "^6.1.1"
+pytest-asyncio = "^0.26.0"
+openapi-python-client = "^0.24.3"
+black = "^25.1.0"
+isort = "^6.0.1"
+
+# Add some useful scripts for managing the workspace
+pydantic-factories = "^1.17.3"
+polyfactory = "^2.21.0"
+requests = "^2.32.3"
+[tool.poetry.scripts]
+format = "black . && isort ."
+lint = "black --check . && isort --check ."
+test = "pytest"
+test-cov = "pytest --cov=hola_server --cov=hola_cli --cov=hola_shared --cov-report=term --cov-report=html"
+test-watch = "ptw"
+
+[tool.pytest.ini_options]
+testpaths = ["hola_server/tests", "hola_cli/tests", "hola_shared/tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "integration: marks tests as integration tests (select with -m integration)",
+    "unit: marks tests as unit tests (select with -m unit)"
+]
+asyncio_default_fixture_loop_scope = "function"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
