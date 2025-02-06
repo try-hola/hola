@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    // Enable latest features
+    "lib": ["ESNext", "DOM"], // Specifies which library files to include in the compilation.
+    "target": "ESNext", // Sets the target ECMAScript version for the output.
+    "module": "ESNext", // Specifies the module system to use.
+    "moduleDetection": "force", // Forces TypeScript to treat files as modules regardless of the file content.
+    "jsx": "react-jsx", // Enables the new JSX transform in React.
+    "allowJs": true, // Permits JavaScript files to be compiled.
+
+    // Bundler mode
+    "moduleResolution": "bundler", // Uses bundler-like logic for resolving modules.
+    "allowImportingTsExtensions": true, // Allows importing TypeScript files with their extensions.
+    "verbatimModuleSyntax": true, // Preserves original module syntax in the output.
+    "noEmit": true, // Prevents emitting output files.
+
+    // Best practices
+    "strict": true, // Enables all strict type-checking options.
+    "skipLibCheck": true, // Skips type checking of all declaration files.
+    "noFallthroughCasesInSwitch": true, // Disallows fall-through between switch cases.
+
+    // Some stricter flags (disabled by default)
+    "noUnusedLocals": false, // Does not error on unused local variables.
+    "noUnusedParameters": false, // Does not error on unused function parameters.
+    "noPropertyAccessFromIndexSignature": false // Allows property access from index signatures directly.
+  }
+}
