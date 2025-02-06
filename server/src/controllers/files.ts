@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import multer, { type Multer } from "multer";
 import path from "path";
 import fs from "fs-extra";
@@ -13,19 +13,21 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 export const uploadFile = upload.single("file");
 
-export const handleFileUpload = async (req: Request, res: Response) => {
+export const handleFileUpload: RequestHandler = async (req, res) => {
   const { appName } = req.params;
   const { filePath } = req.body;
-  const file = req.file as Express.Multer.File | undefined;
+  const file = req.file
 
   if (!appName || !filePath || !file) {
     logEvent("UPLOAD", "error", `Missing required fields or file for ${appName}`);
-    return res.status(400).json({ error: "Missing required fields or file" });
+    res.status(400).json({ error: "Missing required fields or file" });
+    return;
   }
 
   if (filePath.includes("..")) {
     logEvent("SECURITY", "warning", `Invalid filePath (path traversal attempt) for ${appName}: ${filePath}`);
-    return res.status(400).json({ error: "Invalid filePath: Path traversal detected" });
+    res.status(400).json({ error: "Invalid filePath: Path traversal detected" });
+    return;
   }
 
   const appBasePath = path.join("/deployments", appName);
@@ -36,10 +38,10 @@ export const handleFileUpload = async (req: Request, res: Response) => {
     await fs.writeFile(targetFilePath, file.buffer);
 
     logEvent("UPLOAD", "info", `File uploaded successfully`, { file: file.originalname, path: targetFilePath, size: file.size });
-    return res.status(201).json({ message: "File uploaded successfully", path: targetFilePath });
+    res.status(201).json({ message: "File uploaded successfully", path: targetFilePath });
   } catch (err) {
     logEvent("UPLOAD", "error", `Failed to save ${file.originalname} to ${targetFilePath}`, { error: err });
-    return res.status(500).json({ error: "File upload failed" });
+    res.status(500).json({ error: "File upload failed" });
   }
 };
 

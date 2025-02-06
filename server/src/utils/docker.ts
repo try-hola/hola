@@ -1,38 +1,61 @@
-import type { Response } from "express";
 import { spawn } from "child_process";
-import { sendUpdate } from "./updates";
-import { v4 as uuidv4 } from "uuid";
-import { logEvent } from "./logger";
+import { logEvent } from "../utils/logger";
+import type { Response } from "express";
 
-export const runDockerCommand = (res: Response, taskType: string, args: string[], appName: string, rollback = false) => {
-  const taskId = uuidv4();
+export const runDockerCommand = async (
+  res: Response | null,
+  taskId: string,
+  taskType: string,
+  args: string[],
+  appName?: string
+): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const commandString = `docker compose ${args.join(" ")}${appName ? ` ${appName}` : ''}`;
+    logEvent("TASK", "info", `Running: ${commandString}`, { taskId, taskType });
 
-  logEvent("TASK", "info", `Starting ${taskType} task for ${appName}...`, { taskId });
+    // Spawn Docker process
+    const dockerProcess = spawn("docker", ["compose", ...args, ...(appName ? [appName] : [])]);
 
-  sendUpdate(res, taskId, taskType, "progress", `Starting ${taskType} for ${appName}...`, 1, 3);
+    // Stream output (SSE & STDOUT)
+    const sendOutput = (data: Buffer, isError: boolean = false) => {
+      const message = data.toString().trim();
+      if (message) {
+        logEvent("TASK", isError ? "error" : "progress", message, { taskId, taskType });
+        if (res) {
+          res.write(`data: ${JSON.stringify({ taskId, taskType, status: isError ? "error" : "progress", message })}\n\n`);
+        }
+      }
+    };
 
-  const dockerProcess = spawn("docker", ["compose", ...args, appName]);
+    dockerProcess.stdout?.on("data", (data) => sendOutput(data));
+    dockerProcess.stderr?.on("data", (data) => sendOutput(data, true));
 
-  dockerProcess.stdout.on("data", (data) => {
-    sendUpdate(res, taskId, taskType, "progress", data.toString().trim());
-  });
+    dockerProcess.on("close", (code) => {
+      if (code === 0) {
+        logEvent("TASK", "info", `${taskType}${appName ? ` for ${appName}` : ''} completed successfully!`, { taskId, taskType });
+        if (res) {
+          res.write(`data: ${JSON.stringify({ taskId, taskType, status: "completed", message: `${taskType}${appName ? ` for ${appName}` : ''} completed successfully!` })}\n\n`);
+          res.end();
+        }
 
-  dockerProcess.stderr.on("data", (data) => {
-    sendUpdate(res, taskId, taskType, "error", data.toString().trim());
-  });
+        resolve(dockerProcess.stdout.read()?.toString() || '');
+      } else {
+        logEvent("TASK", "error", `${taskType}${appName ? ` for ${appName}` : ''} failed with exit code ${code}`, { taskId, taskType });
+        if (res) {
+          res.write(`data: ${JSON.stringify({ taskId, taskType, status: "failed", message: `${taskType} failed with exit code ${code}` })}\n\n`);
+          res.end();
+        }
+        reject(new Error(`Docker command failed with exit code ${code}`));
+      }
+    });
 
-  dockerProcess.on("close", (code) => {
-    if (code === 0) {
-      sendUpdate(res, taskId, taskType, "completed", `${taskType} for ${appName} completed successfully!`);
-    } else {
-      sendUpdate(res, taskId, taskType, "failed", `${taskType} for ${appName} failed with exit code ${code}`);
+    // Handle client disconnect
+    if (res) {
+      res.req.on("close", () => {
+        logEvent("TASK", "warning", `Client disconnected during ${taskType}${appName ? ` for ${appName}` : ''}.`, { taskId });
+        dockerProcess.kill("SIGINT");
+      });
     }
-    res.end();
-  });
-
-  res.req.on("close", () => {
-    logEvent("TASK", "warning", `Client disconnected during ${taskType} for ${appName}.`, { taskId });
-    dockerProcess.kill("SIGINT");
   });
 };
 

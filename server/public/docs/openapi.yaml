@@ -1,0 +1,256 @@
+openapi: 3.0.1
+info:
+  title: Hola API
+  version: "1.0.0"
+servers:
+  - url: http://localhost:{port}
+    description: Local server
+    variables:
+      port:
+        default: "3000"
+paths:
+  /api/apps:
+    post:
+      summary: Deploy an application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                appName:
+                  type: string
+              required:
+                - appName
+      responses:
+        "200":
+          description: App deployment initiated (SSE stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Missing app name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+    get:
+      summary: List all deployed applications
+      responses:
+        "200":
+          description: List of applications retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apps:
+                    type: array
+                    items:
+                      type: string
+        "500":
+          description: Failed to list applications
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/apps/{appName}:
+    put:
+      summary: Upgrade an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Upgrade initiated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+    get:
+      summary: Get details about a deployed application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application details retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  details:
+                    type: object
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to get application details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+    delete:
+      summary: Remove a deployed application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application removed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "500":
+          description: Failed to remove application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/apps/{appName}/files:
+    post:
+      summary: Upload a file for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                filePath:
+                  type: string
+              required:
+                - file
+                - filePath
+      responses:
+        "201":
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  path:
+                    type: string
+        "400":
+          description: Missing fields or file / invalid filePath
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: File upload failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/apps/{appName}/start:
+    post:
+      summary: Start an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application started successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "500":
+          description: Failed to start application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/apps/{appName}/stop:
+    post:
+      summary: Stop an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application stopped successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "500":
+          description: Failed to stop application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
