@@ -14,10 +14,8 @@ export const deployApp: RequestHandler = (req, res) => {
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
 
-  sendUpdate(res, "progress", `Starting deployment for ${appName}...`, 1, 3);
-
   // Run Docker Compose Up
-  runDockerCommand(res, ["up", "-d"], appName, false);
+  runDockerCommand(res, "DEPLOY", ["up", "-d"], appName, false);
 };
 
 export const upgradeApp: RequestHandler = (req, res) => {
