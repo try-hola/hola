@@ -4,10 +4,14 @@ import dotenv from "dotenv";
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
+import { PORT, STORAGE_ROOT } from "./config";
+import fs from "fs-extra";
 
 dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 3000;
+
+// Ensure storage directory exists
+fs.ensureDirSync(STORAGE_ROOT);
 
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, "../public")));
@@ -24,4 +28,5 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
   console.log(`📄 API Docs available at http://localhost:${PORT}/api-docs`);
+  console.log(`📁 Storage root: ${STORAGE_ROOT}`);
 });

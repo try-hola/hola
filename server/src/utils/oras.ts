@@ -1,9 +1,9 @@
 import { EventEmitter } from "events";
 import { spawn } from "child_process";
-import type { Response } from "express";
 
-interface DockerOptions {
-  cwd?: string;
+interface OrasOptions {
+  outputDir?: string;
+  version?: string;
 }
 
 interface StatusUpdate {
@@ -13,37 +13,35 @@ interface StatusUpdate {
   message: string;
 }
 
-export class DockerRunner extends EventEmitter {
+export class OrasRunner extends EventEmitter {
   async runCommand(
     taskId: string,
     taskType: string,
-    args: string[],
+    registry: string,
     appName: string,
-    options: DockerOptions = {}
+    options: OrasOptions = {}
   ): Promise<void> {
+    const { outputDir, version = "latest" } = options;
+    const bundleName = `${appName}:${version}`;
+    
     this.emit("status", {
       taskId,
       taskType,
       status: "starting",
-      message: `Running docker-compose ${args.join(" ")} for ${appName}`
+      message: `Downloading ${bundleName} from ${registry}`
     } as StatusUpdate);
 
     return new Promise((resolve, reject) => {
-      const childProcess = spawn("docker-compose", args, {
-        cwd: options.cwd,
-        env: { ...process.env, PATH: process.env.PATH }
-      });
+      const args = [
+        "pull",
+        `${registry}/${bundleName}`,
+        "--output",
+        outputDir || "."
+      ];
 
-      childProcess.stdout.on("data", (data) => {
-        this.emit("status", {
-          taskId,
-          taskType,
-          status: "running",
-          message: data.toString()
-        } as StatusUpdate);
-      });
-
-      childProcess.on("error", (error) => {
+      const process = spawn("oras", args);
+      
+      process.on("error", (error) => {
         this.emit("status", {
           taskId,
           taskType,
@@ -53,20 +51,19 @@ export class DockerRunner extends EventEmitter {
         reject(error);
       });
 
-      childProcess.on("close", (code) => {
+      process.on("close", (code) => {
         if (code === 0) {
           this.emit("status", {
             taskId,
             taskType,
             status: "complete",
-            message: `Docker compose command completed successfully`
+            message: `Successfully downloaded ${bundleName}`
           } as StatusUpdate);
           resolve();
         } else {
-          reject(new Error(`Docker compose command failed with code ${code}`));
+          reject(new Error(`Oras command failed with code ${code}`));
         }
       });
     });
   }
 }
-

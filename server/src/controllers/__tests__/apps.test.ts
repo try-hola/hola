@@ -1,11 +1,11 @@
 import { describe, expect, test, mock, beforeEach } from "bun:test";
 import { DockerRunner } from "../../utils/docker";
+import { OrasRunner } from "../../utils/oras";
 import { deployApp } from "../apps";
-import { sendUpdate } from "../../utils/updates";
-import { v4 as uuidv4 } from "uuid";
 import { EventEmitter } from "events";
+import { PATHS, ORAS_REGISTRY } from "../../config";
 
-// Mock uuid to get consistent taskIds
+// Mock uuid for consistent taskIds
 mock.module("uuid", () => ({
   v4: () => "mock-task-id"
 }));
@@ -14,44 +14,75 @@ describe("deployApp", () => {
   let mockReq: any;
   let mockRes: any;
   let mockDocker: DockerRunner;
+  let mockOras: OrasRunner;
+  let mockDockerCommand: ReturnType<typeof mock>;
+  let mockOrasCommand: ReturnType<typeof mock>;
 
   beforeEach(() => {
-    // Setup mock request and response
+    // Setup request mock
     mockReq = {
-      body: { appName: "test-app" }
+      body: { 
+        appName: "test-app",
+        version: "latest"
+      }
     };
 
+    // Setup response mock with SSE methods
     mockRes = {
       setHeader: mock(() => {}),
+      write: mock(() => {}),
       end: mock(() => {}),
       status: mock(() => mockRes),
       json: mock(() => mockRes)
     };
 
-    // Create mock DockerRunner that extends EventEmitter
+    // Setup Docker runner mock
+    mockDockerCommand = mock(() => Promise.resolve());
     mockDocker = new EventEmitter() as DockerRunner;
-    mockDocker.runCommand = mock(async () => "Success");
+    mockDocker.runCommand = mockDockerCommand;
 
-    // Mock the DockerRunner module
+    // Setup Oras runner mock
+    mockOrasCommand = mock(() => Promise.resolve());
+    mockOras = new EventEmitter() as OrasRunner;
+    mockOras.runCommand = mockOrasCommand;
+
+    // Mock the runner modules
     mock.module("../../utils/docker", () => ({
       DockerRunner: mock(() => mockDocker)
+    }));
+
+    mock.module("../../utils/oras", () => ({
+      OrasRunner: mock(() => mockOras)
     }));
   });
 
   test("successfully deploys an app", async () => {
     await deployApp(mockReq, mockRes, () => {});
 
-    // Verify SSE headers
-    expect(mockRes.setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream");
-    expect(mockRes.setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-    expect(mockRes.setHeader).toHaveBeenCalledWith("Connection", "keep-alive");
+    const expectedPackageDir = PATHS.packages("test-app", "latest");
+    const expectedComposeDir = PATHS.deployments.compose("test-app");
+
+    // Verify Oras command was called with correct parameters
+    expect(mockOrasCommand).toHaveBeenCalledWith(
+      "mock-task-id",
+      "DOWNLOAD",
+      ORAS_REGISTRY,
+      "test-app",
+      {
+        outputDir: expectedPackageDir,
+        version: "latest"
+      }
+    );
 
     // Verify Docker command was called with correct parameters
-    expect(mockDocker.runCommand).toHaveBeenCalledWith(
+    expect(mockDockerCommand).toHaveBeenCalledWith(
       "mock-task-id",
       "DEPLOY",
       ["up", "-d"],
-      "test-app"
+      "test-app",
+      {
+        cwd: expectedComposeDir
+      }
     );
   });
 
@@ -64,5 +95,7 @@ describe("deployApp", () => {
     expect(mockRes.json).toHaveBeenCalledWith({
       error: "Missing app name"
     });
+    expect(mockOrasCommand).not.toHaveBeenCalled();
+    expect(mockDockerCommand).not.toHaveBeenCalled();
   });
 });
