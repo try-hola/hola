@@ -8,6 +8,9 @@ export const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 export const PATHS = {
   packages: (appName: string, version: string) => 
     path.join(STORAGE_ROOT, "packages", appName, version),
+
+  config: (appName: string) =>
+    path.join(STORAGE_ROOT, "config", appName),
   
   deployments: {
     root: (appName: string) => 
@@ -18,7 +21,10 @@ export const PATHS = {
       path.join(STORAGE_ROOT, "deployments", appName, "compose"),
     current: (appName: string) => 
       path.join(STORAGE_ROOT, "deployments", appName, "current")
-  }
+  },
+
+  backups: (appName: string, tag: string) => 
+    path.join(STORAGE_ROOT, "backups", appName, tag)
 };
 
 /**

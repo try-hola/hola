@@ -13,6 +13,11 @@ interface StatusUpdate {
   message: string;
 }
 
+interface CommandResult {
+  code: number;
+  output: string;
+}
+
 export class DockerRunner extends EventEmitter {
   async runCommand(
     taskId: string,
@@ -20,7 +25,7 @@ export class DockerRunner extends EventEmitter {
     args: string[],
     appName: string,
     options: DockerOptions = {}
-  ): Promise<void> {
+  ): Promise<CommandResult> {
     this.emit("status", {
       taskId,
       taskType,
@@ -34,7 +39,10 @@ export class DockerRunner extends EventEmitter {
         env: { ...process.env, PATH: process.env.PATH }
       });
 
+      let output = "";
+
       childProcess.stdout.on("data", (data) => {
+        output += data.toString();
         this.emit("status", {
           taskId,
           taskType,
@@ -61,8 +69,14 @@ export class DockerRunner extends EventEmitter {
             status: "complete",
             message: `Docker compose command completed successfully`
           } as StatusUpdate);
-          resolve();
+          resolve({ code, output });
         } else {
+          this.emit("status", {
+            taskId,
+            taskType,
+            status: "error",
+            message: `Docker compose command failed with code ${code}`
+          } as StatusUpdate);
           reject(new Error(`Docker compose command failed with code ${code}`));
         }
       });
