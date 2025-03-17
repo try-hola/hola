@@ -1,18 +1,18 @@
 {
   "compilerOptions": {
     // Enable latest features
-    "lib": ["ESNext", "DOM"], // Specifies which library files to include in the compilation.
-    "target": "ESNext", // Sets the target ECMAScript version for the output.
-    "module": "ESNext", // Specifies the module system to use.
+    "lib": ["ESNext"], // Removed DOM as it's not needed for Node.js server
+    "target": "ES2020", // Sets the target ECMAScript version for the output.
+    "module": "NodeNext", // Specifies the module system to use.
     "moduleDetection": "force", // Forces TypeScript to treat files as modules regardless of the file content.
     "jsx": "react-jsx", // Enables the new JSX transform in React.
     "allowJs": true, // Permits JavaScript files to be compiled.
 
     // Bundler mode
-    "moduleResolution": "bundler", // Uses bundler-like logic for resolving modules.
-    "allowImportingTsExtensions": true, // Allows importing TypeScript files with their extensions.
-    "verbatimModuleSyntax": true, // Preserves original module syntax in the output.
-    "noEmit": true, // Prevents emitting output files.
+    "moduleResolution": "NodeNext", // Uses bundler-like logic for resolving modules.
+    "allowImportingTsExtensions": false, // Allows importing TypeScript files with their extensions.
+    "verbatimModuleSyntax": false, // Preserves original module syntax in the output.
+    "noEmit": false, // Prevents emitting output files.
 
     // Best practices
     "strict": true, // Enables all strict type-checking options.
@@ -22,6 +22,19 @@
     // Some stricter flags (disabled by default)
     "noUnusedLocals": false, // Does not error on unused local variables.
     "noUnusedParameters": false, // Does not error on unused function parameters.
-    "noPropertyAccessFromIndexSignature": false // Allows property access from index signatures directly.
-  }
+    "noPropertyAccessFromIndexSignature": false, // Allows property access from index signatures directly.
+    
+    // Additional options
+    "esModuleInterop": true, // Enables interoperability between CommonJS and ES Modules.
+    "allowSyntheticDefaultImports": true, // Allows default imports from modules with no default export.
+    "outDir": "./dist", // Redirects output structure to the directory.
+    "sourceMap": true, // Generates corresponding .map file.
+    "declaration": true, // Generates corresponding .d.ts file.
+    "removeComments": false, // Does not remove comments from output.
+    "forceConsistentCasingInFileNames": true, // Disallows inconsistently-cased references to the same file.
+    "resolveJsonModule": true, // Includes modules imported with .json extension.
+    "rootDir": "src" // Specifies the root directory of input files.
+  },
+  "include": ["src/**/*"], // Specifies an array of filenames or patterns to include in the program.
+  "exclude": ["node_modules", "dist"] // Specifies an array of filenames or patterns to exclude from the program.
 }
