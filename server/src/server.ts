@@ -1,10 +1,10 @@
 import express from "express";
-import { configRoutes } from "./routes";
+import { registerRoutes } from "./routes.js";
 import dotenv from "dotenv";
 import swaggerUi from "swagger-ui-express";
 import YAML from "yamljs";
 import path from "path";
-import { PORT, STORAGE_ROOT } from "./config";
+import { PORT, STORAGE_ROOT } from "./config.js";
 import fs from "fs-extra";
 
 dotenv.config();
@@ -20,7 +20,9 @@ app.use(express.static(path.join(__dirname, "../public")));
 const openApiDocument = YAML.load(path.join(__dirname, "../public/docs/openapi.yaml"));
 
 app.use(express.json()); // Enable JSON parsing
-app.use("/api", configRoutes);
+
+// Register API routes
+registerRoutes(app);
 
 // Serve OpenAPI UI
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
