@@ -67,19 +67,20 @@ export const handleFileUpload: RequestHandler = async (req, res) => {
  *
  * @param req - The request object containing the application name and file path.
  * @param res - The response object used to send back the requested file or error response.
- * @returns {void} - Does not return a promise; sends the file directly or an error response.
  */
-export const getFile = (req: Request, res: Response) => {
+export const getFile = (req: Request, res: Response): void => {
   const { appName, filePath } = req.params;
 
   if (!isValidAppName(appName)) {
-    return res.status(400).json({ error: "Invalid app name" });
+    res.status(400).json({ error: "Invalid app name" });
+    return;
   }
 
   const fileFullPath = path.join(PATHS.deployments.files(appName), filePath);
 
   if (!fs.existsSync(fileFullPath)) {
-    return res.status(404).json({ error: "File not found" });
+    res.status(404).json({ error: "File not found" });
+    return;
   }
 
   res.sendFile(fileFullPath);

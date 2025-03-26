@@ -4,6 +4,7 @@ import http from 'http';
 import { AddressInfo } from 'net';
 import * as config from '../config.js';
 import { TestEnvironment } from './test-environment.js';
+import { registerRoutes } from '../routes.js';
 
 /**
  * Class to manage a real test server instance for integration tests
@@ -43,12 +44,17 @@ export class TestServer {
       configurable: true
     });
     
-    // Import the real app routes (after config is modified)
-    const { registerRoutes } = await import('../routes.js');
-    
     // Set up middleware and routes on the test app
     this.app.use(express.json());
+    
+    // Register routes explicitly
     registerRoutes(this.app);
+    
+    // Add a catch-all error handler for tests
+    this.app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+      console.error('Test server error:', err);
+      res.status(500).json({ error: 'Internal Server Error', message: err.message });
+    });
   }
 
   /**
@@ -60,6 +66,7 @@ export class TestServer {
         const address = this.server?.address() as AddressInfo;
         this.port = address.port;
         this.baseUrl = `http://localhost:${this.port}`;
+        console.log(`Test server started on ${this.baseUrl}`);
         resolve();
       });
     });
