@@ -13,20 +13,21 @@ Server-Side Component: Manages application deployments, configurations, and file
 | ----------- | ----------------- | -------------------------------------------------- |
 | GET         | /config           | Retrieve system-wide configuration.                |
 | GET         | /config/{appName} | Retrieve configuration for a specific application. |
-| POST        | /config/{appName} | Create or update an application’s configuration.   |
+| PUT         | /config/{appName} | Create or update an application's configuration.   |
 | DELETE      | /config/{appName} | Remove an application-specific configuration.      |
 
 ### Application Deployment & Management
 
-| HTTP Method | Endpoint              | Description                                              |
-| ----------- | --------------------- | -------------------------------------------------------- |
-| POST        | /apps                 | Deploy a new application.                                |
-| GET         | /apps                 | List all deployed applications.                          |
-| GET         | /apps/{appName}       | Get details about a deployed application.                |
-| PUT         | /apps/{appName}       | Upgrade an application (with backup handled internally). |
-| DELETE      | /apps/{appName}       | Remove a deployed application.                           |
-| POST        | /apps/{appName}/start | Start an application.                                    |
-| POST        | /apps/{appName}/stop  | Stop an application.                                     |
+| HTTP Method | Endpoint                | Description                                             |
+| ----------- | ----------------------- | ------------------------------------------------------- |
+| POST        | /apps/deploy            | Deploy a new application.                               |
+| GET         | /apps                   | List all deployed applications.                         |
+| GET         | /apps/{appName}         | Get details about a deployed application.               |
+| PUT         | /apps/{appName}/update  | Update an application (with backup handled internally). |
+| DELETE      | /apps/{appName}         | Remove a deployed application.                          |
+| POST        | /apps/{appName}/start   | Start an application.                                   |
+| POST        | /apps/{appName}/stop    | Stop an application.                                    |
+| POST        | /apps/{appName}/restart | Restart an application.                                 |
 
 ### File Management
 
@@ -41,15 +42,17 @@ Server-Side Component: Manages application deployments, configurations, and file
 | HTTP Method | Endpoint                           | Description                                 |
 | ----------- | ---------------------------------- | ------------------------------------------- |
 | POST        | /apps/{appName}/backup             | Trigger a backup for an application.        |
-| GET         | /apps/{appName}/backup             | Retrieve backup details for an application. |
+| GET         | /apps/{appName}/backups            | List all backups for an application.        |
+| GET         | /apps/{appName}/backup/{backupId}  | Retrieve backup details for an application. |
 | POST        | /apps/{appName}/restore/{backupId} | Restore an application from a backup.       |
 
-### Repository & Versions
+### Logs & Monitoring
 
-| HTTP Method | Endpoint                           | Description                                |
-| ----------- | ---------------------------------- | ------------------------------------------ |
-| GET         | /apps/{appName}/versions           | List available versions of an application. |
-| GET         | /apps/{appName}/versions/{version} | Get details about a specific version.      |
+| HTTP Method | Endpoint                | Description                                 |
+| ----------- | ----------------------- | ------------------------------------------- |
+| GET         | /apps/{appName}/logs    | Retrieve logs for an application.           |
+| GET         | /apps/{appName}/metrics | Get performance metrics for an application. |
+| GET         | /apps/{appName}/health  | Check the health status of an application.  |
 
 ### Real-Time Updates (Using SSE)
 
