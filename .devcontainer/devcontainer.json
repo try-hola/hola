@@ -4,8 +4,7 @@
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
-    "ghcr.io/meaningful-ooo/devcontainer-features/fish:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
   "customizations": {
     "vscode": {
@@ -27,18 +26,15 @@
         },
         "typescript.tsdk": "node_modules/typescript/lib",
         "typescript.enablePromptUseWorkspaceTsdk": true,
-        "jest.runMode": "on-save"
+        "jest.runMode": "on-save",
+        "terminal.integrated.defaultProfile.linux": "bash"
       }
     }
   },
   "forwardPorts": [
     3000
   ],
-  "postCreateCommand": "./devcontainer/config.sh && yarn install",
-  "mounts": [
-    "source=${localEnv:HOME}/.config,target=/home/node/.config,type=bind,consistency=cached",
-    "source=${localEnv:HOME}/.dotfiles,target=/home/node/.dotfiles,type=bind,consistency=cached"
-  ],
+  "postCreateCommand": "yarn install",
   "remoteUser": "node",
   "containerEnv": {
     "NODE_ENV": "development"
