@@ -1,24 +1,594 @@
-# Technical Design Outline
+# Comprehensive Technical Design Document
 
 ## 1. Architecture Overview
 
-CLI Component: Handles user commands and interacts with the server-side components.
-Server-Side Component: Manages deployments, configurations, and file storage.
+The project consists of two main components:
 
-## 2. CLI Design
+- **CLI Component**: A TypeScript/Node.js CLI application that handles user commands, communicates with the server, and processes responses.
+- **Server-Side Component**: A Node.js/TypeScript API server that manages application deployments, configurations, and file storage. Handles long-running tasks with Server-Sent Events (SSE) for real-time updates.
 
-Commands: set-config, get-config, deploy-app, upgrade-app, backup-app, stop-app, start-app, delete-app, upload-file.
-Multi-server support: The CLI will maintain configurations for different servers and handle context switching.
+Both components are organized as a monorepo using Yarn workspaces with CommonJS modules.
 
-## 3. Server-Side Design
+## 2. API Endpoints
 
-APIs: Endpoints for each CLI command to manage applications, configurations, and file uploads.
-Storage: Mechanism for storing configuration settings and uploaded files.
+### Configuration Management
 
-## 4. Communication
+| HTTP Method | Endpoint          | Description                                        |
+| ----------- | ----------------- | -------------------------------------------------- |
+| GET         | /config           | Retrieve system-wide configuration.                |
+| GET         | /config/{appName} | Retrieve configuration for a specific application. |
+| PUT         | /config/{appName} | Create or update an application's configuration.   |
+| DELETE      | /config/{appName} | Remove an application-specific configuration.      |
 
-REST APIs for interaction between CLI and server.
+### Application Deployment & Management
 
-## 5. Security
+| HTTP Method | Endpoint                | Description                                             |
+| ----------- | ----------------------- | ------------------------------------------------------- |
+| POST        | /apps/deploy            | Deploy a new application.                               |
+| GET         | /apps                   | List all deployed applications.                         |
+| GET         | /apps/{appName}         | Get details about a deployed application.               |
+| PUT         | /apps/{appName}/update  | Update an application (with backup handled internally). |
+| DELETE      | /apps/{appName}         | Remove a deployed application.                          |
+| POST        | /apps/{appName}/start   | Start an application.                                   |
+| POST        | /apps/{appName}/stop    | Stop an application.                                    |
+| POST        | /apps/{appName}/restart | Restart an application.                                 |
 
-Authentication and authorization mechanisms for secure access.
+### File Management
+
+| HTTP Method | Endpoint                       | Description                                 |
+| ----------- | ------------------------------ | ------------------------------------------- |
+| POST        | /apps/{appName}/files          | Upload additional files for an application. |
+| GET         | /apps/{appName}/files          | List uploaded files for an application.     |
+| DELETE      | /apps/{appName}/files/{fileId} | Remove a specific uploaded file.            |
+
+### Backup & Restore
+
+| HTTP Method | Endpoint                           | Description                                 |
+| ----------- | ---------------------------------- | ------------------------------------------- |
+| POST        | /apps/{appName}/backup             | Trigger a backup for an application.        |
+| GET         | /apps/{appName}/backups            | List all backups for an application.        |
+| GET         | /apps/{appName}/backup/{backupId}  | Retrieve backup details for an application. |
+| POST        | /apps/{appName}/restore/{backupId} | Restore an application from a backup.       |
+
+### Logs & Monitoring
+
+| HTTP Method | Endpoint                | Description                                 |
+| ----------- | ----------------------- | ------------------------------------------- |
+| GET         | /apps/{appName}/logs    | Retrieve logs for an application.           |
+| GET         | /apps/{appName}/metrics | Get performance metrics for an application. |
+| GET         | /apps/{appName}/health  | Check the health status of an application.  |
+
+### Real-Time Updates (Using SSE)
+
+| HTTP Method | Endpoint               | Description                                                      |
+| ----------- | ---------------------- | ---------------------------------------------------------------- |
+| GET         | /apps/{appName}/events | Streams logs/status updates for deployment or upgrade processes. |
+
+## 3. Communication Protocols
+
+- **REST APIs**: CLI sends requests and receives responses for standard operations.
+- **SSE (Server-Sent Events)**: Provides real-time updates from the server to the CLI for long-running tasks.
+
+## 4. Security
+
+- **Authentication**: Single API key defined on the server via environment variables.
+- **Configuration Security**: Support for encrypting sensitive configuration values at rest.
+- **Encrypted Values**: Masked in API responses and stored separately from regular configuration.
+
+## 5. Storage Structure
+
+### Directory Structure
+
+```
+${STORAGE_ROOT}/
+├── packages/                  # Downloaded ORAS packages
+│   └── {appName}/
+│       └── {version}/
+│           └── bundle.tgz    # Original downloaded package
+│
+├── deployments/              # Active deployments
+│   └── {appName}/
+│       ├── files/           # App-specific uploaded files
+│       ├── compose/         # Generated deployment files
+│       └── current/         # Active deployment workspace
+│
+├── config/                   # Configuration storage
+│   ├── system/
+│   │   └── config.json      # System-wide configuration
+│   └── apps/
+│       └── {appName}/
+│           └── config.json  # App-specific configuration
+│
+└── backups/                  # Backup storage
+    └── {appName}/
+        └── {timestamp}/
+            ├── files/       # Snapshot of files
+            ├── config/      # Snapshot of config
+            └── metadata.json
+```
+
+### Detailed File Organization
+
+```
+/data
+├── packages/
+│   └── {packageName}/
+│       ├── version-{timestamp}/
+│       │   ├── docker-compose.yml   # Original docker-compose from ORAS
+│       │   ├── Dockerfile.*         # Any Dockerfiles from ORAS
+│       │   └── ...                  # Other files from ORAS package
+│       └── latest -> version-{timestamp}  # Symlink to latest version
+├── apps/
+│   └── {appName}/
+│       ├── package-ref              # Reference to package being used
+│       ├── env/
+│       │   ├── app/                 # App-level environment variables
+│       │   │   ├── regular/         # Regular environment variables
+│       │   │   │   └── {KEY_NAME}   # One file per env var, filename is the key
+│       │   │   └── encrypted/       # Encrypted environment variables
+│       │   │       └── {KEY_NAME}   # One file per encrypted env var
+│       │   └── services/            # Service-specific environment variables
+│       │       └── {serviceName}/   # One directory per service
+│       │           ├── regular/     # Regular environment variables
+│       │           │   └── {KEY_NAME}  # One file per env var
+│       │           └── encrypted/   # Encrypted environment variables
+│       │               └── {KEY_NAME}  # One file per encrypted env var
+│       └── files/
+│           ├── app/                 # App-level files
+│           │   └── docker-compose.override.yml  # Optional override for the base compose
+│           └── services/            # Service-specific files
+│               └── {serviceName}/   # One directory per service
+│                   ├── Dockerfile   # Custom Dockerfile for this service (if any)
+│                   └── config/      # Configuration files for this service
+│                       └── {path/to/file}  # Path matches container destination
+└── deployments/
+    └── {deploymentId}/              # Created at deploy time
+        ├── docker-compose.yml       # Main compose file
+        ├── docker-compose.override.yml  # Applied if user provided one
+        ├── .env                     # Combined app-level environment variables
+        ├── services/                # Service-specific files
+        │   └── {serviceName}/
+        │       ├── Dockerfile       # Service Dockerfile (if custom)
+        │       ├── .env             # Service-specific environment variables
+        │       └── config/          # Mounted configuration files
+        │           └── {path/to/file}
+        └── files/                   # Other files needed at the app level
+```
+
+## 6. Directory Roles and Operations
+
+### packages/
+
+- Stores downloaded ORAS packages in their original form
+- Organized by application name and version
+- Preserves original packages for verification and redeployment
+
+### deployments/{appName}/
+
+Contains three key subdirectories for each application:
+
+#### files/
+
+- Permanent storage for user-uploaded files
+- Maintains original path structure
+- Preserved across deployments
+- Example contents:
+  ```
+  files/
+  ├── config/custom-nginx.conf
+  ├── ssl/
+  │   ├── cert.pem
+  │   └── key.pem
+  └── static/custom-logo.png
+  ```
+
+#### compose/
+
+- Contains active Docker Compose configuration
+- Generated during deployment
+- Combines package compose file with configurations
+- Contains:
+  - `docker-compose.yml`: Final compose configuration
+  - `.env`: Generated environment variables
+
+#### current/
+
+- Working directory for active deployment
+- Recreated during each deployment
+- Combines:
+  - Extracted package contents
+  - Links to uploaded files
+  - Generated configurations
+- Temporary workspace that represents the complete deployment
+
+### config/
+
+Stores configuration at two levels:
+
+- System-wide settings (`system/config.json`)
+- Application-specific settings (`apps/{appName}/config.json`)
+
+### backups/
+
+Stores point-in-time snapshots of applications:
+
+- Complete state including files and configuration
+- Organized by timestamp
+- Enables reliable rollback capabilities
+
+## 7. Configuration Management
+
+### Environment Variables
+
+#### App-Level Environment Variables
+
+- Variables that apply to the entire application or are referenced in docker-compose.yml
+- Stored in `env/app/regular/{KEY_NAME}` or `env/app/encrypted/{KEY_NAME}`
+- Combined into a single `.env` file at deploy time
+- Automatically picked up by Docker Compose at the application level
+
+#### Service-Level Environment Variables
+
+- Variables that are specific to a particular service/container
+- Stored in `env/services/{serviceName}/regular/{KEY_NAME}` or `env/services/{serviceName}/encrypted/{KEY_NAME}`
+- Combined into service-specific `.env` files at deploy time
+- Accessible only to the specific service/container
+- Provided to the container via environment section in docker-compose.yml
+
+### Configuration Files
+
+#### App-Level Configuration Files
+
+- Files that apply to the entire application
+- Primarily includes `docker-compose.override.yml`
+- Stored in `files/app/`
+- Special handling for docker-compose.override.yml:
+  - Used by Docker Compose to override settings in the base docker-compose.yml
+  - Automatically detected and used by Docker Compose during deployment
+  - Useful for customizing services, networks, volumes, etc.
+
+#### Service-Level Configuration Files
+
+- Files specific to individual services/containers
+- Stored in `files/services/{serviceName}/config/{path/to/file}`
+- Path structure matches target path in container
+- Includes custom Dockerfiles for specific services
+- Mounted as volumes to the specific service container
+- Examples:
+  - `files/services/nginx/config/etc/nginx/nginx.conf`
+  - `files/services/postgres/config/docker-entrypoint-initdb.d/init.sql`
+  - `files/services/app/Dockerfile`
+
+## 8. Special File Handling
+
+### docker-compose.override.yml
+
+The `docker-compose.override.yml` file is a standard Docker Compose feature that allows users to customize their deployments without modifying the base `docker-compose.yml` file. This file can:
+
+- Override service configurations
+- Add new services
+- Modify environment variables
+- Change volumes and networks
+- Adjust resource constraints
+- Add or modify labels and other metadata
+
+During deployment, Docker Compose automatically merges the base `docker-compose.yml` with the override file if it exists.
+
+### Custom Dockerfiles
+
+Service-specific Dockerfiles allow users to customize individual services:
+
+- Stored as `files/services/{serviceName}/Dockerfile`
+- Referenced in docker-compose.override.yml via the `build` directive
+- Enables customization of base images, build arguments, etc.
+
+## 9. Deployment Workflow
+
+### 1. Package Download
+
+- ORAS package downloaded to `packages/{appName}/{version}/`
+- Package integrity verified
+
+### 2. Deployment Preparation
+
+- Clear `current/` directory
+- Extract package contents
+- Link or copy uploaded files from `files/`
+- Generate compose configuration
+
+### 3. Configuration Merging
+
+- Combine system-wide and app-specific configs
+- Generate final environment variables
+- Create docker-compose configuration
+
+### 4. Activation
+
+- Start services using generated compose files
+- Monitor for successful deployment
+- Update application status
+
+## 10. Implementation Examples
+
+### Environment Variables Management
+
+```typescript
+/**
+ * Set environment variables for an application or specific service
+ */
+exports.setEnvironmentVariables = async (req, res) => {
+  const { appName, serviceName } = req.params;
+  const { variables, encrypted } = req.body;
+
+  try {
+    const appPath = path.join(process.env.DATA_DIR || "/data", "apps", appName);
+
+    // Determine whether this is app-level or service-level configuration
+    let baseEnvPath;
+    if (serviceName) {
+      // Service-level configuration
+      baseEnvPath = path.join(appPath, "env", "services", serviceName);
+    } else {
+      // App-level configuration
+      baseEnvPath = path.join(appPath, "env", "app");
+    }
+
+    // Store each variable in the appropriate directory based on encryption flag
+    for (const [key, value] of Object.entries(variables)) {
+      let targetDir;
+      if (encrypted && encrypted.includes(key)) {
+        targetDir = path.join(baseEnvPath, "encrypted");
+        // Encrypt and store the value
+        // Implementation...
+      } else {
+        targetDir = path.join(baseEnvPath, "regular");
+        // Store the value as plain text
+        // Implementation...
+      }
+    }
+
+    return res.status(200).json({
+      message: serviceName
+        ? `Environment variables set for service ${serviceName}`
+        : "App-level environment variables set",
+    });
+  } catch (error) {
+    // Error handling
+  }
+};
+```
+
+### File Management
+
+```typescript
+/**
+ * Add a configuration file
+ */
+exports.addConfigFile = async (req, res) => {
+  const { appName, serviceName } = req.params;
+  const { path: filePath, content } = req.body;
+
+  try {
+    const appPath = path.join(process.env.DATA_DIR || "/data", "apps", appName);
+
+    // Determine whether this is app-level or service-level configuration
+    let targetPath;
+    if (serviceName) {
+      // Service-level configuration file
+      targetPath = path.join(
+        appPath,
+        "files",
+        "services",
+        serviceName,
+        "config",
+        filePath
+      );
+    } else {
+      // App-level configuration file (like docker-compose.override.yml)
+      targetPath = path.join(appPath, "files", "app", filePath);
+    }
+
+    // Ensure the directory exists
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+
+    // Write the file
+    fs.writeFileSync(targetPath, content);
+
+    // Special handling for specific file types
+    if (filePath === "docker-compose.override.yml" && !serviceName) {
+      console.log(
+        `Added docker-compose.override.yml for application ${appName}`
+      );
+    } else if (filePath === "Dockerfile" && serviceName) {
+      console.log(
+        `Added custom Dockerfile for service ${serviceName} in application ${appName}`
+      );
+    }
+
+    return res.status(200).json({
+      message: `Configuration file ${filePath} added`,
+    });
+  } catch (error) {
+    // Error handling
+  }
+};
+```
+
+### Deployment Process
+
+```typescript
+const deploymentId = `${appName}-${Date.now()}`;
+const deploymentPath = path.join(dataDir, "deployments", deploymentId);
+fs.mkdirSync(deploymentPath, { recursive: true });
+
+// Copy Base Files from ORAS Package
+const packageRef = fs.readFileSync(
+  path.join(dataDir, "apps", appName, "package-ref"),
+  "utf8"
+);
+const packagePath = path.join(dataDir, "packages", packageRef, "latest");
+fs.copySync(packagePath, deploymentPath);
+
+// Apply App-Level Configuration
+const overridePath = path.join(
+  dataDir,
+  "apps",
+  appName,
+  "files",
+  "app",
+  "docker-compose.override.yml"
+);
+if (fs.existsSync(overridePath)) {
+  fs.copySync(
+    overridePath,
+    path.join(deploymentPath, "docker-compose.override.yml")
+  );
+}
+
+// Generate app-level .env file
+const appEnvPath = path.join(dataDir, "apps", appName, "env", "app");
+generateEnvFile(appEnvPath, path.join(deploymentPath, ".env"));
+
+// Apply Service-Level Configuration
+const composeFile = path.join(deploymentPath, "docker-compose.yml");
+const compose = yaml.load(fs.readFileSync(composeFile, "utf8"));
+const services = Object.keys(compose.services || {});
+
+// For each service, apply its configuration
+for (const service of services) {
+  const serviceDeployPath = path.join(deploymentPath, "services", service);
+  fs.mkdirSync(serviceDeployPath, { recursive: true });
+
+  // Copy service configuration
+  const serviceConfigPath = path.join(
+    dataDir,
+    "apps",
+    appName,
+    "files",
+    "services",
+    service
+  );
+
+  if (fs.existsSync(serviceConfigPath)) {
+    // Copy Dockerfile if exists
+    const dockerfilePath = path.join(serviceConfigPath, "Dockerfile");
+    if (fs.existsSync(dockerfilePath)) {
+      fs.copySync(dockerfilePath, path.join(serviceDeployPath, "Dockerfile"));
+
+      // Update docker-compose override to use this Dockerfile
+      ensureDockerComposeOverride(deploymentPath, service, {
+        build: { context: `./services/${service}` },
+      });
+    }
+
+    // Copy config files
+    const configPath = path.join(serviceConfigPath, "config");
+    if (fs.existsSync(configPath)) {
+      fs.copySync(configPath, path.join(serviceDeployPath, "config"));
+
+      // Update docker-compose override to mount these files
+      // Implement mounting logic
+    }
+  }
+
+  // Generate service-level .env file
+  const serviceEnvPath = path.join(
+    dataDir,
+    "apps",
+    appName,
+    "env",
+    "services",
+    service
+  );
+  if (fs.existsSync(serviceEnvPath)) {
+    generateEnvFile(serviceEnvPath, path.join(serviceDeployPath, ".env"));
+
+    // Update docker-compose override to use this env file
+    ensureDockerComposeOverride(deploymentPath, service, {
+      env_file: [`./services/${service}/.env`],
+    });
+  }
+}
+
+// Start the Application
+exec(
+  `cd ${deploymentPath} && docker-compose up -d`,
+  (error, stdout, stderr) => {
+    if (error) {
+      console.error(`Error starting application ${appName}:`, error);
+      return;
+    }
+    console.log(`Application ${appName} deployed successfully`);
+  }
+);
+```
+
+## 11. Project Directory
+
+```
+project-root/
+│
+├── packages/                 # Yarn workspace packages
+│   ├── client/               # CLI client application
+│   │   ├── src/              # TypeScript source code
+│   │   ├── tsconfig.json     # TypeScript configuration
+│   │   └── package.json      # Package information and dependencies
+│   │
+│   ├── server/               # API server application
+│   │   ├── src/              # TypeScript source code
+│   │   ├── public/           # Public assets
+│   │   │   └── docs/         # Documentation
+│   │   │       └── openapi.yaml  # OpenAPI specification
+│   │   ├── tsconfig.json     # TypeScript configuration
+│   │   └── package.json      # Package information and dependencies
+│   │
+│   └── shared/               # Shared types and utilities
+│       ├── src/              # TypeScript source code
+│       ├── tsconfig.json     # TypeScript configuration
+│       └── package.json      # Package information and dependencies
+│
+├── docs/                     # Project documentation
+│   ├── TECHNICAL_COMBINED.md # This comprehensive technical document
+│   └── ...                   # Other documentation files
+│
+├── .gitignore                # Git ignore file
+├── package.json              # Root package.json for Yarn workspaces
+└── README.md                 # Project overview and setup instructions
+```
+
+## 12. Benefits
+
+- **Clean Separation**: Each component maintains its own space
+- **Reliable Upgrades**: Clear distinction between versions
+- **Easy Backups**: Well-organized structure for backing up state
+- **Flexible Configuration**: Multiple levels of configuration
+- **Safe Deployment**: Changes isolated until activation
+- **Rollback Support**: Previous state can be restored easily
+- **Modular Design**: Yarn workspaces for code sharing between packages
+
+## 13. Implementation Notes
+
+- Use symbolic links where possible to save space
+- Implement proper cleanup of old versions
+- Maintain careful permissions management
+- Consider filesystem performance for large deployments
+- Plan for disaster recovery scenarios
+
+## 14. Open Questions and Future Considerations
+
+1. How should we handle dependencies between services in the configuration?
+2. Should we provide templates for common service configurations?
+3. How do we manage service-specific volumes and networks?
+4. Should we add service-level health checks?
+5. How do we handle configuration validation across multiple services?
+
+## 15. Next Steps
+
+1. Complete implementation of package, configuration and deployment managers
+2. Add comprehensive test coverage using Jest
+3. Document the configuration management feature in the user guide
+4. Consider adding configuration validation based on application requirements
+5. Implement CLI tools for managing docker-compose.override.yml files
+6. Design CLI commands for service-level configuration management
+7. Implement service detection from docker-compose files
+8. Create examples of multi-service configuration scenarios
