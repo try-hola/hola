@@ -10,6 +10,7 @@ const fs = require('fs/promises');
 const express = require("express");
 // Import types directly from @types/express
 import { Request, Response } from "express";
+import { Dirent } from "fs";
 
 /**
  * Deploys an application.
@@ -233,7 +234,7 @@ const listApps = async (req: Request, res: Response<ListAppsResponse | ListAppsE
     await fsExtra.ensureDir(deploymentsDir);
     
     // List all entries in the deployments directory
-    const fileEntries = await fs.readdir(deploymentsDir, { withFileTypes: true });
+    const fileEntries: Dirent[] = await fs.readdir(deploymentsDir, { withFileTypes: true });
     
     console.log("Found entries:", fileEntries.map(e => e.name).join(", "));
     
