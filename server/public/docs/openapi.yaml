@@ -21,6 +21,10 @@ paths:
               properties:
                 appName:
                   type: string
+                  description: Name of the application to deploy
+                version:
+                  type: string
+                  description: Version of the application to deploy (default is "latest")
               required:
                 - appName
       responses:
@@ -62,25 +66,45 @@ paths:
                 properties:
                   error:
                     type: string
-  /api/apps/{appName}:
-    put:
-      summary: Upgrade an application
-      parameters:
-        - name: appName
-          in: path
-          required: true
-          schema:
-            type: string
+                  details:
+                    type: string
+
+  /api/apps/deploy:
+    post:
+      summary: Alternative endpoint to deploy an application
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                appName:
+                  type: string
+                  description: Name of the application to deploy
+                version:
+                  type: string
+                  description: Version of the application to deploy (default is "latest")
+              required:
+                - appName
       responses:
         "200":
-          description: Upgrade initiated
+          description: App deployment initiated (SSE stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Missing app name
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  message:
+                  error:
                     type: string
+
+  /api/apps/{appName}/details:
     get:
       summary: Get details about a deployed application
       parameters:
@@ -97,8 +121,16 @@ paths:
               schema:
                 type: object
                 properties:
-                  details:
+                  appName:
+                    type: string
+                  status:
+                    type: string
+                  config:
                     type: object
+                  files:
+                    type: array
+                    items:
+                      type: string
         "404":
           description: Application not found
           content:
@@ -117,6 +149,46 @@ paths:
                 properties:
                   error:
                     type: string
+                  details:
+                    type: string
+
+  /api/apps/{appName}/upgrade:
+    post:
+      summary: Upgrade an application to a new version
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: string
+                  description: Version to upgrade to (default is "latest")
+      responses:
+        "200":
+          description: Upgrade initiated (SSE stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "500":
+          description: Failed to upgrade application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}:
     delete:
       summary: Remove a deployed application
       parameters:
@@ -127,14 +199,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Application removed successfully
+          description: Application removal initiated (SSE stream)
           content:
-            application/json:
+            text/event-stream:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
+                type: string
         "500":
           description: Failed to remove application
           content:
@@ -144,6 +213,7 @@ paths:
                 properties:
                   error:
                     type: string
+
   /api/apps/{appName}/files:
     post:
       summary: Upload a file for an application
@@ -198,6 +268,145 @@ paths:
                 properties:
                   error:
                     type: string
+                    
+    get:
+      summary: List all files for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Files retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:
+                          type: string
+                        name:
+                          type: string
+                  count:
+                    type: integer
+        "400":
+          description: Invalid app name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to list files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/files/{filePath}:
+    get:
+      summary: Download a specific file
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: filePath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Invalid app name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+    
+    delete:
+      summary: Delete a specific file
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: filePath
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: File deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "400":
+          description: Invalid app name or path traversal detected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "404":
+          description: File not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete file
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
   /api/apps/{appName}/start:
     post:
       summary: Start an application
@@ -209,14 +418,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Application started successfully
+          description: Application start initiated (SSE stream)
           content:
-            application/json:
+            text/event-stream:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
+                type: string
         "500":
           description: Failed to start application
           content:
@@ -226,6 +432,7 @@ paths:
                 properties:
                   error:
                     type: string
+
   /api/apps/{appName}/stop:
     post:
       summary: Stop an application
@@ -237,14 +444,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Application stopped successfully
+          description: Application stop initiated (SSE stream)
           content:
-            application/json:
+            text/event-stream:
               schema:
-                type: object
-                properties:
-                  message:
-                    type: string
+                type: string
         "500":
           description: Failed to stop application
           content:
