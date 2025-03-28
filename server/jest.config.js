@@ -1,15 +1,26 @@
-export default {
+module.exports = {
+  preset: 'ts-jest',
   testEnvironment: 'node',
-  transform: {
-    '^.+\\.ts$': ['ts-jest', {
-      useESM: true,
-    }],
-  },
-  moduleFileExtensions: ['ts', 'js', 'json', 'node'],
   testMatch: ['**/__tests__/**/*.test.ts'],
-  preset: 'ts-jest/presets/js-with-ts-esm',
-  extensionsToTreatAsEsm: ['.ts'],
-  moduleNameMapper: {
-    '^(\\.{1,2}/.*)\\.js$': '$1', // Handle .js extension in import statements
+  collectCoverageFrom: [
+    'src/**/*.ts',
+    '!src/**/*.d.ts',
+    '!src/**/*.test.ts',
+    '!src/types/**/*.ts'
+  ],
+  coverageDirectory: 'coverage',
+  verbose: true,
+  
+  // Add these settings for CommonJS compatibility
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', {
+      // Use CommonJS module format in tests
+      useESM: false,
+      isolatedModules: true
+    }]
   },
+  // Explicitly set moduleFileExtensions to prioritize .js
+  moduleFileExtensions: ['js', 'ts', 'json', 'node'],
+  // Allow importing JS files without extensions
+  moduleDirectories: ['node_modules', 'src']
 };

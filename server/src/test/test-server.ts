@@ -1,17 +1,19 @@
-// server/src/test/test-server.ts
-import express from 'express';
-import http from 'http';
-import { AddressInfo } from 'net';
-import * as config from '../config.js';
-import { TestEnvironment } from './test-environment.js';
-import { registerRoutes } from '../routes.js';
+const express = require('express');
+const http = require('http');
+const net = require('net');
+const config = require('../config');
+const { registerRoutes } = require('../routes');
+import { Application, Request, Response, NextFunction } from 'express';
+import * as HTTP from 'http'; // Import for TypeScript type definitions
+import { AddressInfo } from 'net'; // Import AddressInfo type from net
+import { TestEnvironment } from './test-environment';
 
 /**
- * Class to manage a real test server instance for integration tests
+ * Test server for running integration tests with Express
  */
 export class TestServer {
-  private server: http.Server | null = null;
-  private app: express.Application;
+  private server: HTTP.Server | null = null;
+  private app: Application;
   public port: number = 0;
   public baseUrl: string = '';
   public environment: TestEnvironment;
@@ -49,9 +51,8 @@ export class TestServer {
     
     // Register routes explicitly
     registerRoutes(this.app);
-    
     // Add a catch-all error handler for tests
-    this.app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    this.app.use((err: any, req: Request, res: Response, next: NextFunction) => {
       console.error('Test server error:', err);
       res.status(500).json({ error: 'Internal Server Error', message: err.message });
     });
@@ -92,11 +93,12 @@ export class TestServer {
       await this.environment.cleanup();
     }
   }
-  
   /**
    * Get the Express app instance for supertest
    */
-  getApp(): express.Application {
+  getApp(): Application {
     return this.app;
   }
 }
+
+module.exports = { TestServer };

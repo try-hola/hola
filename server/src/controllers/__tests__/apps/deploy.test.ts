@@ -1,9 +1,9 @@
 // server/src/controllers/__tests__/apps/deploy.test.ts
-import request from 'supertest';
-import { TestServer } from '../../../test/test-server.js';
-import fs from 'fs-extra';
-import path from 'path';
-import * as tar from 'tar';
+const request = require('supertest');
+const fs = require('fs-extra');
+const path = require('path');
+const tar = require('tar');
+import { TestServer } from '../../../test/test-server';
 
 // Mock the tar module to avoid actual tar operations
 jest.mock('tar', () => {

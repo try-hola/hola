@@ -1,5 +1,5 @@
 // server/src/test/docker-test-adapter.ts
-import { EventEmitter } from 'events';
+const { EventEmitter } = require('events');
 
 export interface DockerCommandResult {
   code: number;

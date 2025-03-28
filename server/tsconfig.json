@@ -3,13 +3,13 @@
     // Enable latest features
     "lib": ["ESNext"], // Removed DOM as it's not needed for Node.js server
     "target": "ES2020", // Sets the target ECMAScript version for the output.
-    "module": "NodeNext", // Specifies the module system to use.
+    "module": "CommonJS", // Change from NodeNext to CommonJS
     "moduleDetection": "force", // Forces TypeScript to treat files as modules regardless of the file content.
     "jsx": "react-jsx", // Enables the new JSX transform in React.
     "allowJs": true, // Permits JavaScript files to be compiled.
 
     // Bundler mode
-    "moduleResolution": "NodeNext", // Uses bundler-like logic for resolving modules.
+    "moduleResolution": "Node", // Use standard Node resolution
     "allowImportingTsExtensions": false, // Allows importing TypeScript files with their extensions.
     "verbatimModuleSyntax": false, // Preserves original module syntax in the output.
     "noEmit": false, // Prevents emitting output files.

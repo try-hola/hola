@@ -1,6 +1,6 @@
 // server/src/controllers/__tests__/apps/integration.test.ts
-import request from 'supertest';
-import { TestServer } from '../../../test/test-server.js';
+const request = require('supertest');
+import { TestServer } from '../../../test/test-server';
 
 // Mock the DockerRunner to use our test adapter
 jest.mock('../../../utils/docker', () => {

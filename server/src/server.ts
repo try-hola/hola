@@ -1,11 +1,11 @@
-import express from "express";
-import { registerRoutes } from "./routes.js";
-import dotenv from "dotenv";
-import swaggerUi from "swagger-ui-express";
-import YAML from "yamljs";
-import path from "path";
-import { PORT, STORAGE_ROOT } from "./config.js";
-import fs from "fs-extra";
+const express = require("express");
+const { registerRoutes } = require("./routes");
+const dotenv = require("dotenv");
+const swaggerUi = require("swagger-ui-express");
+const YAML = require("yamljs");
+const path = require("path");
+const { PORT, STORAGE_ROOT } = require("./config");
+const fs = require("fs-extra");
 
 dotenv.config();
 const app = express();

@@ -1,8 +1,8 @@
 // server/src/controllers/__tests__/files/integration.test.ts
-import request from 'supertest';
-import { TestServer } from '../../../test/test-server.js';
-import fs from 'fs-extra';
-import path from 'path';
+const request = require('supertest');
+import { TestServer } from '../../../test/test-server';
+const fs = require('fs-extra');
+const path = require('path');
 
 // Mock the DockerRunner to avoid actual Docker operations
 jest.mock('../../../utils/docker', () => {
@@ -127,5 +127,66 @@ describe('Files API Integration Tests', () => {
         contentType: 'text/plain'
       })
       .expect(400);
+  });
+
+  test('GET /api/apps/:appName/files should list all files for an app', async () => {
+    const response = await request(testServer.getApp())
+      .get('/api/apps/file-test-app/files')
+      .expect(200);
+
+    expect(response.body).toHaveProperty('files');
+    expect(Array.isArray(response.body.files)).toBe(true);
+    expect(response.body.files.length).toBeGreaterThanOrEqual(1);
+    
+    // Check if our test files are listed
+    const fileNames = response.body.files.map((file: any) => file.path || file.name);
+    expect(fileNames).toContain('test-file.txt');
+    expect(fileNames.some((name: string) => name.includes('nested/directory/structure/test.txt'))).toBe(true);
+  });
+
+  test('GET /api/apps/:appName/files/:filePath should download a specific file', async () => {
+    const response = await request(testServer.getApp())
+      .get('/api/apps/file-test-app/files/test-file.txt')
+      .expect(200);
+
+    expect(response.text).toBe(testContent);
+    expect(response.headers['content-type']).toMatch(/text\/plain/);
+  });
+
+  test('GET /api/apps/:appName/files/:filePath should return 404 for non-existent files', async () => {
+    await request(testServer.getApp())
+      .get('/api/apps/file-test-app/files/non-existent-file.txt')
+      .expect(404);
+  });
+
+  test('DELETE /api/apps/:appName/files/:filePath should delete a file', async () => {
+    // First upload a file to delete
+    const tempFileName = 'file-to-delete.txt';
+    await request(testServer.getApp())
+      .post('/api/apps/file-test-app/files')
+      .field('filePath', tempFileName)
+      .attach('file', Buffer.from('temporary content'), {
+        filename: tempFileName,
+        contentType: 'text/plain'
+      });
+      
+    // Now delete the file
+    const deleteResponse = await request(testServer.getApp())
+      .delete(`/api/apps/file-test-app/files/${tempFileName}`)
+      .expect(200);
+      
+    expect(deleteResponse.body).toHaveProperty('message', 'File deleted successfully');
+    
+    // Verify file no longer exists
+    const filePath = testServer.environment.getPaths().deployments.files('file-test-app');
+    const deletedFilePath = path.join(filePath, tempFileName);
+    const exists = await fs.pathExists(deletedFilePath);
+    expect(exists).toBe(false);
+  });
+
+  test('DELETE /api/apps/:appName/files/:filePath should return 404 for non-existent files', async () => {
+    await request(testServer.getApp())
+      .delete('/api/apps/file-test-app/files/non-existent-file.txt')
+      .expect(404);
   });
 });

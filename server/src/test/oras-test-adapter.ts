@@ -1,5 +1,5 @@
 // server/src/test/oras-test-adapter.ts
-import { EventEmitter } from 'events';
+const { EventEmitter } = require('events');
 
 export interface OrasCommandOptions {
   outputDir?: string;

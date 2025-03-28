@@ -1,5 +1,6 @@
-import express, { Router } from "express";
-import { 
+const express = require("express");
+const { Router } = express;
+const { 
   deployApp, 
   upgradeApp, 
   listApps, 
@@ -7,15 +8,26 @@ import {
   removeApp,
   startApp,
   stopApp
-} from "./controllers/apps.js";
-import { uploadFile, handleFileUpload, getFile } from "./controllers/files.js";
+} = require("./controllers/apps");
+const { uploadFile, handleFileUpload, getFile, listFiles, deleteFile } = require("./controllers/files");
+import { Express, Request, Response, NextFunction } from "express";
 
 /**
  * Register all application routes to an Express application
  * 
  * @param app Express application instance
  */
-export function registerRoutes(app: express.Application): void {
+// Define interface for controller functions
+interface ControllerFunction {
+  (req: Request, res: Response, next?: NextFunction): void | Promise<void>;
+}
+
+/**
+ * Register all application routes to an Express application
+ * 
+ * @param app Express application instance
+ */
+function registerRoutes(app: Express): void {
   const router = Router();
   
   // App deployment and management routes
@@ -30,10 +42,16 @@ export function registerRoutes(app: express.Application): void {
   
   // File management routes
   router.post("/apps/:appName/files", uploadFile, handleFileUpload); // Upload a file
+  router.get("/apps/:appName/files", listFiles);              // List all files for an app
   
   // Use a regular param and parse the full path in the controller
   router.get("/apps/:appName/files/:filePath", getFile);      // Get a file
+  router.delete("/apps/:appName/files/:filePath", deleteFile); // Delete a file
   
   // Mount the router at the /api path prefix
   app.use("/api", router);
 }
+
+module.exports = {
+  registerRoutes
+};

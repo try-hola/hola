@@ -4,8 +4,8 @@
 
 This project consists of two main components organized as a monorepo using Yarn workspaces:
 
-1. **Node.js/TypeScript API Server** - A backend server built using Node.js and TypeScript.
-2. **Node.js/TypeScript Client** - A CLI application written in TypeScript running on Node.js.
+1. **Node.js/TypeScript API Server** - A backend server built using Node.js and TypeScript with CommonJS modules.
+2. **Node.js/TypeScript Client** - A CLI application written in TypeScript with CommonJS modules running on Node.js.
 
 ## Copilot Guidance
 
@@ -14,13 +14,15 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 ### General Guidelines
 
 - Always suggest idiomatic TypeScript code for both components.
+- Use CommonJS module format (`require`/`module.exports`) for all TypeScript code.
 - Prioritize testability and maintainability over brevity.
 - Follow best practices for modularity and separation of concerns.
 - Leverage Yarn workspaces for shared code and dependencies across packages.
 
 ### TypeScript (Node.js API Server)
 
-- Use ES modules (`import`/`export` syntax) rather than CommonJS.
+- Use CommonJS module syntax (`require`/`module.exports`) rather than ES modules.
+- Configure TypeScript to emit CommonJS-compatible code.
 - Prefer `async/await` over raw promises.
 - Use TypeScript types and interfaces extensively.
 - Suggest `yarn` scripts for executing commands.
@@ -30,7 +32,8 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 
 ### TypeScript (Node.js Client CLI)
 
-- Follow modern TypeScript practices for Node.js environments.
+- Follow modern TypeScript practices for Node.js environments with CommonJS modules.
+- Configure tsconfig.json with `"module": "CommonJS"` and appropriate settings.
 - Use `commander` or `yargs` for CLI command structure and flag parsing.
 - Leverage Yarn workspace references for shared code.
 - Prefer structured logging solutions like `winston` or `pino` when applicable.
@@ -50,6 +53,7 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 ### Testing Recommendations
 
 - Use Jest for testing across both server and client packages.
+- Configure Jest to work with CommonJS modules and TypeScript.
 - Organize tests by feature area, with each controller function having its own dedicated test file.
 - Group related test files in subdirectories matching the component structure (e.g., `__tests__/apps/` for app-related controller tests).
 - Follow the pattern of importing test utilities and setting up mocks before importing the modules under test.

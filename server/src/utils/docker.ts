@@ -1,6 +1,5 @@
-import { EventEmitter } from "events";
-import { spawn } from "child_process";
-import type { Response } from "express";
+const { EventEmitter } = require("events");
+const { spawn } = require("child_process");
 
 interface DockerOptions {
   cwd?: string;
@@ -18,7 +17,7 @@ interface CommandResult {
   output: string;
 }
 
-export class DockerRunner extends EventEmitter {
+class DockerRunner extends EventEmitter {
   async runCommand(
     taskId: string,
     taskType: string,
@@ -41,7 +40,7 @@ export class DockerRunner extends EventEmitter {
 
       let output = "";
 
-      childProcess.stdout.on("data", (data) => {
+      childProcess.stdout.on("data", (data: Buffer) => {
         output += data.toString();
         this.emit("status", {
           taskId,
@@ -51,7 +50,17 @@ export class DockerRunner extends EventEmitter {
         } as StatusUpdate);
       });
 
-      childProcess.on("error", (error) => {
+      childProcess.stderr.on("data", (data: Buffer) => {
+        output += data.toString();
+        this.emit("status", {
+          taskId,
+          taskType,
+          status: "running",
+          message: data.toString()
+        } as StatusUpdate);
+      });
+
+      childProcess.on("error", (error: Error) => {
         this.emit("status", {
           taskId,
           taskType,
@@ -61,21 +70,21 @@ export class DockerRunner extends EventEmitter {
         reject(error);
       });
 
-      childProcess.on("close", (code) => {
+      childProcess.on("close", (code: number) => {
         if (code === 0) {
           this.emit("status", {
-            taskId,
-            taskType,
-            status: "complete",
-            message: `Docker compose command completed successfully`
+        taskId,
+        taskType,
+        status: "complete",
+        message: `Docker compose command completed successfully`
           } as StatusUpdate);
           resolve({ code, output });
         } else {
           this.emit("status", {
-            taskId,
-            taskType,
-            status: "error",
-            message: `Docker compose command failed with code ${code}`
+        taskId,
+        taskType,
+        status: "error",
+        message: `Docker compose command failed with code ${code}`
           } as StatusUpdate);
           reject(new Error(`Docker compose command failed with code ${code}`));
         }
@@ -83,4 +92,8 @@ export class DockerRunner extends EventEmitter {
     });
   }
 }
+
+module.exports = {
+  DockerRunner
+};
 

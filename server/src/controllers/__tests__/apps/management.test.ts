@@ -1,8 +1,8 @@
 // server/src/controllers/__tests__/apps/management.test.ts
-import request from 'supertest';
-import { TestServer } from '../../../test/test-server.js';
-import fs from 'fs-extra';
-import path from 'path';
+const request = require('supertest');
+const fs = require('fs-extra');
+const path = require('path');
+import { TestServer } from '../../../test/test-server';
 
 // Mock the DockerRunner to use our test adapter
 jest.mock('../../../utils/docker', () => {
@@ -16,7 +16,7 @@ jest.mock('../../../utils/docker', () => {
 describe('App Management API Tests', () => {
   let testServer: TestServer;
   const testAppName = 'management-test-app';
-
+  
   beforeAll(async () => {
     // Set up the test server
     testServer = new TestServer();
@@ -25,6 +25,10 @@ describe('App Management API Tests', () => {
     
     // Create a test app for management operations
     await testServer.environment.createMockApp(testAppName);
+    
+    // Create test apps that should appear in the list apps endpoint
+    await testServer.environment.createMockApp('list-test-app1');
+    await testServer.environment.createMockApp('list-test-app2');
   });
 
   afterAll(async () => {
@@ -105,10 +109,6 @@ describe('App Management API Tests', () => {
   });
   
   test('GET /api/apps should return a list of all deployed apps', async () => {
-    // Create a couple more test apps
-    await testServer.environment.createMockApp('list-test-app1');
-    await testServer.environment.createMockApp('list-test-app2');
-    
     const response = await request(testServer.getApp())
       .get('/api/apps')
       .expect(200);

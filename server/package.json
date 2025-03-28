@@ -1,9 +1,9 @@
 {
   "name": "@hola/server",
   "version": "1.0.0",
-  "type": "module",
   "license": "MIT",
   "main": "dist/server.js",
+  "type": "commonjs",
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -33,7 +33,7 @@
     "typescript": "^5.4.2"
   },
   "scripts": {
-    "dev": "nodemon --watch src --ext ts,json --exec \"ts-node --esm src/server.ts\"",
+    "dev": "nodemon --watch src -e ts,js --exec ts-node src/server.ts",
     "start": "node --experimental-specifier-resolution=node dist/server.js",
     "build": "tsc",
     "watch": "tsc --watch",
