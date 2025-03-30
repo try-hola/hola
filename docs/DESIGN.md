@@ -77,82 +77,65 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 
 ## 5. Storage Structure
 
-### Directory Structure
+### Consolidated Directory Structure
 
 ```
-${STORAGE_ROOT}/
-├── packages/                  # Downloaded ORAS packages
-│   └── {appName}/
-│       └── {version}/
-│           └── bundle.tgz    # Original downloaded package
-│
-├── deployments/              # Active deployments
-│   └── {appName}/
-│       ├── files/           # App-specific uploaded files
-│       ├── compose/         # Generated deployment files
-│       └── current/         # Active deployment workspace
-│
-├── config/                   # Configuration storage
-│   ├── system/
-│   │   └── config.json      # System-wide configuration
-│   └── apps/
-│       └── {appName}/
-│           └── config.json  # App-specific configuration
-│
-└── backups/                  # Backup storage
-    └── {appName}/
-        └── {timestamp}/
-            ├── files/       # Snapshot of files
-            ├── config/      # Snapshot of config
-            └── metadata.json
-```
-
-### Detailed File Organization
-
-```
-/data
-├── packages/
+${STORAGE_ROOT}/ (or /data/)
+├── packages/                           # Downloaded ORAS packages
 │   └── {packageName}/
 │       ├── version-{timestamp}/
-│       │   ├── docker-compose.yml   # Original docker-compose from ORAS
-│       │   ├── Dockerfile.*         # Any Dockerfiles from ORAS
-│       │   └── ...                  # Other files from ORAS package
+│       │   ├── docker-compose.yml      # Original docker-compose from ORAS
+│       │   ├── Dockerfile.*            # Any Dockerfiles from ORAS
+│       │   └── ...                     # Other files from ORAS package
 │       └── latest -> version-{timestamp}  # Symlink to latest version
-├── apps/
+│
+├── apps/                              # Application configuration
 │   └── {appName}/
-│       ├── package-ref              # Reference to package being used
-│       ├── env/
-│       │   ├── app/                 # App-level environment variables
-│       │   │   ├── regular/         # Regular environment variables
-│       │   │   │   └── {KEY_NAME}   # One file per env var, filename is the key
-│       │   │   └── encrypted/       # Encrypted environment variables
-│       │   │       └── {KEY_NAME}   # One file per encrypted env var
-│       │   └── services/            # Service-specific environment variables
-│       │       └── {serviceName}/   # One directory per service
-│       │           ├── regular/     # Regular environment variables
-│       │           │   └── {KEY_NAME}  # One file per env var
-│       │           └── encrypted/   # Encrypted environment variables
-│       │               └── {KEY_NAME}  # One file per encrypted env var
+│       ├── package-ref                # Reference to package being used
+│       ├── env/                       # Environment variables
+│       │   ├── regular/               # Regular environment variables
+│       │   │   └── {KEY_NAME}         # One file per env var, filename is the key
+│       │   └── encrypted/             # Encrypted environment variables
+│       │       └── {KEY_NAME}         # One file per encrypted env var
 │       └── files/
-│           ├── app/                 # App-level files
+│           ├── app/                   # App-level files
 │           │   └── docker-compose.override.yml  # Optional override for the base compose
-│           └── services/            # Service-specific files
-│               └── {serviceName}/   # One directory per service
-│                   ├── Dockerfile   # Custom Dockerfile for this service (if any)
-│                   └── config/      # Configuration files for this service
+│           └── services/              # Service-specific files
+│               └── {serviceName}/     # One directory per service
+│                   ├── Dockerfile     # Custom Dockerfile for this service (if any)
+│                   └── config/        # Configuration files for this service
 │                       └── {path/to/file}  # Path matches container destination
-└── deployments/
-    └── {deploymentId}/              # Created at deploy time
-        ├── docker-compose.yml       # Main compose file
-        ├── docker-compose.override.yml  # Applied if user provided one
-        ├── .env                     # Combined app-level environment variables
-        ├── services/                # Service-specific files
-        │   └── {serviceName}/
-        │       ├── Dockerfile       # Service Dockerfile (if custom)
-        │       ├── .env             # Service-specific environment variables
-        │       └── config/          # Mounted configuration files
-        │           └── {path/to/file}
-        └── files/                   # Other files needed at the app level
+│
+├── deployments/                       # Active deployments
+│   └── {deploymentId}/                # Created at deploy time (includes appName)
+│       ├── docker-compose.yml         # Main compose file
+│       ├── docker-compose.override.yml # Applied if user provided one
+│       ├── .env                       # Combined environment variables
+│       ├── services/                  # Service-specific files
+│       │   └── {serviceName}/
+│       │       ├── Dockerfile         # Service Dockerfile (if custom)
+│       │       └── config/            # Mounted configuration files
+│       │           └── {path/to/file}
+│       └── files/                     # Other files needed at the app level
+│
+├── config/                            # Global configuration storage
+│   ├── system/
+│   │   ├── config.json                # System-wide configuration
+│   │   └── env/                       # Global environment variables
+│   │       ├── regular/               # Regular environment variables
+│   │       │   └── {KEY_NAME}         # One file per env var, filename is the key
+│   │       └── encrypted/             # Encrypted environment variables
+│   │           └── {KEY_NAME}         # One file per encrypted env var
+│   └── apps/
+│       └── {appName}/
+│           └── config.json            # App-specific configuration
+│
+└── backups/                           # Backup storage
+    └── {appName}/
+        └── {timestamp}/
+            ├── files/                 # Snapshot of files
+            ├── config/                # Snapshot of config
+            └── metadata.json          # Backup metadata
 ```
 
 ## 6. Directory Roles and Operations
@@ -220,20 +203,14 @@ Stores point-in-time snapshots of applications:
 
 ### Environment Variables
 
-#### App-Level Environment Variables
+All environment variables are stored under a single namespace per application to ensure they work correctly with Docker Compose:
 
-- Variables that apply to the entire application or are referenced in docker-compose.yml
-- Stored in `env/app/regular/{KEY_NAME}` or `env/app/encrypted/{KEY_NAME}`
-- Combined into a single `.env` file at deploy time
-- Automatically picked up by Docker Compose at the application level
-
-#### Service-Level Environment Variables
-
-- Variables that are specific to a particular service/container
-- Stored in `env/services/{serviceName}/regular/{KEY_NAME}` or `env/services/{serviceName}/encrypted/{KEY_NAME}`
-- Combined into service-specific `.env` files at deploy time
-- Accessible only to the specific service/container
-- Provided to the container via environment section in docker-compose.yml
+- Variables are stored in `env/regular/{KEY_NAME}` or `env/encrypted/{KEY_NAME}`
+- Each variable is stored in a separate file named after the environment variable
+- All variables are combined into a single `.env` file during deployment
+- This single `.env` file is used by Docker Compose for the entire application
+- Since Docker Compose uses a flat namespace for variables, this approach ensures all services have access to the required variables
+- Encrypted variables are decrypted during deployment before being written to the `.env` file
 
 ### Configuration Files
 
