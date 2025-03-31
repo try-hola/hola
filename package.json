@@ -9,5 +9,8 @@
   "workspaces": [
     "server",
     "client"
-  ]
+  ],
+  "scripts": {
+    "test": "yarn workspaces run test"
+  }
 }

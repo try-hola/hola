@@ -1,5 +1,7 @@
 // server/src/controllers/__tests__/apps/integration.test.ts
 const request = require('supertest');
+const fs = require('fs-extra');
+const path = require('path');
 import { TestServer } from '../../../test/test-server';
 
 // Mock the DockerRunner to use our test adapter
@@ -7,6 +9,15 @@ jest.mock('../../../utils/docker', () => {
   return {
     DockerRunner: jest.fn().mockImplementation(() => {
       return new (require('../../../test/docker-test-adapter').DockerTestAdapter)();
+    })
+  };
+});
+
+// Mock the OrasRunner to use our test adapter
+jest.mock('../../../utils/oras', () => {
+  return {
+    OrasRunner: jest.fn().mockImplementation(() => {
+      return new (require('../../../test/oras-test-adapter').OrasTestAdapter)();
     })
   };
 });
@@ -20,9 +31,24 @@ describe('Apps API Integration Tests', () => {
     await testServer.init();
     await testServer.start();
     
-    // Create test apps
+    // Create test apps with proper directory structure
     await testServer.environment.createMockApp('test-app1');
     await testServer.environment.createMockApp('test-app2');
+    
+    // Add some files to test apps to test file listing
+    const appFilesDir = testServer.environment.getPaths().apps.files.app('test-app1'); // Use apps path
+    await fs.ensureDir(appFilesDir);
+    await fs.writeFile(path.join(appFilesDir, 'test-config.json'), '{"test": true}');
+
+    // Create mock bundle files needed for deploy/upgrade tests in this suite
+    const packageDirLatest = testServer.environment.getPaths().packages.version('test-app1', 'latest');
+    await fs.ensureDir(packageDirLatest);
+    await fs.writeFile(path.join(packageDirLatest, 'bundle.tgz'), 'mock latest bundle');
+
+    const mockUpgradePackageDir = testServer.environment.getPaths().packages.version('test-app1', 'new-version');
+    const mockUpgradeBundlePath = path.join(mockUpgradePackageDir, 'bundle.tgz');
+    await fs.ensureDir(mockUpgradePackageDir);
+    await fs.writeFile(mockUpgradeBundlePath, 'mock tarball content');
   });
 
   afterAll(async () => {

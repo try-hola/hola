@@ -14,24 +14,19 @@ export class TestEnvironment {
     packages: string;
     backups: string;
     config: string;
+    apps: string;
   };
 
   constructor(options: { cleanOnExit?: boolean } = {}) {
-    // Create unique test directory in system temp folder
-    this.storageRoot = path.join(
-      process.env.TEST_STORAGE_ROOT || 
-      path.join(process.env.TEMP || '/tmp', 'hola-test-' + uuidv4())
-    );
-    
-    // Define sub-directories
+    this.storageRoot = path.join(process.cwd(), 'data');
     this.appDirectories = {
       deployments: path.join(this.storageRoot, 'deployments'),
       packages: path.join(this.storageRoot, 'packages'),
       backups: path.join(this.storageRoot, 'backups'),
-      config: path.join(this.storageRoot, 'config')
+      config: path.join(this.storageRoot, 'config'),
+      apps: path.join(this.storageRoot, 'apps'),
     };
-    
-    // Clean test directory on process exit if requested
+
     if (options.cleanOnExit) {
       process.on('exit', () => {
         this.cleanup();
@@ -39,79 +34,185 @@ export class TestEnvironment {
     }
   }
 
-  /**
-   * Initialize the test environment by creating necessary directories
-   */
   async init(): Promise<void> {
-    // Ensure the storage root exists and is empty
     await fs.emptyDir(this.storageRoot);
-    
-    // Create required sub-directories
-    await Promise.all(
-      Object.values(this.appDirectories).map(dir => fs.ensureDir(dir))
-    );
+    await Promise.all(Object.values(this.appDirectories).map(dir => fs.ensureDir(dir)));
   }
 
-  /**
-   * Create mock app directory structure for testing
-   */
   async createMockApp(appName: string): Promise<void> {
+    // Create deployment directories
     const appDeploymentPath = path.join(this.appDirectories.deployments, appName);
     const appComposePath = path.join(appDeploymentPath, 'compose');
     const appFilesPath = path.join(appDeploymentPath, 'files');
     const appCurrentPath = path.join(appDeploymentPath, 'current');
-    
+    const appServicesPath = path.join(appDeploymentPath, 'services');
+
     await fs.ensureDir(appDeploymentPath);
     await fs.ensureDir(appComposePath);
     await fs.ensureDir(appFilesPath);
     await fs.ensureDir(appCurrentPath);
+    await fs.ensureDir(appServicesPath);
+
+    // Create app files structure (app-level and services)
+    await fs.ensureDir(path.join(appFilesPath, 'app'));
+    await fs.ensureDir(path.join(appFilesPath, 'services'));
+
+    // Create app configuration structure
+    const appPath = path.join(this.appDirectories.apps, appName);
+    await fs.ensureDir(appPath);
+
+    // Create app files directories
+    await fs.ensureDir(path.join(appPath, 'files', 'app'));
+    await fs.ensureDir(path.join(appPath, 'files', 'services'));
+
+    // Create environment variable directories
+    await fs.ensureDir(path.join(appPath, 'env', 'regular'));
+    await fs.ensureDir(path.join(appPath, 'env', 'encrypted'));
+    await fs.ensureDir(path.join(appPath, 'env', 'services'));
+
+    // Create config directory
+    const configPath = path.join(this.appDirectories.config, 'apps', appName);
+    await fs.ensureDir(configPath);
     
-    // Create sample docker-compose.yml file
+    // Create a sample config.json file
+    await fs.writeJSON(path.join(configPath, 'config.json'), {
+      name: appName,
+      test: true,
+      createdAt: new Date().toISOString()
+    });
+
+    // Create backup structure
+    const backupsRoot = path.join(this.appDirectories.backups, appName);
+    const timestamp = new Date().toISOString();
+    const timestampedBackupDir = path.join(backupsRoot, timestamp);
+
+    await fs.ensureDir(backupsRoot);
+    await fs.ensureDir(timestampedBackupDir);
+    await fs.ensureDir(path.join(timestampedBackupDir, 'files'));
+    await fs.ensureDir(path.join(timestampedBackupDir, 'config'));
+
+    // Create backup metadata
     await fs.writeFile(
-      path.join(appComposePath, 'docker-compose.yml'),
-      'version: "3"\nservices:\n  app:\n    image: nginx:alpine'
+      path.join(timestampedBackupDir, 'metadata.json'),
+      JSON.stringify({ 
+        appName, 
+        timestamp, 
+        success: true,
+        backupType: "test"
+      })
     );
-    
-    // Create sample config file
-    await fs.ensureDir(path.join(this.appDirectories.config, appName));
-    await fs.writeFile(
-      path.join(this.appDirectories.config, appName, 'config.json'),
-      JSON.stringify({ name: appName, test: true })
-    );
+
+    // Log verification of backup directories for debugging
+    if (!(await fs.pathExists(timestampedBackupDir))) {
+      console.error(`Backup directory creation failed: ${timestampedBackupDir}`);
+    }
   }
 
-  /**
-   * Clean up the test environment and remove all test data
-   */
   async cleanup(): Promise<void> {
     try {
-      await fs.remove(this.storageRoot);
+      // First try to clean up specific directories recursively
+      const directories = Object.values(this.appDirectories);
+      for (const dir of directories) {
+        if (await fs.pathExists(dir)) {
+          try {
+            // Use rimraf-style removal with force option
+            await fs.remove(dir);
+          } catch (error) {
+            console.error(`Failed to remove directory: ${dir}`, error);
+          }
+        }
+      }
+      
+      // Then clean up the entire storage root
+      if (await fs.pathExists(this.storageRoot)) {
+        try {
+          await fs.remove(this.storageRoot);
+        } catch (error) {
+          console.warn(`Failed to completely remove storage root: ${this.storageRoot}`, error);
+        }
+      }
     } catch (error) {
       console.warn('Failed to clean up test environment:', error);
     }
   }
-  
-  /**
-   * Returns path functions that mimic the project's PATHS configuration but using test directories
-   */
+
   getPaths() {
     return {
-      packages: (appName: string, version: string) => 
-        path.join(this.appDirectories.packages, appName, version),
-      config: (appName: string) => 
-        path.join(this.appDirectories.config, appName),
-      deployments: {
-        root: (appName: string) => 
-          path.join(this.appDirectories.deployments, appName),
-        files: (appName: string) => 
-          path.join(this.appDirectories.deployments, appName, 'files'),
-        compose: (appName: string) => 
-          path.join(this.appDirectories.deployments, appName, 'compose'),
-        current: (appName: string) => 
-          path.join(this.appDirectories.deployments, appName, 'current')
+      packages: {
+        root: (appName: string): string => path.join(this.storageRoot, 'packages', appName),
+        version: (appName: string, version: string): string => 
+          version === 'latest'
+            ? path.join(this.storageRoot, 'packages', appName, version)
+            : path.join(this.storageRoot, 'packages', appName, `version-${version}`),
+        bundle: (appName: string, version: string): string => 
+          path.join(
+            this.storageRoot, 
+            'packages', 
+            appName, 
+            version === 'latest' ? version : `version-${version}`, 
+            'bundle.tgz'
+          ),
       },
-      backups: (appName: string, tag: string) => 
-        path.join(this.appDirectories.backups, appName, tag)
+      apps: {
+        root: (appName: string): string => path.join(this.storageRoot, 'apps', appName),
+        packageRef: (appName: string): string => path.join(this.storageRoot, 'apps', appName, 'package-ref'),
+        env: {
+          app: {
+            regular: (appName: string): string => path.join(this.storageRoot, 'apps', appName, 'env', 'regular'),
+            encrypted: (appName: string): string => path.join(this.storageRoot, 'apps', appName, 'env', 'encrypted'),
+            variable: (appName: string, key: string, encrypted: boolean): string => 
+              path.join(this.storageRoot, 'apps', appName, 'env', encrypted ? 'encrypted' : 'regular', key),
+          },
+          service: {
+            regular: (appName: string, serviceName: string): string => 
+              path.join(this.storageRoot, 'apps', appName, 'env', 'services', serviceName, 'regular'),
+            encrypted: (appName: string, serviceName: string): string => 
+              path.join(this.storageRoot, 'apps', appName, 'env', 'services', serviceName, 'encrypted'),
+            variable: (appName: string, serviceName: string, key: string, encrypted: boolean): string => 
+              path.join(
+                this.storageRoot, 
+                'apps', 
+                appName, 
+                'env', 
+                'services', 
+                serviceName, 
+                encrypted ? 'encrypted' : 'regular', 
+                key
+              ),
+          },
+        },
+        files: {
+          app: (appName: string): string => path.join(this.storageRoot, 'apps', appName, 'files', 'app'),
+          service: {
+            root: (appName: string, serviceName: string): string => 
+              path.join(this.storageRoot, 'apps', appName, 'files', 'services', serviceName),
+            config: (appName: string, serviceName: string): string => 
+              path.join(this.storageRoot, 'apps', appName, 'files', 'services', serviceName, 'config'),
+            dockerfile: (appName: string, serviceName: string): string => 
+              path.join(this.storageRoot, 'apps', appName, 'files', 'services', serviceName, 'Dockerfile'),
+          },
+        },
+      },
+      config: {
+        system: (): string => path.join(this.storageRoot, 'config', 'system'),
+        app: (appName: string): string => path.join(this.storageRoot, 'config', 'apps', appName),
+      },
+      deployments: {
+        root: (appName: string): string => path.join(this.storageRoot, 'deployments', appName),
+        files: (appName: string): string => path.join(this.storageRoot, 'deployments', appName, 'files'),
+        compose: (appName: string): string => path.join(this.storageRoot, 'deployments', appName, 'compose'),
+        current: (appName: string): string => path.join(this.storageRoot, 'deployments', appName, 'current'),
+        services: (appName: string): string => path.join(this.storageRoot, 'deployments', appName, 'services'),
+        service: (appName: string, serviceName: string): string => 
+          path.join(this.storageRoot, 'deployments', appName, 'services', serviceName),
+      },
+      backups: {
+        root: (appName: string): string => path.join(this.storageRoot, 'backups', appName),
+        timestamp: (appName: string, tag: string): string => path.join(this.storageRoot, 'backups', appName, tag),
+        files: (appName: string, tag: string): string => path.join(this.storageRoot, 'backups', appName, tag, 'files'),
+        config: (appName: string, tag: string): string => path.join(this.storageRoot, 'backups', appName, tag, 'config'),
+        metadata: (appName: string, tag: string): string => path.join(this.storageRoot, 'backups', appName, tag, 'metadata.json'),
+      },
     };
   }
 }

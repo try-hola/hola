@@ -1,4 +1,5 @@
 const express = require('express');
+const bodyParser = require('body-parser');
 const http = require('http');
 const net = require('net');
 const config = require('../config');
@@ -48,9 +49,11 @@ export class TestServer {
     
     // Set up middleware and routes on the test app
     this.app.use(express.json());
+    this.app.use(express.urlencoded({ extended: true }));
     
     // Register routes explicitly
     registerRoutes(this.app);
+    
     // Add a catch-all error handler for tests
     this.app.use((err: any, req: Request, res: Response, next: NextFunction) => {
       console.error('Test server error:', err);
@@ -93,6 +96,7 @@ export class TestServer {
       await this.environment.cleanup();
     }
   }
+  
   /**
    * Get the Express app instance for supertest
    */

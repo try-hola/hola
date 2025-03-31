@@ -1,99 +1,142 @@
-const { EventEmitter } = require("events");
-const { spawn } = require("child_process");
+const { spawn } = require('child_process');
+const { EventEmitter } = require('events');
 
-interface DockerOptions {
-  cwd?: string;
-}
-
-interface StatusUpdate {
-  taskId: string;
-  taskType: string;
-  status: "starting" | "running" | "complete" | "error";
-  message: string;
-}
-
-interface CommandResult {
+/**
+ * Result of a Docker command execution
+ */
+interface DockerCommandResult {
   code: number;
   output: string;
 }
 
+/**
+ * Options for Docker command execution
+ */
+interface DockerCommandOptions {
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
+/**
+ * Docker runner class that handles executing docker and docker-compose commands
+ * and emitting events for status updates
+ */
 class DockerRunner extends EventEmitter {
+  /**
+   * Run a Docker command and emit status events
+   * 
+   * @param taskId - Unique ID for this task
+   * @param taskType - Type of task (DEPLOY, REMOVE, START, etc.)
+   * @param args - Command arguments for docker-compose
+   * @param appName - Name of the application
+   * @param options - Additional options for command execution
+   * @returns Promise resolving to the command result
+   */
   async runCommand(
     taskId: string,
     taskType: string,
     args: string[],
     appName: string,
-    options: DockerOptions = {}
-  ): Promise<CommandResult> {
-    this.emit("status", {
-      taskId,
-      taskType,
-      status: "starting",
-      message: `Running docker-compose ${args.join(" ")} for ${appName}`
-    } as StatusUpdate);
-
+    options: DockerCommandOptions = {}
+  ): Promise<DockerCommandResult> {
     return new Promise((resolve, reject) => {
-      const childProcess = spawn("docker-compose", args, {
+      // Default to docker-compose command
+      const command = 'docker-compose';
+      
+      // Set up environment with any passed options
+      const env = {
+        ...process.env,
+        ...options.env
+      };
+      
+      // Emit a starting event
+      this.emit('status', {
+        taskId,
+        taskType,
+        status: 'starting',
+        message: `Running docker-compose ${args.join(' ')} for ${appName}`
+      });
+      
+      // Spawn the process
+      const dockerProcess = spawn(command, args, {
         cwd: options.cwd,
-        env: { ...process.env, PATH: process.env.PATH }
+        env
       });
-
-      let output = "";
-
-      childProcess.stdout.on("data", (data: Buffer) => {
-        output += data.toString();
-        this.emit("status", {
+      
+      let stdout = '';
+      let stderr = '';
+      
+      // Collect stdout and emit updates
+      dockerProcess.stdout.on('data', (data) => {
+        const chunk = data.toString();
+        stdout += chunk;
+        
+        this.emit('status', {
           taskId,
           taskType,
-          status: "running",
-          message: data.toString()
-        } as StatusUpdate);
+          status: 'running',
+          message: chunk.trim()
+        });
       });
-
-      childProcess.stderr.on("data", (data: Buffer) => {
-        output += data.toString();
-        this.emit("status", {
+      
+      // Collect stderr
+      dockerProcess.stderr.on('data', (data) => {
+        const chunk = data.toString();
+        stderr += chunk;
+        
+        // Emit stderr as a warning status
+        this.emit('status', {
           taskId,
           taskType,
-          status: "running",
-          message: data.toString()
-        } as StatusUpdate);
+          status: 'warning',
+          message: chunk.trim()
+        });
       });
-
-      childProcess.on("error", (error: Error) => {
-        this.emit("status", {
-          taskId,
-          taskType,
-          status: "error",
-          message: error.message
-        } as StatusUpdate);
-        reject(error);
-      });
-
-      childProcess.on("close", (code: number) => {
+      
+      // Handle process completion
+      dockerProcess.on('close', (code) => {
         if (code === 0) {
-          this.emit("status", {
-        taskId,
-        taskType,
-        status: "complete",
-        message: `Docker compose command completed successfully`
-          } as StatusUpdate);
-          resolve({ code, output });
+          this.emit('status', {
+            taskId,
+            taskType,
+            status: 'complete',
+            message: `Command completed successfully`
+          });
+          
+          resolve({
+            code,
+            output: stdout
+          });
         } else {
-          this.emit("status", {
-        taskId,
-        taskType,
-        status: "error",
-        message: `Docker compose command failed with code ${code}`
-          } as StatusUpdate);
-          reject(new Error(`Docker compose command failed with code ${code}`));
+          const errorMessage = `Command failed with exit code ${code}: ${stderr}`;
+          
+          this.emit('status', {
+            taskId,
+            taskType,
+            status: 'error',
+            message: errorMessage
+          });
+          
+          reject(new Error(errorMessage));
         }
+      });
+      
+      // Handle process errors
+      dockerProcess.on('error', (error) => {
+        const errorMessage = `Failed to execute command: ${error.message}`;
+        
+        this.emit('status', {
+          taskId,
+          taskType,
+          status: 'error',
+          message: errorMessage
+        });
+        
+        reject(new Error(errorMessage));
       });
     });
   }
 }
 
-module.exports = {
-  DockerRunner
-};
+module.exports = { DockerRunner };
 

@@ -1,34 +1,106 @@
-const express = require("express");
-const { registerRoutes } = require("./routes");
-const dotenv = require("dotenv");
-const swaggerUi = require("swagger-ui-express");
-const YAML = require("yamljs");
-const path = require("path");
-const { PORT, STORAGE_ROOT } = require("./config");
-const fs = require("fs-extra");
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const { registerRoutes } = require('./routes');
+const { PORT } = require('./config');
+const { logEvent } = require('./utils/logger');
 
-dotenv.config();
-const app = express();
+/**
+ * Sets up and configures the Express server application
+ * @returns {import('express').Application} Configured Express application
+ */
+function setupServer() {
+  const app = express();
 
-// Ensure storage directory exists
-fs.ensureDirSync(STORAGE_ROOT);
+  // Apply middleware
+  app.use(cors());
+  app.use(bodyParser.json({ limit: '50mb' }));
+  app.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
+  
+  // Basic request logging middleware
+  app.use((req, res, next) => {
+    logEvent('HTTP', 'info', `${req.method} ${req.url}`);
+    next();
+  });
 
-// Serve static files from the public directory
-app.use(express.static(path.join(__dirname, "../public")));
+  // API key authentication
+  app.use((req, res, next) => {
+    // Skip authentication in test environment
+    if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+      return next();
+    }
 
-// Load OpenAPI document
-const openApiDocument = YAML.load(path.join(__dirname, "../public/docs/openapi.yaml"));
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      logEvent('SECURITY', 'warning', 'No API key is configured. API is unsecured!');
+      return next();
+    }
+    
+    const providedKey = req.headers['x-api-key'];
+    if (!providedKey || providedKey !== apiKey) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    
+    next();
+  });
 
-app.use(express.json()); // Enable JSON parsing
+  // Register API routes
+  registerRoutes(app);
 
-// Register API routes
-registerRoutes(app);
+  // 404 handler
+  app.use((req, res) => {
+    res.status(404).json({ error: 'Not Found', path: req.path });
+  });
 
-// Serve OpenAPI UI
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
+  // Global error handler
+  app.use((err, req, res, next) => {
+    const statusCode = err.statusCode || 500;
+    logEvent('ERROR', 'error', `${err.message || 'Unknown error'}`);
+    console.error(err);
+    
+    res.status(statusCode).json({
+      error: err.message || 'Internal Server Error',
+      status: statusCode
+    });
+  });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📄 API Docs available at http://localhost:${PORT}/api-docs`);
-  console.log(`📁 Storage root: ${STORAGE_ROOT}`);
-});
+  return app;
+}
+
+/**
+ * Starts the server on the specified port
+ */
+function startServer() {
+  const app = setupServer();
+  const port = PORT || 3000;
+
+  const server = app.listen(port, () => {
+    logEvent('SERVER', 'info', `Server started on port ${port}`);
+  });
+
+  // Graceful shutdown handler
+  function shutdown() {
+    logEvent('SERVER', 'info', 'Server shutting down...');
+    server.close(() => {
+      logEvent('SERVER', 'info', 'Server stopped');
+      process.exit(0);
+    });
+  }
+
+  // Handle termination signals
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
+  return server;
+}
+
+// Export for use in other modules
+module.exports = {
+  setupServer,
+  startServer
+};
+
+// Start the server if this file is run directly
+if (require.main === module) {
+  startServer();
+}

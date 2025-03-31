@@ -1,6 +1,7 @@
 {
   "name": "Node.js Project",
-  "image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "devcontainer",
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
@@ -11,11 +12,9 @@
       "extensions": [
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode",
-        // "streetsidesoftware.code-spell-checker",
         "ms-vscode.vscode-typescript-next",
         "mikestead.dotenv",
         "christian-kohler.path-intellisense",
-        "orta.vscode-jest",
         "github.copilot",
         "redhat.vscode-yaml"
       ],
@@ -26,7 +25,7 @@
         },
         "typescript.tsdk": "node_modules/typescript/lib",
         "typescript.enablePromptUseWorkspaceTsdk": true,
-        "jest.runMode": "on-save",
+        // "jest.runMode": "on-save",
         "terminal.integrated.defaultProfile.linux": "bash"
       }
     }

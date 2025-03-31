@@ -27,7 +27,7 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 | POST        | /apps/deploy            | Deploy a new application.                               |
 | GET         | /apps                   | List all deployed applications.                         |
 | GET         | /apps/{appName}         | Get details about a deployed application.               |
-| PUT         | /apps/{appName}/update  | Update an application (with backup handled internally). |
+| POST        | /apps/{appName}/update  | Update an application (with backup handled internally). |
 | DELETE      | /apps/{appName}         | Remove a deployed application.                          |
 | POST        | /apps/{appName}/start   | Start an application.                                   |
 | POST        | /apps/{appName}/stop    | Stop an application.                                    |
@@ -80,7 +80,7 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 ### Consolidated Directory Structure
 
 ```
-${STORAGE_ROOT}/ (or /data/)
+${STORAGE_ROOT}/ (or data/)
 ├── packages/                           # Downloaded ORAS packages
 │   └── {packageName}/
 │       ├── version-{timestamp}/
@@ -298,7 +298,7 @@ exports.setEnvironmentVariables = async (req, res) => {
   const { variables, encrypted } = req.body;
 
   try {
-    const appPath = path.join(process.env.DATA_DIR || "/data", "apps", appName);
+    const appPath = path.join(process.env.DATA_DIR || "data", "apps", appName);
 
     // Determine whether this is app-level or service-level configuration
     let baseEnvPath;
@@ -346,7 +346,7 @@ exports.addConfigFile = async (req, res) => {
   const { path: filePath, content } = req.body;
 
   try {
-    const appPath = path.join(process.env.DATA_DIR || "/data", "apps", appName);
+    const appPath = path.join(process.env.DATA_DIR || "data", "apps", appName);
 
     // Determine whether this is app-level or service-level configuration
     let targetPath;

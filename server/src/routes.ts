@@ -1,57 +1,36 @@
-const express = require("express");
-const { Router } = express;
-const { 
-  deployApp, 
-  upgradeApp, 
-  listApps, 
-  getAppDetails, 
-  removeApp,
-  startApp,
-  stopApp
-} = require("./controllers/apps");
-const { uploadFile, handleFileUpload, getFile, listFiles, deleteFile } = require("./controllers/files");
-import { Express, Request, Response, NextFunction } from "express";
+const express = require('express');
+import { Application } from 'express';
+const appsController = require('./controllers/apps');
+const filesController = require('./controllers/files');
 
 /**
- * Register all application routes to an Express application
+ * Registers all API routes on the given Express application
  * 
- * @param app Express application instance
+ * @param app - The Express application instance
  */
-// Define interface for controller functions
-interface ControllerFunction {
-  (req: Request, res: Response, next?: NextFunction): void | Promise<void>;
-}
+export const registerRoutes = (app: Application): void => {
+  // Root path for basic status check
+  app.get('/', (req, res) => {
+    res.json({ status: 'ok', version: process.env.npm_package_version || '1.0.0' });
+  });
 
-/**
- * Register all application routes to an Express application
- * 
- * @param app Express application instance
- */
-function registerRoutes(app: Express): void {
-  const router = Router();
-  
-  // App deployment and management routes
-  router.post("/apps", deployApp);                            // Deploy a new app
-  router.post("/apps/deploy", deployApp);                     // Alternative deploy endpoint
-  router.get("/apps", listApps);                              // List all apps
-  router.get("/apps/:appName/details", getAppDetails);        // Get app details
-  router.post("/apps/:appName/upgrade", upgradeApp);          // Upgrade app
-  router.delete("/apps/:appName", removeApp);                 // Remove app
-  router.post("/apps/:appName/start", startApp);              // Start app
-  router.post("/apps/:appName/stop", stopApp);                // Stop app
-  
+  // Application management routes
+  app.post('/api/apps/deploy', appsController.deployApp); // Deploy a new application
+  app.get('/api/apps', appsController.listApps); // List all deployed applications
+  app.get('/api/apps/:appName/details', appsController.getAppDetails); // Get details about an application
+  app.post('/api/apps/:appName/upgrade', appsController.upgradeApp); // Upgrade an existing application
+  app.delete('/api/apps/:appName', appsController.removeApp); // Remove an application
+  app.post('/api/apps/:appName/start', appsController.startApp); // Start an application
+  app.post('/api/apps/:appName/stop', appsController.stopApp); // Stop an application
+
   // File management routes
-  router.post("/apps/:appName/files", uploadFile, handleFileUpload); // Upload a file
-  router.get("/apps/:appName/files", listFiles);              // List all files for an app
-  
-  // Use a regular param and parse the full path in the controller
-  router.get("/apps/:appName/files/:filePath", getFile);      // Get a file
-  router.delete("/apps/:appName/files/:filePath", deleteFile); // Delete a file
-  
-  // Mount the router at the /api path prefix
-  app.use("/api", router);
-}
+  app.post('/api/apps/:appName/files', filesController.uploadFile, filesController.handleFileUpload); // Upload a file
+  app.get('/api/apps/:appName/files', filesController.listFiles); // List files for an application
+  app.get('/api/apps/:appName/files/:filePath(*)', filesController.getFile); // Get a specific file
+  app.delete('/api/apps/:appName/files/:filePath(*)', filesController.deleteFile); // Delete a specific file
+};
 
+// Export using CommonJS syntax
 module.exports = {
   registerRoutes
 };
