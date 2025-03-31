@@ -4,8 +4,11 @@ import fs from 'fs-extra';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
- * Test environment configuration that provides isolated storage paths
- * and manages cleanup between tests
+ * Test environment configuration for integration testing
+ * 
+ * Creates an isolated filesystem structure with standardized paths
+ * for app deployments, packages, backups, and configuration.
+ * Handles initialization and cleanup of test data between test runs.
  */
 export class TestEnvironment {
   public readonly storageRoot: string;
@@ -34,11 +37,18 @@ export class TestEnvironment {
     }
   }
 
+  /**
+   * Initialize the test environment by creating required directories
+   */
   async init(): Promise<void> {
     await fs.emptyDir(this.storageRoot);
     await Promise.all(Object.values(this.appDirectories).map(dir => fs.ensureDir(dir)));
   }
 
+  /**
+   * Creates a complete mock application structure for testing
+   * Sets up all required directories and config files for an application
+   */
   async createMockApp(appName: string): Promise<void> {
     // Create deployment directories
     const appDeploymentPath = path.join(this.appDirectories.deployments, appName);
@@ -102,12 +112,16 @@ export class TestEnvironment {
       })
     );
 
-    // Log verification of backup directories for debugging
+    // Verify backup directory creation
     if (!(await fs.pathExists(timestampedBackupDir))) {
       console.error(`Backup directory creation failed: ${timestampedBackupDir}`);
     }
   }
 
+  /**
+   * Clean up all test data directories
+   * Uses a multi-stage approach to ensure thorough cleanup even if individual removals fail
+   */
   async cleanup(): Promise<void> {
     try {
       // First try to clean up specific directories recursively
@@ -136,6 +150,10 @@ export class TestEnvironment {
     }
   }
 
+  /**
+   * Returns path helper functions for accessing standardized file locations
+   * Used to override the default paths in the application configuration
+   */
   getPaths() {
     return {
       packages: {

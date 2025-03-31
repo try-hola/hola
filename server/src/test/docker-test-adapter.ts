@@ -1,4 +1,3 @@
-// server/src/test/docker-test-adapter.ts
 const { EventEmitter } = require('events');
 
 export interface DockerCommandResult {
@@ -12,7 +11,8 @@ export interface DockerCommandOptions {
 }
 
 /**
- * Test-friendly Docker adapter that can be used with real Docker or mocked
+ * Test adapter for Docker CLI operations
+ * Supports both mocked responses and real Docker integration
  */
 export class DockerTestAdapter extends EventEmitter {
   private useMock: boolean;
@@ -23,7 +23,14 @@ export class DockerTestAdapter extends EventEmitter {
   }
 
   /**
-   * Run a Docker command
+   * Executes a Docker command or simulates it in mock mode
+   * 
+   * @param taskId - Unique identifier for the task
+   * @param taskType - The type of Docker operation
+   * @param args - Docker CLI arguments
+   * @param appName - The application name
+   * @param options - Command options including working directory and environment
+   * @returns Promise resolving to command result with exit code and output
    */
   async runCommand(
     taskId: string,
@@ -55,7 +62,7 @@ export class DockerTestAdapter extends EventEmitter {
       
       await new Promise(resolve => setTimeout(resolve, 50));
       
-      // Mock common Docker command responses
+      // Mock common Docker command responses based on command arguments
       let result: DockerCommandResult;
       
       if (args.includes('ps')) {
@@ -79,8 +86,7 @@ export class DockerTestAdapter extends EventEmitter {
       
       return result;
     } else {
-      // For real Docker implementation, import and use the actual DockerRunner
-      // This would be implemented to use the real Docker CLI or Docker API
+      // Real Docker implementation would be implemented here
       throw new Error('Real Docker implementation not available in test mode');
     }
   }

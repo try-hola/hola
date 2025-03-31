@@ -5,12 +5,13 @@ const net = require('net');
 const config = require('../config');
 const { registerRoutes } = require('../routes');
 import { Application, Request, Response, NextFunction } from 'express';
-import * as HTTP from 'http'; // Import for TypeScript type definitions
-import { AddressInfo } from 'net'; // Import AddressInfo type from net
+import * as HTTP from 'http';
+import { AddressInfo } from 'net';
 import { TestEnvironment } from './test-environment';
 
 /**
  * Test server for running integration tests with Express
+ * Provides an isolated environment with configurable test paths
  */
 export class TestServer {
   private server: HTTP.Server | null = null;
@@ -25,7 +26,8 @@ export class TestServer {
   }
 
   /**
-   * Initialize the test server with real or mock modules as needed
+   * Initialize the test server with isolated environment
+   * Sets up middleware, routes, and overrides configuration paths for testing
    */
   async init(): Promise<void> {
     await this.environment.init();
@@ -62,7 +64,7 @@ export class TestServer {
   }
 
   /**
-   * Start the server on a random available port
+   * Start the server on a random available port to avoid conflicts
    */
   async start(): Promise<void> {
     return new Promise((resolve) => {
@@ -78,6 +80,7 @@ export class TestServer {
 
   /**
    * Stop the server and clean up resources
+   * Ensures proper shutdown sequence to prevent resource leaks
    */
   async stop(): Promise<void> {
     if (this.server) {
@@ -98,7 +101,7 @@ export class TestServer {
   }
   
   /**
-   * Get the Express app instance for supertest
+   * Get the Express app instance for use with supertest
    */
   getApp(): Application {
     return this.app;

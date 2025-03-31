@@ -1,4 +1,3 @@
-// server/src/test/oras-test-adapter.ts
 const { EventEmitter } = require('events');
 
 export interface OrasCommandOptions {
@@ -7,12 +6,12 @@ export interface OrasCommandOptions {
 }
 
 /**
- * Test adapter for the ORAS runner that mocks package downloads
- * and other ORAS operations for integration testing
+ * Test adapter for the ORAS (OCI Registry As Storage) client
+ * Simulates package downloads and operations for testing without external dependencies
  */
 export class OrasTestAdapter extends EventEmitter {
   /**
-   * Run a simulated ORAS command
+   * Simulates running an ORAS command with appropriate status events
    * 
    * @param taskId - The unique task identifier
    * @param taskType - The type of operation being performed
