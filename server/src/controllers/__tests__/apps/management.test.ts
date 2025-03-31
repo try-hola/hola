@@ -1,10 +1,10 @@
-// server/src/controllers/__tests__/apps/management.test.ts
+// Tests for App Management API endpoints (start, stop, details, removal)
 const request = require('supertest');
 const fs = require('fs-extra');
 const path = require('path');
 import { TestServer } from '../../../test/test-server';
 
-// Mock the DockerRunner to use our test adapter
+// Replace Docker operations with test adapter
 jest.mock('../../../utils/docker', () => {
   return {
     DockerRunner: jest.fn().mockImplementation(() => {
@@ -18,24 +18,23 @@ describe('App Management API Tests', () => {
   const testAppName = 'management-test-app';
   
   beforeAll(async () => {
-    // Set up the test server
     testServer = new TestServer();
     await testServer.init();
     await testServer.start();
     
-    // Create test apps that should appear in the list apps endpoint
+    // Create apps that will appear in the list apps endpoint tests
     await testServer.environment.createMockApp('list-test-app1');
     await testServer.environment.createMockApp('list-test-app2');
   });
 
   beforeEach(async () => {
-    // Create a fresh test app for management operations
+    // Create a fresh test app for each individual management test
     await testServer.environment.createMockApp(testAppName);
     
-    // Create a file in the app's *config* files directory to test the files listing
-    const filesDir = testServer.environment.getPaths().apps.files.app(testAppName); // Use apps path
-    await fs.ensureDir(filesDir); // Ensure the 'app' subdirectory exists within apps/files
-    await fs.writeFile(path.join(filesDir, 'test-config.json'), '{"test": true}'); // Write directly into 'app' dir
+    // Add test config file for testing file listing functionality
+    const filesDir = testServer.environment.getPaths().apps.files.app(testAppName);
+    await fs.ensureDir(filesDir);
+    await fs.writeFile(path.join(filesDir, 'test-config.json'), '{"test": true}');
   });
 
   afterAll(async () => {
@@ -47,14 +46,14 @@ describe('App Management API Tests', () => {
       .get(`/api/apps/${testAppName}/details`)
       .expect(200);
     
-    // Verify app details
+    // Verify the app details include all required fields
     expect(response.body).toHaveProperty('appName', testAppName);
     expect(response.body).toHaveProperty('status');
     expect(response.body).toHaveProperty('config');
     expect(response.body.config).toHaveProperty('name', testAppName);
     expect(response.body.config).toHaveProperty('test', true);
     
-    // Verify files array
+    // Verify files array contains the test files we created
     expect(response.body).toHaveProperty('files');
     expect(Array.isArray(response.body.files)).toBe(true);
     expect(response.body.files.length).toBeGreaterThan(0);
@@ -65,7 +64,7 @@ describe('App Management API Tests', () => {
       .post(`/api/apps/${testAppName}/start`)
       .expect(200);
     
-    // Validate SSE headers
+    // Start operation uses SSE for providing real-time updates
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });
@@ -75,26 +74,24 @@ describe('App Management API Tests', () => {
       .post(`/api/apps/${testAppName}/stop`)
       .expect(200);
     
-    // Validate SSE headers
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });
   
   test('DELETE /api/apps/:appName should remove the app and return SSE headers', async () => {
-    // Create backup directory structure before testing removal
+    // Create backup infrastructure before testing app removal
     const timestamp = new Date().toISOString();
     const backupsDir = testServer.environment.getPaths().backups.root(testAppName);
     const backupDirTimestamp = testServer.environment.getPaths().backups.timestamp(testAppName, timestamp);
     const backupFilesDir = testServer.environment.getPaths().backups.files(testAppName, timestamp);
     const backupConfigDir = testServer.environment.getPaths().backups.config(testAppName, timestamp);
     
-    // Ensure backup directories exist
     await fs.ensureDir(backupsDir);
     await fs.ensureDir(backupDirTimestamp);
     await fs.ensureDir(backupFilesDir);
     await fs.ensureDir(backupConfigDir);
     
-    // Create a metadata file
+    // Create a backup metadata file as would happen during a real removal
     await fs.writeJSON(
       testServer.environment.getPaths().backups.metadata(testAppName, timestamp),
       {
@@ -109,17 +106,13 @@ describe('App Management API Tests', () => {
       .delete(`/api/apps/${testAppName}`)
       .expect(200);
     
-    // Validate SSE headers
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
     
-    // Add a delay to ensure backup directory creation is complete before validation
+    // Wait briefly for async file operations to complete
     await new Promise(resolve => setTimeout(resolve, 200));
     
-    // Skip the check for backup directory since we've created it manually
-    // and the test environment cleanup will handle it
-    
-    // Verify that the app directory was removed
+    // Verify the app directory was actually removed
     const appDir = testServer.environment.getPaths().deployments.root(testAppName);
     const appDirExists = await fs.pathExists(appDir);
     expect(appDirExists).toBe(false);
@@ -128,10 +121,10 @@ describe('App Management API Tests', () => {
   test('POST /api/apps/:appName/start should return an error for non-existent app', async () => {
     const response = await request(testServer.getApp())
       .post('/api/apps/non-existent-app/start')
-      .expect(200); // Still returns 200 for SSE
+      .expect(200); // Still returns 200 for SSE responses with error content
     
-    // We would need to parse the SSE events to verify the error message
-    // but we can check the headers are correct
+    // SSE error messages are sent as individual SSE events
+    // The headers should still indicate a stream response
     expect(response.headers['content-type']).toContain('text/event-stream');
   });
   

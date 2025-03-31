@@ -1,10 +1,10 @@
-// server/src/controllers/__tests__/apps/integration.test.ts
+// Integration tests for App Controller API endpoints
 const request = require('supertest');
 const fs = require('fs-extra');
 const path = require('path');
 import { TestServer } from '../../../test/test-server';
 
-// Mock the DockerRunner to use our test adapter
+// Replace Docker and ORAS operations with test adapters
 jest.mock('../../../utils/docker', () => {
   return {
     DockerRunner: jest.fn().mockImplementation(() => {
@@ -26,21 +26,20 @@ describe('Apps API Integration Tests', () => {
   let testServer: TestServer;
 
   beforeAll(async () => {
-    // Set up the test server
     testServer = new TestServer();
     await testServer.init();
     await testServer.start();
     
-    // Create test apps with proper directory structure
+    // Set up test data and directory structure
     await testServer.environment.createMockApp('test-app1');
     await testServer.environment.createMockApp('test-app2');
     
-    // Add some files to test apps to test file listing
-    const appFilesDir = testServer.environment.getPaths().apps.files.app('test-app1'); // Use apps path
+    // Add test configuration file for file listing tests
+    const appFilesDir = testServer.environment.getPaths().apps.files.app('test-app1');
     await fs.ensureDir(appFilesDir);
     await fs.writeFile(path.join(appFilesDir, 'test-config.json'), '{"test": true}');
 
-    // Create mock bundle files needed for deploy/upgrade tests in this suite
+    // Create mock package bundles for deployment tests
     const packageDirLatest = testServer.environment.getPaths().packages.version('test-app1', 'latest');
     await fs.ensureDir(packageDirLatest);
     await fs.writeFile(path.join(packageDirLatest, 'bundle.tgz'), 'mock latest bundle');
@@ -82,7 +81,7 @@ describe('Apps API Integration Tests', () => {
       .post('/api/apps/test-app1/start')
       .expect(200);
     
-    // Test for SSE headers
+    // Verify SSE response headers for real-time status updates
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });
@@ -107,7 +106,7 @@ describe('Apps API Integration Tests', () => {
       .send({ appName: 'test-app1', version: 'latest' })
       .expect(200);
     
-    // Validate SSE headers (the deploy operation is expected to use SSE)
+    // Long-running deployment operations use Server-Sent Events for real-time updates
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });
@@ -118,7 +117,6 @@ describe('Apps API Integration Tests', () => {
       .send({ version: 'new-version' })
       .expect(200);
     
-    // Validate SSE headers for the upgrade endpoint
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });
@@ -128,7 +126,7 @@ describe('Apps API Integration Tests', () => {
       .delete('/api/apps/test-app1')
       .expect(200);
     
-    // Check for SSE headers instead of JSON body
+    // App removal is a long-running operation that uses SSE
     expect(response.headers['content-type']).toContain('text/event-stream');
     expect(response.headers['cache-control']).toContain('no-cache');
   });

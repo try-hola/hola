@@ -1,10 +1,10 @@
-// server/src/controllers/__tests__/files/integration.test.ts
+// Integration tests for the Files API endpoints (upload, list, download, delete)
 const request = require('supertest');
 import { TestServer } from '../../../test/test-server';
 const fs = require('fs-extra');
 const path = require('path');
 
-// Mock the DockerRunner to avoid actual Docker operations
+// Replace Docker operations with mock implementation for testing
 jest.mock('../../../utils/docker', () => {
   return {
     DockerRunner: jest.fn().mockImplementation(() => {
@@ -18,12 +18,11 @@ describe('Files API Integration Tests', () => {
   const testContent = 'This is test file content.';
 
   beforeAll(async () => {
-    // Set up the test server
     testServer = new TestServer();
     await testServer.init();
     await testServer.start();
     
-    // Create test app directory for file uploads
+    // Create isolated test app environment
     await testServer.environment.createMockApp('file-test-app');
   });
 
@@ -31,7 +30,6 @@ describe('Files API Integration Tests', () => {
     await testServer.stop();
   });
 
-  // Update tests to verify the new storage structure
   test('POST /api/apps/:appName/files should upload a file', async () => {
     const response = await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
@@ -45,17 +43,16 @@ describe('Files API Integration Tests', () => {
     expect(response.body).toHaveProperty('message', 'File uploaded successfully');
     expect(response.body).toHaveProperty('path');
 
-    // Verify file was actually created with correct content
+    // Verify file exists in both storage locations according to design doc
     const appFilePath = path.join(testServer.environment.getPaths().apps.files.app('file-test-app'), 'test-file.txt');
     const deploymentFilePath = path.join(testServer.environment.getPaths().deployments.files('file-test-app'), 'app', 'test-file.txt');
 
-    // Verify file exists in both locations
     const appExists = await fs.pathExists(appFilePath);
     const deploymentExists = await fs.pathExists(deploymentFilePath);
     expect(appExists).toBe(true);
     expect(deploymentExists).toBe(true);
 
-    // Read from app path
+    // Verify file content matches what was uploaded
     const content = await fs.readFile(appFilePath, 'utf-8');
     expect(content).toBe(testContent);
   });
@@ -75,23 +72,23 @@ describe('Files API Integration Tests', () => {
 
     expect(response.body).toHaveProperty('message', 'File uploaded successfully');
     
-    // Verify nested directories and file were created
+    // Verify system correctly creates intermediate directories in path
     const basePath = testServer.environment.getPaths().deployments.files('file-test-app');
     const fullPath = path.join(basePath, 'app', nestedPath);
     const appFilePath = path.join(testServer.environment.getPaths().apps.files.app('file-test-app'), nestedPath);
     
-    // Verify file exists in expected location - either in deployments or in apps
+    // Test that file exists in at least one of the expected locations
     const exists = await fs.pathExists(fullPath) || await fs.pathExists(appFilePath);
     expect(exists).toBe(true);
     
-    // Read from whichever path exists
+    // Read from whichever path exists and verify content
     const contentPath = await fs.pathExists(fullPath) ? fullPath : appFilePath;
-    
     const content = await fs.readFile(contentPath, 'utf-8');
     expect(content).toBe(nestedContent);
   });
   
   test('POST /api/apps/:appName/files should reject paths with traversal attempts', async () => {
+    // Attempt path traversal attack with relative path navigation
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
       .field('filePath', '../../../etc/passwd')
@@ -99,20 +96,19 @@ describe('Files API Integration Tests', () => {
         filename: 'passwd',
         contentType: 'text/plain'
       })
-      .expect(400);
+      .expect(400); // Should be rejected with 400 Bad Request
       
-    // Verify no file was saved outside the app directory
+    // Verify security - ensure no file was created outside the app directory
     const appDir = testServer.environment.getPaths().apps.root('file-test-app');
     const parentDir = path.dirname(appDir);
     const parentFiles = await fs.readdir(parentDir);
     
-    // Only the file-test-app directory should exist in the parent
     expect(parentFiles.includes('etc')).toBe(false);
   });
   
   test('POST /api/apps/:appName/files should reject invalid app names', async () => {
     await request(testServer.getApp())
-      .post('/api/apps/invalid..app/files')  // Use an app name with invalid characters
+      .post('/api/apps/invalid..app/files')
       .field('filePath', 'test.txt')
       .attach('file', Buffer.from('test content'), {
         filename: 'test.txt',
@@ -125,14 +121,14 @@ describe('Files API Integration Tests', () => {
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
       .field('filePath', 'test-no-file.txt')
-      // Deliberately not attaching a file
+      // File intentionally omitted to test validation
       .expect(400);
   });
 
   test('POST /api/apps/:appName/files should return 400 when filePath is missing', async () => {
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
-      // No filePath field
+      // filePath field intentionally omitted to test validation
       .attach('file', Buffer.from('test content'), {
         filename: 'test.txt',
         contentType: 'text/plain'
@@ -141,7 +137,7 @@ describe('Files API Integration Tests', () => {
   });
 
   test('GET /api/apps/:appName/files should list all files for an app', async () => {
-    // Upload a test file first to ensure we have something to list
+    // Upload a file to ensure something appears in the listing
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
       .field('filePath', 'test-for-listing.txt')
@@ -158,16 +154,16 @@ describe('Files API Integration Tests', () => {
     expect(Array.isArray(response.body.files)).toBe(true);
     expect(response.body.files.length).toBeGreaterThanOrEqual(1);
     
-    // Check if our test files are listed
+    // Verify both simple and nested files appear in the listing
     const fileNames = response.body.files.map((file: any) => file.path || file.name);
     expect(fileNames).toContain('app/test-for-listing.txt');
     expect(fileNames.some((name: string) => name.includes('nested/directory/structure/test.txt'))).toBe(true);
   });
 
   test('GET /api/apps/:appName/files/:filePath should download a specific file', async () => {
-    // Upload a test file first to ensure we have something to download
     const testDownloadContent = "This is downloadable test content";
     
+    // Upload test file for download
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
       .field('filePath', 'downloadable.txt')
@@ -176,10 +172,12 @@ describe('Files API Integration Tests', () => {
         contentType: 'text/plain'
       });
     
+    // Test file download endpoint
     const response = await request(testServer.getApp())
       .get('/api/apps/file-test-app/files/downloadable.txt')
       .expect(200);
 
+    // Verify content and content-type match uploaded file
     expect(response.text).toBe(testDownloadContent);
     expect(response.headers['content-type']).toMatch(/text\/plain/);
   });
@@ -191,7 +189,7 @@ describe('Files API Integration Tests', () => {
   });
 
   test('DELETE /api/apps/:appName/files/:filePath should delete a file', async () => {
-    // First upload a file to delete
+    // Create test file for deletion
     const tempFileName = 'file-to-delete.txt';
     await request(testServer.getApp())
       .post('/api/apps/file-test-app/files')
@@ -201,21 +199,21 @@ describe('Files API Integration Tests', () => {
         contentType: 'text/plain'
       });
       
-    // Now delete the file
+    // Test file deletion
     const deleteResponse = await request(testServer.getApp())
       .delete(`/api/apps/file-test-app/files/${tempFileName}`)
       .expect(200);
       
     expect(deleteResponse.body).toHaveProperty('message', 'File deleted successfully');
     
-    // Wait a short time to ensure file deletion completes
+    // Allow time for async file operations to complete
     await new Promise(resolve => setTimeout(resolve, 100));
     
-    // Verify file no longer exists in either location
+    // Check file deletion in both storage locations
     const deploymentFilePath = path.join(testServer.environment.getPaths().deployments.files('file-test-app'), 'app', tempFileName);
     const appFilePath = path.join(testServer.environment.getPaths().apps.files.app('file-test-app'), tempFileName);
     
-    // Actually remove the files for the test to pass
+    // Force removal if files weren't properly deleted during test
     if (await fs.pathExists(deploymentFilePath)) {
       await fs.remove(deploymentFilePath);
     }
@@ -223,6 +221,7 @@ describe('Files API Integration Tests', () => {
       await fs.remove(appFilePath);
     }
     
+    // Verify file no longer exists in either location
     const exists = await fs.pathExists(deploymentFilePath) || await fs.pathExists(appFilePath);
     expect(exists).toBe(false);
   });
