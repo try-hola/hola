@@ -25,7 +25,54 @@ const getSystemConfig = async (
   req: Request,
   res: Response<SystemConfigResponse | SystemConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    // Get the key from query params, if provided
+    const { key } = req.query;
+
+    // Define config path from the system config directory
+    const configPath = path.join(PATHS.config.system(), "config.json");
+
+    // Check if the config file exists
+    if (!(await fs.pathExists(configPath))) {
+      // If it doesn't exist, create an empty config file
+      await fs.ensureDir(path.dirname(configPath));
+      await fs.writeJSON(configPath, {}, { spaces: 2 });
+
+      if (key) {
+        // If a specific key was requested but no config exists yet
+        res.status(404).json({ error: `Configuration key '${key}' not found` });
+        return;
+      }
+
+      // Return empty config
+      res.json({ config: {} });
+      return;
+    }
+
+    // Read the config file
+    const config = await fs.readJSON(configPath);
+
+    // If a specific key was requested, return just that value
+    if (key) {
+      if (config.hasOwnProperty(key)) {
+        res.json({ config: { [key]: config[key] } });
+      } else {
+        res.status(404).json({ error: `Configuration key '${key}' not found` });
+      }
+      return;
+    }
+
+    // Return the entire config
+    res.json({ config });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to get system config", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to retrieve system configuration",
+      details: error.message,
+    });
+  }
 };
 
 /**

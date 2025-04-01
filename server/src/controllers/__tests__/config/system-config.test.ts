@@ -1,0 +1,116 @@
+// Tests for system-wide configuration management functionality
+const request = require("supertest");
+const fs = require("fs-extra");
+const path = require("path");
+import { TestServer } from "../../../test/test-server";
+
+describe("System Config API Tests", () => {
+  let testServer: TestServer;
+
+  beforeEach(async () => {
+    // Create a fresh test server for each test to ensure isolation
+    testServer = new TestServer();
+    await testServer.init();
+    await testServer.start();
+
+    // Ensure test directory exists
+    const systemConfigDir = testServer.environment.getPaths().config.system();
+    await fs.ensureDir(systemConfigDir);
+  });
+
+  afterEach(async () => {
+    await testServer.stop();
+  });
+
+  test("GET /api/config should return empty object when no config exists", async () => {
+    // Make sure no config file exists
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    if (await fs.pathExists(configPath)) {
+      await fs.remove(configPath);
+    }
+
+    const response = await request(testServer.getApp())
+      .get("/api/config")
+      .expect(200);
+
+    expect(response.body).toEqual({ config: {} });
+
+    // Verify the empty config file was created automatically
+    const configExists = await fs.pathExists(configPath);
+    expect(configExists).toBe(true);
+  });
+
+  test("GET /api/config should return the entire config", async () => {
+    // Create a test config file
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const testConfig = {
+      testKey1: "testValue1",
+      testKey2: 123,
+      testKey3: { nested: true },
+    };
+    await fs.writeJSON(configPath, testConfig);
+
+    const response = await request(testServer.getApp())
+      .get("/api/config")
+      .expect(200);
+
+    expect(response.body).toEqual({ config: testConfig });
+  });
+
+  test("GET /api/config?key=testKey should return a specific config value", async () => {
+    // Create a test config file
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const testConfig = {
+      testKey1: "testValue1",
+      testKey2: 123,
+      testKey3: { nested: true },
+    };
+    await fs.writeJSON(configPath, testConfig);
+
+    const response = await request(testServer.getApp())
+      .get("/api/config?key=testKey1")
+      .expect(200);
+
+    expect(response.body).toEqual({ config: { testKey1: "testValue1" } });
+  });
+
+  test("GET /api/config?key=nonExistentKey should return 404 for non-existent key", async () => {
+    // Create a test config file
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const testConfig = { testKey: "testValue" };
+    await fs.writeJSON(configPath, testConfig);
+
+    const response = await request(testServer.getApp())
+      .get("/api/config?key=nonExistentKey")
+      .expect(404);
+
+    expect(response.body).toEqual({
+      error: "Configuration key 'nonExistentKey' not found",
+    });
+  });
+
+  test("GET /api/config should handle errors gracefully", async () => {
+    // Create a corrupt config file to cause an error
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    await fs.ensureDir(path.dirname(configPath));
+    // Create a file with invalid JSON content
+    await fs.writeFile(configPath, "{invalid-json:");
+
+    await request(testServer.getApp()).get("/api/config").expect(500);
+  });
+});
