@@ -457,12 +457,10 @@ const getAppDetails = async (
       files,
     });
   } catch (error: any) {
-    res
-      .status(500)
-      .json({
-        error: "Failed to get application details",
-        details: error.message,
-      });
+    res.status(500).json({
+      error: "Failed to get application details",
+      details: error.message,
+    });
   }
 };
 
@@ -761,11 +759,67 @@ interface RestartAppRequestParams {
   appName: string;
 }
 
+interface RestartAppStatusUpdate {
+  taskId: string;
+  taskType: string;
+  status: string;
+  message: string;
+}
+
 const restartApp = async (
   req: Request<RestartAppRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName } = req.params;
+  const taskId: string = uuidv4();
+  const docker = new DockerRunner();
+
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  docker.on("status", (update: RestartAppStatusUpdate) => {
+    sendUpdate(
+      res,
+      update.taskId,
+      update.taskType,
+      update.status,
+      update.message
+    );
+  });
+
+  try {
+    const composeDir: string = PATHS.deployments.compose(appName);
+
+    if (!(await fs.pathExists(composeDir))) {
+      sendUpdate(
+        res,
+        taskId,
+        "RESTART",
+        "error",
+        `Application ${appName} not found`
+      );
+      res.end();
+      return;
+    }
+
+    await docker.runCommand(taskId, "RESTART", ["restart"], appName, {
+      cwd: composeDir,
+    });
+
+    sendUpdate(
+      res,
+      taskId,
+      "RESTART",
+      "complete",
+      `Application ${appName} restarted successfully`
+    );
+    res.end();
+  } catch (error: any) {
+    sendUpdate(res, taskId, "RESTART", "error", error.message);
+    res.end();
+  }
 };
 
 /**
