@@ -2,6 +2,7 @@ const express = require("express");
 import { Application } from "express";
 const appsController = require("./controllers/apps");
 const filesController = require("./controllers/files");
+const configController = require("./controllers/config"); // This controller needs to be created
 
 /**
  * Registers all API routes on the given Express application
@@ -26,6 +27,26 @@ export const registerRoutes = (app: Application): void => {
   app.post("/api/apps/:appName/start", appsController.startApp); // Start an application
   app.post("/api/apps/:appName/stop", appsController.stopApp); // Stop an application
 
+  // Missing app management routes (to be implemented)
+  app.post("/api/apps/:appName/restart", appsController.restartApp); // Restart an application
+
+  // Backup & Restore routes (to be implemented)
+  app.post("/api/apps/:appName/backup", appsController.createBackup); // Create a backup
+  app.get("/api/apps/:appName/backups", appsController.listBackups); // List all backups
+  app.get(
+    "/api/apps/:appName/backup/:backupId",
+    appsController.getBackupDetails
+  ); // Get backup details
+  app.post(
+    "/api/apps/:appName/restore/:backupId",
+    appsController.restoreFromBackup
+  ); // Restore from backup
+
+  // Logs & Monitoring routes (to be implemented)
+  app.get("/api/apps/:appName/logs", appsController.getAppLogs); // Get application logs
+  app.get("/api/apps/:appName/metrics", appsController.getAppMetrics); // Get application metrics
+  app.get("/api/apps/:appName/health", appsController.getAppHealth); // Check application health
+
   // File management routes
   app.post(
     "/api/apps/:appName/files",
@@ -38,6 +59,57 @@ export const registerRoutes = (app: Application): void => {
     "/api/apps/:appName/files/:filePath(*)",
     filesController.deleteFile
   ); // Delete a specific file
+
+  // Configuration management routes
+  // System configuration routes
+  app.get("/api/config", configController.getSystemConfig); // Get all system configuration
+  app.post("/api/config", configController.createSystemConfig); // Create/update multiple system config values
+  app.put("/api/config/:key", configController.updateSystemConfigValue); // Create/update a specific system config value
+  app.delete("/api/config/:key", configController.deleteSystemConfigValue); // Delete a specific system config value
+  // Add this route handler that checks for the keys query parameter
+  app.delete("/api/config", (req, res) => {
+    if (req.query.keys) {
+      return configController.deleteMultipleSystemConfigValues(req, res);
+    }
+    return res.status(400).json({ error: "Missing keys query parameter" });
+  });
+
+  // App configuration routes
+  app.get("/api/config/:appName", configController.getAppConfig); // Get all app configuration
+  app.post("/api/config/:appName", configController.createAppConfig); // Create/update multiple app config values
+  app.put("/api/config/:appName/:key", configController.updateAppConfigValue); // Create/update a specific app config value
+  app.delete(
+    "/api/config/:appName/:key",
+    configController.deleteAppConfigValue
+  ); // Delete a specific app config value
+  // Update this route handler to check for the keys query parameter
+  app.delete("/api/config/:appName", (req, res) => {
+    if (req.query.keys) {
+      return configController.deleteMultipleAppConfigValues(req, res);
+    }
+    return configController.deleteAppConfig(req, res);
+  });
+
+  // Encrypted app configuration routes
+  app.get(
+    "/api/config/:appName/encrypted",
+    configController.getAppEncryptedConfig
+  ); // Get all encrypted app configuration
+  app.post(
+    "/api/config/:appName/encrypted",
+    configController.createAppEncryptedConfig
+  ); // Create/update multiple encrypted values
+  app.put(
+    "/api/config/:appName/encrypted/:key",
+    configController.updateAppEncryptedValue
+  ); // Create/update a specific encrypted value
+  app.delete(
+    "/api/config/:appName/encrypted/:key",
+    configController.deleteAppEncryptedValue
+  ); // Delete a specific encrypted value
+
+  // Events stream route (SSE for real-time updates)
+  app.get("/api/apps/:appName/events", appsController.streamEvents); // Stream events for an app
 };
 
 // Export using CommonJS syntax

@@ -13,12 +13,24 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 
 ### Configuration Management
 
-| HTTP Method | Endpoint          | Description                                        |
-| ----------- | ----------------- | -------------------------------------------------- |
-| GET         | /config           | Retrieve system-wide configuration.                |
-| GET         | /config/{appName} | Retrieve configuration for a specific application. |
-| PUT         | /config/{appName} | Create or update an application's configuration.   |
-| DELETE      | /config/{appName} | Remove an application-specific configuration.      |
+| HTTP Method | Endpoint                          | Description                                       |
+| ----------- | --------------------------------- | ------------------------------------------------- |
+| GET         | /config                           | Retrieve system-wide configuration                |
+| GET         | /config?key=name                  | Retrieve specific system config value             |
+| POST        | /config                           | Create or update multiple system config values    |
+| PUT         | /config/{key}                     | Create or update a specific system config value   |
+| DELETE      | /config/{key}                     | Remove a specific system config value             |
+| DELETE      | /config?keys=key1,key2            | Remove multiple system config values              |
+| GET         | /config/{appName}                 | Retrieve all configuration for an application     |
+| GET         | /config/{appName}?key=name        | Retrieve specific config value for an application |
+| POST        | /config/{appName}                 | Create or update multiple app config values       |
+| PUT         | /config/{appName}/{key}           | Create or update a specific app config value      |
+| DELETE      | /config/{appName}/{key}           | Remove a specific app config value                |
+| DELETE      | /config/{appName}?keys=k1,k2      | Remove multiple app config values                 |
+| GET         | /config/{appName}/encrypted       | Retrieve all encrypted values (masked by default) |
+| POST        | /config/{appName}/encrypted       | Create or update multiple encrypted values        |
+| PUT         | /config/{appName}/encrypted/{key} | Create or update a specific encrypted value       |
+| DELETE      | /config/{appName}/encrypted/{key} | Remove a specific encrypted value                 |
 
 ### Application Deployment & Management
 

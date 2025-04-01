@@ -460,3 +460,1033 @@ paths:
                 properties:
                   error:
                     type: string
+                    
+  /api/apps/{appName}/restart:
+    post:
+      summary: Restart an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application restart initiated (SSE stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "500":
+          description: Failed to restart application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/backup:
+    post:
+      summary: Create a backup of an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backupId:
+                    type: string
+                  message:
+                    type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to create backup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/backups:
+    get:
+      summary: List all backups for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backups retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backups:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        createdAt:
+                          type: string
+                        size:
+                          type: number
+                  count:
+                    type: integer
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to list backups
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/backup/{backupId}:
+    get:
+      summary: Get details about a specific backup
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: backupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Backup details retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  backupId:
+                    type: string
+                  createdAt:
+                    type: string
+                  size:
+                    type: number
+                  metadata:
+                    type: object
+        "404":
+          description: Backup not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to get backup details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/restore/{backupId}:
+    post:
+      summary: Restore an application from a backup
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: backupId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Application restoration initiated (SSE stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Backup not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to restore application
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/logs:
+    get:
+      summary: Get logs for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: lines
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Logs retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  logs:
+                    type: array
+                    items:
+                      type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to get logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/metrics:
+    get:
+      summary: Get performance metrics for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Metrics retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  metrics:
+                    type: object
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to get metrics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/health:
+    get:
+      summary: Check the health status of an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Health check successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  services:
+                    type: object
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to check health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  /api/apps/{appName}/events:
+    get:
+      summary: Stream events for an application (SSE)
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE event stream established
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+
+  # Configuration Management Endpoints
+
+  /api/config:
+    get:
+      summary: Retrieve system-wide configuration
+      parameters:
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Specific configuration key to retrieve
+      responses:
+        "200":
+          description: Configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  config:
+                    type: object
+        "500":
+          description: Failed to retrieve configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+    post:
+      summary: Create or update multiple system configuration values
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config:
+                  type: object
+              required:
+                - config
+      responses:
+        "200":
+          description: Configuration updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  config:
+                    type: object
+                  message:
+                    type: string
+        "500":
+          description: Failed to update configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+    delete:
+      summary: Delete multiple system configuration values
+      parameters:
+        - name: keys
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Comma-separated list of keys to delete
+      responses:
+        "200":
+          description: Configuration values deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deletedKeys:
+                    type: array
+                    items:
+                      type: string
+                  message:
+                    type: string
+        "400":
+          description: Missing keys parameter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete configuration values
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /api/config/{key}:
+    put:
+      summary: Create or update a specific system configuration value
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value:
+                  type: object
+              required:
+                - value
+      responses:
+        "200":
+          description: Configuration value updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  value:
+                    type: object
+                  message:
+                    type: string
+        "500":
+          description: Failed to update configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    delete:
+      summary: Delete a specific system configuration value
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Configuration value deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  message:
+                    type: string
+        "404":
+          description: Configuration key not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /api/config/{appName}:
+    get:
+      summary: Retrieve application-specific configuration
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Specific configuration key to retrieve
+      responses:
+        "200":
+          description: Application configuration retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  config:
+                    type: object
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to retrieve configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    post:
+      summary: Create or update multiple app configuration values
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config:
+                  type: object
+              required:
+                - config
+      responses:
+        "200":
+          description: Application configuration updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  config:
+                    type: object
+                  message:
+                    type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to update configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    delete:
+      summary: Delete application configuration
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: keys
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of keys to delete (if omitted, all keys will be deleted)
+      responses:
+        "200":
+          description: Configuration deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  message:
+                    type: string
+                  deletedKeys:
+                    type: array
+                    items:
+                      type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /api/config/{appName}/{key}:
+    put:
+      summary: Create or update a specific app configuration value
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value:
+                  type: object
+              required:
+                - value
+      responses:
+        "200":
+          description: Configuration value updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  key:
+                    type: string
+                  value:
+                    type: object
+                  message:
+                    type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to update configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    delete:
+      summary: Delete a specific app configuration value
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Configuration value deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  key:
+                    type: string
+                  message:
+                    type: string
+        "404":
+          description: Application or key not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /api/config/{appName}/encrypted:
+    get:
+      summary: Retrieve encrypted configuration values for an application
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Encrypted configuration values retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  encrypted:
+                    type: object
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to retrieve encrypted configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    post:
+      summary: Create or update multiple encrypted configuration values
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                encrypted:
+                  type: object
+              required:
+                - encrypted
+      responses:
+        "200":
+          description: Encrypted configuration values updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  keys:
+                    type: array
+                    items:
+                      type: string
+                  message:
+                    type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to update encrypted configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+
+  /api/config/{appName}/encrypted/{key}:
+    put:
+      summary: Create or update a specific encrypted configuration value
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value:
+                  type: string
+              required:
+                - value
+      responses:
+        "200":
+          description: Encrypted configuration value updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  key:
+                    type: string
+                  message:
+                    type: string
+        "404":
+          description: Application not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to update encrypted configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
+                    
+    delete:
+      summary: Delete a specific encrypted configuration value
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Encrypted configuration value deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appName:
+                    type: string
+                  key:
+                    type: string
+                  message:
+                    type: string
+        "404":
+          description: Application or key not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        "500":
+          description: Failed to delete encrypted configuration value
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: string
