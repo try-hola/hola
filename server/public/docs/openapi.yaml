@@ -327,6 +327,7 @@ paths:
         - name: filePath
           in: path
           required: true
+          description: Path to the file, can include nested directories with slashes
           schema:
             type: string
       responses:
@@ -367,6 +368,7 @@ paths:
         - name: filePath
           in: path
           required: true
+          description: Path to the file, can include nested directories with slashes
           schema:
             type: string
       responses:
