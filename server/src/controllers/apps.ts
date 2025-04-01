@@ -482,7 +482,7 @@ const removeApp = async (
     const backupConfigDir = PATHS.backups.config(appName, timestamp);
     await fs.ensureDir(backupConfigDir);
 
-    // Backup files and configurations
+    // Back up current deployment files and compose configs
     const currentDir: string = PATHS.deployments.current(appName);
     const composeDir: string = PATHS.deployments.compose(appName);
 
@@ -504,7 +504,7 @@ const removeApp = async (
 
     await fs.writeJSON(PATHS.backups.metadata(appName, timestamp), metadata);
     
-    // Double-check that backup directory exists before proceeding
+    // Safety check - ensure backup directory was created properly before continuing
     const backupDirExists = await fs.pathExists(backupDir);
     if (!backupDirExists) {
       sendUpdate(res, taskId, "REMOVE", "warning", `Failed to create backup directory: ${backupDir}`);

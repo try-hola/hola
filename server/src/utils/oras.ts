@@ -7,18 +7,21 @@ const fs = require('fs-extra');
  * Options for ORAS command execution
  */
 interface OrasCommandOptions {
+  /** Directory where artifacts will be saved when downloading */
   outputDir?: string;
+  /** Version tag for the artifact (defaults to "latest") */
   version?: string;
+  /** Key-value pairs of annotations to apply to artifacts */
   annotations?: Record<string, string>;
 }
 
 /**
- * ORAS runner class that handles OCI Registry operations
- * and emits events for status updates
+ * ORAS (OCI Registry As Storage) runner for interacting with OCI-compatible registries
+ * Emits status events during operations for progress tracking
  */
 class OrasRunner extends EventEmitter {
   /**
-   * Run an ORAS command and emit status events
+   * Executes an ORAS command against an OCI registry
    * 
    * @param taskId - Unique ID for this task
    * @param taskType - Type of task (DOWNLOAD, UPLOAD, etc.)
@@ -84,7 +87,7 @@ class OrasRunner extends EventEmitter {
       let stdout = '';
       let stderr = '';
       
-      // Collect stdout
+      // Collect stdout and emit as status updates
       orasProcess.stdout.on('data', (data) => {
         const chunk = data.toString();
         stdout += chunk;
@@ -97,12 +100,11 @@ class OrasRunner extends EventEmitter {
         });
       });
       
-      // Collect stderr
+      // Collect stderr and emit as warnings
       orasProcess.stderr.on('data', (data) => {
         const chunk = data.toString();
         stderr += chunk;
         
-        // Emit stderr as a warning status
         this.emit('status', {
           taskId,
           taskType,
@@ -111,7 +113,7 @@ class OrasRunner extends EventEmitter {
         });
       });
       
-      // Handle process completion
+      // Handle successful completion
       orasProcess.on('close', (code) => {
         if (code === 0) {
           this.emit('status', {
@@ -136,7 +138,7 @@ class OrasRunner extends EventEmitter {
         }
       });
       
-      // Handle process errors
+      // Handle process spawn errors (e.g., command not found)
       orasProcess.on('error', (error) => {
         const errorMessage = `Failed to execute command: ${error.message}`;
         

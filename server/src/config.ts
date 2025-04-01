@@ -1,7 +1,10 @@
 const path = require("path");
 const fs = require("fs-extra");
 
-// Types for exported objects
+/**
+ * Path functions for file system organization
+ * Provides standardized paths for all application components
+ */
 interface PathFunctions {
   packages: {
     root: (appName: string) => string;
@@ -20,7 +23,12 @@ interface PathFunctions {
       service: {
         regular: (appName: string, serviceName: string) => string;
         encrypted: (appName: string, serviceName: string) => string;
-        variable: (appName: string, serviceName: string, key: string, encrypted: boolean) => string;
+        variable: (
+          appName: string,
+          serviceName: string,
+          key: string,
+          encrypted: boolean
+        ) => string;
       };
     };
     files: {
@@ -54,91 +62,159 @@ interface PathFunctions {
 }
 
 // Use project directory or home directory instead of /var
-const defaultPath = process.env.NODE_ENV === 'test' 
-  ? path.join(process.cwd(), "data")
-  : process.env.DATA_DIR || "data";
+const defaultPath =
+  process.env.NODE_ENV === "test"
+    ? path.join(process.cwd(), "data")
+    : process.env.DATA_DIR || "data";
 
 export const STORAGE_ROOT = process.env.STORAGE_ROOT || defaultPath;
 export const ORAS_REGISTRY = process.env.ORAS_REGISTRY || "localhost:5000";
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
-// Update the PATHS object to match the storage structure in the design document
+// Storage path structure for all application components
 export const PATHS: PathFunctions = {
   packages: {
-    root: (appName: string): string => path.join(STORAGE_ROOT, "packages", appName),
-    version: (appName: string, version: string): string => 
-      version === "latest" 
+    root: (appName: string): string =>
+      path.join(STORAGE_ROOT, "packages", appName),
+    version: (appName: string, version: string): string =>
+      version === "latest"
         ? path.join(STORAGE_ROOT, "packages", appName, version)
         : path.join(STORAGE_ROOT, "packages", appName, `version-${version}`),
-    bundle: (appName: string, version: string): string => 
+    bundle: (appName: string, version: string): string =>
       path.join(
-        STORAGE_ROOT, 
-        "packages", 
-        appName, 
-        version === "latest" ? version : `version-${version}`, 
+        STORAGE_ROOT,
+        "packages",
+        appName,
+        version === "latest" ? version : `version-${version}`,
         "bundle.tgz"
       ),
   },
   apps: {
     root: (appName: string): string => path.join(STORAGE_ROOT, "apps", appName),
-    packageRef: (appName: string): string => path.join(STORAGE_ROOT, "apps", appName, "package-ref"),
+    packageRef: (appName: string): string =>
+      path.join(STORAGE_ROOT, "apps", appName, "package-ref"),
     env: {
       app: {
-        regular: (appName: string): string => path.join(STORAGE_ROOT, "apps", appName, "env", "regular"),
-        encrypted: (appName: string): string => path.join(STORAGE_ROOT, "apps", appName, "env", "encrypted"),
-        variable: (appName: string, key: string, encrypted: boolean): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "env", encrypted ? "encrypted" : "regular", key),
+        regular: (appName: string): string =>
+          path.join(STORAGE_ROOT, "apps", appName, "env", "regular"),
+        encrypted: (appName: string): string =>
+          path.join(STORAGE_ROOT, "apps", appName, "env", "encrypted"),
+        variable: (appName: string, key: string, encrypted: boolean): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "env",
+            encrypted ? "encrypted" : "regular",
+            key
+          ),
       },
       service: {
-        regular: (appName: string, serviceName: string): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "env", "services", serviceName, "regular"),
-        encrypted: (appName: string, serviceName: string): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "env", "services", serviceName, "encrypted"),
-        variable: (appName: string, serviceName: string, key: string, encrypted: boolean): string => 
+        regular: (appName: string, serviceName: string): string =>
           path.join(
-            STORAGE_ROOT, 
-            "apps", 
-            appName, 
-            "env", 
-            "services", 
-            serviceName, 
-            encrypted ? "encrypted" : "regular", 
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "env",
+            "services",
+            serviceName,
+            "regular"
+          ),
+        encrypted: (appName: string, serviceName: string): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "env",
+            "services",
+            serviceName,
+            "encrypted"
+          ),
+        variable: (
+          appName: string,
+          serviceName: string,
+          key: string,
+          encrypted: boolean
+        ): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "env",
+            "services",
+            serviceName,
+            encrypted ? "encrypted" : "regular",
             key
           ),
       },
     },
     files: {
-      app: (appName: string): string => path.join(STORAGE_ROOT, "apps", appName, "files", "app"),
+      app: (appName: string): string =>
+        path.join(STORAGE_ROOT, "apps", appName, "files", "app"),
       service: {
-        root: (appName: string, serviceName: string): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "files", "services", serviceName),
-        config: (appName: string, serviceName: string): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "files", "services", serviceName, "config"),
-        dockerfile: (appName: string, serviceName: string): string => 
-          path.join(STORAGE_ROOT, "apps", appName, "files", "services", serviceName, "Dockerfile"),
+        root: (appName: string, serviceName: string): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "files",
+            "services",
+            serviceName
+          ),
+        config: (appName: string, serviceName: string): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "files",
+            "services",
+            serviceName,
+            "config"
+          ),
+        dockerfile: (appName: string, serviceName: string): string =>
+          path.join(
+            STORAGE_ROOT,
+            "apps",
+            appName,
+            "files",
+            "services",
+            serviceName,
+            "Dockerfile"
+          ),
       },
     },
   },
   config: {
     system: (): string => path.join(STORAGE_ROOT, "config", "system"),
-    app: (appName: string): string => path.join(STORAGE_ROOT, "config", "apps", appName),
+    app: (appName: string): string =>
+      path.join(STORAGE_ROOT, "config", "apps", appName),
   },
   deployments: {
-    root: (appName: string): string => path.join(STORAGE_ROOT, "deployments", appName),
-    files: (appName: string): string => path.join(STORAGE_ROOT, "deployments", appName, "files"),
-    compose: (appName: string): string => path.join(STORAGE_ROOT, "deployments", appName, "compose"),
-    current: (appName: string): string => path.join(STORAGE_ROOT, "deployments", appName, "current"),
-    services: (appName: string): string => path.join(STORAGE_ROOT, "deployments", appName, "services"),
-    service: (appName: string, serviceName: string): string => 
+    root: (appName: string): string =>
+      path.join(STORAGE_ROOT, "deployments", appName),
+    files: (appName: string): string =>
+      path.join(STORAGE_ROOT, "deployments", appName, "files"),
+    compose: (appName: string): string =>
+      path.join(STORAGE_ROOT, "deployments", appName, "compose"),
+    current: (appName: string): string =>
+      path.join(STORAGE_ROOT, "deployments", appName, "current"),
+    services: (appName: string): string =>
+      path.join(STORAGE_ROOT, "deployments", appName, "services"),
+    service: (appName: string, serviceName: string): string =>
       path.join(STORAGE_ROOT, "deployments", appName, "services", serviceName),
   },
   backups: {
-    root: (appName: string): string => path.join(STORAGE_ROOT, "backups", appName),
-    timestamp: (appName: string, tag: string): string => path.join(STORAGE_ROOT, "backups", appName, tag),
-    files: (appName: string, tag: string): string => path.join(STORAGE_ROOT, "backups", appName, tag, "files"),
-    config: (appName: string, tag: string): string => path.join(STORAGE_ROOT, "backups", appName, tag, "config"),
-    metadata: (appName: string, tag: string): string => path.join(STORAGE_ROOT, "backups", appName, tag, "metadata.json"),
+    root: (appName: string): string =>
+      path.join(STORAGE_ROOT, "backups", appName),
+    timestamp: (appName: string, tag: string): string =>
+      path.join(STORAGE_ROOT, "backups", appName, tag),
+    files: (appName: string, tag: string): string =>
+      path.join(STORAGE_ROOT, "backups", appName, tag, "files"),
+    config: (appName: string, tag: string): string =>
+      path.join(STORAGE_ROOT, "backups", appName, tag, "config"),
+    metadata: (appName: string, tag: string): string =>
+      path.join(STORAGE_ROOT, "backups", appName, tag, "metadata.json"),
   },
 };
 
@@ -164,5 +240,5 @@ module.exports = {
   ORAS_REGISTRY,
   STORAGE_ROOT,
   PATHS,
-  isValidAppName
+  isValidAppName,
 };

@@ -18,8 +18,8 @@ interface DockerCommandOptions {
 }
 
 /**
- * Docker runner class that handles executing docker and docker-compose commands
- * and emitting events for status updates
+ * Docker runner for executing docker and docker-compose commands
+ * Emits events for status updates during command execution
  */
 class DockerRunner extends EventEmitter {
   /**

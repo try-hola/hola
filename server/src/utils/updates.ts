@@ -3,6 +3,7 @@ import { logEvent } from './logger';
 
 /**
  * Represents a task update that will be sent to the client
+ * through Server-Sent Events (SSE)
  */
 interface TaskUpdate {
   /** Unique identifier for the task */
@@ -22,9 +23,9 @@ interface TaskUpdate {
 }
 
 /**
- * Send a Server-Sent Event (SSE) update to the client
+ * Sends a Server-Sent Event (SSE) update to the client and logs it internally
  * 
- * @param res - Express response object
+ * @param res - Express response object with SSE headers already set
  * @param taskId - Unique ID for this task 
  * @param taskType - Type of task (DEPLOY, REMOVE, START, etc.)
  * @param status - Status of the task (starting, running, complete, error)
