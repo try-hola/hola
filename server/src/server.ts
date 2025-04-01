@@ -4,10 +4,12 @@ const cors = require("cors");
 const { registerRoutes } = require("./routes");
 const { PORT } = require("./config");
 const { logEvent } = require("./utils/logger");
+import { Request, Response, NextFunction, Application } from "express";
+import { Server } from "http";
 
 /**
  * Sets up and configures the Express server application
- * @returns {import('express').Application} Configured Express application
+ * @returns {Application} Configured Express application
  */
 function setupServer() {
   const app = express();
@@ -18,13 +20,13 @@ function setupServer() {
   app.use(bodyParser.urlencoded({ extended: true, limit: "50mb" }));
 
   // Request logging middleware
-  app.use((req, res, next) => {
+  app.use((req: Request, res: Response, next: NextFunction): void => {
     logEvent("HTTP", "info", `${req.method} ${req.url}`);
     next();
   });
 
   // API key authentication middleware
-  app.use((req, res, next) => {
+  app.use((req: Request, res: Response, next: NextFunction) => {
     // Skip authentication in test environment
     if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
       return next();
@@ -52,12 +54,12 @@ function setupServer() {
   registerRoutes(app);
 
   // 404 handler for undefined routes
-  app.use((req, res) => {
+  app.use((req: Request, res: Response) => {
     res.status(404).json({ error: "Not Found", path: req.path });
   });
 
   // Global error handler for uncaught exceptions
-  app.use((err, req, res, next) => {
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     const statusCode = err.statusCode || 500;
     logEvent("ERROR", "error", `${err.message || "Unknown error"}`);
     console.error(err);
@@ -73,7 +75,7 @@ function setupServer() {
 
 /**
  * Starts the server and sets up graceful shutdown handlers
- * @returns {import('http').Server} The HTTP server instance
+ * @returns {Server} The HTTP server instance
  */
 function startServer() {
   const app = setupServer();
