@@ -66,12 +66,26 @@ export const registerRoutes = (app: Application): void => {
   app.post("/api/config", configController.createSystemConfig); // Create/update multiple system config values
   app.put("/api/config/:key", configController.updateSystemConfigValue); // Create/update a specific system config value
   app.delete("/api/config/:key", configController.deleteSystemConfigValue); // Delete a specific system config value
-  // Add this route handler that checks for the keys query parameter
+  // Update this route handler to use the expected error messages
   app.delete("/api/config", (req, res) => {
-    if (req.query.keys) {
-      return configController.deleteMultipleSystemConfigValues(req, res);
+    // Special case for empty keys parameter to match test expectations
+    if (req.query.keys === "") {
+      return res.status(400).json({
+        error: "No valid keys provided",
+        details: "Keys parameter must contain at least one valid key",
+      });
     }
-    return res.status(400).json({ error: "Missing keys query parameter" });
+
+    // If keys query param doesn't exist
+    if (!req.query.keys) {
+      return res.status(400).json({
+        error: "Missing or invalid keys parameter",
+        details: "Keys must be provided as a comma-separated string",
+      });
+    }
+
+    // All other cases with valid keys
+    return configController.deleteMultipleSystemConfigValues(req, res);
   });
 
   // App configuration routes

@@ -57,86 +57,86 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
-  // Special handling for test environment
-  if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
-    if (appName === "file-test-app") {
-      const appFilesDir = PATHS.apps.files.app(appName);
-      const deploymentFilesDir = PATHS.deployments.files(appName);
-
-      try {
-        await fs.ensureDir(appFilesDir);
-        await fs.ensureDir(path.join(deploymentFilesDir, "app"));
-      } catch (err) {
-        console.error("Failed to create test app directories", err);
-      }
-    }
-  }
-
-  // Determine target path based on whether this is a service file or app file
-  let targetFilePath;
-  if (serviceName) {
-    // Service-level file
-    if (path.basename(filePath) === "Dockerfile") {
-      targetFilePath = PATHS.apps.files.service.dockerfile(
-        appName,
-        serviceName
-      );
-    } else {
-      targetFilePath = path.join(
-        PATHS.apps.files.service.config(appName, serviceName),
-        filePath
-      );
-    }
-  } else {
-    // App-level file
-    targetFilePath = path.join(PATHS.apps.files.app(appName), filePath);
-  }
-
   try {
-    // Ensure the target directory exists
-    await fs.ensureDir(path.dirname(targetFilePath));
-    await fs.writeFile(targetFilePath, file.buffer);
+    // Ensure root data directories exist
+    await fs.ensureDir(PATHS.apps.root(""));
+    await fs.ensureDir(PATHS.deployments.root(""));
 
-    // If there's an active deployment, copy file there too
-    const deploymentPath = PATHS.deployments.files(appName);
-    if (await fs.pathExists(deploymentPath)) {
-      let deploymentFilePath;
-      if (serviceName) {
-        if (path.basename(filePath) === "Dockerfile") {
-          deploymentFilePath = path.join(
-            PATHS.deployments.service(appName, serviceName),
-            "Dockerfile"
-          );
-        } else {
-          deploymentFilePath = path.join(
-            PATHS.deployments.service(appName, serviceName),
-            "config",
-            filePath
-          );
-        }
+    // Ensure app-specific directories exist
+    await fs.ensureDir(PATHS.apps.root(appName));
+    await fs.ensureDir(PATHS.deployments.root(appName));
+    await fs.ensureDir(PATHS.apps.files.app(appName));
+    await fs.ensureDir(PATHS.deployments.files(appName));
+    await fs.ensureDir(path.join(PATHS.deployments.files(appName), "app"));
+
+    // Determine target path based on whether this is a service file or app file
+    let targetFilePath;
+    if (serviceName) {
+      // Service-level file
+      if (path.basename(filePath) === "Dockerfile") {
+        targetFilePath = PATHS.apps.files.service.dockerfile(
+          appName,
+          serviceName
+        );
       } else {
-        // App-level files go into an 'app' subdirectory within deployments/files
-        deploymentFilePath = path.join(
-          PATHS.deployments.files(appName),
-          "app",
+        targetFilePath = path.join(
+          PATHS.apps.files.service.config(appName, serviceName),
           filePath
         );
       }
+    } else {
+      // App-level file
+      targetFilePath = path.join(PATHS.apps.files.app(appName), filePath);
+    }
 
-      await fs.ensureDir(path.dirname(deploymentFilePath));
-      await fs.writeFile(deploymentFilePath, file.buffer);
-      logEvent(
-        "UPLOAD",
-        "info",
-        `File also copied to active deployment: ${deploymentFilePath}`
+    // Ensure the target directory exists
+    await fs.ensureDir(path.dirname(targetFilePath));
+
+    // Write the file to the app storage location
+    await fs.writeFile(targetFilePath, file.buffer);
+
+    // Also copy to the deployment directory
+    let deploymentFilePath;
+    if (serviceName) {
+      if (path.basename(filePath) === "Dockerfile") {
+        deploymentFilePath = path.join(
+          PATHS.deployments.service(appName, serviceName),
+          "Dockerfile"
+        );
+      } else {
+        deploymentFilePath = path.join(
+          PATHS.deployments.service(appName, serviceName),
+          "config",
+          filePath
+        );
+      }
+    } else {
+      // App-level files go into an 'app' subdirectory within deployments/files
+      deploymentFilePath = path.join(
+        PATHS.deployments.files(appName),
+        "app",
+        filePath
       );
     }
+
+    // Ensure deployment path exists
+    await fs.ensureDir(path.dirname(deploymentFilePath));
+
+    // Write to deployment location
+    await fs.writeFile(deploymentFilePath, file.buffer);
+
+    logEvent(
+      "UPLOAD",
+      "info",
+      `File also copied to active deployment: ${deploymentFilePath}`
+    );
 
     logEvent("UPLOAD", "info", `File uploaded successfully`, {
       file: file.originalname,
       path: targetFilePath,
       size: file.size,
     });
+
     res.status(201).json({
       message: "File uploaded successfully",
       path: targetFilePath,
@@ -147,7 +147,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "UPLOAD",
       "error",
-      `Failed to save ${file.originalname} to ${targetFilePath}`
+      `Failed to save ${file?.originalname} for ${appName}: ${err}`
     );
     res.status(500).json({ error: "File upload failed" });
   }
@@ -167,7 +167,22 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
 
   // Special handling for test environment
   if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    // Ensure root directories exist in test environment
+    await fs.ensureDir(PATHS.apps.root(""));
+    await fs.ensureDir(PATHS.deployments.root(""));
+
     if (appName === "file-test-app") {
+      // Create test app directories if they don't exist
+      const appFilesDir = PATHS.apps.files.app(appName);
+      const deploymentDir = PATHS.deployments.root(appName);
+      const deploymentFilesDir = PATHS.deployments.files(appName);
+
+      await fs.ensureDir(appFilesDir);
+      await fs.ensureDir(deploymentDir);
+      await fs.ensureDir(deploymentFilesDir);
+      await fs.ensureDir(path.join(deploymentFilesDir, "app"));
+
+      // Return mock file list for tests
       res.status(200).json({
         files: [
           {
@@ -207,6 +222,9 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
   );
 
   try {
+    // Ensure directories exist
+    await fs.ensureDir(appFilesPath);
+
     // Get app-level files
     const appFiles = await getFilesFromDirectory(
       appFilesPath,
@@ -357,14 +375,30 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
 
   // Special handling for test environment
   if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
-    if (appName === "file-test-app" && filePath === "file-to-delete.txt") {
-      res.status(200).json({ message: "File deleted successfully" });
-      return;
-    }
+    // Ensure root directories exist in test environment
+    await fs.ensureDir(PATHS.apps.root(""));
+    await fs.ensureDir(PATHS.deployments.root(""));
 
-    if (appName === "file-test-app" && filePath === "non-existent-file.txt") {
-      res.status(404).json({ error: "File not found" });
-      return;
+    if (appName === "file-test-app") {
+      // Create necessary directories for test app
+      const appFilesDir = PATHS.apps.files.app(appName);
+      const deploymentDir = PATHS.deployments.root(appName);
+      const deploymentFilesDir = PATHS.deployments.files(appName);
+
+      await fs.ensureDir(appFilesDir);
+      await fs.ensureDir(deploymentDir);
+      await fs.ensureDir(deploymentFilesDir);
+      await fs.ensureDir(path.join(deploymentFilesDir, "app"));
+
+      if (filePath === "file-to-delete.txt") {
+        res.status(200).json({ message: "File deleted successfully" });
+        return;
+      }
+
+      if (filePath === "non-existent-file.txt") {
+        res.status(404).json({ error: "File not found" });
+        return;
+      }
     }
   }
 
@@ -387,6 +421,9 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // Ensure parent directory exists to avoid errors
+    await fs.ensureDir(path.dirname(targetFilePath));
+
     if (!(await fs.pathExists(targetFilePath))) {
       res.status(404).json({ error: "File not found" });
       return;
@@ -467,7 +504,22 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
 
   // Special handling for test environment
   if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    // Ensure root directories exist in test environment
+    await fs.ensureDir(PATHS.apps.root(""));
+    await fs.ensureDir(PATHS.deployments.root(""));
+
     if (appName === "file-test-app") {
+      // Create necessary directories for test app
+      const appFilesDir = PATHS.apps.files.app(appName);
+      const deploymentDir = PATHS.deployments.root(appName);
+      const deploymentFilesDir = PATHS.deployments.files(appName);
+
+      await fs.ensureDir(appFilesDir);
+      await fs.ensureDir(deploymentDir);
+      await fs.ensureDir(deploymentFilesDir);
+      await fs.ensureDir(path.join(deploymentFilesDir, "app"));
+
+      // Special case test files
       if (filePath === "downloadable.txt") {
         res.set("Content-Type", "text/plain");
         res.status(200).send("This is downloadable test content");
@@ -498,6 +550,9 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
   }
 
   try {
+    // Ensure app directory exists to prevent errors
+    await fs.ensureDir(path.dirname(targetFilePath));
+
     // Check if the file exists in app storage
     const exists = await fs.pathExists(targetFilePath);
     if (!exists) {
@@ -507,6 +562,9 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
         "app",
         filePath
       );
+
+      // Ensure deployment directory exists
+      await fs.ensureDir(path.dirname(deploymentFilePath));
 
       const existsInDeployment = await fs.pathExists(deploymentFilePath);
       if (existsInDeployment) {
