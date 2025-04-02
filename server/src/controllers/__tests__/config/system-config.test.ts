@@ -397,4 +397,134 @@ describe("System Config API Tests", () => {
       error: `Configuration key '${key}' not found`,
     });
   });
+
+  // Tests for DELETE /config?keys=key1,key2 endpoint
+  test("DELETE /api/config?keys should delete multiple configuration values", async () => {
+    // Create a test config file with multiple values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      key1: "value1",
+      key2: "value2",
+      key3: "value3",
+      keyToKeep: "valueToKeep",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const response = await request(testServer.getApp())
+      .delete("/api/config?keys=key1,key2,key3")
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      deletedKeys: ["key1", "key2", "key3"],
+      message: "Deleted 3 system configuration value(s)",
+    });
+
+    // Verify the keys were actually deleted in the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      keyToKeep: "valueToKeep",
+    });
+    expect(savedConfig.key1).toBeUndefined();
+    expect(savedConfig.key2).toBeUndefined();
+    expect(savedConfig.key3).toBeUndefined();
+  });
+
+  test("DELETE /api/config?keys should handle when some keys don't exist", async () => {
+    // Create a test config file with multiple values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      key1: "value1",
+      keyToKeep: "valueToKeep",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const response = await request(testServer.getApp())
+      .delete("/api/config?keys=key1,nonExistentKey1,nonExistentKey2")
+      .expect(200);
+
+    // Check the response (should only include keys that were actually deleted)
+    expect(response.body).toEqual({
+      deletedKeys: ["key1"],
+      message: "Deleted 1 system configuration value(s)",
+    });
+
+    // Verify the keys were actually deleted in the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      keyToKeep: "valueToKeep",
+    });
+    expect(savedConfig.key1).toBeUndefined();
+  });
+
+  test("DELETE /api/config?keys should return 404 when all specified keys are not found", async () => {
+    // Create a test config file with multiple values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      key1: "value1",
+      key2: "value2",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const response = await request(testServer.getApp())
+      .delete("/api/config?keys=nonExistentKey1,nonExistentKey2")
+      .expect(404);
+
+    // Check the response
+    expect(response.body).toEqual({
+      error: "None of the specified keys were found",
+    });
+
+    // Verify the config file remains unchanged
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual(initialConfig);
+  });
+
+  test("DELETE /api/config?keys should return 400 when no keys parameter is provided", async () => {
+    const response = await request(testServer.getApp())
+      .delete("/api/config")
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "Missing keys query parameter",
+    });
+  });
+
+  test("DELETE /api/config?keys should return 400 when keys parameter is empty", async () => {
+    const response = await request(testServer.getApp())
+      .delete("/api/config?keys=")
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "Missing keys query parameter",
+    });
+  });
+
+  test("DELETE /api/config?keys should return 404 when config file doesn't exist", async () => {
+    // Make sure no config file exists
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    if (await fs.pathExists(configPath)) {
+      await fs.remove(configPath);
+    }
+
+    const response = await request(testServer.getApp())
+      .delete("/api/config?keys=key1,key2")
+      .expect(404);
+
+    expect(response.body).toEqual({
+      error: "Configuration not found",
+    });
+  });
 });

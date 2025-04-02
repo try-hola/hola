@@ -310,7 +310,85 @@ const deleteMultipleSystemConfigValues = async (
     DeleteMultipleSystemConfigValuesResponse | SystemConfigErrorResponse
   >
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { keys } = req.query;
+
+    if (!keys || typeof keys !== "string") {
+      res.status(400).json({
+        error: "Missing or invalid keys parameter",
+        details: "Keys must be provided as a comma-separated string",
+      });
+      return;
+    }
+
+    // Split the comma-separated keys
+    const keyArray = keys
+      .split(",")
+      .map((key) => key.trim())
+      .filter((key) => key);
+
+    if (keyArray.length === 0) {
+      res.status(400).json({
+        error: "No valid keys provided",
+        details: "Keys parameter must contain at least one valid key",
+      });
+      return;
+    }
+
+    // Define config path from the system config directory
+    const configPath = path.join(PATHS.config.system(), "config.json");
+
+    // Check if the config file exists
+    if (!(await fs.pathExists(configPath))) {
+      res.status(404).json({ error: "Configuration not found" });
+      return;
+    }
+
+    // Read the config file
+    let config = await fs.readJSON(configPath);
+
+    // Keep track of which keys were actually deleted
+    const deletedKeys: string[] = [];
+
+    // Delete each key
+    keyArray.forEach((key) => {
+      if (config.hasOwnProperty(key)) {
+        delete config[key];
+        deletedKeys.push(key);
+      }
+    });
+
+    if (deletedKeys.length === 0) {
+      res.status(404).json({ error: "None of the specified keys were found" });
+      return;
+    }
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, config, { spaces: 2 });
+
+    logEvent(
+      "CONFIG",
+      "info",
+      `Deleted ${deletedKeys.length} system config value(s)`,
+      {
+        keys: deletedKeys,
+      }
+    );
+
+    // Return success response
+    res.status(200).json({
+      deletedKeys,
+      message: `Deleted ${deletedKeys.length} system configuration value(s)`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to delete system config values", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to delete system configuration values",
+      details: error.message,
+    });
+  }
 };
 
 /**
