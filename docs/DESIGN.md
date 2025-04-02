@@ -76,6 +76,71 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 | ----------- | ---------------------- | ---------------------------------------------------------------- |
 | GET         | /apps/{appName}/events | Streams logs/status updates for deployment or upgrade processes. |
 
+## 2.1 Suggested CLI Structure
+
+The following CLI structure is designed to offer a cohesive, intuitive interface for end users while cleanly mapping to the underlying API features. All commands follow the pattern:
+
+```
+hola <command> <subcommand> [options]
+```
+
+### Configuration Management
+
+```
+hola config get [--app <appName>] [--key <key>] [--secret]
+hola config set [--app <appName>] [--secret] <key>=<value>...
+hola config delete [--app <appName>] [--secret] <key>...
+```
+
+- `--app` targets an app-specific config; otherwise, system-wide is assumed.
+- `--secret` stores or retrieves values encrypted at rest (masked when retrieved).
+
+### Application Lifecycle
+
+```
+hola app deploy <appName> [--package <package-ref>] [--env KEY=VALUE...] [--file <file>...]
+hola app list
+hola app info <appName>
+hola app update <appName>
+hola app delete <appName>
+hola app start <appName>
+hola app stop <appName>
+hola app restart <appName>
+```
+
+### File Management
+
+```
+hola file upload <appName> <path>...
+hola file list <appName>
+hola file delete <appName> <fileId>
+```
+
+### Backup & Restore
+
+```
+hola backup create <appName>
+hola backup list <appName>
+hola backup info <appName> <backupId>
+hola backup restore <appName> <backupId>
+```
+
+### Logs & Monitoring
+
+```
+hola logs <appName>
+hola metrics <appName>
+hola health <appName>
+```
+
+### Real-Time Updates
+
+```
+hola watch <appName> [--events deploy|update|all]
+```
+
+This CLI is designed to be clear, minimal, and consistent. Aliases like `cfg`, `ls`, or `rm` can be introduced as optional ergonomic shortcuts. Descriptive error messages and `--help` flags for every command/subcommand ensure a friendly developer experience.
+
 ## 3. Communication Protocols
 
 - **REST APIs**: CLI sends requests and receives responses for standard operations.
