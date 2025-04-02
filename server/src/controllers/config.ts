@@ -173,7 +173,54 @@ const updateSystemConfigValue = async (
   >,
   res: Response<UpdateSystemConfigValueResponse | SystemConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { key } = req.params;
+    const { value } = req.body;
+
+    if (value === undefined) {
+      res.status(400).json({
+        error: "Missing value in request body",
+      });
+      return;
+    }
+
+    // Define config path from the system config directory
+    const configPath = path.join(PATHS.config.system(), "config.json");
+
+    // Check if the config file exists, if not create it
+    if (!(await fs.pathExists(configPath))) {
+      await fs.ensureDir(path.dirname(configPath));
+      await fs.writeJSON(configPath, {}, { spaces: 2 });
+    }
+
+    // Read the existing config
+    let existingConfig = await fs.readJSON(configPath);
+
+    // Update the specific key
+    existingConfig[key] = value;
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, existingConfig, { spaces: 2 });
+
+    logEvent("CONFIG", "info", `Updated system config value for key: ${key}`, {
+      value,
+    });
+
+    // Return the updated value
+    res.status(200).json({
+      key,
+      value,
+      message: `Updated system configuration value for key: ${key}`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to update system config value", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to update system configuration value",
+      details: error.message,
+    });
+  }
 };
 
 /**

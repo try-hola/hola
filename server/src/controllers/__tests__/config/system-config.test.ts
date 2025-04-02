@@ -122,7 +122,7 @@ describe("System Config API Tests", () => {
       "config.json"
     );
     const initialConfig = {
-      existingKey: "existingValue"
+      existingKey: "existingValue",
     };
     await fs.writeJSON(configPath, initialConfig);
 
@@ -130,7 +130,7 @@ describe("System Config API Tests", () => {
     const newConfigValues = {
       newKey1: "newValue1",
       newKey2: 123,
-      existingKey: "updatedValue" // This should overwrite the existing value
+      existingKey: "updatedValue", // This should overwrite the existing value
     };
 
     const response = await request(testServer.getApp())
@@ -142,13 +142,15 @@ describe("System Config API Tests", () => {
     const expectedConfig = {
       existingKey: "updatedValue",
       newKey1: "newValue1",
-      newKey2: 123
+      newKey2: 123,
     };
 
     // Check the response
     expect(response.body).toEqual({
       config: expectedConfig,
-      message: `Updated ${Object.keys(newConfigValues).length} configuration value(s)`
+      message: `Updated ${
+        Object.keys(newConfigValues).length
+      } configuration value(s)`,
     });
 
     // Verify the config was actually saved to the file
@@ -169,7 +171,7 @@ describe("System Config API Tests", () => {
     // New config to add
     const newConfigValues = {
       freshKey1: "freshValue1",
-      freshKey2: 456
+      freshKey2: 456,
     };
 
     const response = await request(testServer.getApp())
@@ -180,7 +182,9 @@ describe("System Config API Tests", () => {
     // Check the response
     expect(response.body).toEqual({
       config: newConfigValues,
-      message: `Updated ${Object.keys(newConfigValues).length} configuration value(s)`
+      message: `Updated ${
+        Object.keys(newConfigValues).length
+      } configuration value(s)`,
     });
 
     // Verify the config was actually saved to a new file
@@ -197,7 +201,121 @@ describe("System Config API Tests", () => {
 
     expect(response.body).toEqual({
       error: "Invalid configuration format",
-      details: "Config must be a valid object"
+      details: "Config must be a valid object",
+    });
+  });
+
+  // Tests for PUT /api/config/{key} endpoint
+  test("PUT /api/config/{key} should create or update a specific system configuration value", async () => {
+    // Create a test config file with initial values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      existingKey: "existingValue",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const key = "testKey";
+    const value = "testValue";
+
+    const response = await request(testServer.getApp())
+      .put(`/api/config/${key}`)
+      .send({ value })
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      key,
+      value,
+      message: `Updated system configuration value for key: ${key}`,
+    });
+
+    // Verify the config was actually saved to the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      existingKey: "existingValue",
+      [key]: value,
+    });
+  });
+
+  test("PUT /api/config/{key} should update an existing system configuration value", async () => {
+    // Create a test config file with initial values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const key = "existingKey";
+    const initialValue = "initialValue";
+    const updatedValue = "updatedValue";
+
+    const initialConfig = {
+      [key]: initialValue,
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const response = await request(testServer.getApp())
+      .put(`/api/config/${key}`)
+      .send({ value: updatedValue })
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      key,
+      value: updatedValue,
+      message: `Updated system configuration value for key: ${key}`,
+    });
+
+    // Verify the config was actually updated in the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      [key]: updatedValue,
+    });
+  });
+
+  test("PUT /api/config/{key} should create a new config file if it doesn't exist", async () => {
+    // Make sure no config file exists
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    if (await fs.pathExists(configPath)) {
+      await fs.remove(configPath);
+    }
+
+    const key = "freshKey";
+    const value = "freshValue";
+
+    const response = await request(testServer.getApp())
+      .put(`/api/config/${key}`)
+      .send({ value })
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      key,
+      value,
+      message: `Updated system configuration value for key: ${key}`,
+    });
+
+    // Verify the config was actually saved to a new file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      [key]: value,
+    });
+  });
+
+  test("PUT /api/config/{key} should return 400 when value is missing", async () => {
+    const key = "someKey";
+
+    const response = await request(testServer.getApp())
+      .put(`/api/config/${key}`)
+      .send({}) // Missing value property
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "Missing value in request body",
     });
   });
 });
