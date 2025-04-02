@@ -113,4 +113,91 @@ describe("System Config API Tests", () => {
 
     await request(testServer.getApp()).get("/api/config").expect(500);
   });
+
+  // Tests for POST /api/config endpoint
+  test("POST /api/config should create or update system configuration values", async () => {
+    // Create a test config file with initial values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      existingKey: "existingValue"
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    // New config to add
+    const newConfigValues = {
+      newKey1: "newValue1",
+      newKey2: 123,
+      existingKey: "updatedValue" // This should overwrite the existing value
+    };
+
+    const response = await request(testServer.getApp())
+      .post("/api/config")
+      .send({ config: newConfigValues })
+      .expect(200);
+
+    // Expected merged config
+    const expectedConfig = {
+      existingKey: "updatedValue",
+      newKey1: "newValue1",
+      newKey2: 123
+    };
+
+    // Check the response
+    expect(response.body).toEqual({
+      config: expectedConfig,
+      message: `Updated ${Object.keys(newConfigValues).length} configuration value(s)`
+    });
+
+    // Verify the config was actually saved to the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual(expectedConfig);
+  });
+
+  test("POST /api/config should create a new config file if it doesn't exist", async () => {
+    // Make sure no config file exists
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    if (await fs.pathExists(configPath)) {
+      await fs.remove(configPath);
+    }
+
+    // New config to add
+    const newConfigValues = {
+      freshKey1: "freshValue1",
+      freshKey2: 456
+    };
+
+    const response = await request(testServer.getApp())
+      .post("/api/config")
+      .send({ config: newConfigValues })
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      config: newConfigValues,
+      message: `Updated ${Object.keys(newConfigValues).length} configuration value(s)`
+    });
+
+    // Verify the config was actually saved to a new file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual(newConfigValues);
+  });
+
+  test("POST /api/config should return 400 for invalid configuration format", async () => {
+    // Invalid request with missing config object
+    const response = await request(testServer.getApp())
+      .post("/api/config")
+      .send({})
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "Invalid configuration format",
+      details: "Config must be a valid object"
+    });
+  });
 });

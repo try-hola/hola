@@ -95,7 +95,53 @@ const createSystemConfig = async (
   req: Request<{}, {}, CreateSystemConfigRequestBody>,
   res: Response<CreateSystemConfigResponse | SystemConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { config } = req.body;
+
+    if (!config || typeof config !== "object") {
+      res.status(400).json({
+        error: "Invalid configuration format",
+        details: "Config must be a valid object",
+      });
+      return;
+    }
+
+    // Define config path from the system config directory
+    const configPath = path.join(PATHS.config.system(), "config.json");
+
+    // Check if the config file exists, if not create it
+    if (!(await fs.pathExists(configPath))) {
+      await fs.ensureDir(path.dirname(configPath));
+      await fs.writeJSON(configPath, {}, { spaces: 2 });
+    }
+
+    // Read the existing config
+    let existingConfig = await fs.readJSON(configPath);
+
+    // Merge the new config with the existing one
+    const updatedConfig = { ...existingConfig, ...config };
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, updatedConfig, { spaces: 2 });
+
+    logEvent("CONFIG", "info", "Updated system configuration", {
+      updatedKeys: Object.keys(config),
+    });
+
+    // Return the updated config
+    res.status(200).json({
+      config: updatedConfig,
+      message: `Updated ${Object.keys(config).length} configuration value(s)`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to update system config", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to update system configuration",
+      details: error.message,
+    });
+  }
 };
 
 /**
