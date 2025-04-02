@@ -837,7 +837,85 @@ const createBackup = async (
   req: Request<CreateBackupRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName } = req.params;
+  const taskId: string = uuidv4();
+
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  try {
+    // Create timestamp for the backup
+    const timestamp = new Date().toISOString();
+
+    // Ensure the root backup directory exists first
+    const backupsRootDir: string = PATHS.backups.root(appName);
+    await fs.ensureDir(backupsRootDir);
+
+    // Create the timestamped backup directory
+    const backupDir: string = PATHS.backups.timestamp(appName, timestamp);
+    await fs.ensureDir(backupDir);
+
+    // Create files and config directories inside the backup
+    const backupFilesDir = PATHS.backups.files(appName, timestamp);
+    await fs.ensureDir(backupFilesDir);
+
+    const backupConfigDir = PATHS.backups.config(appName, timestamp);
+    await fs.ensureDir(backupConfigDir);
+
+    // Backup existing deployment
+    const currentDir: string = PATHS.deployments.current(appName);
+    const composeDir: string = PATHS.deployments.compose(appName);
+
+    // Backup current deployment if it exists
+    if (await fs.pathExists(currentDir)) {
+      await fs.copy(currentDir, path.join(backupFilesDir, "current"));
+    }
+
+    // Backup compose files if they exist
+    if (await fs.pathExists(composeDir)) {
+      await fs.copy(composeDir, path.join(backupConfigDir, "compose"));
+    }
+
+    // Create backup metadata file
+    const metadata = {
+      timestamp,
+      appName,
+      backupType: "manual",
+      createdAt: new Date().toISOString(),
+    };
+
+    await fs.writeJSON(PATHS.backups.metadata(appName, timestamp), metadata);
+
+    // Double-check that backup directory exists before proceeding
+    const backupDirExists = await fs.pathExists(backupDir);
+    if (!backupDirExists) {
+      sendUpdate(
+        res,
+        taskId,
+        "BACKUP",
+        "warning",
+        `Failed to create backup directory: ${backupDir}`
+      );
+      // Recreate it as a fallback
+      await fs.ensureDir(backupDir);
+      await fs.ensureDir(backupFilesDir);
+      await fs.ensureDir(backupConfigDir);
+    }
+
+    sendUpdate(
+      res,
+      taskId,
+      "BACKUP",
+      "complete",
+      `Backup for ${appName} created successfully`
+    );
+    res.end();
+  } catch (error: any) {
+    sendUpdate(res, taskId, "BACKUP", "error", error.message);
+    res.end();
+  }
 };
 
 /**
@@ -855,7 +933,36 @@ const listBackups = async (
   req: Request<ListBackupsRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName } = req.params;
+
+  try {
+    const backupsRootDir: string = PATHS.backups.root(appName);
+
+    if (!(await fs.pathExists(backupsRootDir))) {
+      res.status(404).json({ error: "No backups found" });
+      return;
+    }
+
+    const backupDirs: string[] = await fs.readdir(backupsRootDir);
+
+    const backups = await Promise.all(
+      backupDirs.map(async (dir) => {
+        const metadataPath = PATHS.backups.metadata(appName, dir);
+        if (await fs.pathExists(metadataPath)) {
+          const metadata = await fs.readJSON(metadataPath);
+          return metadata;
+        }
+        return null;
+      })
+    );
+
+    res.json({ backups: backups.filter((backup) => backup !== null) });
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to list backups",
+      details: error.message,
+    });
+  }
 };
 
 /**
@@ -874,7 +981,24 @@ const getBackupDetails = async (
   req: Request<GetBackupDetailsRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName, backupId } = req.params;
+
+  try {
+    const metadataPath = PATHS.backups.metadata(appName, backupId);
+
+    if (!(await fs.pathExists(metadataPath))) {
+      res.status(404).json({ error: "Backup not found" });
+      return;
+    }
+
+    const metadata = await fs.readJSON(metadataPath);
+    res.json(metadata);
+  } catch (error: any) {
+    res.status(500).json({
+      error: "Failed to get backup details",
+      details: error.message,
+    });
+  }
 };
 
 /**
@@ -893,7 +1017,83 @@ const restoreFromBackup = async (
   req: Request<RestoreFromBackupRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName, backupId } = req.params;
+  const taskId: string = uuidv4();
+  const docker = new DockerRunner();
+
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  docker.on("status", (update: StatusUpdate) => {
+    sendUpdate(
+      res,
+      update.taskId,
+      update.taskType,
+      update.status,
+      update.message
+    );
+  });
+
+  try {
+    const backupDir: string = PATHS.backups.timestamp(appName, backupId);
+
+    if (!(await fs.pathExists(backupDir))) {
+      sendUpdate(
+        res,
+        taskId,
+        "RESTORE",
+        "error",
+        `Backup ${backupId} not found for ${appName}`
+      );
+      res.end();
+      return;
+    }
+
+    // Stop the application before restoring
+    const composeDir: string = PATHS.deployments.compose(appName);
+    if (await fs.pathExists(composeDir)) {
+      await docker.runCommand(taskId, "STOP", ["stop"], appName, {
+        cwd: composeDir,
+      });
+    }
+
+    // Restore files and config from backup
+    const backupFilesDir = PATHS.backups.files(appName, backupId);
+    const backupConfigDir = PATHS.backups.config(appName, backupId);
+
+    const currentDir: string = PATHS.deployments.current(appName);
+    const composeDirPath: string = PATHS.deployments.compose(appName);
+
+    await fs.emptyDir(currentDir);
+    await fs.emptyDir(composeDirPath);
+
+    if (await fs.pathExists(backupFilesDir)) {
+      await fs.copy(backupFilesDir, currentDir);
+    }
+
+    if (await fs.pathExists(backupConfigDir)) {
+      await fs.copy(backupConfigDir, composeDirPath);
+    }
+
+    // Restart the application with restored files
+    await docker.runCommand(taskId, "START", ["up", "-d"], appName, {
+      cwd: composeDirPath,
+    });
+
+    sendUpdate(
+      res,
+      taskId,
+      "RESTORE",
+      "complete",
+      `Application ${appName} restored from backup ${backupId} successfully`
+    );
+    res.end();
+  } catch (error: any) {
+    sendUpdate(res, taskId, "RESTORE", "error", error.message);
+    res.end();
+  }
 };
 
 /**
@@ -911,7 +1111,56 @@ const getAppLogs = async (
   req: Request<GetAppLogsRequestParams>,
   res: Response
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName } = req.params;
+  const taskId: string = uuidv4();
+  const docker = new DockerRunner();
+
+  // Set up SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
+  docker.on("status", (update: StatusUpdate) => {
+    sendUpdate(
+      res,
+      update.taskId,
+      update.taskType,
+      update.status,
+      update.message
+    );
+  });
+
+  try {
+    const composeDir: string = PATHS.deployments.compose(appName);
+
+    if (!(await fs.pathExists(composeDir))) {
+      sendUpdate(
+        res,
+        taskId,
+        "LOGS",
+        "error",
+        `Application ${appName} not found`
+      );
+      res.end();
+      return;
+    }
+
+    await docker.runCommand(taskId, "LOGS", ["logs", "--follow"], appName, {
+      cwd: composeDir,
+    });
+
+    sendUpdate(
+      res,
+      taskId,
+      "LOGS",
+      "complete",
+      `Logs for ${appName} retrieved successfully`
+    );
+    res.end();
+  } catch (error: any) {
+    sendUpdate(res, taskId, "LOGS", "error", error.message);
+    res.end();
+  }
 };
 
 /**
