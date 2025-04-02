@@ -37,5 +37,8 @@
   "remoteUser": "node",
   "containerEnv": {
     "NODE_ENV": "development"
+  },
+  "tasks": {
+    "test": "yarn test"
   }
 }
