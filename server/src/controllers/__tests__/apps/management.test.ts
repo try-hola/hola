@@ -46,9 +46,9 @@ describe("App Management API Tests", () => {
     await testServer.stop();
   });
 
-  test("GET /api/apps/:appName/details should return complete app details", async () => {
+  test("GET /api/apps/:appName should return complete app details", async () => {
     const response = await request(testServer.getApp())
-      .get(`/api/apps/${testAppName}/details`)
+      .get(`/api/apps/${testAppName}`)
       .expect(200);
 
     // Verify the app details include all required fields

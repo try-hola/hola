@@ -21,7 +21,7 @@ export const registerRoutes = (app: Application): void => {
   // Application management routes
   app.post("/api/apps/deploy", appsController.deployApp); // Deploy a new application
   app.get("/api/apps", appsController.listApps); // List all deployed applications
-  app.get("/api/apps/:appName/details", appsController.getAppDetails); // Get details about an application
+  app.get("/api/apps/:appName", appsController.getAppDetails); // Get details about an application
   app.post("/api/apps/:appName/upgrade", appsController.upgradeApp); // Upgrade an existing application
   app.delete("/api/apps/:appName", appsController.removeApp); // Remove an application
   app.post("/api/apps/:appName/start", appsController.startApp); // Start an application

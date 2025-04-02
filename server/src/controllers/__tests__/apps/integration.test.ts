@@ -115,9 +115,9 @@ describe("Apps API Integration Tests", () => {
     expect(response.body.apps).toContain("test-app2");
   });
 
-  test("GET /api/apps/:appName/details should return app details", async () => {
+  test("GET /api/apps/:appName should return app details", async () => {
     const response = await request(testServer.getApp())
-      .get("/api/apps/test-app1/details")
+      .get("/api/apps/test-app1")
       .expect(200);
 
     expect(response.body).toHaveProperty("appName", "test-app1");
