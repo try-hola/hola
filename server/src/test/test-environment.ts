@@ -2,6 +2,10 @@
 import path from "path";
 import fs from "fs-extra";
 import { v4 as uuidv4 } from "uuid";
+import { promisify } from "util";
+
+// Add a small delay utility for retry mechanisms
+const sleep = promisify(setTimeout);
 
 /**
  * Test environment configuration for integration testing
@@ -19,9 +23,12 @@ export class TestEnvironment {
     config: string;
     apps: string;
   };
+  private readonly uniqueId: string;
 
   constructor(options: { cleanOnExit?: boolean } = {}) {
-    this.storageRoot = path.join(process.cwd(), "data");
+    // Add a unique ID to prevent test collisions
+    this.uniqueId = uuidv4().substring(0, 8);
+    this.storageRoot = path.join(process.cwd(), `data_test_${this.uniqueId}`);
     this.appDirectories = {
       deployments: path.join(this.storageRoot, "deployments"),
       packages: path.join(this.storageRoot, "packages"),
@@ -41,10 +48,62 @@ export class TestEnvironment {
    * Initialize the test environment by creating required directories
    */
   async init(): Promise<void> {
-    await fs.emptyDir(this.storageRoot);
+    // Ensure the storage root doesn't exist before starting
+    await this.safeRemove(this.storageRoot);
+
+    // Create storage root and all subdirectories
+    await fs.ensureDir(this.storageRoot);
     await Promise.all(
       Object.values(this.appDirectories).map((dir) => fs.ensureDir(dir))
     );
+  }
+
+  /**
+   * Safe removal of directory with retries and recursive deletion
+   * @param dirPath Directory path to remove
+   * @param maxRetries Maximum number of retry attempts
+   * @param retryDelay Delay between retries in milliseconds
+   */
+  private async safeRemove(
+    dirPath: string,
+    maxRetries = 3,
+    retryDelay = 100
+  ): Promise<boolean> {
+    if (!(await fs.pathExists(dirPath))) {
+      return true;
+    }
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        await fs.remove(dirPath);
+        return true;
+      } catch (error) {
+        if (attempt === maxRetries - 1) {
+          // On final attempt, don't throw but return false to indicate failure
+          return false;
+        }
+
+        // Wait a bit before retrying
+        await sleep(retryDelay);
+
+        // Try to remove files first on retry
+        try {
+          const entries = await fs.readdir(dirPath, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dirPath, entry.name);
+            if (entry.isDirectory()) {
+              await this.safeRemove(fullPath, 1, 0);
+            } else {
+              await fs.unlink(fullPath).catch(() => {});
+            }
+          }
+        } catch {
+          // Ignore errors in the intermediate cleanup
+        }
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -131,46 +190,13 @@ export class TestEnvironment {
    */
   async cleanup(): Promise<void> {
     try {
-      // First try to clean up specific directories recursively
-      const directories = Object.values(this.appDirectories);
-      for (const dir of directories) {
-        if (await fs.pathExists(dir)) {
-          try {
-            // Recursively delete all files in directory first
-            const files = await fs.readdir(dir, { withFileTypes: true });
-            for (const file of files) {
-              const fullPath = path.join(dir, file.name);
-              await fs.remove(fullPath);
-            }
-            // Then remove the directory itself
-            await fs.remove(dir);
-          } catch (error) {
-            console.error(`Failed to remove directory: ${dir}`, error);
-          }
-        }
-      }
+      // Simply remove the entire storage root with our safer removal function
+      const success = await this.safeRemove(this.storageRoot);
 
-      // Then clean up the entire storage root
-      if (await fs.pathExists(this.storageRoot)) {
-        try {
-          await fs.remove(this.storageRoot);
-        } catch (error) {
-          console.warn(
-            `Failed to completely remove storage root: ${this.storageRoot}`,
-            error
-          );
-          // Try to at least remove all the files
-          try {
-            const files = await fs.readdir(this.storageRoot, {
-              withFileTypes: true,
-            });
-            for (const file of files) {
-              await fs.remove(path.join(this.storageRoot, file.name));
-            }
-          } catch (err) {
-            // Ignore any errors in this final cleanup attempt
-          }
-        }
+      if (!success) {
+        console.warn(
+          `Could not completely remove test data directory: ${this.storageRoot}`
+        );
       }
     } catch (error) {
       console.warn("Failed to clean up test environment:", error);
