@@ -104,9 +104,33 @@ paths:
                   error:
                     type: string
 
-  /api/apps/{appName}/details:
+  /api/apps/{appName}:
     get:
-      summary: Get details about a deployed application
+      summary: Get details about a specific application
+      description: Returns comprehensive information about a deployed application
+      operationId: getAppDetails
+      tags:
+        - applications
+      parameters:
+        - name: appName
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppDetails'
+        '404':
+          description: Application not found
+        '500':
+          description: Internal server error
+
+    delete:
+      summary: Remove a deployed application
       parameters:
         - name: appName
           in: path
@@ -115,41 +139,19 @@ paths:
             type: string
       responses:
         "200":
-          description: Application details retrieved successfully
+          description: Application removal initiated (SSE stream)
           content:
-            application/json:
+            text/event-stream:
               schema:
-                type: object
-                properties:
-                  appName:
-                    type: string
-                  status:
-                    type: string
-                  config:
-                    type: object
-                  files:
-                    type: array
-                    items:
-                      type: string
-        "404":
-          description: Application not found
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
+                type: string
         "500":
-          description: Failed to get application details
+          description: Failed to remove application
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   error:
-                    type: string
-                  details:
                     type: string
 
   /api/apps/{appName}/upgrade:
@@ -180,32 +182,6 @@ paths:
                 type: string
         "500":
           description: Failed to upgrade application
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-
-  /api/apps/{appName}:
-    delete:
-      summary: Remove a deployed application
-      parameters:
-        - name: appName
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Application removal initiated (SSE stream)
-          content:
-            text/event-stream:
-              schema:
-                type: string
-        "500":
-          description: Failed to remove application
           content:
             application/json:
               schema:
