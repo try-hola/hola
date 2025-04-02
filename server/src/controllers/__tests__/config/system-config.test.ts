@@ -318,4 +318,83 @@ describe("System Config API Tests", () => {
       error: "Missing value in request body",
     });
   });
+
+  // Tests for DELETE /config/{key} endpoint
+  test("DELETE /api/config/{key} should delete a specific configuration value", async () => {
+    // Create a test config file with multiple values
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      keyToDelete: "valueToDelete",
+      keyToKeep: "valueToKeep",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const key = "keyToDelete";
+    const response = await request(testServer.getApp())
+      .delete(`/api/config/${key}`)
+      .expect(200);
+
+    // Check the response
+    expect(response.body).toEqual({
+      key,
+      message: `Deleted system configuration value for key: ${key}`,
+    });
+
+    // Verify the key was actually deleted in the file
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual({
+      keyToKeep: "valueToKeep",
+    });
+    expect(savedConfig.keyToDelete).toBeUndefined();
+  });
+
+  test("DELETE /api/config/{key} should return 404 when the key doesn't exist", async () => {
+    // Create a test config file
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    const initialConfig = {
+      existingKey: "existingValue",
+    };
+    await fs.writeJSON(configPath, initialConfig);
+
+    const key = "nonExistentKey";
+    const response = await request(testServer.getApp())
+      .delete(`/api/config/${key}`)
+      .expect(404);
+
+    // Check the response
+    expect(response.body).toEqual({
+      error: `Configuration key '${key}' not found`,
+    });
+
+    // Verify the config file remains unchanged
+    const savedConfig = await fs.readJSON(configPath);
+    expect(savedConfig).toEqual(initialConfig);
+  });
+
+  test("DELETE /api/config/{key} should return 404 when config file doesn't exist", async () => {
+    // Make sure no config file exists
+    const configPath = path.join(
+      testServer.environment.getPaths().config.system(),
+      "config.json"
+    );
+    if (await fs.pathExists(configPath)) {
+      await fs.remove(configPath);
+    }
+
+    const key = "anyKey";
+    const response = await request(testServer.getApp())
+      .delete(`/api/config/${key}`)
+      .expect(404);
+
+    // Check the response
+    expect(response.body).toEqual({
+      error: `Configuration key '${key}' not found`,
+    });
+  });
 });

@@ -243,7 +243,49 @@ const deleteSystemConfigValue = async (
   req: Request<DeleteSystemConfigValueRequestParams>,
   res: Response<DeleteSystemConfigValueResponse | SystemConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { key } = req.params;
+
+    // Define config path from the system config directory
+    const configPath = path.join(PATHS.config.system(), "config.json");
+
+    // Check if the config file exists
+    if (!(await fs.pathExists(configPath))) {
+      res.status(404).json({ error: `Configuration key '${key}' not found` });
+      return;
+    }
+
+    // Read the config file
+    let config = await fs.readJSON(configPath);
+
+    // Check if the key exists
+    if (!config.hasOwnProperty(key)) {
+      res.status(404).json({ error: `Configuration key '${key}' not found` });
+      return;
+    }
+
+    // Delete the key
+    delete config[key];
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, config, { spaces: 2 });
+
+    logEvent("CONFIG", "info", `Deleted system config value for key: ${key}`);
+
+    // Return success response
+    res.status(200).json({
+      key,
+      message: `Deleted system configuration value for key: ${key}`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to delete system config value", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to delete system configuration value",
+      details: error.message,
+    });
+  }
 };
 
 /**
