@@ -6,13 +6,17 @@ const { encryptValue, decryptValue } = require("../utils/encryption");
 import { Request, Response } from "express";
 
 /**
- * Retrieves system-wide configuration.
+ * Retrieves system configuration.
  *
- * @param req - The request object.
+ * @param req - The request object, can include a 'key' query parameter to retrieve specific configuration.
  * @param res - The response object used to send back the desired HTTP response.
  * @returns {Promise<void>} - A promise that resolves when the system configuration is retrieved.
  */
-interface SystemConfigResponse {
+interface GetSystemConfigQueryParams {
+  key?: string;
+}
+
+interface GetSystemConfigResponse {
   config: Record<string, any>;
 }
 
@@ -22,50 +26,54 @@ interface SystemConfigErrorResponse {
 }
 
 const getSystemConfig = async (
-  req: Request,
-  res: Response<SystemConfigResponse | SystemConfigErrorResponse>
+  req: Request<{}, {}, {}, GetSystemConfigQueryParams>,
+  res: Response<GetSystemConfigResponse | SystemConfigErrorResponse>
 ): Promise<void> => {
+  const { key } = req.query;
+  const configPath = path.join(PATHS.config.system(), "config.json");
+
   try {
-    // Get the key from query params, if provided
-    const { key } = req.query;
+    // Create the directory if it doesn't exist (especially for tests)
+    await fs.ensureDir(path.dirname(configPath));
 
-    // Define config path from the system config directory
-    const configPath = path.join(PATHS.config.system(), "config.json");
+    // Use empty object as fallback when file doesn't exist
+    let config = {};
 
-    // Check if the config file exists
-    if (!(await fs.pathExists(configPath))) {
-      // If it doesn't exist, create an empty config file
-      await fs.ensureDir(path.dirname(configPath));
-      await fs.writeJSON(configPath, {}, { spaces: 2 });
-
-      if (key) {
-        // If a specific key was requested but no config exists yet
-        res.status(404).json({ error: `Configuration key '${key}' not found` });
+    // Read the configuration file if it exists
+    if (await fs.pathExists(configPath)) {
+      try {
+        const configData = await fs.readFile(configPath, "utf8");
+        config = JSON.parse(configData);
+      } catch (parseError) {
+        logEvent("CONFIG", "error", `Failed to parse system config JSON`, {
+          path: configPath,
+          error: parseError.message,
+        });
+        res.status(500).json({
+          error: "Failed to parse system configuration",
+          details: parseError.message,
+        });
         return;
       }
-
-      // Return empty config
-      res.json({ config: {} });
-      return;
     }
 
-    // Read the config file
-    const config = await fs.readJSON(configPath);
-
-    // If a specific key was requested, return just that value
+    // If a specific key was requested, return just that key-value pair
     if (key) {
-      if (config.hasOwnProperty(key)) {
-        res.json({ config: { [key]: config[key] } });
+      if (Object.prototype.hasOwnProperty.call(config, key)) {
+        res.status(200).json({
+          config: { [key]: config[key] },
+        });
       } else {
         res.status(404).json({ error: `Configuration key '${key}' not found` });
       }
-      return;
+    } else {
+      // Return the entire configuration
+      res.status(200).json({
+        config,
+      });
     }
-
-    // Return the entire config
-    res.json({ config });
   } catch (error: any) {
-    logEvent("CONFIG", "error", "Failed to get system config", {
+    logEvent("CONFIG", "error", `Failed to retrieve system configuration`, {
       error: error.message,
     });
     res.status(500).json({
@@ -108,17 +116,35 @@ const createSystemConfig = async (
 
     // Define config path from the system config directory
     const configPath = path.join(PATHS.config.system(), "config.json");
+    const configDir = path.dirname(configPath);
 
-    // Check if the config file exists, if not create it
-    if (!(await fs.pathExists(configPath))) {
-      await fs.ensureDir(path.dirname(configPath));
-      await fs.writeJSON(configPath, {}, { spaces: 2 });
+    // Ensure directory exists
+    await fs.ensureDir(configDir);
+
+    // Initialize existingConfig as empty object
+    let existingConfig = {};
+
+    // Check if the config file exists and read it if it does
+    if (await fs.pathExists(configPath)) {
+      try {
+        existingConfig = await fs.readJSON(configPath);
+      } catch (readError) {
+        // If there's an error reading the file (corrupted JSON, etc.),
+        // log it but continue with an empty object
+        logEvent(
+          "CONFIG",
+          "warning",
+          `Error reading existing config, creating new file`,
+          {
+            path: configPath,
+            error: readError.message,
+          }
+        );
+        // We'll create a new file with just the new config
+      }
     }
 
-    // Read the existing config
-    let existingConfig = await fs.readJSON(configPath);
-
-    // Merge the new config with the existing one
+    // Merge the new config with the existing one (or empty object if no existing config)
     const updatedConfig = { ...existingConfig, ...config };
 
     // Write the updated config back to the file
@@ -126,6 +152,7 @@ const createSystemConfig = async (
 
     logEvent("CONFIG", "info", "Updated system configuration", {
       updatedKeys: Object.keys(config),
+      configPath,
     });
 
     // Return the updated config
