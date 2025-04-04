@@ -543,7 +543,85 @@ const createAppConfig = async (
   req: Request<CreateAppConfigRequestParams, {}, CreateAppConfigRequestBody>,
   res: Response<CreateAppConfigResponse | AppConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { appName } = req.params;
+    const { config } = req.body;
+
+    if (!isValidAppName(appName)) {
+      res.status(400).json({
+        error: "Invalid application name",
+        details: "Application name contains invalid characters",
+      });
+      return;
+    }
+
+    if (!config || typeof config !== "object") {
+      res.status(400).json({
+        error: "Invalid configuration format",
+        details: "Config must be a valid object",
+      });
+      return;
+    }
+
+    // Define config path from the app config directory
+    const configPath = path.join(PATHS.config.app(appName), "config.json");
+    const configDir = path.dirname(configPath);
+
+    // Ensure directory exists
+    await fs.ensureDir(configDir);
+
+    // Initialize existingConfig as empty object
+    let existingConfig = {};
+
+    // Check if the config file exists and read it if it does
+    if (await fs.pathExists(configPath)) {
+      try {
+        existingConfig = await fs.readJSON(configPath);
+      } catch (readError) {
+        // If there's an error reading the file (corrupted JSON, etc.),
+        // log it but continue with an empty object
+        logEvent(
+          "CONFIG",
+          "warning",
+          `Error reading existing app config, creating new file`,
+          {
+            appName,
+            path: configPath,
+            error: readError.message,
+          }
+        );
+        // We'll create a new file with just the new config
+      }
+    }
+
+    // Merge the new config with the existing one (or empty object if no existing config)
+    const updatedConfig = { ...existingConfig, ...config };
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, updatedConfig, { spaces: 2 });
+
+    logEvent("CONFIG", "info", `Updated configuration for app: ${appName}`, {
+      updatedKeys: Object.keys(config),
+      configPath,
+    });
+
+    // Return the updated config
+    res.status(200).json({
+      appName,
+      config: updatedConfig,
+      message: `Updated ${
+        Object.keys(config).length
+      } configuration value(s) for ${appName}`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", `Failed to update app config`, {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to update application configuration",
+      details: error.message,
+    });
+  }
 };
 
 /**
@@ -577,7 +655,83 @@ const updateAppConfigValue = async (
   >,
   res: Response<UpdateAppConfigValueResponse | AppConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { appName, key } = req.params;
+    const { value } = req.body;
+
+    if (!isValidAppName(appName)) {
+      res.status(400).json({
+        error: "Invalid application name",
+        details: "Application name contains invalid characters",
+      });
+      return;
+    }
+
+    if (value === undefined) {
+      res.status(400).json({
+        error: "Missing value in request body",
+      });
+      return;
+    }
+
+    // Define config path from the app config directory
+    const configPath = path.join(PATHS.config.app(appName), "config.json");
+    const configDir = path.dirname(configPath);
+
+    // Ensure directory exists
+    await fs.ensureDir(configDir);
+
+    // Initialize with empty object if file doesn't exist
+    let existingConfig = {};
+
+    // Check if the config file exists and read it if it does
+    if (await fs.pathExists(configPath)) {
+      try {
+        existingConfig = await fs.readJSON(configPath);
+      } catch (readError) {
+        // If there's an error reading the file (corrupted JSON, etc.),
+        // log it but continue with an empty object
+        logEvent(
+          "CONFIG",
+          "warning",
+          `Error reading existing app config, creating new file`,
+          {
+            appName,
+            path: configPath,
+            error: readError.message,
+          }
+        );
+        // We'll create a new file with just the new config
+      }
+    }
+
+    // Update the specific key
+    existingConfig[key] = value;
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, existingConfig, { spaces: 2 });
+
+    logEvent("CONFIG", "info", `Updated app config value for key: ${key}`, {
+      appName,
+      key,
+    });
+
+    // Return the updated value
+    res.status(200).json({
+      appName,
+      key,
+      value,
+      message: `Updated configuration value for ${appName}: ${key}`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to update app config value", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to update application configuration value",
+      details: error.message,
+    });
+  }
 };
 
 /**
@@ -630,7 +784,79 @@ const deleteAppConfigValue = async (
   req: Request<DeleteAppConfigValueRequestParams>,
   res: Response<DeleteAppConfigValueResponse | AppConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  try {
+    const { appName, key } = req.params;
+
+    if (!isValidAppName(appName)) {
+      res.status(400).json({
+        error: "Invalid application name",
+        details: "Application name contains invalid characters",
+      });
+      return;
+    }
+
+    // Define config path from the app config directory
+    const configPath = path.join(PATHS.config.app(appName), "config.json");
+
+    // Check if the config file exists
+    if (!(await fs.pathExists(configPath))) {
+      res.status(404).json({
+        error: `Configuration key '${key}' not found for application '${appName}'`,
+      });
+      return;
+    }
+
+    // Read the config file
+    let config: Record<string, any>;
+    try {
+      config = await fs.readJSON(configPath);
+    } catch (readError) {
+      logEvent("CONFIG", "error", `Failed to read app config file`, {
+        appName,
+        path: configPath,
+        error: readError.message,
+      });
+      res.status(500).json({
+        error: "Failed to read application configuration",
+        details: readError.message,
+      });
+      return;
+    }
+
+    // Check if the key exists
+    if (!config.hasOwnProperty(key)) {
+      res.status(404).json({
+        error: `Configuration key '${key}' not found for application '${appName}'`,
+      });
+      return;
+    }
+
+    // Delete the key
+    delete config[key];
+
+    // Write the updated config back to the file
+    await fs.writeJSON(configPath, config, { spaces: 2 });
+
+    logEvent("CONFIG", "info", `Deleted app config value for key: ${key}`, {
+      appName,
+      key,
+    });
+
+    // Return success response
+    res.status(200).json({
+      appName,
+      key,
+      message: `Deleted configuration value for ${appName}: ${key}`,
+    });
+  } catch (error: any) {
+    logEvent("CONFIG", "error", "Failed to delete app config value", {
+      error: error.message,
+    });
+    res.status(500).json({
+      error: "Failed to delete application configuration value",
+      details: error.message,
+    });
+  }
 };
 
 /**
