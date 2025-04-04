@@ -11,70 +11,73 @@ Both components are organized as a monorepo using Yarn workspaces with CommonJS 
 
 ## 2. API Endpoints
 
+All API endpoints use the `/api` prefix.
+
 ### Configuration Management
 
-| HTTP Method | Endpoint                          | Description                                       |
-| ----------- | --------------------------------- | ------------------------------------------------- |
-| GET         | /config                           | Retrieve system-wide configuration                |
-| GET         | /config?key=name                  | Retrieve specific system config value             |
-| POST        | /config                           | Create or update multiple system config values    |
-| PUT         | /config/{key}                     | Create or update a specific system config value   |
-| DELETE      | /config/{key}                     | Remove a specific system config value             |
-| DELETE      | /config?keys=key1,key2            | Remove multiple system config values              |
-| GET         | /config/{appName}                 | Retrieve all configuration for an application     |
-| GET         | /config/{appName}?key=name        | Retrieve specific config value for an application |
-| POST        | /config/{appName}                 | Create or update multiple app config values       |
-| PUT         | /config/{appName}/{key}           | Create or update a specific app config value      |
-| DELETE      | /config/{appName}/{key}           | Remove a specific app config value                |
-| DELETE      | /config/{appName}?keys=k1,k2      | Remove multiple app config values                 |
-| GET         | /config/{appName}/encrypted       | Retrieve all encrypted values (masked by default) |
-| POST        | /config/{appName}/encrypted       | Create or update multiple encrypted values        |
-| PUT         | /config/{appName}/encrypted/{key} | Create or update a specific encrypted value       |
-| DELETE      | /config/{appName}/encrypted/{key} | Remove a specific encrypted value                 |
+| HTTP Method | Endpoint                              | Description                                       |
+| ----------- | ------------------------------------- | ------------------------------------------------- |
+| GET         | /api/config                           | Retrieve system-wide configuration                |
+| GET         | /api/config?key=name                  | Retrieve specific system config value             |
+| POST        | /api/config                           | Create or update multiple system config values    |
+| PUT         | /api/config/{key}                     | Create or update a specific system config value   |
+| DELETE      | /api/config/{key}                     | Remove a specific system config value             |
+| DELETE      | /api/config?keys=key1,key2            | Remove multiple system config values              |
+| GET         | /api/config/{appName}                 | Retrieve all configuration for an application     |
+| GET         | /api/config/{appName}?key=name        | Retrieve specific config value for an application |
+| POST        | /api/config/{appName}                 | Create or update multiple app config values       |
+| PUT         | /api/config/{appName}/{key}           | Create or update a specific app config value      |
+| DELETE      | /api/config/{appName}/{key}           | Remove a specific app config value                |
+| DELETE      | /api/config/{appName}?keys=k1,k2      | Remove multiple app config values                 |
+| GET         | /api/config/{appName}/encrypted       | Retrieve all encrypted values (masked by default) |
+| POST        | /api/config/{appName}/encrypted       | Create or update multiple encrypted values        |
+| PUT         | /api/config/{appName}/encrypted/{key} | Create or update a specific encrypted value       |
+| DELETE      | /api/config/{appName}/encrypted/{key} | Remove a specific encrypted value                 |
 
 ### Application Deployment & Management
 
-| HTTP Method | Endpoint                | Description                                             |
-| ----------- | ----------------------- | ------------------------------------------------------- |
-| POST        | /apps/deploy            | Deploy a new application.                               |
-| GET         | /apps                   | List all deployed applications.                         |
-| GET         | /apps/{appName}         | Get details about a deployed application.               |
-| POST        | /apps/{appName}/update  | Update an application (with backup handled internally). |
-| DELETE      | /apps/{appName}         | Remove a deployed application.                          |
-| POST        | /apps/{appName}/start   | Start an application.                                   |
-| POST        | /apps/{appName}/stop    | Stop an application.                                    |
-| POST        | /apps/{appName}/restart | Restart an application.                                 |
+| HTTP Method | Endpoint                    | Description                                              |
+| ----------- | --------------------------- | -------------------------------------------------------- |
+| POST        | /api/apps/deploy            | Deploy a new application.                                |
+| GET         | /api/apps                   | List all deployed applications.                          |
+| GET         | /api/apps/{appName}         | Get details about a deployed application.                |
+| POST        | /api/apps/{appName}/upgrade | Upgrade an application (with backup handled internally). |
+| DELETE      | /api/apps/{appName}         | Remove a deployed application.                           |
+| POST        | /api/apps/{appName}/start   | Start an application.                                    |
+| POST        | /api/apps/{appName}/stop    | Stop an application.                                     |
+| POST        | /api/apps/{appName}/restart | Restart an application.                                  |
 
 ### File Management
 
-| HTTP Method | Endpoint                       | Description                                 |
-| ----------- | ------------------------------ | ------------------------------------------- |
-| POST        | /apps/{appName}/files          | Upload additional files for an application. |
-| GET         | /apps/{appName}/files          | List uploaded files for an application.     |
-| DELETE      | /apps/{appName}/files/{fileId} | Remove a specific uploaded file.            |
+| HTTP Method | Endpoint                                | Description                                 |
+| ----------- | --------------------------------------- | ------------------------------------------- |
+| POST        | /api/apps/{appName}/files               | Upload additional files for an application. |
+| GET         | /api/apps/{appName}/files               | List uploaded files for an application.     |
+| GET         | /api/apps/{appName}/files/:filePath(\*) | Get a specific uploaded file.               |
+| DELETE      | /api/apps/{appName}/files/:filePath(\*) | Remove a specific uploaded file.            |
 
 ### Backup & Restore
 
-| HTTP Method | Endpoint                           | Description                                 |
-| ----------- | ---------------------------------- | ------------------------------------------- |
-| POST        | /apps/{appName}/backup             | Trigger a backup for an application.        |
-| GET         | /apps/{appName}/backups            | List all backups for an application.        |
-| GET         | /apps/{appName}/backup/{backupId}  | Retrieve backup details for an application. |
-| POST        | /apps/{appName}/restore/{backupId} | Restore an application from a backup.       |
+| HTTP Method | Endpoint                               | Description                                 |
+| ----------- | -------------------------------------- | ------------------------------------------- |
+| POST        | /api/apps/{appName}/backup             | Trigger a backup for an application.        |
+| GET         | /api/apps/{appName}/backups            | List all backups for an application.        |
+| GET         | /api/apps/{appName}/backup/{backupId}  | Retrieve backup details for an application. |
+| POST        | /api/apps/{appName}/restore/{backupId} | Restore an application from a backup.       |
 
 ### Logs & Monitoring
 
-| HTTP Method | Endpoint                | Description                                 |
-| ----------- | ----------------------- | ------------------------------------------- |
-| GET         | /apps/{appName}/logs    | Retrieve logs for an application.           |
-| GET         | /apps/{appName}/metrics | Get performance metrics for an application. |
-| GET         | /apps/{appName}/health  | Check the health status of an application.  |
+| HTTP Method | Endpoint                    | Description                                 |
+| ----------- | --------------------------- | ------------------------------------------- |
+| GET         | /api/apps/{appName}/logs    | Retrieve logs for an application.           |
+| GET         | /api/apps/{appName}/metrics | Get performance metrics for an application. |
+| GET         | /api/apps/{appName}/health  | Check the health status of an application.  |
 
 ### Real-Time Updates (Using SSE)
 
-| HTTP Method | Endpoint               | Description                                                      |
-| ----------- | ---------------------- | ---------------------------------------------------------------- |
-| GET         | /apps/{appName}/events | Streams logs/status updates for deployment or upgrade processes. |
+| HTTP Method | Endpoint                   | Description                                                      |
+| ----------- | -------------------------- | ---------------------------------------------------------------- |
+| GET         | /api/apps/{appName}/events | Streams logs/status updates for deployment or upgrade processes. |
 
 ## 2.1 Suggested CLI Structure
 
@@ -101,7 +104,7 @@ hola config delete [--app <appName>] [--secret] <key>...
 hola app deploy <appName> [--package <package-ref>] [--env KEY=VALUE...] [--file <file>...]
 hola app list
 hola app info <appName>
-hola app update <appName>
+hola app upgrade <appName>
 hola app delete <appName>
 hola app start <appName>
 hola app stop <appName>
@@ -113,7 +116,7 @@ hola app restart <appName>
 ```
 hola file upload <appName> <path>...
 hola file list <appName>
-hola file delete <appName> <fileId>
+hola file delete <appName> <filePath>
 ```
 
 ### Backup & Restore
