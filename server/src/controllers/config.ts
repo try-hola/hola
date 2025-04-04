@@ -443,7 +443,79 @@ const getAppConfig = async (
   req: Request<GetAppConfigRequestParams>,
   res: Response<AppConfigResponse | AppConfigErrorResponse>
 ): Promise<void> => {
-  // Implementation will go here
+  const { appName } = req.params;
+  const { key } = req.query;
+
+  try {
+    if (!isValidAppName(appName)) {
+      res.status(400).json({
+        error: "Invalid application name",
+        details: "Application name contains invalid characters",
+      });
+      return;
+    }
+
+    const configPath = path.join(PATHS.config.app(appName), "config.json");
+
+    // Create the directory if it doesn't exist (especially for tests)
+    await fs.ensureDir(path.dirname(configPath));
+
+    // Use empty object as fallback when file doesn't exist
+    let config = {};
+
+    // Read the configuration file if it exists
+    if (await fs.pathExists(configPath)) {
+      try {
+        const configData = await fs.readFile(configPath, "utf8");
+        config = JSON.parse(configData);
+      } catch (parseError) {
+        logEvent("CONFIG", "error", `Failed to parse app config JSON`, {
+          appName,
+          path: configPath,
+          error: parseError.message,
+        });
+        res.status(500).json({
+          error: "Failed to parse application configuration",
+          details: parseError.message,
+        });
+        return;
+      }
+    }
+
+    // If a specific key was requested, return just that key-value pair
+    if (key) {
+      if (Object.prototype.hasOwnProperty.call(config, key as string)) {
+        res.status(200).json({
+          appName,
+          config: { [key as string]: config[key as string] },
+        });
+      } else {
+        res.status(404).json({
+          error: `Configuration key '${key}' not found for application '${appName}'`,
+        });
+      }
+    } else {
+      // Return the entire configuration
+      res.status(200).json({
+        appName,
+        config,
+      });
+    }
+  } catch (error: any) {
+    logEvent(
+      "CONFIG",
+      "error",
+      `Failed to retrieve application configuration`,
+      {
+        appName,
+        error: error.message,
+      }
+    );
+    res.status(500).json({
+      error: `Failed to retrieve configuration for application '${appName}'`,
+      details: error.message,
+    });
+  }
 };
 
 /**
