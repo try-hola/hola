@@ -37,14 +37,14 @@ const getSystemConfig = async (
     await fs.ensureDir(path.dirname(configPath));
 
     // Use empty object as fallback when file doesn't exist
-    let config = {};
+    let config: Record<string, any> = {};
 
     // Read the configuration file if it exists
     if (await fs.pathExists(configPath)) {
       try {
         const configData = await fs.readFile(configPath, "utf8");
         config = JSON.parse(configData);
-      } catch (parseError) {
+      } catch (parseError: any) {
         logEvent("CONFIG", "error", `Failed to parse system config JSON`, {
           path: configPath,
           error: parseError.message,
@@ -128,7 +128,7 @@ const createSystemConfig = async (
     if (await fs.pathExists(configPath)) {
       try {
         existingConfig = await fs.readJSON(configPath);
-      } catch (readError) {
+      } catch (readError: any) {
         // If there's an error reading the file (corrupted JSON, etc.),
         // log it but continue with an empty object
         logEvent(
@@ -461,14 +461,14 @@ const getAppConfig = async (
     await fs.ensureDir(path.dirname(configPath));
 
     // Use empty object as fallback when file doesn't exist
-    let config = {};
+    let config: Record<string, any> = {};
 
     // Read the configuration file if it exists
     if (await fs.pathExists(configPath)) {
       try {
         const configData = await fs.readFile(configPath, "utf8");
         config = JSON.parse(configData);
-      } catch (parseError) {
+      } catch (parseError: any) {
         logEvent("CONFIG", "error", `Failed to parse app config JSON`, {
           appName,
           path: configPath,
@@ -577,7 +577,7 @@ const createAppConfig = async (
     if (await fs.pathExists(configPath)) {
       try {
         existingConfig = await fs.readJSON(configPath);
-      } catch (readError) {
+      } catch (readError: any) {
         // If there's an error reading the file (corrupted JSON, etc.),
         // log it but continue with an empty object
         logEvent(
@@ -682,13 +682,13 @@ const updateAppConfigValue = async (
     await fs.ensureDir(configDir);
 
     // Initialize with empty object if file doesn't exist
-    let existingConfig = {};
+    let existingConfig: Record<string, any> = {};
 
     // Check if the config file exists and read it if it does
     if (await fs.pathExists(configPath)) {
       try {
         existingConfig = await fs.readJSON(configPath);
-      } catch (readError) {
+      } catch (readError: unknown) {
         // If there's an error reading the file (corrupted JSON, etc.),
         // log it but continue with an empty object
         logEvent(
@@ -698,7 +698,10 @@ const updateAppConfigValue = async (
           {
             appName,
             path: configPath,
-            error: readError.message,
+            error:
+              readError instanceof Error
+                ? readError.message
+                : String(readError),
           }
         );
         // We'll create a new file with just the new config
@@ -810,7 +813,7 @@ const deleteAppConfigValue = async (
     let config: Record<string, any>;
     try {
       config = await fs.readJSON(configPath);
-    } catch (readError) {
+    } catch (readError: any) {
       logEvent("CONFIG", "error", `Failed to read app config file`, {
         appName,
         path: configPath,
