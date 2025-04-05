@@ -4,9 +4,11 @@
 const appsController = require("./apps");
 const lifecycle = require("./lifecycle");
 const info = require("./info");
+const backup = require("./backup");
 
 module.exports = {
   ...appsController,
   ...lifecycle,
   ...info,
+  ...backup,
 };
