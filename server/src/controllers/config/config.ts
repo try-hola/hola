@@ -1,8 +1,8 @@
 const path = require("path");
 import * as fs from "fs-extra";
-const { logEvent } = require("../utils/logger");
-const { PATHS, isValidAppName } = require("../config");
-const { encryptValue, decryptValue } = require("../utils/encryption");
+const { logEvent } = require("../../utils/logger");
+const { PATHS, isValidAppName } = require("../../config");
+const { encryptValue, decryptValue } = require("../../utils/encryption");
 import { Request, Response } from "express";
 
 /**
@@ -419,19 +419,24 @@ const deleteMultipleSystemConfigValues = async (
 };
 
 /**
- * Retrieves application-specific configuration.
+ * Creates or updates application-specific configuration.
  *
- * @param req - The request object containing the application name in the params.
+ * @param req - The request object containing the application name in the params and the configuration in the body.
  * @param res - The response object used to send back the desired HTTP response.
- * @returns {Promise<void>} - A promise that resolves when the application configuration is retrieved.
+ * @returns {Promise<void>} - A promise that resolves when the application configuration is updated.
  */
-interface GetAppConfigRequestParams {
+interface UpdateAppConfigRequestParams {
   appName: string;
 }
 
-interface AppConfigResponse {
+interface UpdateAppConfigRequestBody {
+  config: Record<string, any>;
+}
+
+interface UpdateAppConfigResponse {
   appName: string;
   config: Record<string, any>;
+  message: string;
 }
 
 interface AppConfigErrorResponse {
@@ -439,189 +444,11 @@ interface AppConfigErrorResponse {
   details?: string;
 }
 
-const getAppConfig = async (
-  req: Request<GetAppConfigRequestParams>,
-  res: Response<AppConfigResponse | AppConfigErrorResponse>
+const updateAppConfig = async (
+  req: Request<UpdateAppConfigRequestParams, {}, UpdateAppConfigRequestBody>,
+  res: Response<UpdateAppConfigResponse | AppConfigErrorResponse>
 ): Promise<void> => {
-  const { appName } = req.params;
-  const { key } = req.query;
-
-  try {
-    if (!isValidAppName(appName)) {
-      res.status(400).json({
-        error: "Invalid application name",
-        details: "Application name contains invalid characters",
-      });
-      return;
-    }
-
-    const configPath = path.join(PATHS.config.app(appName), "config.json");
-
-    // Create the directory if it doesn't exist (especially for tests)
-    await fs.ensureDir(path.dirname(configPath));
-
-    // Use empty object as fallback when file doesn't exist
-    let config: Record<string, any> = {};
-
-    // Read the configuration file if it exists
-    if (await fs.pathExists(configPath)) {
-      try {
-        const configData = await fs.readFile(configPath, "utf8");
-        config = JSON.parse(configData);
-      } catch (parseError: any) {
-        logEvent("CONFIG", "error", `Failed to parse app config JSON`, {
-          appName,
-          path: configPath,
-          error: parseError.message,
-        });
-        res.status(500).json({
-          error: "Failed to parse application configuration",
-          details: parseError.message,
-        });
-        return;
-      }
-    }
-
-    // If a specific key was requested, return just that key-value pair
-    if (key) {
-      if (Object.prototype.hasOwnProperty.call(config, key as string)) {
-        res.status(200).json({
-          appName,
-          config: { [key as string]: config[key as string] },
-        });
-      } else {
-        res.status(404).json({
-          error: `Configuration key '${key}' not found for application '${appName}'`,
-        });
-      }
-    } else {
-      // Return the entire configuration
-      res.status(200).json({
-        appName,
-        config,
-      });
-    }
-  } catch (error: any) {
-    logEvent(
-      "CONFIG",
-      "error",
-      `Failed to retrieve application configuration`,
-      {
-        appName,
-        error: error.message,
-      }
-    );
-    res.status(500).json({
-      error: `Failed to retrieve configuration for application '${appName}'`,
-      details: error.message,
-    });
-  }
-};
-
-/**
- * Creates or updates multiple application configuration values.
- *
- * @param req - The request object containing the application name in params and configuration values in body.
- * @param res - The response object used to send back the desired HTTP response.
- * @returns {Promise<void>} - A promise that resolves when the application configuration is updated.
- */
-interface CreateAppConfigRequestParams {
-  appName: string;
-}
-
-interface CreateAppConfigRequestBody {
-  config: Record<string, any>;
-}
-
-interface CreateAppConfigResponse {
-  appName: string;
-  config: Record<string, any>;
-  message: string;
-}
-
-const createAppConfig = async (
-  req: Request<CreateAppConfigRequestParams, {}, CreateAppConfigRequestBody>,
-  res: Response<CreateAppConfigResponse | AppConfigErrorResponse>
-): Promise<void> => {
-  try {
-    const { appName } = req.params;
-    const { config } = req.body;
-
-    if (!isValidAppName(appName)) {
-      res.status(400).json({
-        error: "Invalid application name",
-        details: "Application name contains invalid characters",
-      });
-      return;
-    }
-
-    if (!config || typeof config !== "object") {
-      res.status(400).json({
-        error: "Invalid configuration format",
-        details: "Config must be a valid object",
-      });
-      return;
-    }
-
-    // Define config path from the app config directory
-    const configPath = path.join(PATHS.config.app(appName), "config.json");
-    const configDir = path.dirname(configPath);
-
-    // Ensure directory exists
-    await fs.ensureDir(configDir);
-
-    // Initialize existingConfig as empty object
-    let existingConfig = {};
-
-    // Check if the config file exists and read it if it does
-    if (await fs.pathExists(configPath)) {
-      try {
-        existingConfig = await fs.readJSON(configPath);
-      } catch (readError: any) {
-        // If there's an error reading the file (corrupted JSON, etc.),
-        // log it but continue with an empty object
-        logEvent(
-          "CONFIG",
-          "warning",
-          `Error reading existing app config, creating new file`,
-          {
-            appName,
-            path: configPath,
-            error: readError.message,
-          }
-        );
-        // We'll create a new file with just the new config
-      }
-    }
-
-    // Merge the new config with the existing one (or empty object if no existing config)
-    const updatedConfig = { ...existingConfig, ...config };
-
-    // Write the updated config back to the file
-    await fs.writeJSON(configPath, updatedConfig, { spaces: 2 });
-
-    logEvent("CONFIG", "info", `Updated configuration for app: ${appName}`, {
-      updatedKeys: Object.keys(config),
-      configPath,
-    });
-
-    // Return the updated config
-    res.status(200).json({
-      appName,
-      config: updatedConfig,
-      message: `Updated ${
-        Object.keys(config).length
-      } configuration value(s) for ${appName}`,
-    });
-  } catch (error: any) {
-    logEvent("CONFIG", "error", `Failed to update app config`, {
-      error: error.message,
-    });
-    res.status(500).json({
-      error: "Failed to update application configuration",
-      details: error.message,
-    });
-  }
+  // Implementation will go here
 };
 
 /**
@@ -735,34 +562,6 @@ const updateAppConfigValue = async (
       details: error.message,
     });
   }
-};
-
-/**
- * Updates or creates application-specific configuration.
- *
- * @param req - The request object containing the application name in the params and the configuration in the body.
- * @param res - The response object used to send back the desired HTTP response.
- * @returns {Promise<void>} - A promise that resolves when the application configuration is updated.
- */
-interface UpdateAppConfigRequestParams {
-  appName: string;
-}
-
-interface UpdateAppConfigRequestBody {
-  config: Record<string, any>;
-}
-
-interface UpdateAppConfigResponse {
-  appName: string;
-  config: Record<string, any>;
-  message: string;
-}
-
-const updateAppConfig = async (
-  req: Request<UpdateAppConfigRequestParams, {}, UpdateAppConfigRequestBody>,
-  res: Response<UpdateAppConfigResponse | AppConfigErrorResponse>
-): Promise<void> => {
-  // Implementation will go here
 };
 
 /**
@@ -1041,8 +840,6 @@ module.exports = {
   deleteMultipleSystemConfigValues,
 
   // App config endpoints
-  getAppConfig,
-  createAppConfig,
   updateAppConfig,
   updateAppConfigValue,
   deleteAppConfig,
