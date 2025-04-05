@@ -14,13 +14,13 @@ module.exports = {
   // Add these settings for CommonJS compatibility
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
-      // Use CommonJS module format in tests
       useESM: false,
       isolatedModules: true
     }]
   },
-  // Explicitly set moduleFileExtensions to prioritize .js
   moduleFileExtensions: ['js', 'ts', 'json', 'node'],
-  // Allow importing JS files without extensions
-  moduleDirectories: ['node_modules', 'src']
+  moduleDirectories: ['node_modules', 'src'],
+  
+  // Add global teardown
+  globalTeardown: '<rootDir>/src/test/jest-global-teardown.js'
 };

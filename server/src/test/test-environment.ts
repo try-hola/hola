@@ -28,7 +28,8 @@ export class TestEnvironment {
   constructor(options: { cleanOnExit?: boolean } = {}) {
     // Add a unique ID to prevent test collisions
     this.uniqueId = uuidv4().substring(0, 8);
-    this.storageRoot = path.join(process.cwd(), `data_test_${this.uniqueId}`);
+    // Use /tmp directory instead of project directory
+    this.storageRoot = path.join("/tmp", `data_test_${this.uniqueId}`);
     this.appDirectories = {
       deployments: path.join(this.storageRoot, "deployments"),
       packages: path.join(this.storageRoot, "packages"),
@@ -37,9 +38,24 @@ export class TestEnvironment {
       apps: path.join(this.storageRoot, "apps"),
     };
 
-    if (options.cleanOnExit) {
+    if (options.cleanOnExit !== false) {
+      // Default to true
+      // Register cleanup handlers for various exit scenarios
       process.on("exit", () => {
-        this.cleanup();
+        try {
+          fs.removeSync(this.storageRoot);
+        } catch (e) {
+          console.warn("Failed to clean test dir on exit:", e);
+        }
+      });
+
+      // Also clean up on process termination signals
+      process.on("SIGINT", () => {
+        this.cleanup().finally(() => process.exit(130));
+      });
+
+      process.on("SIGTERM", () => {
+        this.cleanup().finally(() => process.exit(143));
       });
     }
   }
@@ -66,8 +82,8 @@ export class TestEnvironment {
    */
   private async safeRemove(
     dirPath: string,
-    maxRetries = 3,
-    retryDelay = 100
+    maxRetries = 5,
+    retryDelay = 200
   ): Promise<boolean> {
     if (!(await fs.pathExists(dirPath))) {
       return true;
@@ -80,10 +96,13 @@ export class TestEnvironment {
       } catch (error) {
         if (attempt === maxRetries - 1) {
           // On final attempt, don't throw but return false to indicate failure
+          console.warn(
+            `Failed to remove directory ${dirPath} after ${maxRetries} attempts`
+          );
           return false;
         }
 
-        // Wait a bit before retrying
+        // Wait before retrying
         await sleep(retryDelay);
 
         // Try to remove files first on retry
@@ -94,7 +113,13 @@ export class TestEnvironment {
             if (entry.isDirectory()) {
               await this.safeRemove(fullPath, 1, 0);
             } else {
-              await fs.unlink(fullPath).catch(() => {});
+              try {
+                // Ensure write permission before removal
+                fs.chmodSync(fullPath, 0o666);
+                await fs.unlink(fullPath).catch(() => {});
+              } catch {
+                // Ignore chmod errors
+              }
             }
           }
         } catch {
@@ -190,7 +215,13 @@ export class TestEnvironment {
    */
   async cleanup(): Promise<void> {
     try {
-      // Simply remove the entire storage root with our safer removal function
+      // Safety check to only remove directories in /tmp
+      if (!this.storageRoot || !this.storageRoot.startsWith("/tmp/")) {
+        console.warn("Refusing to clean up storage root not in /tmp");
+        return;
+      }
+
+      // Remove the entire storage root with our safer removal function
       const success = await this.safeRemove(this.storageRoot);
 
       if (!success) {

@@ -99,21 +99,18 @@ export class TestServer {
     try {
       if (this.server) {
         // First close any open connections
-        await new Promise<void>((resolve, reject) => {
+        await new Promise<void>((resolve) => {
           this.server!.close((err) => {
             if (err) {
               console.warn("Error closing test server:", err);
-              // Continue despite errors
-              resolve();
-            } else {
-              resolve();
             }
+            // Always resolve, even on errors
+            resolve();
           });
         });
 
         // Small delay to allow connections to fully close
         await sleep(100);
-
         this.server = null;
       }
     } catch (err) {
