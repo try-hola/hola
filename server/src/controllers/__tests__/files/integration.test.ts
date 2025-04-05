@@ -75,26 +75,6 @@ describe("Files API Integration Tests", () => {
   });
 
   afterAll(async () => {
-    // Clean up all test files before stopping the server
-    try {
-      const appFilesPath = testServer.environment
-        .getPaths()
-        .apps.files.app(testAppName);
-      const deploymentFilesPath = testServer.environment
-        .getPaths()
-        .deployments.files(testAppName);
-
-      if (await fs.pathExists(appFilesPath)) {
-        await fs.emptyDir(appFilesPath);
-      }
-
-      if (await fs.pathExists(deploymentFilesPath)) {
-        await fs.emptyDir(deploymentFilesPath);
-      }
-    } catch (err) {
-      console.log("Error cleaning up test files:", err);
-    }
-
     await testServer.stop();
   });
 

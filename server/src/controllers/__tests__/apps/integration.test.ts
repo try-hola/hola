@@ -71,36 +71,6 @@ describe("Apps API Integration Tests", () => {
   });
 
   afterAll(async () => {
-    try {
-      // Explicitly clean up test directories before stopping the server
-      const appsDir = path.join(process.cwd(), "data/apps");
-      const deployDir = path.join(process.cwd(), "data/deployments");
-      const packagesDir = path.join(process.cwd(), "data/packages");
-
-      if (await fs.pathExists(appsDir)) {
-        const apps = await fs.readdir(appsDir);
-        for (const app of apps) {
-          await fs.remove(path.join(appsDir, app));
-        }
-      }
-
-      if (await fs.pathExists(deployDir)) {
-        const deployments = await fs.readdir(deployDir);
-        for (const deployment of deployments) {
-          await fs.remove(path.join(deployDir, deployment));
-        }
-      }
-
-      if (await fs.pathExists(packagesDir)) {
-        const packages = await fs.readdir(packagesDir);
-        for (const pkg of packages) {
-          await fs.remove(path.join(packagesDir, pkg));
-        }
-      }
-    } catch (err) {
-      console.log("Error cleaning up test directories:", err);
-    }
-
     await testServer.stop();
   });
 

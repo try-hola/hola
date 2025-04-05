@@ -11,6 +11,7 @@
     "client"
   ],
   "scripts": {
-    "test": "yarn workspaces run test"
+    "test": "yarn workspaces run test",
+    "test:coverage": "yarn workspaces run test:coverage"
   }
 }
