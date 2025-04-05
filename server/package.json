@@ -37,7 +37,7 @@
     "start": "node --experimental-specifier-resolution=node dist/server.js",
     "build": "tsc",
     "watch": "tsc --watch",
-    "test": "jest",
+    "test": "jest --bail",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "lint": "eslint src --ext .ts",
