@@ -1,13 +1,13 @@
 // This file acts as an aggregator for the app controller functions.
 // It currently re-exports everything from apps.ts to facilitate incremental migration.
 
-const appsController = require("./apps");
+const monitoring = require("./monitoring");
 const lifecycle = require("./lifecycle");
 const info = require("./info");
 const backup = require("./backup");
 
 module.exports = {
-  ...appsController,
+  ...monitoring,
   ...lifecycle,
   ...info,
   ...backup,
