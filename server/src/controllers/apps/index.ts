@@ -3,8 +3,10 @@
 
 const appsController = require("./apps");
 const lifecycle = require("./lifecycle");
+const info = require("./info");
 
 module.exports = {
   ...appsController,
   ...lifecycle,
+  ...info,
 };
