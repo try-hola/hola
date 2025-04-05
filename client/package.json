@@ -7,7 +7,7 @@
   "scripts": {
     "start": "ts-node src/index.ts",
     "build": "tsc",
-    "test": "jest"
+    "test": "jest --bail"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
