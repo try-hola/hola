@@ -144,16 +144,376 @@ hola watch <appName> [--events deploy|update|all]
 
 This CLI is designed to be clear, minimal, and consistent. Aliases like `cfg`, `ls`, or `rm` can be introduced as optional ergonomic shortcuts. Descriptive error messages and `--help` flags for every command/subcommand ensure a friendly developer experience.
 
+## 2.2 Client Error Handling and Feedback
+
+The CLI client provides clear, actionable feedback for different error scenarios:
+
+### Error Categories and Responses
+
+| Error Type     | Description              | Client Response                                      |
+| -------------- | ------------------------ | ---------------------------------------------------- |
+| Connection     | Server unreachable       | Clear error with network troubleshooting steps       |
+| Authentication | Invalid API key          | Instructions for validating credentials              |
+| Validation     | Invalid input parameters | Specific guidance on correcting the input            |
+| Resource       | Resource not found       | Suggestions for available resources                  |
+| Permission     | Insufficient permissions | Details about required permissions                   |
+| Server         | Internal server errors   | Error code and instructions to contact administrator |
+
+### User Feedback Mechanisms
+
+- **Progress Indicators**: Long-running operations display spinners or progress bars
+- **Color Coding**: Success (green), warnings (yellow), and errors (red)
+- **Verbose Mode**: `--verbose` flag for additional operational details
+- **Quiet Mode**: `--quiet` flag for machine-readable output (JSON)
+- **Debug Mode**: `--debug` flag for troubleshooting with detailed logs
+
+## 2.3 Client Configuration Options
+
+The CLI client can be customized through a local configuration file (`~/.hola/config.json`) with the following options:
+
+| Setting             | Default                 | Description                                          |
+| ------------------- | ----------------------- | ---------------------------------------------------- |
+| `server_url`        | `http://localhost:3000` | Server base URL                                      |
+| `api_key`           | -                       | Authentication key (encrypted at rest)               |
+| `timeout`           | `60000`                 | Request timeout in milliseconds                      |
+| `output_format`     | `table`                 | Default output format (`table`, `json`, `yaml`)      |
+| `color`             | `auto`                  | Terminal color support (`auto`, `always`, `never`)   |
+| `log_level`         | `info`                  | Logging verbosity (`debug`, `info`, `warn`, `error`) |
+| `auto_update_check` | `true`                  | Check for CLI updates automatically                  |
+
+These settings can be overridden per command using equivalent command-line options:
+
+```bash
+hola app list --output-format json --timeout 30000
+```
+
+## 2.4 Client Output Formatting
+
+The CLI supports multiple output formats to accommodate different use cases:
+
+### Output Formats
+
+- **Table** (default): Human-readable tabular format
+- **JSON**: Machine-readable JSON for scripting and automation
+- **YAML**: Human and machine-readable YAML format
+- **Tree**: Hierarchical tree view for nested data
+
+### Examples
+
+```bash
+# Default tabular output
+hola app list
+
+# JSON output for scripting
+hola app list --output json
+
+# YAML output
+hola app list --output yaml
+
+# Tree view for nested structures
+hola app info myapp --output tree
+```
+
+### Filter and Query Support
+
+The client supports JMESPath queries for filtering and transforming output:
+
+```bash
+# Get only running applications
+hola app list --query "[?status=='running']"
+
+# Extract just the names of all applications
+hola app list --query "[].name"
+```
+
+## 2.5 Client Offline Capabilities
+
+The CLI client is designed to provide meaningful functionality even with limited or no connectivity:
+
+- **Local Caching**: Recent query results are cached locally
+- **Documentation**: Help content is available offline with `hola help`
+- **Config Validation**: Local validation of configurations before attempting server operations
+- **Retry Logic**: Automatic retry with exponential backoff for transient network issues
+- **Draft Mode**: Create configurations offline with `--draft` flag and apply later
+- **Batch Operations**: Queue operations with `--batch` flag for later execution
+- **Sync Command**: Explicit `hola sync` command to synchronize offline changes
+
+## 2.6 CLI Command Implementation Details
+
+### Command Structure
+
+Each CLI command follows a consistent implementation pattern:
+
+1. **Command Definition**: Using Commander.js for command structure and option parsing
+2. **Input Validation**: Local validation before sending requests
+3. **API Request**: Communication with the server API
+4. **Response Processing**: Transforming the API response for display
+5. **Output Formatting**: Rendering the result in the selected format
+6. **Error Handling**: Providing clear error messages and recovery steps
+
+### Plugin Architecture
+
+The CLI supports extensibility through plugins:
+
+- Custom commands can be registered via plugins
+- Plugins are discovered in `~/.hola/plugins/`
+- Official and community plugins extend functionality without core changes
+
+### Integration Features
+
+- **Shell Completion**: Support for command completion in Bash, Zsh, and Fish
+- **Interactive Mode**: Interactive prompts for complex operations with `--interactive`
+- **Bulk Operations**: Batch processing with input from files or STDIN
+- **Scriptability**: Exit codes and structured output for use in scripts
+
 ## 3. Communication Protocols
 
 - **REST APIs**: CLI sends requests and receives responses for standard operations.
 - **SSE (Server-Sent Events)**: Provides real-time updates from the server to the CLI for long-running tasks.
+
+## 3.1 Server Management & Contexts
+
+The CLI client supports managing multiple Hola server installations through a context-based approach, similar to how Docker and Kubernetes clients operate.
+
+### Server Contexts
+
+Server contexts allow users to define, manage, and switch between multiple Hola server instances:
+
+| Command                               | Description                              |
+| ------------------------------------- | ---------------------------------------- |
+| `hola server list`                    | List all configured server contexts      |
+| `hola server current`                 | Show the currently active server context |
+| `hola server switch <name>`           | Switch to a different server context     |
+| `hola server rename <old> <new>`      | Rename a server context                  |
+| `hola server remove <name>`           | Remove a server context                  |
+| `hola server update <name> [options]` | Update server context details            |
+
+Each context contains:
+
+- Server URL
+- Authentication settings
+- Docker context name
+- Custom timeout/retry settings
+- Context-specific configuration overrides
+
+### Server Configuration Structure
+
+Server contexts are stored in the user configuration file (`~/.hola/servers.json`), separate from regular client configuration:
+
+```json
+{
+  "servers": {
+    "production": {
+      "url": "https://hola.example.com",
+      "api_key": "prod-encrypted-key",
+      "docker_context": "production",
+      "timeout": 120000
+    },
+    "staging": {
+      "url": "https://staging-hola.example.com",
+      "api_key": "staging-encrypted-key",
+      "docker_context": "staging",
+      "timeout": 60000
+    },
+    "local": {
+      "url": "http://localhost:3000",
+      "api_key": "local-encrypted-key",
+      "docker_context": "default",
+      "timeout": 30000
+    }
+  },
+  "current": "local"
+}
+```
+
+All CLI commands implicitly use the active context, but can target a specific server using the --server flag:
+
+```bash
+hola app list --server staging
+```
+
+## 3.2 Server Bootstrapping
+
+The Hola client provides a server bootstrapping feature to deploy the Hola server container to a fresh Docker host.
+
+### Bootstrap Wizard
+
+The bootstrap process uses an interactive wizard for collecting server deployment parameters:
+
+```bash
+hola server bootstrap [--name <context-name>] [--docker-context <docker-context>] [--non-interactive]
+```
+
+When run interactively (default), the wizard:
+
+1. Verifies the Docker client is installed and configured
+2. Prompts for Docker context selection or creation
+3. Validates connectivity to the Docker host
+4. Collects server configuration parameters:
+   - Server name
+   - Admin password
+   - Data storage location
+   - Host port mapping
+   - TLS configuration
+   - System resource limits
+5. Generates a secure API key
+6. Deploys the Hola server container to the selected Docker host
+7. Validates server connectivity
+8. Saves the new server context
+
+In non-interactive mode, all parameters must be provided through flags or a configuration file.
+
+### Docker Context Integration
+
+The bootstrapping process leverages Docker contexts for remote deployment:
+
+1. Lists available Docker contexts for selection
+2. Optionally creates a new Docker context for a remote host:
+
+```bash
+hola server bootstrap --create-docker-context remote --docker-host "ssh://user@remote-host"
+```
+
+3. Connects to the Docker host using the selected context
+4. Deploys the Hola server container
+5. Associates the new Hola server with the Docker context
+
+### Docker Compose Template
+
+The bootstrap process uses a Docker Compose template for deploying the Hola server:
+
+```yaml
+version: "3.8"
+services:
+  hola-server:
+    image: hola/server:latest
+    restart: always
+    environment:
+      - HOLA_API_KEY=${HOLA_API_KEY}
+      - HOLA_ADMIN_PASSWORD=${HOLA_ADMIN_PASSWORD}
+      - HOLA_DATA_DIR=/data
+    ports:
+      - "${HOLA_PORT:-3000}:3000"
+    volumes:
+      - ${HOLA_DATA_DIR:-./data}:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "${HOLA_CPU_LIMIT:-1}"
+          memory: ${HOLA_MEMORY_LIMIT:-1G}
+```
+
+### Post-Bootstrap Configuration
+
+After successful bootstrap, the client:
+
+1. Configures the new server context using the generated API key
+2. Switches to the new context automatically
+3. Performs initial system configuration
+4. Verifies server health
+
+## 3.3 CLI Command Context Awareness
+
+All CLI commands are context-aware, ensuring they interact with the intended Hola server.
+
+### Context Resolution Order
+
+When determining which server to target, the client follows this resolution order:
+
+1. Explicit server specified with `--server <name>` flag
+2. Environment variable: `HOLA_SERVER_CONTEXT`
+3. Currently active server context
+4. Default server context if none is active
+
+### Command Structure with Context Support
+
+All commands support the `--server` flag to explicitly target a specific server:
+
+```bash
+# Target explicit server
+hola app deploy myapp --package example.com/myapp:1.0.0 --server production
+
+# Use current context
+hola app list
+
+# Temporarily override context
+HOLA_SERVER_CONTEXT=staging hola app list
+```
+
+### Bulk Operations Across Servers
+
+For operations that need to be performed across multiple servers:
+
+```bash
+# Execute a command on all configured servers
+hola app list --all-servers
+
+# Execute on specific servers
+hola app list --servers staging,production
+```
+
+### Context Information in Output
+
+Command outputs include the server context to avoid confusion:
+
+```bash
+$ hola app list
+SERVER: production
++-------------+--------+----------+
+| Application | Status | Version  |
++-------------+--------+----------+
+| website     | active | 1.2.0    |
+| api         | active | 0.9.1    |
++-------------+--------+----------+
+```
+
+### Server Health Check
+
+The client performs a connectivity check before executing commands:
+
+```bash
+# Check if the server is accessible
+hola server ping [--server <name>]
+```
 
 ## 4. Security
 
 - **Authentication**: Single API key defined on the server via environment variables.
 - **Configuration Security**: Support for encrypting sensitive configuration values at rest.
 - **Encrypted Values**: Masked in API responses and stored separately from regular configuration.
+
+## 4.1 Updated Client Authentication Flow
+
+The CLI client authenticates with the server using the following workflow:
+
+1. **Multi-Server API Key Storage**:
+
+   - API keys are stored securely by server context in `~/.hola/servers.json`
+   - The configuration file is created with restricted permissions (600)
+   - Each server has its own API key
+
+2. **Server Bootstrap Process**:
+
+   - During server bootstrapping, a secure API key is automatically generated
+   - The key is stored in the newly created server context
+   - The key is configured in the deployed Hola server container
+
+3. **Manual Setup Process**:
+
+   - Users can add existing servers using `hola server add <name> <url>`
+   - The API key can be provided manually or via interactive prompt
+   - The key is validated against the server before being stored
+
+4. **Authentication Process**:
+
+   - Each API request includes the context's API key in the `Authorization` header
+   - The server validates the key before processing any request
+   - Authentication failures receive a clear error message with troubleshooting steps
+
+5. **Key Rotation**:
+   - Support for key rotation with `hola server rotate-key <name>`
+   - For bootstrapped servers, the client can generate a new key and update the server
+   - For manually added servers, the user must provide the new key
 
 ## 5. Storage Structure
 
