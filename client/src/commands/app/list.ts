@@ -4,13 +4,33 @@ const { handleCommandError } = require("../../utils/error-handler");
 
 /**
  * List all deployed applications
+ * @param {Object} options - Command options
+ * @param {string} options.output - Output format (table or json)
  */
 async function execute(options) {
   try {
-    // To be implemented
-    // Will fetch applications from the API and display them
-    console.log("Listing applications (to be implemented)");
-    return { success: true };
+    const response = await apiClient.get('/api/apps');
+    
+    // Extract apps from response
+    const apps = response.data.apps || [];
+    
+    if (apps.length === 0) {
+      console.log("No applications deployed");
+      return { success: true, data: [] };
+    }
+    
+    // Format the output based on the user's preference
+    if (options.output === 'json') {
+      outputFormatter.json({ apps });
+    } else {
+      // Default to table output
+      const tableData = apps.map(appName => ({ name: appName }));
+      outputFormatter.table(tableData, ['name'], {
+        title: 'Deployed Applications'
+      });
+    }
+    
+    return { success: true, data: apps };
   } catch (error) {
     return handleCommandError(error);
   }
