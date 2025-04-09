@@ -1,11 +1,18 @@
-module.exports = {
-  command: "app",
-  describe: "Application management commands",
-  builder: (yargs: any) => {
-    return yargs
-      .command(require("./list"))
-      .command(require("./info"))
-      .demandCommand(1, "You need to specify a subcommand");
-  },
-  handler: () => {},
+const { Command } = require("commander");
+const listCommand = require("./list");
+const infoCommand = require("./info");
+
+module.exports = function registerAppCommands(program) {
+  // Create the app command
+  const appCommand = new Command("app")
+    .description("Application management commands");
+  
+  // Register all app subcommands
+  listCommand(appCommand);
+  infoCommand(appCommand);
+  
+  // Add the app command to the main program
+  program.addCommand(appCommand);
+  
+  return program;
 };

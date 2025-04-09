@@ -5,7 +5,7 @@ const { handleCommandError } = require("../../utils/error-handler");
 /**
  * List all deployed applications
  */
-async function execute() {
+async function execute(options) {
   try {
     // To be implemented
     // Will fetch applications from the API and display them
@@ -16,9 +16,10 @@ async function execute() {
   }
 }
 
-module.exports = {
-  command: "list",
-  describe: "List all deployed applications",
-  builder: {},
-  handler: execute,
+module.exports = function(appCommand) {
+  return appCommand
+    .command("list")
+    .description("List all deployed applications")
+    .option("-o, --output <format>", "output format (table, json)", "table")
+    .action(execute);
 };

@@ -36,8 +36,11 @@ class ApiClient {
    * @param {Object} params - Query parameters
    */
   async get(endpoint, params = {}) {
-    // To be implemented
-    return { success: true, data: [] };
+    try {
+      return await this.client.get(endpoint, { params });
+    } catch (error) {
+      throw error; // Error will be handled by the interceptor
+    }
   }
 
   /**

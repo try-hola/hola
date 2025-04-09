@@ -5,11 +5,12 @@ const { handleCommandError } = require("../../utils/error-handler");
 
 /**
  * Delete configuration values
- * @param {Object} argv - Command arguments
+ * @param {Array<string>} keys - Array of keys to delete
+ * @param {Object} options - Command options
  */
-async function execute(argv: any) {
+async function execute(keys, options) {
   try {
-    const { app, secret, keys } = argv;
+    const { app, secret } = options;
 
     // To be implemented
     // Will delete configuration values either locally or from the remote server
@@ -30,25 +31,15 @@ async function execute(argv: any) {
   }
 }
 
-module.exports = {
-  command: "delete [keys..]",
-  describe: "Delete configuration values",
-  builder: (yargs: any) => {
-    return yargs
-      .option("app", {
-        describe: "Target application name",
-        type: "string",
-      })
-      .option("secret", {
-        describe: "Operate on encrypted values",
-        type: "boolean",
-      })
-      .example("hola config delete server_url", "Delete system config value")
-      .example(
-        "hola config delete --app myapp DB_USER DB_PASS",
-        "Delete multiple app config values"
-      )
-      .demandOption("keys", "You must provide at least one key to delete");
-  },
-  handler: execute,
+module.exports = function(configCommand) {
+  return configCommand
+    .command("delete <keys...>")
+    .description("Delete configuration values")
+    .option("--app <name>", "Target application name")
+    .option("--secret", "Operate on encrypted values")
+    .action(execute)
+    .addHelpText('after', `
+Examples:
+  $ hola config delete server_url             Delete system config value
+  $ hola config delete --app myapp DB_USER DB_PASS    Delete multiple app config values`);
 };

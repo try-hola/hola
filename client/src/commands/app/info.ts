@@ -4,12 +4,11 @@ const { handleCommandError } = require("../../utils/error-handler");
 
 /**
  * Get details about a deployed application
- * @param {Object} argv - Command arguments
+ * @param {string} appName - Name of the application
+ * @param {Object} options - Command options
  */
-async function execute(argv) {
+async function execute(appName, options) {
   try {
-    const { appName } = argv;
-
     // To be implemented
     // Will fetch application details from the API and display them
     console.log(`Getting info for app: ${appName} (to be implemented)`);
@@ -19,9 +18,10 @@ async function execute(argv) {
   }
 }
 
-module.exports = {
-  command: "info <appName>",
-  describe: "Get details about a deployed application",
-  builder: {},
-  handler: execute,
+module.exports = function(appCommand) {
+  return appCommand
+    .command("info <appName>")
+    .description("Get details about a deployed application")
+    .option("-o, --output <format>", "output format (table, json)", "table")
+    .action(execute);
 };

@@ -1,10 +1,11 @@
-module.exports = (yargs) => {
-  return yargs
-    .command(require("./app"))
-    .command(require("./config"))
-    .demandCommand(1, "You need to specify a command")
-    .help()
-    .alias("h", "help")
-    .version()
-    .alias("v", "version");
+// Register all commands
+const appCommands = require("./app");
+const configCommands = require("./config");
+
+module.exports = (program) => {
+  // Register top-level command groups
+  appCommands(program);
+  configCommands(program);
+  
+  return program;
 };
