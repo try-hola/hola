@@ -87,7 +87,18 @@ The following CLI structure is designed to offer a cohesive, intuitive interface
 hola <command> <subcommand> [options]
 ```
 
-### Configuration Management
+### Client Settings Management (Local)
+
+```
+hola settings get [--key <key>]
+hola settings set <key>=<value>...
+hola settings delete <key>...
+```
+
+- These commands manage client-side settings stored in the local `~/.hola/config.json` file
+- Settings affect client behavior like output format, logging, and connection parameters
+
+### Server Configuration Management (Remote)
 
 ```
 hola config get [--app <appName>] [--key <key>] [--secret]
@@ -97,6 +108,7 @@ hola config delete [--app <appName>] [--secret] <key>...
 
 - `--app` targets an app-specific config; otherwise, system-wide is assumed.
 - `--secret` stores or retrieves values encrypted at rest (masked when retrieved).
+- These commands manage server-side configurations used by deployed applications
 
 ### Application Lifecycle
 
@@ -251,6 +263,39 @@ Each CLI command follows a consistent implementation pattern:
 5. **Output Formatting**: Rendering the result in the selected format
 6. **Error Handling**: Providing clear error messages and recovery steps
 
+### Commander.js Implementation
+
+The CLI leverages Commander.js with the following implementation strategies:
+
+1. **TypeScript Decorators**: Using decorators to simplify command registration and improve code readability
+2. **Modular Command Structure**: Organizing commands in a directory structure that mirrors the command hierarchy
+3. **Consistent Command Pattern**: Maintaining a predictable pattern for all commands to enhance maintainability
+
+Example command implementation structure:
+
+```typescript
+// Example command registration using Commander.js
+const { Command } = require("commander");
+const program = new Command();
+
+program
+  .name("hola")
+  .description("Hola CLI for application deployment and management")
+  .version("0.1.0");
+
+program
+  .command("app list")
+  .description("List all deployed applications")
+  .option("-o, --output <format>", "output format (table, json, yaml)", "table")
+  .action(async (options) => {
+    // Command implementation
+  });
+
+// Additional commands registered here...
+
+module.exports = program;
+```
+
 ### Plugin Architecture
 
 The CLI supports extensibility through plugins:
@@ -258,13 +303,6 @@ The CLI supports extensibility through plugins:
 - Custom commands can be registered via plugins
 - Plugins are discovered in `~/.hola/plugins/`
 - Official and community plugins extend functionality without core changes
-
-### Integration Features
-
-- **Shell Completion**: Support for command completion in Bash, Zsh, and Fish
-- **Interactive Mode**: Interactive prompts for complex operations with `--interactive`
-- **Bulk Operations**: Batch processing with input from files or STDIN
-- **Scriptability**: Exit codes and structured output for use in scripts
 
 ## 3. Communication Protocols
 

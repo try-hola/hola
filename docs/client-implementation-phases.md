@@ -13,7 +13,8 @@ This document outlines the phased implementation plan for the Hola client applic
 - Simple authentication with a single API key
 - Core HTTP client with proper error handling
 - Initial command structure for:
-  - `hola config get/set`
+  - `hola settings get/set` (local client settings)
+  - `hola config get/set` (server configuration)
   - `hola app list`
   - `hola app info`
 - Unit test framework and initial test coverage
@@ -24,13 +25,14 @@ This document outlines the phased implementation plan for the Hola client applic
 - Set up TypeScript project with CommonJS modules
 - Implement API client with Axios or node-fetch
 - Create configuration manager for storing and retrieving API keys
-- Establish command registration pattern for scalability
+- Establish command registration pattern for scalability using Commander.js
 - Implement basic error handling and feedback mechanisms
 - Basic table-based output formatting
+- Clear distinction between local settings and server configs
 
 ### Outcome:
 
-A functioning CLI that can connect to a single pre-configured server instance, authenticate, and perform basic read operations.
+A functioning CLI that can connect to a single pre-configured server instance, authenticate, and perform basic read operations with clear separation between local settings and remote configuration.
 
 ## Phase 2: Application Lifecycle Management
 
