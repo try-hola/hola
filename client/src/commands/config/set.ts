@@ -1,19 +1,24 @@
-const configManager = require("../../utils/config-manager");
+import { Command } from "commander";
 const apiClient = require("../../utils/api-client");
-const outputFormatter = require("../../utils/output-formatter");
+const configManager = require("../../utils/config-manager");
 const { handleCommandError } = require("../../utils/error-handler");
+
+interface Options {
+  app?: string;
+  secret?: boolean;
+}
 
 /**
  * Set configuration values
  * @param {Array<string>} keyValues - Array of key=value pairs
- * @param {Object} options - Command options
+ * @param {Options} options - Command options
  */
-async function handler(keyValues, options) {
+async function handler(keyValues: string[], options: Options) {
   try {
     const { app, secret } = options;
 
     // Parse key=value pairs into an object
-    const configValues = keyValues.reduce((acc, pair) => {
+    const configValues = keyValues.reduce<Record<string, string>>((acc, pair) => {
       const [key, value] = pair.split("=");
       if (!key || value === undefined) {
         throw new Error(`Invalid key=value pair: ${pair}`);
@@ -42,7 +47,7 @@ async function handler(keyValues, options) {
 }
 
 // Commander.js builder function equivalent for tests
-function builder(yargs) {
+function builder(yargs: any) {
   return yargs
     .option("app", {
       describe: "Target application name",
@@ -65,7 +70,7 @@ module.exports = {
   builder,
   handler,
   // Export Commander.js configuration function for actual CLI usage
-  default: function(configCommand) {
+  default: function(configCommand: Command) {
     return configCommand
       .command("set <keyValues...>")
       .description(describe)
