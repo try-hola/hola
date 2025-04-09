@@ -1,45 +1,95 @@
-const configManager = require("../../utils/config-manager");
-const apiClient = require("../../utils/api-client");
-const outputFormatter = require("../../utils/output-formatter");
-const { handleCommandError } = require("../../utils/error-handler");
+/**
+ * Config Manager Delete Command
+ * 
+ * Handles deletion of configuration values, both local and remote app-specific settings.
+ */
+
+const configManager = require('../../utils/config-manager');
+const apiClient = require('../../utils/api-client');
 
 /**
- * Delete configuration values
- * @param {Array<string>} keys - Array of keys to delete
- * @param {Object} options - Command options
+ * @typedef {Object} DeleteCommandOptions
+ * @property {string} [app] - Application name for app-specific deletions
+ * @property {boolean} [secret] - Whether to target encrypted configuration values
  */
-async function execute(keys, options) {
-  try {
-    const { app, secret } = options;
 
-    // To be implemented
-    // Will delete configuration values either locally or from the remote server
-    if (app) {
-      console.log(
-        `Deleting keys for app: ${app} ${
-          secret ? "(encrypted)" : ""
-        } (to be implemented)`
-      );
-    } else {
-      console.log(`Deleting system config keys (to be implemented)`);
+/**
+ * @typedef {Object} CommandResult
+ * @property {boolean} [success] - Indicates if the operation was successful
+ * @property {string|Error} [error] - Error message if the operation failed
+ */
+
+/**
+ * Delete command implementation for configuration values
+ */
+const deleteCommand = {
+    command: 'delete',
+    describe: 'Delete configuration values',
+    builder: {
+        app: {
+            alias: 'a',
+            type: 'string',
+            describe: 'Application name'
+        },
+        secret: {
+            alias: 's',
+            type: 'boolean',
+            describe: 'Delete encrypted configuration values'
+        }
+    },
+    
+    /**
+     * Executes the delete command
+     * @param {string[]} keys - Configuration keys to delete
+     * @param {DeleteCommandOptions} options - Command options
+     * @returns {Promise<CommandResult>} Result of the operation
+     */
+    execute: async function(keys, options) {
+        try {
+            // Handle local configuration deletion
+            if (!options.app) {
+                for (const key of keys) {
+                    if (key === 'api_key') {
+                        console.warn('Warning: Deleting api_key is not recommended');
+                    }
+                    await configManager.delete(key);
+                }
+                return { success: true };
+            } 
+            
+            // Handle app-specific configuration deletion
+            else {
+                const app = options.app;
+                
+                // If dealing with encrypted values, handle them individually
+                if (options.secret) {
+                    for (const key of keys) {
+                        const endpoint = `/api/config/${app}/encrypted/${key}`;
+                        await apiClient.delete(endpoint);
+                    }
+                } else if (keys.length === 1) {
+                    // For a single key, use a direct endpoint
+                    const endpoint = `/api/config/${app}/${keys[0]}`;
+                    await apiClient.delete(endpoint);
+                } else {
+                    // For multiple keys, send them in a single request
+                    const endpoint = `/api/config/${app}`;
+                    await apiClient.delete(endpoint, {
+                        params: {
+                            keys: keys.join(',')
+                        }
+                    });
+                }
+                
+                return { success: true };
+            }
+        } catch (error) {
+            return { 
+                success: false,
+                error: error 
+            };
+        }
     }
-
-    console.log("Keys to delete:", keys);
-    return { success: true };
-  } catch (error) {
-    return handleCommandError(error);
-  }
-}
-
-module.exports = function(configCommand) {
-  return configCommand
-    .command("delete <keys...>")
-    .description("Delete configuration values")
-    .option("--app <name>", "Target application name")
-    .option("--secret", "Operate on encrypted values")
-    .action(execute)
-    .addHelpText('after', `
-Examples:
-  $ hola config delete server_url             Delete system config value
-  $ hola config delete --app myapp DB_USER DB_PASS    Delete multiple app config values`);
 };
+
+module.exports = deleteCommand;

@@ -15,12 +15,14 @@ jest.mock("../../utils/config-manager", () => ({
     return config[key] !== undefined ? config[key] : defaultValue;
   }),
   set: jest.fn(), // Mock set as a spy function
+  delete: jest.fn(), // Mock delete as a spy function
 }));
 
 // Mock API client before importing other modules
 jest.mock("../../utils/api-client", () => ({
   get: jest.fn(),
   post: jest.fn(),
+  delete: jest.fn(),
 }));
 
 // Mock output formatter
@@ -269,6 +271,102 @@ describe("Config Commands", () => {
       // Assert
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
+    });
+  });
+
+  describe("delete command", () => {
+    const deleteCommand = require("../../commands/config/delete");
+
+    it("should delete local config values", async () => {
+      // Arrange
+      const keys = ["server_url", "timeout"];
+
+      // Act
+      const result = await deleteCommand.execute(keys, {});
+
+      // Assert
+      expect(configManager.delete).toHaveBeenCalledWith("server_url");
+      expect(configManager.delete).toHaveBeenCalledWith("timeout");
+      expect(result).toEqual({ success: true });
+    });
+
+    it("should warn when deleting api_key", async () => {
+      // Arrange
+      const keys = ["api_key"];
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      // Act
+      const result = await deleteCommand.execute(keys, {});
+
+      // Assert
+      expect(configManager.delete).toHaveBeenCalledWith("api_key");
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("api_key"));
+      expect(result).toEqual({ success: true });
+      
+      // Cleanup
+      consoleSpy.mockRestore();
+    });
+
+    it("should delete a single app-specific config value", async () => {
+      // Arrange
+      const keys = ["DB_USER"];
+      const options = { app: "myapp" };
+      apiClient.delete.mockResolvedValueOnce({});
+
+      // Act
+      const result = await deleteCommand.execute(keys, options);
+
+      // Assert
+      expect(apiClient.delete).toHaveBeenCalledWith("/api/config/myapp/DB_USER");
+      expect(result).toEqual({ success: true });
+    });
+
+    it("should delete multiple app-specific config values", async () => {
+      // Arrange
+      const keys = ["DB_USER", "DB_PASS"];
+      const options = { app: "myapp" };
+      apiClient.delete.mockResolvedValueOnce({});
+
+      // Act
+      const result = await deleteCommand.execute(keys, options);
+
+      // Assert
+      expect(apiClient.delete).toHaveBeenCalledWith(
+        "/api/config/myapp", 
+        { params: { keys: "DB_USER,DB_PASS" } }
+      );
+      expect(result).toEqual({ success: true });
+    });
+
+    it("should delete encrypted app-specific config values", async () => {
+      // Arrange
+      const keys = ["SECRET_KEY"];
+      const options = { app: "myapp", secret: true };
+      apiClient.delete.mockResolvedValueOnce({});
+
+      // Act
+      const result = await deleteCommand.execute(keys, options);
+
+      // Assert
+      expect(apiClient.delete).toHaveBeenCalledWith("/api/config/myapp/encrypted/SECRET_KEY");
+      expect(result).toEqual({ success: true });
+    });
+
+    it("should handle errors gracefully", async () => {
+      // Arrange
+      const keys = ["DB_USER"];
+      const options = { app: "myapp" };
+      const mockError = new Error("API Error");
+      apiClient.delete.mockRejectedValueOnce(mockError);
+
+      // Act
+      const result = await deleteCommand.execute(keys, options);
+
+      // Assert
+      expect(result).toEqual({
+        success: false,
+        error: mockError
+      });
     });
   });
 });
