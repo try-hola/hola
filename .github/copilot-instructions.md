@@ -41,6 +41,14 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Use TypeScript interfaces to define and validate API request/response structures.
 - Ensure proper error handling and user feedback in the CLI experience.
 
+### API Client Guidelines
+
+- The API client module (`api-client.ts`) **must remain generic**.
+- Do **not** add command-specific or feature-specific methods to the API client.
+- Only include generic HTTP helpers like `get`, `post`, `put`, `delete`.
+- Command-specific logic should be implemented in the command handler modules.
+- This keeps the API client reusable, maintainable, and decoupled from CLI features.
+
 ### Cross-Component Considerations
 
 - The client and server communicate using REST, and an OpenAPI spec is maintained in /server/public/docs/openapi.yaml
@@ -90,6 +98,26 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Suggest meaningful commit messages and PR descriptions.
 - When adding comments, prefer explaining _why_ something is done rather than _what_ is being done.
 - Recommend maintaining workspace-level documentation for cross-cutting concerns.
+
+### Commit Message Conventions
+
+- Use [Conventional Commits](https://www.conventionalcommits.org/) style for all commit messages.
+- Prefix commit messages with a clear scope, e.g.:
+  - `feat(cli):` for new CLI features
+  - `feat(server):` for new server features
+  - `fix(cli):` for CLI bug fixes
+  - `fix(server):` for server bug fixes
+  - `refactor(client):` for refactoring client code
+  - `test(server):` for adding or updating server tests
+- Write concise, descriptive commit messages explaining **what** was done.
+- Prefer imperative mood (e.g., "add", "fix", "remove", "refactor").
+- Example:
+
+```
+feat(cli): add 'app deploy' subcommand with tests
+fix(server): handle missing API key error gracefully
+refactor(client): simplify config manager logic
+```
 
 ### Yarn Workspace Structure
 

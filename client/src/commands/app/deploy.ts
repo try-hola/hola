@@ -1,4 +1,4 @@
-const apiClient = require('../../utils/api-client');
+const apiClient = require("../../utils/api-client");
 
 /**
  * Deploy an application package
@@ -17,34 +17,46 @@ async function handler(
       packagePath,
       force: options.force || false,
     };
-    const response = await apiClient.post('/api/apps/deploy', payload);
+    const response = await apiClient.post("/api/apps/deploy", payload);
     console.log(`Application '${appName}' deployed successfully.`);
     return { success: true, data: response };
   } catch (error) {
-    console.error(`Failed to deploy application '${appName}':`, error.message || error);
+    console.error(
+      `Failed to deploy application '${appName}':`,
+      error.message || error
+    );
     return { success: false, error };
   }
 }
 
-const command = 'deploy <appName> [packagePath]';
-const describe = 'Deploy an application package';
+const command = "deploy <appName> [packagePath]";
+const describe = "Deploy an application package";
 
 module.exports = {
   command,
   describe,
   handler,
-  default: function(appCommand: import('commander').Command) {
+  default: function (appCommand: import("commander").Command) {
     return appCommand
       .command(command)
       .description(describe)
-      .option('--force', 'Force redeploy if app already exists')
-      .action((appName: string, packagePath: string | undefined, options: { force?: boolean }) => {
-        return handler(appName, packagePath, options);
-      })
-      .addHelpText('after', `
+      .option("--force", "Force redeploy if app already exists")
+      .action(
+        (
+          appName: string,
+          packagePath: string | undefined,
+          options: { force?: boolean }
+        ) => {
+          return handler(appName, packagePath, options);
+        }
+      )
+      .addHelpText(
+        "after",
+        `
 Examples:
   $ hola app deploy myapp ./path/to/package.tgz
   $ hola app deploy myapp --force
-`);
+`
+      );
   },
 };
