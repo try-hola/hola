@@ -49,8 +49,11 @@ class ApiClient {
    * @param {Object} data - Request body
    */
   async post(endpoint, data = {}) {
-    // To be implemented
-    return { success: true, data: {} };
+    try {
+      return await this.client.post(endpoint, data);
+    } catch (error) {
+      throw error;
+    }
   }
 
   /**

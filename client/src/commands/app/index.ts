@@ -2,6 +2,7 @@ const { Command } = require("commander");
 const listCommand = require("./list");
 const infoCommand = require("./info");
 const startCommand = require("./start");
+const deployCommand = require("./deploy");
 
 module.exports = function registerAppCommands(program) {
   // Create the app command
@@ -13,6 +14,7 @@ module.exports = function registerAppCommands(program) {
   listCommand(appCommand);
   infoCommand(appCommand);
   startCommand(appCommand);
+  deployCommand(appCommand);
 
   // Add the app command to the main program
   program.addCommand(appCommand);
