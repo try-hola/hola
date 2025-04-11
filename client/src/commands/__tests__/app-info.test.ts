@@ -30,7 +30,11 @@ const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 
-// Create a mock commander object to pass to the command modules
+// Import the app info command
+const appInfoModule = require("../app/info");
+const { handler: infoHandler } = appInfoModule;
+
+// Create a mock commander object
 const mockCommand = {
   command: jest.fn().mockReturnThis(),
   description: jest.fn().mockReturnThis(),
@@ -41,9 +45,8 @@ const mockCommand = {
   }),
 };
 
-// Import the app info command
-const appInfoModule = require("../app/info");
-const appInfoCommand = appInfoModule(mockCommand);
+// Register the command (optional, for coverage)
+appInfoModule.default(mockCommand);
 
 describe("App Info Command", () => {
   beforeEach(() => {
@@ -70,7 +73,7 @@ describe("App Info Command", () => {
 
     // Execute the command
     const options = { output: "table" };
-    const result = await appInfoCommand.execute("test-app1", options);
+    const result = await infoHandler("test-app1", options);
 
     // Validate API was called correctly
     expect(apiClient.get).toHaveBeenCalledWith("/api/apps/test-app1");
@@ -109,7 +112,7 @@ describe("App Info Command", () => {
 
     // Execute the command
     const options = { output: "json" };
-    const result = await appInfoCommand.execute("test-app1", options);
+    const result = await infoHandler("test-app1", options);
 
     // Validate API was called correctly
     expect(apiClient.get).toHaveBeenCalledWith("/api/apps/test-app1");
@@ -135,7 +138,7 @@ describe("App Info Command", () => {
 
     // Execute the command
     const options = { output: "table" };
-    const result = await appInfoCommand.execute("non-existent-app", options);
+    const result = await infoHandler("non-existent-app", options);
 
     // Validate API was called correctly
     expect(apiClient.get).toHaveBeenCalledWith("/api/apps/non-existent-app");

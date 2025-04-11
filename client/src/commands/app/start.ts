@@ -4,11 +4,11 @@ const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
 
 /**
- * Start an application
+ * Handler to start an application
  * @param {string} appName - Name of the application to start
  * @param {Object} options - Command options
  */
-async function execute(appName, options) {
+async function handler(appName, options) {
   try {
     logger.debug(`Starting application: ${appName}`);
 
@@ -29,9 +29,19 @@ async function execute(appName, options) {
   }
 }
 
-module.exports = function (appCommand) {
-  return appCommand
-    .command("start <appName>")
-    .description("Start an application")
-    .action(execute);
+const command = "start <appName>";
+const describe = "Start an application";
+
+function builder(yargs) {
+  return yargs;
+}
+
+module.exports = {
+  command,
+  describe,
+  builder,
+  handler,
+  default: function (appCommand) {
+    return appCommand.command(command).description(describe).action(handler);
+  },
 };

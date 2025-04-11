@@ -29,6 +29,10 @@ jest.mock("../../utils/logger", () => ({
 const apiClient = require("../../utils/api-client");
 const { handleCommandError } = require("../../utils/error-handler");
 
+// Import the app start command
+const appStartModule = require("../app/start");
+const { handler: startHandler } = appStartModule;
+
 // Create a mock commander object to pass to the command modules
 const mockCommand = {
   command: jest.fn().mockReturnThis(),
@@ -40,9 +44,8 @@ const mockCommand = {
   }),
 };
 
-// Import the app start command
-const appStartModule = require("../app/start");
-const appStartCommand = appStartModule(mockCommand);
+// Register the command (optional, for coverage)
+appStartModule.default(mockCommand);
 
 describe("App Start Command", () => {
   beforeEach(() => {
@@ -63,7 +66,7 @@ describe("App Start Command", () => {
     const consoleSpy = jest.spyOn(console, "log");
 
     // Execute the command
-    const result = await appStartCommand.execute("test-app", {});
+    const result = await startHandler("test-app", {});
 
     // Validate API was called correctly
     expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/start");
@@ -93,7 +96,7 @@ describe("App Start Command", () => {
     apiClient.post.mockRejectedValue(mockError);
 
     // Execute the command
-    const result = await appStartCommand.execute("non-existent-app", {});
+    const result = await startHandler("non-existent-app", {});
 
     // Validate API was called correctly
     expect(apiClient.post).toHaveBeenCalledWith(
@@ -123,7 +126,7 @@ describe("App Start Command", () => {
     const consoleSpy = jest.spyOn(console, "error");
 
     // Execute the command
-    const result = await appStartCommand.execute("failing-app", {});
+    const result = await startHandler("failing-app", {});
 
     // Validate API was called correctly
     expect(apiClient.post).toHaveBeenCalledWith("/api/apps/failing-app/start");

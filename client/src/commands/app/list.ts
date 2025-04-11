@@ -4,18 +4,15 @@ const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
 
 /**
- * List all deployed applications
+ * Handler to list all deployed applications
  * @param {Object} options - Command options
  * @param {string} options.output - Output format (table or json)
  */
-async function execute(options) {
+async function handler(options) {
   try {
     logger.debug("Fetching app list");
 
-    // Ensure we're explicitly calling the correct endpoint
     const response = await apiClient.get("/api/apps");
-
-    // Extract apps from response
     const apps = response.data.apps || [];
 
     if (apps.length === 0) {
@@ -23,11 +20,9 @@ async function execute(options) {
       return { success: true, data: [] };
     }
 
-    // Format the output based on the user's preference
     if (options.output === "json") {
       outputFormatter.json({ apps });
     } else {
-      // Default to table output
       const tableData = apps.map((appName) => ({ name: appName }));
       outputFormatter.table(tableData, ["name"], {
         title: "Deployed Applications",
@@ -40,10 +35,28 @@ async function execute(options) {
   }
 }
 
-module.exports = function (appCommand) {
-  return appCommand
-    .command("list")
-    .description("List all deployed applications")
-    .option("-o, --output <format>", "output format (table, json)", "table")
-    .action(execute);
+const command = "list";
+const describe = "List all deployed applications";
+
+function builder(yargs) {
+  return yargs.option("output", {
+    alias: "o",
+    describe: "output format (table, json)",
+    default: "table",
+    type: "string",
+  });
+}
+
+module.exports = {
+  command,
+  describe,
+  builder,
+  handler,
+  default: function (appCommand) {
+    return appCommand
+      .command(command)
+      .description(describe)
+      .option("-o, --output <format>", "output format (table, json)", "table")
+      .action(handler);
+  },
 };

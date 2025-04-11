@@ -87,11 +87,8 @@ const mockCommand = {
 const appListModule = require("../app/list");
 const appInfoModule = require("../app/info");
 
-appListModule(mockCommand);
-const listHandler = mockCommand._handler;
-
-appInfoModule(mockCommand);
-const infoHandler = mockCommand._handler;
+const { handler: listHandler } = appListModule;
+const { handler: infoHandler } = appInfoModule;
 
 describe("App Commands", () => {
   beforeEach(() => {
