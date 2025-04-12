@@ -1,12 +1,9 @@
 const apiClient = require("../../utils/api-client");
-const configManager = require("../../utils/config-manager");
-const { handleCommandError } = require("../../utils/error-handler");
 const outputFormatter = require("../../utils/output-formatter");
 const { ConfigSetOptions, ApiResponse } = require("../../types");
 
 /**
- * Handles setting of configuration values, both local and remote app-specific settings.
- * Supports system config, app config, and encrypted app config values.
+ * Handles setting of configuration values via the remote API (system or app-specific).
  * @param {Array<string>} keyValues - Array of key=value pairs
  * @param {ConfigSetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
@@ -14,7 +11,6 @@ const { ConfigSetOptions, ApiResponse } = require("../../types");
 async function handler(keyValues: string[], options: import("../../types").ConfigSetOptions): Promise<import("../../types").ApiResponse> {
   try {
     const { app, secret } = options;
-    // Parse key=value pairs into an object
     const configValues = keyValues.reduce((acc, pair) => {
       const [key, value] = pair.split("=");
       if (!key || value === undefined) {
@@ -23,20 +19,20 @@ async function handler(keyValues: string[], options: import("../../types").Confi
       acc[key] = value;
       return acc;
     }, {});
+    let endpoint = "";
+    let response;
     if (app) {
-      // Set app-specific configuration on the server
-      const endpoint = secret ? `/api/config/${app}/encrypted` : `/api/config/${app}`;
-      await apiClient.post(endpoint, { config: configValues });
+      endpoint = secret ? `/api/config/${app}/encrypted` : `/api/config/${app}`;
+      response = await apiClient.post(endpoint, { config: configValues });
       outputFormatter.formatOutput({ message: `Configuration for app '${app}' updated successfully.` }, options.output);
     } else {
-      // Set system-wide configuration locally
-      Object.entries(configValues).forEach(([key, value]) => {
-        configManager.set(key, value);
-      });
+      endpoint = "/api/config";
+      response = await apiClient.post(endpoint, { config: configValues });
       outputFormatter.formatOutput({ message: "System configuration updated successfully." }, options.output);
     }
-    return { success: true };
+    return { success: true, data: response && response.data ? response.data : undefined };
   } catch (error) {
+    outputFormatter.formatOutput({ error: error.message || "Unknown error" }, "table");
     return {
       success: false,
       error: {

@@ -1,62 +1,40 @@
-const configManager = require("../../utils/config-manager");
 const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
-const { handleCommandError } = require("../../utils/error-handler");
-const logger = require("../../utils/logger");
 const { ConfigGetOptions, ApiResponse } = require("../../types");
 
 /**
- * Handles retrieval of configuration values, both local and remote app-specific settings.
- * Supports system config, app config, and encrypted app config values.
+ * Handles retrieval of configuration values from the remote API (system or app-specific).
  * @param {ConfigGetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
 async function handler(options: import("../../types").ConfigGetOptions): Promise<import("../../types").ApiResponse> {
   try {
     const { app, key, secret } = options;
+    let endpoint = "";
+    let params = key ? { key } : {};
+    let response;
 
-    // If app is specified, get app-specific config from server
     if (app) {
-      logger.debug(`Getting config for app: ${app}, key: ${key || 'all'}, secret: ${!!secret}`);
-      let endpoint = `/api/config/${app}`;
-      
-      // If requesting encrypted values
-      if (secret) {
-        endpoint = `/api/config/${app}/encrypted`;
+      endpoint = secret ? `/api/config/${app}/encrypted` : `/api/config/${app}`;
+      response = await apiClient.get(endpoint, params);
+      if (response && response.data) {
+        const outputData = key && response.data.config ? response.data.config[key] : response.data.config;
+        outputFormatter.formatOutput(outputData, options.output);
+        return { success: true, data: response.data };
       }
-      
-      const params = key ? { key } : {};
-      const response = await apiClient.get(endpoint, params);
-
-      // Format and display the response data
-      const outputData = key && response.data ? response.data[key] : response.data;
-      outputFormatter.formatOutput(outputData, options.output);
-      
-      return { success: true, data: response.data };
     } else {
-      // If no app specified, get local client config or system config from server
-      if (key === 'api_key') {
-        // Don't show the full API key, mask it for security
-        const apiKey = configManager.get('api_key');
-        const maskedKey = apiKey ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}` : '';
-        outputFormatter.formatOutput({ api_key: maskedKey }, options.output);
-        return { success: true, data: { api_key: maskedKey } };
-      } else if (key) {
-        // Get a specific local config value
-        const value = configManager.get(key);
-        outputFormatter.formatOutput({ [key]: value }, options.output);
-        return { success: true, data: { [key]: value } };
-      } else {
-        // Get all local config values (with masked api_key)
-        const config = configManager.getConfig();
-        if (config.api_key) {
-          config.api_key = `${config.api_key.substring(0, 4)}...${config.api_key.substring(config.api_key.length - 4)}`;
-        }
-        outputFormatter.formatOutput(config, options.output);
-        return { success: true, data: config };
+      endpoint = "/api/config";
+      response = await apiClient.get(endpoint, params);
+      if (response && response.data) {
+        const outputData = key && response.data.config ? response.data.config[key] : response.data.config;
+        outputFormatter.formatOutput(outputData, options.output);
+        return { success: true, data: response.data };
       }
     }
+    outputFormatter.formatOutput({ error: "No configuration found." }, options.output);
+    return { success: false, error: { code: "NOT_FOUND", message: "No configuration found." } };
   } catch (error) {
+    outputFormatter.formatOutput({ error: error.message || "Unknown error" }, "table");
     return {
       success: false,
       error: {

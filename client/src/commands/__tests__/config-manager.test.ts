@@ -86,86 +86,65 @@ describe("Config Commands", () => {
   });
 
   describe("get command", () => {
-    it("should get all local config values when no parameters provided", async () => {
+    it("should get all system config values from the server when no app is provided", async () => {
       const argv = { output: "json" };
+      const mockResponse = { data: { config: { server_url: "http://localhost:3000", timeout: 5000 } } };
+      apiClient.get.mockResolvedValueOnce(mockResponse);
       const result = await getHandler(argv);
-      expect(configManager.getConfig).toHaveBeenCalled();
+      expect(apiClient.get).toHaveBeenCalledWith("/api/config", {});
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        expect.objectContaining({
-          server_url: "http://localhost:3000",
-          api_key: expect.stringMatching(/^test.*key$/),
-        }),
+        mockResponse.data.config,
         "json"
       );
-      expect(result).toEqual({ success: true, data: expect.any(Object) });
+      expect(result).toEqual({ success: true, data: mockResponse.data });
     });
 
-    it("should get specific local config value when key is provided", async () => {
+    it("should get a specific system config value from the server when key is provided", async () => {
       const argv = { key: "server_url", output: "table" };
+      const mockResponse = { data: { config: { server_url: "http://localhost:3000" } } };
+      apiClient.get.mockResolvedValueOnce(mockResponse);
       const result = await getHandler(argv);
-      expect(configManager.get).toHaveBeenCalledWith("server_url");
+      expect(apiClient.get).toHaveBeenCalledWith("/api/config", { key: "server_url" });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { server_url: "http://localhost:3000" },
+        mockResponse.data.config.server_url,
         "table"
       );
-      expect(result).toEqual({
-        success: true,
-        data: { server_url: "http://localhost:3000" },
-      });
+      expect(result).toEqual({ success: true, data: mockResponse.data });
     });
 
-    it("should mask api_key when requesting it specifically", async () => {
-      const argv = { key: "api_key", output: "table" };
-      const result = await getHandler(argv);
-      expect(configManager.get).toHaveBeenCalledWith("api_key");
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { api_key: expect.stringMatching(/^test.*key$/) },
-        "table"
-      );
-      expect(result).toEqual({
-        success: true,
-        data: expect.objectContaining({
-          api_key: expect.stringMatching(/^test.*key$/),
-        }),
-      });
-    });
-
-    it("should get application config from server when app parameter is provided", async () => {
+    it("should get all app config values from the server when app is provided", async () => {
       const appName = "test-app";
       const argv = { app: appName, output: "json" };
-      const mockResponse = { data: { port: 3000, name: appName } };
+      const mockResponse = { data: { config: { port: 3000, name: appName } } };
       apiClient.get.mockResolvedValueOnce(mockResponse);
       const result = await getHandler(argv);
       expect(apiClient.get).toHaveBeenCalledWith(`/api/config/${appName}`, {});
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data,
+        mockResponse.data.config,
         "json"
       );
       expect(result).toEqual({ success: true, data: mockResponse.data });
-      expect(logger.debug).toHaveBeenCalled();
     });
 
-    it("should get specific application config value when app and key parameters are provided", async () => {
+    it("should get a specific app config value from the server when app and key are provided", async () => {
       const appName = "test-app";
       const key = "port";
       const argv = { app: appName, key, output: "table" };
-      const mockResponse = { data: { port: 3000 } };
+      const mockResponse = { data: { config: { port: 3000 } } };
       apiClient.get.mockResolvedValueOnce(mockResponse);
       const result = await getHandler(argv);
-      expect(apiClient.get).toHaveBeenCalledWith(`/api/config/${appName}`, {
-        key,
-      });
+      expect(apiClient.get).toHaveBeenCalledWith(`/api/config/${appName}`, { key });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.port,
+        mockResponse.data.config.port,
         "table"
       );
       expect(result).toEqual({ success: true, data: mockResponse.data });
     });
 
-    it("should get encrypted application values when secret flag is used", async () => {
+    it("should get encrypted app config values when secret flag is used", async () => {
       const appName = "test-app";
       const argv = { app: appName, secret: true, output: "json" };
-      const mockResponse = { data: { DB_PASSWORD: "******" } };
+      const mockResponse = { data: { config: { DB_PASSWORD: "******" } } };
       apiClient.get.mockResolvedValueOnce(mockResponse);
       const result = await getHandler(argv);
       expect(apiClient.get).toHaveBeenCalledWith(
@@ -173,7 +152,7 @@ describe("Config Commands", () => {
         {}
       );
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data,
+        mockResponse.data.config,
         "json"
       );
       expect(result).toEqual({ success: true, data: mockResponse.data });
@@ -197,30 +176,39 @@ describe("Config Commands", () => {
   });
 
   describe("set command", () => {
-    it("should set local config values", async () => {
+    it("should set system config values via the API", async () => {
       const argv = {
         keyValues: ["server_url=http://localhost:4000", "timeout=10000"],
       };
+      apiClient.post.mockResolvedValueOnce({ data: { config: { server_url: "http://localhost:4000", timeout: "10000" } } });
       const result = await setHandler(argv.keyValues, {});
-      expect(configManager.set).toHaveBeenCalledWith(
-        "server_url",
-        "http://localhost:4000"
+      expect(apiClient.post).toHaveBeenCalledWith(
+        "/api/config",
+        { config: { server_url: "http://localhost:4000", timeout: "10000" } }
       );
-      expect(configManager.set).toHaveBeenCalledWith("timeout", "10000");
-      expect(result).toEqual({ success: true });
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: "System configuration updated successfully." },
+        undefined
+      );
+      expect(result).toEqual({ success: true, data: { config: { server_url: "http://localhost:4000", timeout: "10000" } } });
     });
 
-    it("should set app-specific config values on the server", async () => {
+    it("should set app-specific config values via the API", async () => {
       const argv = {
         keyValues: ["DB_USER=admin", "DB_PASS=secret"],
         app: "myapp",
       };
-      apiClient.post.mockResolvedValueOnce({});
+      apiClient.post.mockResolvedValueOnce({ data: { config: { DB_USER: "admin", DB_PASS: "secret" } } });
       const result = await setHandler(argv.keyValues, { app: argv.app });
-      expect(apiClient.post).toHaveBeenCalledWith("/api/config/myapp", {
-        config: { DB_USER: "admin", DB_PASS: "secret" },
-      });
-      expect(result).toEqual({ success: true });
+      expect(apiClient.post).toHaveBeenCalledWith(
+        "/api/config/myapp",
+        { config: { DB_USER: "admin", DB_PASS: "secret" } }
+      );
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: `Configuration for app 'myapp' updated successfully.` },
+        undefined
+      );
+      expect(result).toEqual({ success: true, data: { config: { DB_USER: "admin", DB_PASS: "secret" } } });
     });
 
     it("should handle errors gracefully", async () => {
@@ -232,54 +220,74 @@ describe("Config Commands", () => {
   });
 
   describe("delete command", () => {
-    it("should delete local config values", async () => {
-      const argv = { keys: ["server_url", "timeout"] };
+    it("should delete a single system config value via the API", async () => {
+      const argv = { keys: ["server_url"] };
+      apiClient.delete.mockResolvedValueOnce({});
       const result = await deleteHandler(argv.keys, {});
-      expect(configManager.delete).toHaveBeenCalledWith("server_url");
-      expect(configManager.delete).toHaveBeenCalledWith("timeout");
-      expect(result).toEqual({ success: true });
-    });
-
-    it("should warn when deleting api_key", async () => {
-      const argv = { keys: ["api_key"] };
-      const result = await deleteHandler(argv.keys, {});
-      expect(configManager.delete).toHaveBeenCalledWith("api_key");
+      expect(apiClient.delete).toHaveBeenCalledWith(
+        "/api/config/server_url"
+      );
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        expect.objectContaining({ warning: expect.stringContaining("api_key") }),
+        { message: `System configuration key 'server_url' deleted successfully.` },
         "table"
       );
       expect(result).toEqual({ success: true });
     });
 
-    it("should delete a single app-specific config value", async () => {
-      const argv = { keys: ["DB_USER"], app: "myapp" };
+    it("should delete multiple system config values via the API", async () => {
+      const argv = { keys: ["server_url", "timeout"] };
       apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, { app: argv.app });
+      const result = await deleteHandler(argv.keys, {});
       expect(apiClient.delete).toHaveBeenCalledWith(
-        `/api/config/myapp/DB_USER`
+        "/api/config",
+        { params: { keys: "server_url,timeout" } }
+      );
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: `System configuration keys [server_url, timeout] deleted successfully.` },
+        "table"
       );
       expect(result).toEqual({ success: true });
     });
 
-    it("should delete multiple app-specific config values", async () => {
-      const argv = { keys: ["DB_USER", "DB_PASS"], app: "myapp" };
+    it("should delete a single app-specific config value via the API", async () => {
+      const argv = { keys: ["DB_USER"], app: "myapp" };
       apiClient.delete.mockResolvedValueOnce({});
       const result = await deleteHandler(argv.keys, { app: argv.app });
-      expect(apiClient.delete).toHaveBeenCalledWith(`/api/config/myapp`, {
-        params: { keys: "DB_USER,DB_PASS" },
-      });
+      expect(apiClient.delete).toHaveBeenCalledWith(
+        "/api/config/myapp/DB_USER"
+      );
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: `Configuration key 'DB_USER' for app 'myapp' deleted successfully.` },
+        "table"
+      );
       expect(result).toEqual({ success: true });
     });
 
-    it("should delete encrypted app-specific config values", async () => {
+    it("should delete multiple app-specific config values via the API", async () => {
+      const argv = { keys: ["DB_USER", "DB_PASS"], app: "myapp" };
+      apiClient.delete.mockResolvedValueOnce({});
+      const result = await deleteHandler(argv.keys, { app: argv.app });
+      expect(apiClient.delete).toHaveBeenCalledWith(
+        "/api/config/myapp",
+        { params: { keys: "DB_USER,DB_PASS" } }
+      );
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: `Configuration keys [DB_USER, DB_PASS] for app 'myapp' deleted successfully.` },
+        "table"
+      );
+      expect(result).toEqual({ success: true });
+    });
+
+    it("should delete encrypted app-specific config values via the API", async () => {
       const argv = { keys: ["SECRET_KEY"], app: "myapp", secret: true };
       apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, {
-        app: argv.app,
-        secret: argv.secret,
-      });
+      const result = await deleteHandler(argv.keys, { app: argv.app, secret: argv.secret });
       expect(apiClient.delete).toHaveBeenCalledWith(
-        `/api/config/myapp/encrypted/SECRET_KEY`
+        "/api/config/myapp/encrypted/SECRET_KEY"
+      );
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: `Encrypted configuration for app 'myapp' deleted successfully.` },
+        "table"
       );
       expect(result).toEqual({ success: true });
     });
@@ -293,7 +301,7 @@ describe("Config Commands", () => {
         success: false,
         error: {
           code: mockError.code || "DELETE_ERROR",
-          message: mockError.message || "API Error",
+          message: mockError.message || "Delete failed",
           details: mockError.details,
         },
       });
