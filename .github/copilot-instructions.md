@@ -40,6 +40,8 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Optimize for cross-platform compatibility.
 - Use TypeScript interfaces to define and validate API request/response structures.
 - Ensure proper error handling and user feedback in the CLI experience.
+- **Always use `outputFormatter.formatOutput` for all user-facing output, even for simple console logs, to ensure consistent formatting and future extensibility.**
+- **Always use the shared error structure defined in `ApiResponse` for all command implementations.**
 
 ### API Client Guidelines
 
