@@ -2,6 +2,7 @@ const Conf = require("conf");
 const path = require("path");
 const os = require("os");
 const fs = require("fs-extra");
+const { ConfigStore } = require("../types");
 
 const CONFIG_DEFAULTS = {
   server_url: "http://localhost:3000",
@@ -57,7 +58,7 @@ class ConfigManager {
   /**
    * Get all configuration values
    */
-  getConfig() {
+  getConfig(): typeof ConfigStore {
     return this.config.store;
   }
 
@@ -66,7 +67,7 @@ class ConfigManager {
    * @param {string} key - Configuration key to retrieve
    * @param {any} defaultValue - Default value if key doesn't exist
    */
-  get(key, defaultValue = undefined) {
+  get(key: string, defaultValue: any = undefined) {
     return this.config.get(key, defaultValue);
   }
 
@@ -75,7 +76,7 @@ class ConfigManager {
    * @param {string} key - Configuration key to set
    * @param {any} value - Value to store
    */
-  set(key, value) {
+  set(key: string, value: any) {
     return this.config.set(key, value);
   }
 
@@ -83,7 +84,7 @@ class ConfigManager {
    * Delete a configuration value
    * @param {string} key - Configuration key to delete
    */
-  delete(key) {
+  delete(key: string) {
     return this.config.delete(key);
   }
 
@@ -91,7 +92,7 @@ class ConfigManager {
    * Check if a configuration value exists
    * @param {string} key - Configuration key to check
    */
-  has(key) {
+  has(key: string) {
     return this.config.has(key);
   }
 

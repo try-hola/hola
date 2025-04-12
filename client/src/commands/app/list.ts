@@ -2,15 +2,14 @@ const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
-const { ApiResponse } = require("../../types");
+const { AppListOptions, ApiResponse } = require("../../types");
 
 /**
  * Handler to list all deployed applications
- * @param {Object} options - Command options
- * @param {string} options.output - Output format (table or json)
- * @returns {Promise<ApiResponse>}
+ * @param {AppListOptions} options - Command options
+ * @returns {Promise<ApiResponse<string[]>>}
  */
-const handler = async (options) => {
+const handler = async (options: typeof AppListOptions): Promise<typeof ApiResponse> => {
   try {
     logger.debug("Fetching app list");
 

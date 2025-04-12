@@ -43,11 +43,42 @@ type ConfigValue = {
   value: string | number | boolean | object;
 };
 
-// Export types for TypeScript
-module.exports = {};
+// Command option interfaces
+interface AppListOptions {
+  output: "table" | "json";
+}
 
-// Add type exports for TypeScript
-module.exports.ConfigStore = undefined;
-module.exports.ApiResponse = undefined;
-module.exports.AppInfo = undefined;
-module.exports.ConfigValue = undefined;
+interface AppInfoOptions {
+  output: "table" | "json";
+}
+
+interface ConfigGetOptions {
+  app?: string;
+  key?: string;
+  secret?: boolean;
+  output: "table" | "json";
+}
+
+interface ConfigSetOptions {
+  app?: string;
+  secret?: boolean;
+  output: "table" | "json";
+}
+
+interface ConfigDeleteOptions {
+  app?: string;
+  secret?: boolean;
+}
+
+// Export types for CommonJS
+module.exports = {
+  ConfigStore: undefined,
+  ApiResponse: undefined,
+  AppInfo: undefined,
+  ConfigValue: undefined,
+  AppListOptions: undefined,
+  AppInfoOptions: undefined,
+  ConfigGetOptions: undefined,
+  ConfigSetOptions: undefined,
+  ConfigDeleteOptions: undefined,
+};

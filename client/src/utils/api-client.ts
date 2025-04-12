@@ -35,9 +35,9 @@ class ApiClient {
    * Make a GET request to the API
    * @param {string} endpoint - API endpoint to call
    * @param {Object} params - Query parameters
-   * @returns {Promise<ApiResponse>}
+   * @returns {Promise<ApiResponse<any>>}
    */
-  async get(endpoint, params = {}) {
+  async get(endpoint: string, params: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
       const response = await this.client.get(endpoint, { params });
       return { success: true, data: response };
@@ -57,9 +57,9 @@ class ApiClient {
    * Make a POST request to the API
    * @param {string} endpoint - API endpoint to call
    * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse>}
+   * @returns {Promise<ApiResponse<any>>}
    */
-  async post(endpoint, data = {}) {
+  async post(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
       const response = await this.client.post(endpoint, data);
       return { success: true, data: response };
@@ -79,9 +79,9 @@ class ApiClient {
    * Make a PUT request to the API
    * @param {string} endpoint - API endpoint to call
    * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse>}
+   * @returns {Promise<ApiResponse<any>>}
    */
-  async put(endpoint, data = {}) {
+  async put(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
       const response = await this.client.put(endpoint, data);
       return { success: true, data: response };
@@ -100,9 +100,9 @@ class ApiClient {
   /**
    * Make a DELETE request to the API
    * @param {string} endpoint - API endpoint to call
-   * @returns {Promise<ApiResponse>}
+   * @returns {Promise<ApiResponse<any>>}
    */
-  async delete(endpoint) {
+  async delete(endpoint: string): Promise<typeof ApiResponse> {
     try {
       const response = await this.client.delete(endpoint);
       return { success: true, data: response };

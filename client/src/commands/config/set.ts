@@ -2,13 +2,15 @@ const apiClient = require("../../utils/api-client");
 const configManager = require("../../utils/config-manager");
 const { handleCommandError } = require("../../utils/error-handler");
 const outputFormatter = require("../../utils/output-formatter");
+const { ConfigSetOptions, ApiResponse } = require("../../types");
 
 /**
  * Set configuration values
  * @param {Array<string>} keyValues - Array of key=value pairs
- * @param {{ app?: string; secret?: boolean }} options - Command options
+ * @param {ConfigSetOptions} options - Command options
+ * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(keyValues, options) {
+async function handler(keyValues: string[], options: typeof ConfigSetOptions): Promise<typeof ApiResponse> {
   try {
     const { app, secret } = options;
     // Parse key=value pairs into an object

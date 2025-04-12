@@ -7,16 +7,18 @@
 const apiClient = require("../../utils/api-client");
 const configManager = require("../../utils/config-manager");
 const outputFormatter = require("../../utils/output-formatter");
+const { ConfigDeleteOptions, ApiResponse } = require("../../types");
 
 /**
  * Delete configuration values
  * @param {string[]} keys - Keys to delete
- * @param {{ app?: string; secret?: boolean }} options - Command options
+ * @param {ConfigDeleteOptions} options - Command options
+ * @returns {Promise<ApiResponse<any>>}
  */
 async function handler(
   keys: string[],
-  options: { app?: string; secret?: boolean }
-) {
+  options: typeof ConfigDeleteOptions
+): Promise<typeof ApiResponse> {
   try {
     if (!options.app) {
       for (const key of keys) {

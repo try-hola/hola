@@ -3,12 +3,14 @@ const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
+const { ConfigGetOptions, ApiResponse } = require("../../types");
 
 /**
  * Get configuration values
- * @param {Object} options - Command options
+ * @param {ConfigGetOptions} options - Command options
+ * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(options) {
+async function handler(options: typeof ConfigGetOptions): Promise<typeof ApiResponse> {
   try {
     const { app, key, secret } = options;
 

@@ -2,16 +2,15 @@ const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
-const { ApiResponse } = require("../../types");
+const { AppInfoOptions, ApiResponse } = require("../../types");
 
 /**
  * Handler to get detailed information about an application
  * @param {string} appName - Name of the application
- * @param {Object} options - Command options
- * @param {string} options.output - Output format (table or json)
- * @returns {Promise<ApiResponse>}
+ * @param {AppInfoOptions} options - Command options
+ * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(appName, options) {
+async function handler(appName: string, options: typeof AppInfoOptions): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Fetching details for app: ${appName}`);
 
