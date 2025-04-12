@@ -10,7 +10,7 @@ const { ConfigGetOptions, ApiResponse } = require("../../types");
  * @param {ConfigGetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(options: typeof ConfigGetOptions): Promise<typeof ApiResponse> {
+async function handler(options: import("../../types").ConfigGetOptions): Promise<import("../../types").ApiResponse> {
   try {
     const { app, key, secret } = options;
 

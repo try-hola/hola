@@ -7,10 +7,11 @@ const { ApiResponse } = require("../../types");
 /**
  * Handler to start an application
  * @param {string} appName - Name of the application to start
- * @param {Object} options - Command options
+ * @param {StartOptions} options - Command options
  * @returns {Promise<ApiResponse>}
  */
-async function handler(appName, options) {
+interface StartOptions {}
+async function handler(appName: string, options: StartOptions): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Starting application: ${appName}`);
 

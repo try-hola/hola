@@ -9,7 +9,7 @@ const { AppListOptions, ApiResponse } = require("../../types");
  * @param {AppListOptions} options - Command options
  * @returns {Promise<ApiResponse<string[]>>}
  */
-const handler = async (options: typeof AppListOptions): Promise<typeof ApiResponse> => {
+const handler = async (options: import("../../types").AppListOptions): Promise<import("../../types").ApiResponse> => {
   try {
     logger.debug("Fetching app list");
 

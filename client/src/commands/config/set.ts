@@ -10,7 +10,7 @@ const { ConfigSetOptions, ApiResponse } = require("../../types");
  * @param {ConfigSetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(keyValues: string[], options: typeof ConfigSetOptions): Promise<typeof ApiResponse> {
+async function handler(keyValues: string[], options: import("../../types").ConfigSetOptions): Promise<import("../../types").ApiResponse> {
   try {
     const { app, secret } = options;
     // Parse key=value pairs into an object

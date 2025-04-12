@@ -10,7 +10,7 @@ const { AppInfoOptions, ApiResponse } = require("../../types");
  * @param {AppInfoOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(appName: string, options: typeof AppInfoOptions): Promise<typeof ApiResponse> {
+async function handler(appName: string, options: import("../../types").AppInfoOptions): Promise<import("../../types").ApiResponse> {
   try {
     logger.debug(`Fetching details for app: ${appName}`);
 

@@ -8,10 +8,13 @@ const { ApiResponse } = require("../../types");
  * @param options - Deployment options
  * @returns {Promise<ApiResponse>}
  */
+interface DeployOptions {
+  force?: boolean;
+}
 async function handler(
   appName: string,
   packagePath: string | undefined,
-  options: { force?: boolean }
+  options: DeployOptions
 ): Promise<typeof ApiResponse> {
   try {
     const payload = {
@@ -72,7 +75,7 @@ module.exports = {
         (
           appName: string,
           packagePath: string | undefined,
-          options: { force?: boolean }
+          options: DeployOptions
         ) => {
           return handler(appName, packagePath, options);
         }

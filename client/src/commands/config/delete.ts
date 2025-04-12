@@ -17,8 +17,8 @@ const { ConfigDeleteOptions, ApiResponse } = require("../../types");
  */
 async function handler(
   keys: string[],
-  options: typeof ConfigDeleteOptions
-): Promise<typeof ApiResponse> {
+  options: import("../../types").ConfigDeleteOptions
+): Promise<import("../../types").ApiResponse> {
   try {
     if (!options.app) {
       for (const key of keys) {
