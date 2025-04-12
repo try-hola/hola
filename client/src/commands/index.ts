@@ -6,11 +6,13 @@
 // Register all commands
 const appCommands = require("./app");
 const configCommands = require("./config");
+const settingsCommands = require("./settings");
 
 module.exports = (program) => {
   // Register top-level command groups
   appCommands(program);
   configCommands(program);
+  settingsCommands(program);
   
   return program;
 };
