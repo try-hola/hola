@@ -5,7 +5,8 @@ const outputFormatter = require("../../utils/output-formatter");
 const { ConfigSetOptions, ApiResponse } = require("../../types");
 
 /**
- * Set configuration values
+ * Handles setting of configuration values, both local and remote app-specific settings.
+ * Supports system config, app config, and encrypted app config values.
  * @param {Array<string>} keyValues - Array of key=value pairs
  * @param {ConfigSetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
@@ -47,6 +48,11 @@ async function handler(keyValues: string[], options: import("../../types").Confi
   }
 }
 
+/**
+ * Builder function for configuring command-line options for the set command.
+ * @param yargs - Yargs instance
+ * @returns Yargs instance with options configured
+ */
 function builder(yargs) {
   return yargs
     .option("app", {
@@ -59,9 +65,19 @@ function builder(yargs) {
     });
 }
 
+/**
+ * CLI command string for setting configuration values.
+ */
 const command = "set [keyValues..]";
+
+/**
+ * Description for the set command.
+ */
 const describe = "Set configuration values";
 
+/**
+ * Registers the set command with the Commander configCommand instance.
+ */
 module.exports = {
   command,
   describe,

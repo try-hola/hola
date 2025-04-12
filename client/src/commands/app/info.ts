@@ -5,7 +5,8 @@ const logger = require("../../utils/logger");
 const { AppInfoOptions, ApiResponse } = require("../../types");
 
 /**
- * Handler to get detailed information about an application
+ * Handler to get detailed information about an application.
+ * Fetches app details from the server and formats output.
  * @param {string} appName - Name of the application
  * @param {AppInfoOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
@@ -72,7 +73,14 @@ async function handler(appName: string, options: import("../../types").AppInfoOp
   }
 }
 
+/**
+ * CLI command string for showing app info.
+ */
 const command = "info <appName>";
+
+/**
+ * Description for the info command.
+ */
 const describe = "Show detailed information about an application";
 
 function builder(yargs) {
@@ -89,6 +97,9 @@ module.exports = {
   describe,
   builder,
   handler,
+  /**
+   * Registers the info command with the Commander appCommand instance.
+   */
   default: function (appCommand) {
     return appCommand
       .command(command)

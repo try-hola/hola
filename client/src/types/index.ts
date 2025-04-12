@@ -1,5 +1,5 @@
 /**
- * Configuration type for storing application settings
+ * Configuration values for storing application settings.
  */
 type ConfigStore = {
   server_url: string;
@@ -12,7 +12,7 @@ type ConfigStore = {
 };
 
 /**
- * Base response type for API calls
+ * Standard response structure for API calls.
  */
 type ApiResponse<T = any> = {
   success: boolean;
@@ -25,7 +25,7 @@ type ApiResponse<T = any> = {
 };
 
 /**
- * Application information type
+ * Information about an application.
  */
 type AppInfo = {
   name: string;
@@ -36,22 +36,30 @@ type AppInfo = {
 };
 
 /**
- * Config value type
+ * Key-value pair for configuration values.
  */
 type ConfigValue = {
   key: string;
   value: string | number | boolean | object;
 };
 
-// Command option interfaces
+/**
+ * Options for the 'app list' command.
+ */
 interface AppListOptions {
   output: "table" | "json";
 }
 
+/**
+ * Options for the 'app info' command.
+ */
 interface AppInfoOptions {
   output: "table" | "json";
 }
 
+/**
+ * Options for the 'config get' command.
+ */
 interface ConfigGetOptions {
   app?: string;
   key?: string;
@@ -59,12 +67,18 @@ interface ConfigGetOptions {
   output: "table" | "json";
 }
 
+/**
+ * Options for the 'config set' command.
+ */
 interface ConfigSetOptions {
   app?: string;
   secret?: boolean;
   output: "table" | "json";
 }
 
+/**
+ * Options for the 'config delete' command.
+ */
 interface ConfigDeleteOptions {
   app?: string;
   secret?: boolean;

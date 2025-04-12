@@ -4,7 +4,11 @@ const configManager = require("./config-manager");
 const { ApiResponse } = require("../types");
 
 /**
- * API Client for communicating with the Hola server
+ * API Client for communicating with the Hola server.
+ * Provides generic HTTP helpers for REST API calls.
+ * Generic API client for making HTTP requests to the server.
+ * Provides generic get, post, put, and delete methods.
+ * Do not add command-specific logic here.
  */
 class ApiClient {
   // Axios client instance
@@ -32,10 +36,10 @@ class ApiClient {
   }
 
   /**
-   * Make a GET request to the API
+   * Make a GET request to the API.
    * @param {string} endpoint - API endpoint to call
    * @param {Object} params - Query parameters
-   * @returns {Promise<ApiResponse<any>>}
+   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
    */
   async get(endpoint: string, params: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
@@ -54,10 +58,10 @@ class ApiClient {
   }
 
   /**
-   * Make a POST request to the API
+   * Make a POST request to the API.
    * @param {string} endpoint - API endpoint to call
    * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse<any>>}
+   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
    */
   async post(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
@@ -76,10 +80,10 @@ class ApiClient {
   }
 
   /**
-   * Make a PUT request to the API
+   * Make a PUT request to the API.
    * @param {string} endpoint - API endpoint to call
    * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse<any>>}
+   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
    */
   async put(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
     try {
@@ -98,9 +102,9 @@ class ApiClient {
   }
 
   /**
-   * Make a DELETE request to the API
+   * Make a DELETE request to the API.
    * @param {string} endpoint - API endpoint to call
-   * @returns {Promise<ApiResponse<any>>}
+   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
    */
   async delete(endpoint: string): Promise<typeof ApiResponse> {
     try {
@@ -119,4 +123,7 @@ class ApiClient {
   }
 }
 
+/**
+ * Exports a singleton instance of the API client for use throughout the CLI.
+ */
 module.exports = new ApiClient();

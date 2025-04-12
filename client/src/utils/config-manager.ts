@@ -14,6 +14,10 @@ const CONFIG_DEFAULTS = {
   auto_update_check: true,
 };
 
+/**
+ * Manages persistent configuration for the CLI client.
+ * Stores and retrieves configuration values from disk.
+ */
 class ConfigManager {
   constructor() {
     // Create config directory if it doesn't exist
@@ -56,52 +60,55 @@ class ConfigManager {
   }
 
   /**
-   * Get all configuration values
+   * Returns all configuration values as an object.
    */
   getConfig(): typeof ConfigStore {
     return this.config.store;
   }
 
   /**
-   * Get a specific configuration value
-   * @param {string} key - Configuration key to retrieve
-   * @param {any} defaultValue - Default value if key doesn't exist
+   * Returns a specific configuration value by key.
+   * @param key - Configuration key to retrieve
+   * @param defaultValue - Value to return if key does not exist
    */
   get(key: string, defaultValue: any = undefined) {
     return this.config.get(key, defaultValue);
   }
 
   /**
-   * Set a configuration value
-   * @param {string} key - Configuration key to set
-   * @param {any} value - Value to store
+   * Sets a configuration value by key.
+   * @param key - Configuration key to set
+   * @param value - Value to store
    */
   set(key: string, value: any) {
     return this.config.set(key, value);
   }
 
   /**
-   * Delete a configuration value
-   * @param {string} key - Configuration key to delete
+   * Deletes a configuration value by key.
+   * @param key - Configuration key to delete
    */
   delete(key: string) {
     return this.config.delete(key);
   }
 
   /**
-   * Check if a configuration value exists
-   * @param {string} key - Configuration key to check
+   * Checks if a configuration key exists.
+   * @param key - Configuration key to check
    */
   has(key: string) {
     return this.config.has(key);
   }
 
   /**
-   * Reset all configuration to defaults
+   * Resets all configuration values to their defaults.
    */
   reset() {
     return this.config.clear();
   }
 }
 
+/**
+ * Exports a singleton instance of the configuration manager for use throughout the CLI.
+ */
 module.exports = new ConfigManager();

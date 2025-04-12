@@ -5,9 +5,10 @@ const logger = require("../../utils/logger");
 const { AppListOptions, ApiResponse } = require("../../types");
 
 /**
- * Handler to list all deployed applications
- * @param {AppListOptions} options - Command options
- * @returns {Promise<ApiResponse<string[]>>}
+ * Handler to list all deployed applications.
+ * Returns a list of application names from the server.
+ * @param options - Command options
+ * @returns ApiResponse with application names
  */
 const handler = async (options: import("../../types").AppListOptions): Promise<import("../../types").ApiResponse> => {
   try {
@@ -46,7 +47,14 @@ const handler = async (options: import("../../types").AppListOptions): Promise<i
   }
 };
 
+/**
+ * CLI command string for listing applications.
+ */
 const command = "list";
+
+/**
+ * Description for the list command.
+ */
 const describe = "List all deployed applications";
 
 function builder(yargs) {
@@ -63,6 +71,9 @@ module.exports = {
   describe,
   builder,
   handler,
+  /**
+   * Registers the list command with the Commander appCommand instance.
+   */
   default: function (appCommand) {
     return appCommand
       .command(command)

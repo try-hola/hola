@@ -2,11 +2,12 @@ const apiClient = require("../../utils/api-client");
 const { ApiResponse } = require("../../types");
 
 /**
- * Deploy an application package
+ * Deploy an application package using the provided app name and package path.
+ * Sends a deployment request to the server.
  * @param appName - Name of the app
  * @param packagePath - Optional path to the package file
  * @param options - Deployment options
- * @returns {Promise<ApiResponse>}
+ * @returns ApiResponse with deployment result
  */
 interface DeployOptions {
   force?: boolean;
@@ -59,9 +60,19 @@ async function handler(
   }
 }
 
+/**
+ * CLI command string for deploying an application.
+ */
 const command = "deploy <appName> [packagePath]";
+
+/**
+ * Description for the deploy command.
+ */
 const describe = "Deploy an application package";
 
+/**
+ * Registers the deploy command with the Commander appCommand instance.
+ */
 module.exports = {
   command,
   describe,

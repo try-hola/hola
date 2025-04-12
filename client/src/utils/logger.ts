@@ -8,6 +8,12 @@ const configManager = require("./config-manager");
 const logsDir = path.join(os.homedir(), ".hola", "logs");
 fs.ensureDirSync(logsDir);
 
+/**
+ * Winston logger instance for the CLI client.
+ * Logs to both file and console (if not in production).
+ *
+ * Use this logger for all structured logging in the CLI.
+ */
 const logger = winston.createLogger({
   level: configManager.get("log_level", "info"),
   format: winston.format.combine(
@@ -38,4 +44,7 @@ if (process.env.NODE_ENV !== "production") {
   );
 }
 
+/**
+ * Exports the configured logger instance for use throughout the CLI.
+ */
 module.exports = logger;

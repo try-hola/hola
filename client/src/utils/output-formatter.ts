@@ -1,10 +1,19 @@
+/**
+ * Provides output formatting utilities for CLI commands.
+ * Supports table, JSON, and custom formatting for user-facing output.
+ */
 const chalk = require("chalk");
 
+/**
+ * Utility for formatting and printing CLI output in various formats.
+ * Supports table and JSON output for consistent user experience.
+ */
 class OutputFormatter {
   /**
-   * Format output based on requested format
+   * Formats data as a string in the requested format.
    * @param {any} data - Data to format
    * @param {string} format - Output format (table, json)
+   * @returns {string} Formatted string
    */
   format(data, format = "table") {
     switch (format) {
@@ -17,9 +26,10 @@ class OutputFormatter {
   }
 
   /**
-   * Format and print output based on requested format
+   * Formats and prints data in the requested format.
    * @param {any} data - Data to format and print
    * @param {string} format - Output format (table, json)
+   * @returns {string} Formatted string
    */
   formatOutput(data, format = "table") {
     const output = this.format(data, format);
@@ -28,16 +38,18 @@ class OutputFormatter {
   }
 
   /**
-   * Format data as a JSON string
+   * Formats data as a pretty-printed JSON string.
    * @param {any} data - Data to format as JSON
+   * @returns {string} JSON string
    */
   formatJson(data) {
     return JSON.stringify(data, null, 2);
   }
 
   /**
-   * Format data as an ASCII table
+   * Formats data as an ASCII table string.
    * @param {any} data - Data to format as table
+   * @returns {string} Table string
    */
   formatTable(data) {
     // Handle configuration objects (key-value pairs)
@@ -86,8 +98,9 @@ class OutputFormatter {
   }
 
   /**
-   * Convert a value to a string representation
+   * Converts a value to a string representation for display.
    * @param {any} value - Value to stringify
+   * @returns {string} String representation
    */
   stringifyValue(value) {
     if (value === undefined) {
@@ -103,7 +116,7 @@ class OutputFormatter {
   }
 
   /**
-   * Print success message
+   * Prints a success message in green.
    * @param {string} message - Success message
    */
   success(message) {
@@ -111,7 +124,7 @@ class OutputFormatter {
   }
 
   /**
-   * Print warning message
+   * Prints a warning message in yellow.
    * @param {string} message - Warning message
    */
   warn(message) {
@@ -119,7 +132,7 @@ class OutputFormatter {
   }
 
   /**
-   * Print error message
+   * Prints an error message in red.
    * @param {string} message - Error message
    */
   error(message) {

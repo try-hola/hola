@@ -10,10 +10,11 @@ const outputFormatter = require("../../utils/output-formatter");
 const { ConfigDeleteOptions, ApiResponse } = require("../../types");
 
 /**
- * Delete configuration values
- * @param {string[]} keys - Keys to delete
- * @param {ConfigDeleteOptions} options - Command options
- * @returns {Promise<ApiResponse<any>>}
+ * Handles deletion of configuration values, both local and remote app-specific settings.
+ * Supports deleting system config, app config, and encrypted app config values.
+ * @param keys - Keys to delete
+ * @param options - Command options
+ * @returns ApiResponse indicating success or error
  */
 async function handler(
   keys: string[],
@@ -60,7 +61,9 @@ async function handler(
 }
 
 /**
- * Builder function for tests (optional)
+ * Builder function for configuring command-line options for the delete command.
+ * @param yargs - Yargs instance
+ * @returns Yargs instance with options configured
  */
 function builder(yargs: any) {
   return yargs
@@ -76,7 +79,14 @@ function builder(yargs: any) {
     });
 }
 
+/**
+ * CLI command string for deleting configuration values.
+ */
 const command = "delete <keys...>";
+
+/**
+ * Description for the delete command.
+ */
 const describe = "Delete configuration values";
 
 module.exports = {
@@ -84,6 +94,9 @@ module.exports = {
   describe,
   builder,
   handler,
+  /**
+   * Registers the delete command with the Commander configCommand instance.
+   */
   default: function (configCommand: import("commander").Command) {
     return configCommand
       .command("delete <keys...>")

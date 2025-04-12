@@ -5,10 +5,11 @@ const logger = require("../../utils/logger");
 const { ApiResponse } = require("../../types");
 
 /**
- * Handler to start an application
- * @param {string} appName - Name of the application to start
- * @param {StartOptions} options - Command options
- * @returns {Promise<ApiResponse>}
+ * Handler to start an application.
+ * Sends a start request to the server for the specified app.
+ * @param appName - Name of the application to start
+ * @param options - Command options
+ * @returns ApiResponse with start result
  */
 interface StartOptions {}
 async function handler(appName: string, options: StartOptions): Promise<typeof ApiResponse> {
@@ -44,13 +45,23 @@ async function handler(appName: string, options: StartOptions): Promise<typeof A
   }
 }
 
+/**
+ * CLI command string for starting an application.
+ */
 const command = "start <appName>";
+
+/**
+ * Description for the start command.
+ */
 const describe = "Start an application";
 
 function builder(yargs) {
   return yargs;
 }
 
+/**
+ * Registers the start command with the Commander appCommand instance.
+ */
 module.exports = {
   command,
   describe,

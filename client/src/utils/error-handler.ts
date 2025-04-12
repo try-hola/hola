@@ -1,3 +1,7 @@
+/**
+ * Provides error handling utilities for CLI commands.
+ * Formats errors into the standard ApiResponse structure.
+ */
 const logger = require("./logger");
 const chalk = require("chalk");
 

@@ -6,7 +6,8 @@ const logger = require("../../utils/logger");
 const { ConfigGetOptions, ApiResponse } = require("../../types");
 
 /**
- * Get configuration values
+ * Handles retrieval of configuration values, both local and remote app-specific settings.
+ * Supports system config, app config, and encrypted app config values.
  * @param {ConfigGetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
@@ -68,7 +69,9 @@ async function handler(options: import("../../types").ConfigGetOptions): Promise
 }
 
 /**
- * Builder function for command options
+ * Builder function for configuring command-line options for the get command.
+ * @param yargs - Yargs instance
+ * @returns Yargs instance with options configured
  */
 function builder(yargs) {
   return yargs
@@ -86,11 +89,19 @@ function builder(yargs) {
     });
 }
 
-// Command definition properties
+/**
+ * CLI command string for getting configuration values.
+ */
 const command = "get";
+
+/**
+ * Description for the get command.
+ */
 const describe = "Get configuration values";
 
-// Export command specification for testing
+/**
+ * Registers the get command with the Commander configCommand instance.
+ */
 module.exports = {
   command,
   describe,

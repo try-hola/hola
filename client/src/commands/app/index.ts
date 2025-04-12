@@ -4,6 +4,12 @@ const infoCommand = require("./info");
 const startCommand = require("./start");
 const deployCommand = require("./deploy");
 
+/**
+ * Registers all application-related CLI commands (list, info, start, deploy) with the provided Commander program instance.
+ * Adds the 'app' command group and its subcommands to the CLI.
+ * @param program Commander program instance
+ * @returns The configured Commander program instance
+ */
 module.exports = function registerAppCommands(program) {
   // Create the app command
   const appCommand = new Command("app").description(
