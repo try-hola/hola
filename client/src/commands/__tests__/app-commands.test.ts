@@ -106,10 +106,13 @@ describe("App Commands", () => {
       const result = await listHandler(options);
 
       expect(apiClient.get).toHaveBeenCalledWith("/api/apps");
-      expect(outputFormatter.table).toHaveBeenCalledWith(
-        [{ name: "app1" }, { name: "app2" }, { name: "app3" }],
-        ["name"],
-        { title: "Deployed Applications" }
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        [
+          { name: "app1" },
+          { name: "app2" },
+          { name: "app3" }
+        ],
+        "table"
       );
       expect(result).toEqual({ success: true, data: ["app1", "app2", "app3"] });
     });
@@ -124,24 +127,29 @@ describe("App Commands", () => {
       const result = await listHandler(options);
 
       expect(apiClient.get).toHaveBeenCalledWith("/api/apps");
-      expect(outputFormatter.json).toHaveBeenCalledWith({
-        apps: ["app1", "app2", "app3"],
-      });
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        [
+          { name: "app1" },
+          { name: "app2" },
+          { name: "app3" }
+        ],
+        "json"
+      );
       expect(result).toEqual({ success: true, data: ["app1", "app2", "app3"] });
     });
 
     test("should handle empty app list", async () => {
       apiClient.get.mockResolvedValue({ success: true, data: { apps: [] } });
-      const consoleSpy = jest.spyOn(console, "log").mockImplementation();
 
       const options = { output: "table" };
       const result = await listHandler(options);
 
       expect(apiClient.get).toHaveBeenCalledWith("/api/apps");
-      expect(consoleSpy).toHaveBeenCalledWith("No applications deployed");
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        { message: "No applications deployed" },
+        "table"
+      );
       expect(result).toEqual({ success: true, data: [] });
-
-      consoleSpy.mockRestore();
     });
 
     test("should handle API errors", async () => {
@@ -175,13 +183,15 @@ describe("App Commands", () => {
       };
 
       apiClient.get.mockResolvedValue({ success: true, data: mockAppDetails });
-      const consoleSpy = jest.spyOn(console, "log").mockImplementation();
 
       const options = { output: "table" };
       const result = await infoHandler("test-app1", options);
 
       expect(apiClient.get).toHaveBeenCalledWith("/api/apps/test-app1");
-      expect(consoleSpy).toHaveBeenCalledWith("Application: test-app1");
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        [{ property: "Application", value: "test-app1" }],
+        "table"
+      );
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         expect.arrayContaining([
           expect.objectContaining({ property: "name", value: "test-app1" }),
@@ -190,8 +200,6 @@ describe("App Commands", () => {
         "table"
       );
       expect(result).toEqual({ success: true, data: mockAppDetails });
-
-      consoleSpy.mockRestore();
     });
 
     test("should show app details in JSON format when specified", async () => {

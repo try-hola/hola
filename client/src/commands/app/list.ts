@@ -18,19 +18,12 @@ const handler = async (options) => {
 
     if (response.success && response.data && response.data.apps) {
       const apps = response.data.apps;
-      if (options.output === "json") {
-        outputFormatter.json({ apps });
-      } else {
-        if (apps.length === 0) {
-          console.log("No applications deployed");
-        } else {
-          outputFormatter.table(
-            apps.map((name) => ({ name })),
-            ["name"],
-            { title: "Deployed Applications" }
-          );
-        }
-      }
+      outputFormatter.formatOutput(
+        apps.length === 0
+          ? { message: "No applications deployed" }
+          : apps.map((name) => ({ name })),
+        options.output
+      );
       return { success: true, data: apps };
     } else {
       return {

@@ -1,6 +1,7 @@
 const apiClient = require("../../utils/api-client");
 const configManager = require("../../utils/config-manager");
 const { handleCommandError } = require("../../utils/error-handler");
+const outputFormatter = require("../../utils/output-formatter");
 
 /**
  * Set configuration values
@@ -23,13 +24,13 @@ async function handler(keyValues, options) {
       // Set app-specific configuration on the server
       const endpoint = secret ? `/api/config/${app}/encrypted` : `/api/config/${app}`;
       await apiClient.post(endpoint, { config: configValues });
-      console.log(`Configuration for app '${app}' updated successfully.`);
+      outputFormatter.formatOutput({ message: `Configuration for app '${app}' updated successfully.` }, options.output);
     } else {
       // Set system-wide configuration locally
       Object.entries(configValues).forEach(([key, value]) => {
         configManager.set(key, value);
       });
-      console.log("System configuration updated successfully.");
+      outputFormatter.formatOutput({ message: "System configuration updated successfully." }, options.output);
     }
     return { success: true };
   } catch (error) {

@@ -36,7 +36,11 @@ async function handler(appName, options) {
               : appDetails.status;
         }
 
-        console.log(`Application: ${appName}`);
+        // Use formatOutput for heading and table
+        outputFormatter.formatOutput(
+          [{ property: "Application", value: appName }],
+          "table"
+        );
         const tableData = Object.entries(appDetails).map(([key, value]) => {
           if (typeof value === "object" && value !== null) {
             value = JSON.stringify(value);

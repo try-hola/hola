@@ -80,7 +80,10 @@ describe("App Info Command", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/api/apps/test-app1");
 
     // Validate output was formatted
-    expect(consoleSpy).toHaveBeenCalledWith("Application: test-app1");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      [{ property: "Application", value: "test-app1" }],
+      "table"
+    );
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ property: "name", value: "test-app1" }),

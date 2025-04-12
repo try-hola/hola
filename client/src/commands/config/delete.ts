@@ -6,6 +6,7 @@
 
 const apiClient = require("../../utils/api-client");
 const configManager = require("../../utils/config-manager");
+const outputFormatter = require("../../utils/output-formatter");
 
 /**
  * Delete configuration values
@@ -20,11 +21,11 @@ async function handler(
     if (!options.app) {
       for (const key of keys) {
         if (key === "api_key") {
-          console.warn("Warning: Deleting api_key is not recommended");
+          outputFormatter.formatOutput({ warning: "Warning: Deleting api_key is not recommended" }, "table");
         }
         await configManager.delete(key);
       }
-      console.log("Local configuration deleted successfully.");
+      outputFormatter.formatOutput({ message: "Local configuration deleted successfully." }, "table");
     } else {
       const app = options.app;
       if (options.secret) {
@@ -41,7 +42,7 @@ async function handler(
           params: { keys: keys.join(",") },
         });
       }
-      console.log(`Configuration for app '${app}' deleted successfully.`);
+      outputFormatter.formatOutput({ message: `Configuration for app '${app}' deleted successfully.` }, "table");
     }
     return { success: true };
   } catch (error) {

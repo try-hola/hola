@@ -242,14 +242,13 @@ describe("Config Commands", () => {
 
     it("should warn when deleting api_key", async () => {
       const argv = { keys: ["api_key"] };
-      const consoleSpy = jest.spyOn(console, "warn").mockImplementation();
       const result = await deleteHandler(argv.keys, {});
       expect(configManager.delete).toHaveBeenCalledWith("api_key");
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("api_key")
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+        expect.objectContaining({ warning: expect.stringContaining("api_key") }),
+        "table"
       );
       expect(result).toEqual({ success: true });
-      consoleSpy.mockRestore();
     });
 
     it("should delete a single app-specific config value", async () => {
