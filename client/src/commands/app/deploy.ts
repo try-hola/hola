@@ -1,16 +1,18 @@
 const apiClient = require("../../utils/api-client");
+const { ApiResponse } = require("../../types");
 
 /**
  * Deploy an application package
  * @param appName - Name of the app
  * @param packagePath - Optional path to the package file
  * @param options - Deployment options
+ * @returns {Promise<ApiResponse>}
  */
 async function handler(
   appName: string,
   packagePath: string | undefined,
   options: { force?: boolean }
-) {
+): Promise<typeof ApiResponse> {
   try {
     const payload = {
       appName,
@@ -19,13 +21,38 @@ async function handler(
     };
     const response = await apiClient.post("/api/apps/deploy", payload);
     console.log(`Application '${appName}' deployed successfully.`);
-    return { success: true, data: response };
+    return { success: true, data: response.data };
   } catch (error) {
+    let code = "DEPLOY_ERROR";
+    let message = "Unknown error";
+    let details;
+    if (error && typeof error === "object") {
+      if ("code" in error && typeof error.code === "string") {
+        code = error.code;
+      }
+      if (error instanceof Error) {
+        message = error.message;
+      } else if ("message" in error && typeof error.message === "string") {
+        message = error.message;
+      }
+      if ("details" in error) {
+        details = error.details;
+      }
+    } else if (typeof error === "string") {
+      message = error;
+    }
     console.error(
       `Failed to deploy application '${appName}':`,
-      error.message || error
+      message
     );
-    return { success: false, error };
+    return {
+      success: false,
+      error: {
+        code,
+        message,
+        details,
+      },
+    };
   }
 }
 

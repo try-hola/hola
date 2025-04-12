@@ -185,7 +185,14 @@ describe("Config Commands", () => {
       const mockError = new Error("API Error");
       apiClient.get.mockRejectedValueOnce(mockError);
       const result = await getHandler(argv);
-      expect(result).toEqual({ success: false, error: mockError });
+      expect(result).toEqual({
+        success: false,
+        error: {
+          code: mockError.code || "GET_ERROR",
+          message: mockError.message || "Unknown error",
+          details: mockError.details,
+        },
+      });
     });
   });
 
@@ -283,7 +290,14 @@ describe("Config Commands", () => {
       const mockError = new Error("API Error");
       apiClient.delete.mockRejectedValueOnce(mockError);
       const result = await deleteHandler(argv.keys, { app: argv.app });
-      expect(result).toEqual({ success: false, error: mockError });
+      expect(result).toEqual({
+        success: false,
+        error: {
+          code: mockError.code || "DELETE_ERROR",
+          message: mockError.message || "API Error",
+          details: mockError.details,
+        },
+      });
     });
   });
 });

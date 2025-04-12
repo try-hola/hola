@@ -1,5 +1,5 @@
 {
-  "name": "@hola/client",
+  "name": "client",
   "version": "0.1.0",
   "description": "Hola command-line client",
   "main": "dist/index.js",

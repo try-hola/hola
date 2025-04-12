@@ -54,7 +54,14 @@ async function handler(options) {
       }
     }
   } catch (error) {
-    return handleCommandError(error);
+    return {
+      success: false,
+      error: {
+        code: error.code || "GET_ERROR",
+        message: error.message || "Unknown error",
+        details: error.details,
+      },
+    };
   }
 }
 

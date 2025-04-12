@@ -65,6 +65,7 @@ describe("App Info Command", () => {
     };
 
     apiClient.get.mockResolvedValue({
+      success: true,
       data: mockAppDetails,
     });
 
@@ -107,6 +108,7 @@ describe("App Info Command", () => {
     };
 
     apiClient.get.mockResolvedValue({
+      success: true,
       data: mockAppDetails,
     });
 
@@ -143,13 +145,14 @@ describe("App Info Command", () => {
     // Validate API was called correctly
     expect(apiClient.get).toHaveBeenCalledWith("/api/apps/non-existent-app");
 
-    // Validate error was handled
-    expect(handleCommandError).toHaveBeenCalledWith(mockError);
-
-    // Validate result
+    // Validate result matches new ApiResponse error structure
     expect(result).toEqual({
       success: false,
-      error: mockError,
+      error: {
+        code: mockError.code || "INFO_ERROR",
+        message: mockError.message || "Unknown error",
+        details: mockError.details,
+      },
     });
   });
 });

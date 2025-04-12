@@ -2,12 +2,14 @@ const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 const logger = require("../../utils/logger");
+const { ApiResponse } = require("../../types");
 
 /**
  * Handler to get detailed information about an application
  * @param {string} appName - Name of the application
  * @param {Object} options - Command options
  * @param {string} options.output - Output format (table or json)
+ * @returns {Promise<ApiResponse>}
  */
 async function handler(appName, options) {
   try {
@@ -15,44 +17,55 @@ async function handler(appName, options) {
 
     const response = await apiClient.get(`/api/apps/${appName}`);
 
-    if (!response.data) {
-      console.log(`No information found for application '${appName}'`);
+    if (response.success && response.data) {
+      if (options.output === "json") {
+        outputFormatter.formatOutput(response.data, "json");
+      } else {
+        const appDetails = response.data;
+
+        if (appDetails.createdAt) {
+          appDetails.createdAt = new Date(
+            appDetails.createdAt
+          ).toLocaleString();
+        }
+
+        if (appDetails.status) {
+          appDetails.status =
+            appDetails.status === "running"
+              ? `${appDetails.status} ✓`
+              : appDetails.status;
+        }
+
+        console.log(`Application: ${appName}`);
+        const tableData = Object.entries(appDetails).map(([key, value]) => {
+          if (typeof value === "object" && value !== null) {
+            value = JSON.stringify(value);
+          }
+          return { property: key, value };
+        });
+
+        outputFormatter.formatOutput(tableData, "table");
+      }
+
+      return response;
+    } else {
       return {
         success: false,
-        error: new Error("No application information found"),
+        error: {
+          code: "NOT_FOUND",
+          message: `No information found for application '${appName}'`,
+        },
       };
     }
-
-    if (options.output === "json") {
-      outputFormatter.formatOutput(response.data, "json");
-    } else {
-      const appDetails = response.data;
-
-      if (appDetails.createdAt) {
-        appDetails.createdAt = new Date(appDetails.createdAt).toLocaleString();
-      }
-
-      if (appDetails.status) {
-        appDetails.status =
-          appDetails.status === "running"
-            ? `${appDetails.status} ✓`
-            : appDetails.status;
-      }
-
-      console.log(`Application: ${appName}`);
-      const tableData = Object.entries(appDetails).map(([key, value]) => {
-        if (typeof value === "object" && value !== null) {
-          value = JSON.stringify(value);
-        }
-        return { property: key, value };
-      });
-
-      outputFormatter.formatOutput(tableData, "table");
-    }
-
-    return { success: true, data: response.data };
   } catch (error) {
-    return handleCommandError(error);
+    return {
+      success: false,
+      error: {
+        code: error.code || "INFO_ERROR",
+        message: error.message || "Unknown error",
+        details: error.details,
+      },
+    };
   }
 }
 

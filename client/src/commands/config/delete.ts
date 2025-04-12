@@ -45,8 +45,14 @@ async function handler(
     }
     return { success: true };
   } catch (error) {
-    console.error("Delete failed:", error.message || error);
-    return { success: false, error };
+    return {
+      success: false,
+      error: {
+        code: error.code || "DELETE_ERROR",
+        message: error.message || "Delete failed",
+        details: error.details,
+      },
+    };
   }
 }
 

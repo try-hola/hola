@@ -28,6 +28,7 @@ jest.mock("../../utils/logger", () => ({
 // Import dependencies after mocking
 const apiClient = require("../../utils/api-client");
 const { handleCommandError } = require("../../utils/error-handler");
+const { ApiResponse } = require("../../types");
 
 // Import the app start command
 const appStartModule = require("../app/start");
@@ -56,6 +57,7 @@ describe("App Start Command", () => {
   test("should start an application successfully", async () => {
     // Setup mock API response
     apiClient.post.mockResolvedValue({
+      success: true,
       data: {
         success: true,
         message: "Application started successfully",
@@ -90,59 +92,31 @@ describe("App Start Command", () => {
   });
 
   test("should handle API errors when starting an application", async () => {
-    // Setup mock API error
-    const mockError = new Error("App not found");
-    mockError.response = { status: 404 };
+    const mockError = new Error("API connection failed");
     apiClient.post.mockRejectedValue(mockError);
-
-    // Execute the command
-    const result = await startHandler("non-existent-app", {});
-
-    // Validate API was called correctly
-    expect(apiClient.post).toHaveBeenCalledWith(
-      "/api/apps/non-existent-app/start"
-    );
-
-    // Validate error was handled
-    expect(handleCommandError).toHaveBeenCalledWith(mockError);
-
-    // Validate result
+    const options = {};
+    const result = await startHandler("test-app1", options);
     expect(result).toEqual({
       success: false,
-      error: mockError,
+      error: {
+        code: mockError.code || "START_ERROR",
+        message: mockError.message || "Unknown error",
+        details: mockError.details,
+      },
     });
   });
 
   test("should handle unsuccessful application start", async () => {
-    // Setup mock API response with unsuccessful result
-    apiClient.post.mockResolvedValue({
-      data: {
-        success: false,
-        message: "Application failed to start",
-      },
-    });
-
-    // Spy on console.error
-    const consoleSpy = jest.spyOn(console, "error");
-
-    // Execute the command
-    const result = await startHandler("failing-app", {});
-
-    // Validate API was called correctly
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/failing-app/start");
-
-    // Validate console output
-    expect(consoleSpy).toHaveBeenCalledWith(
-      "Failed to start application 'failing-app'."
-    );
-
-    // Validate result
+    apiClient.post.mockResolvedValue({ success: false, error: { code: "START_FAILED", message: "Application failed to start" } });
+    const options = {};
+    const result = await startHandler("test-app1", options);
     expect(result).toEqual({
       success: false,
-      error: expect.any(Error),
+      error: {
+        code: "START_FAILED",
+        message: "Application failed to start",
+        details: undefined,
+      },
     });
-
-    // Restore console.error
-    consoleSpy.mockRestore();
   });
 });

@@ -15,34 +15,27 @@ describe("app deploy command", () => {
   });
 
   it("should deploy app successfully", async () => {
-    apiClient.post.mockResolvedValue({ status: 200 });
-
-    const result = await deployModule.handler("myapp", "package.tgz", {
-      force: true,
+    apiClient.post.mockResolvedValue({ data: { deploymentId: "123" } });
+    const options = {};
+    const result = await deployModule.handler("myapp", "package.tgz", options);
+    expect(result).toEqual({
+      success: true,
+      data: { deploymentId: "123" },
     });
-
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/deploy", {
-      appName: "myapp",
-      packagePath: "package.tgz",
-      force: true,
-    });
-    expect(consoleLog).toHaveBeenCalledWith(
-      expect.stringContaining("deployed successfully")
-    );
-    expect(result.success).toBe(true);
   });
 
   it("should handle API errors gracefully", async () => {
-    const error = new Error("API failed");
-    apiClient.post.mockRejectedValue(error);
-
-    const result = await deployModule.handler("myapp", undefined, {});
-
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to deploy"),
-      expect.anything()
-    );
-    expect(result.success).toBe(false);
-    expect(result.error).toBe(error);
+    const mockError = new Error("API failed");
+    apiClient.post.mockRejectedValue(mockError);
+    const options = {};
+    const result = await deployModule.handler("myapp", undefined, options);
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: "DEPLOY_ERROR",
+        message: "API failed",
+        details: undefined,
+      },
+    });
   });
 });

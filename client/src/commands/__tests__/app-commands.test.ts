@@ -98,6 +98,7 @@ describe("App Commands", () => {
   describe("app list command", () => {
     test("should list apps in table format by default", async () => {
       apiClient.get.mockResolvedValue({
+        success: true,
         data: { apps: ["app1", "app2", "app3"] },
       });
 
@@ -115,6 +116,7 @@ describe("App Commands", () => {
 
     test("should list apps in JSON format when specified", async () => {
       apiClient.get.mockResolvedValue({
+        success: true,
         data: { apps: ["app1", "app2", "app3"] },
       });
 
@@ -129,7 +131,7 @@ describe("App Commands", () => {
     });
 
     test("should handle empty app list", async () => {
-      apiClient.get.mockResolvedValue({ data: { apps: [] } });
+      apiClient.get.mockResolvedValue({ success: true, data: { apps: [] } });
       const consoleSpy = jest.spyOn(console, "log").mockImplementation();
 
       const options = { output: "table" };
@@ -150,8 +152,15 @@ describe("App Commands", () => {
       const result = await listHandler(options);
 
       expect(apiClient.get).toHaveBeenCalled();
-      expect(handleCommandError).toHaveBeenCalledWith(mockError);
-      expect(result).toEqual({ success: false, error: mockError });
+      // The handler now returns ApiResponse error structure
+      expect(result).toEqual({
+        success: false,
+        error: {
+          code: mockError.code || "LIST_ERROR",
+          message: mockError.message || "Unknown error",
+          details: mockError.details,
+        },
+      });
     });
   });
 
@@ -165,7 +174,7 @@ describe("App Commands", () => {
         createdAt: "2025-04-01T10:30:00.000Z",
       };
 
-      apiClient.get.mockResolvedValue({ data: mockAppDetails });
+      apiClient.get.mockResolvedValue({ success: true, data: mockAppDetails });
       const consoleSpy = jest.spyOn(console, "log").mockImplementation();
 
       const options = { output: "table" };
@@ -192,7 +201,7 @@ describe("App Commands", () => {
         version: "1.0.0",
       };
 
-      apiClient.get.mockResolvedValue({ data: mockAppDetails });
+      apiClient.get.mockResolvedValue({ success: true, data: mockAppDetails });
 
       const options = { output: "json" };
       const result = await infoHandler("test-app1", options);
@@ -214,8 +223,15 @@ describe("App Commands", () => {
       const result = await infoHandler("non-existent-app", options);
 
       expect(apiClient.get).toHaveBeenCalledWith("/api/apps/non-existent-app");
-      expect(handleCommandError).toHaveBeenCalledWith(mockError);
-      expect(result).toEqual({ success: false, error: mockError });
+      // The handler now returns ApiResponse error structure
+      expect(result).toEqual({
+        success: false,
+        error: {
+          code: mockError.code || "INFO_ERROR",
+          message: mockError.message || "Unknown error",
+          details: mockError.details,
+        },
+      });
     });
   });
 });
