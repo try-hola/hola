@@ -34,6 +34,12 @@ const { ApiResponse } = require("../../types");
 const appStartModule = require("../app/start");
 const { handler: startHandler } = appStartModule;
 
+// Import the app stop and restart commands
+const appStopModule = require("../app/stop");
+const { handler: stopHandler } = appStopModule;
+const appRestartModule = require("../app/restart");
+const { handler: restartHandler } = appRestartModule;
+
 // Create a mock commander object to pass to the command modules
 const mockCommand = {
   command: jest.fn().mockReturnThis(),
@@ -115,6 +121,98 @@ describe("App Start Command", () => {
       error: {
         code: "START_FAILED",
         message: "Application failed to start",
+        details: undefined,
+      },
+    });
+  });
+});
+
+describe("App Stop Command", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test("should stop an application successfully", async () => {
+    apiClient.post.mockResolvedValue({
+      success: true,
+      data: { success: true, message: "Application stopped successfully" },
+    });
+    const result = await stopHandler("test-app", {});
+    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/stop");
+    expect(result).toEqual({
+      success: true,
+      data: { success: true, message: "Application stopped successfully" },
+    });
+  });
+
+  test("should handle API errors when stopping an application", async () => {
+    const mockError = new Error("API connection failed");
+    apiClient.post.mockRejectedValue(mockError);
+    const result = await stopHandler("test-app1", {});
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: mockError.code || "STOP_ERROR",
+        message: mockError.message || "Unknown error",
+        details: mockError.details,
+      },
+    });
+  });
+
+  test("should handle unsuccessful application stop", async () => {
+    apiClient.post.mockResolvedValue({ success: false, error: { code: "STOP_FAILED", message: "Application failed to stop" } });
+    const result = await stopHandler("test-app1", {});
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: "STOP_FAILED",
+        message: "Application failed to stop",
+        details: undefined,
+      },
+    });
+  });
+});
+
+describe("App Restart Command", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test("should restart an application successfully", async () => {
+    apiClient.post.mockResolvedValue({
+      success: true,
+      data: { success: true, message: "Application restarted successfully" },
+    });
+    const result = await restartHandler("test-app", {});
+    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/restart");
+    expect(result).toEqual({
+      success: true,
+      data: { success: true, message: "Application restarted successfully" },
+    });
+  });
+
+  test("should handle API errors when restarting an application", async () => {
+    const mockError = new Error("API connection failed");
+    apiClient.post.mockRejectedValue(mockError);
+    const result = await restartHandler("test-app1", {});
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: mockError.code || "RESTART_ERROR",
+        message: mockError.message || "Unknown error",
+        details: mockError.details,
+      },
+    });
+  });
+
+  test("should handle unsuccessful application restart", async () => {
+    apiClient.post.mockResolvedValue({ success: false, error: { code: "RESTART_FAILED", message: "Application failed to restart" } });
+    const result = await restartHandler("test-app1", {});
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: "RESTART_FAILED",
+        message: "Application failed to restart",
         details: undefined,
       },
     });
