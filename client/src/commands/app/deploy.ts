@@ -1,78 +1,86 @@
 const apiClient = require("../../utils/api-client");
+const outputFormatter = require("../../utils/output-formatter");
 const { ApiResponse } = require("../../types");
+const fs = require("fs");
+const path = require("path");
 
 /**
  * Deploy an application package using the provided app name and package path.
- * Sends a deployment request to the server.
- * @param appName - Name of the app
- * @param packagePath - Optional path to the package file
- * @param options - Deployment options
+ * @param appName - Name of the application to deploy
+ * @param packagePath - Path to the package file (optional)
+ * @param options - DeployOptions (force, output, etc)
  * @returns ApiResponse with deployment result
  */
 interface DeployOptions {
   force?: boolean;
+  output?: string;
 }
 async function handler(
   appName: string,
   packagePath: string | undefined,
   options: DeployOptions
 ): Promise<typeof ApiResponse> {
-  try {
-    const payload = {
-      appName,
-      packagePath,
-      force: options.force || false,
+  // Input validation
+  if (!appName || typeof appName !== "string" || !appName.match(/^[a-zA-Z0-9-_]+$/)) {
+    const error = {
+      code: "DEPLOY_INVALID_APPNAME",
+      message: "Invalid or missing application name. App name must be alphanumeric (dashes/underscores allowed).",
     };
-    const response = await apiClient.post("/api/apps/deploy", payload);
-    console.log(`Application '${appName}' deployed successfully.`);
-    return { success: true, data: response.data };
-  } catch (error) {
-    let code = "DEPLOY_ERROR";
-    let message = "Unknown error";
-    let details;
-    if (error && typeof error === "object") {
-      if ("code" in error && typeof error.code === "string") {
-        code = error.code;
-      }
-      if (error instanceof Error) {
-        message = error.message;
-      } else if ("message" in error && typeof error.message === "string") {
-        message = error.message;
-      }
-      if ("details" in error) {
-        details = error.details;
-      }
-    } else if (typeof error === "string") {
-      message = error;
+    outputFormatter.formatOutput({ error }, options.output);
+    return { success: false, error };
+  }
+
+  // Prepare payload
+  const payload: any = { appName };
+  if (options.force) payload.force = true;
+
+  // If a package path is provided, validate it exists and is a file
+  if (packagePath) {
+    const absPath = path.resolve(packagePath);
+    if (!fs.existsSync(absPath) || !fs.statSync(absPath).isFile()) {
+      const error = {
+        code: "DEPLOY_PACKAGE_NOT_FOUND",
+        message: `Package file not found: ${absPath}`,
+      };
+      outputFormatter.formatOutput({ error }, options.output);
+      return { success: false, error };
     }
-    console.error(
-      `Failed to deploy application '${appName}':`,
-      message
-    );
-    return {
-      success: false,
-      error: {
-        code,
-        message,
-        details,
-      },
+    // For now, just send the path as a string; future: support file upload/multipart
+    payload.packagePath = absPath;
+  }
+
+  try {
+    // Call the API to deploy the app
+    const response = await apiClient.post("/api/apps/deploy", payload);
+    if (response && response.data) {
+      outputFormatter.formatOutput(
+        { message: `Deployment started for '${appName}'.`, ...response.data },
+        options.output
+      );
+      return { success: true, data: response.data };
+    } else {
+      const error = {
+        code: response?.error?.code || "DEPLOY_FAILED",
+        message: response?.error?.message || "Deployment failed.",
+        details: response?.error?.details,
+      };
+      outputFormatter.formatOutput({ error }, options.output);
+      return { success: false, error };
+    }
+  } catch (err: any) {
+    const error = {
+      code: err.code || "DEPLOY_ERROR",
+      message: err.message || "Unknown error during deployment.",
+      details: err.details,
     };
+    outputFormatter.formatOutput({ error }, options.output);
+    return { success: false, error };
   }
 }
 
-/**
- * CLI command string for deploying an application.
- */
 const command = "deploy <appName> [packagePath]";
-
-/**
- * Description for the deploy command.
- */
 const describe = "Deploy an application package";
 
-/**
- * Registers the deploy command with the Commander appCommand instance.
- */
 module.exports = {
   command,
   describe,
@@ -82,22 +90,13 @@ module.exports = {
       .command(command)
       .description(describe)
       .option("--force", "Force redeploy if app already exists")
-      .action(
-        (
-          appName: string,
-          packagePath: string | undefined,
-          options: DeployOptions
-        ) => {
-          return handler(appName, packagePath, options);
-        }
-      )
+      .option("-o, --output <format>", "output format (table, json)", "table")
+      .action((appName: string, packagePath: string | undefined, options: DeployOptions) => {
+        return handler(appName, packagePath, options);
+      })
       .addHelpText(
         "after",
-        `
-Examples:
-  $ hola app deploy myapp ./path/to/package.tgz
-  $ hola app deploy myapp --force
-`
+        `\nExamples:\n  $ hola app deploy myapp ./path/to/package.tgz\n  $ hola app deploy myapp --force\n`
       );
   },
 };
