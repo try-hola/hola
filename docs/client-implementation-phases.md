@@ -43,7 +43,7 @@ A functioning CLI that can connect to a single pre-configured server instance, a
 - [x] Full application lifecycle commands:
   - [x] `hola app deploy`
   - [ ] `hola app upgrade`
-  - [ ] `hola app delete`
+  - [x] `hola app delete`
   - [x] `hola app start/stop/restart`
 - [ ] File upload capabilities:
   - [ ] `hola file upload/list/delete`
