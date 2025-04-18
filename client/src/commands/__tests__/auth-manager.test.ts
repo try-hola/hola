@@ -1,17 +1,21 @@
 /**
  * Tests for the auth-manager module
  */
-const mockKeytar = {
-  setPassword: jest.fn().mockResolvedValue(undefined),
-  getPassword: jest.fn().mockResolvedValue(null),
-  deletePassword: jest.fn().mockResolvedValue(undefined),
+// Mock dependencies before importing modules
+jest.mock("keytar");
+jest.mock("open");
+jest.mock("../../utils/config-manager");
+jest.mock("../../utils/output-formatter");
+
+// Mock the outputFormatter module directly
+const outputFormatterMock = {
+  formatOutput: jest.fn(),
 };
+jest.doMock("../../utils/output-formatter", () => ({
+  outputFormatter: outputFormatterMock,
+}));
 
-jest.mock("keytar", () => mockKeytar);
-
-const mockOpen = jest.fn().mockResolvedValue(undefined);
-jest.mock("open", () => mockOpen);
-
+// Mock HTTP and crypto modules
 const mockCreateServer = jest.fn();
 const mockServerListen = jest.fn();
 const mockServerClose = jest.fn();
@@ -56,26 +60,11 @@ jest.mock("axios", () => ({
   post: mockAxiosPost,
 }));
 
-// Mock config manager
-const mockConfigManager = {
-  getServerContext: jest.fn().mockResolvedValue({
-    name: "test-server",
-    url: "https://test.orb.local",
-    providerOptions: {
-      orbDomain: "test.orb.local",
-    },
-    clientId: "test-client-id",
-  }),
-};
-jest.mock("../../utils/config-manager", () => mockConfigManager);
-
-// Mock output formatter
-const mockOutputFormatter = {
-  formatOutput: jest.fn(),
-};
-jest.mock("../../utils/output-formatter", () => ({
-  outputFormatter: mockOutputFormatter,
-}));
+// Import dependencies after mocking
+const keytar = require("keytar");
+const open = require("open");
+const { outputFormatter } = require("../../utils/output-formatter");
+const configManager = require("../../utils/config-manager");
 
 // Import the module under test after all mocks are set up
 const authManager = require("../../utils/auth-manager");
@@ -94,7 +83,7 @@ describe("Auth Manager", () => {
       },
     });
 
-    mockKeytar.getPassword.mockResolvedValue(null);
+    keytar.getPassword.mockResolvedValue(null);
   });
 
   describe("authenticate", () => {
@@ -132,19 +121,17 @@ describe("Auth Manager", () => {
       );
 
       // Verify tokens were stored securely
-      expect(mockKeytar.setPassword).toHaveBeenCalledWith(
+      expect(keytar.setPassword).toHaveBeenCalledWith(
         "hola-cli",
         "test-server_tokens",
         expect.stringContaining("test-access-token"),
       );
 
       // Verify browser was opened with correct URL
-      expect(mockOpen).toHaveBeenCalledWith(
-        expect.stringContaining("authorize"),
-      );
+      expect(open).toHaveBeenCalledWith(expect.stringContaining("authorize"));
 
       // Verify success message was shown
-      expect(mockOutputFormatter.formatOutput).toHaveBeenCalledWith(
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         "success",
         "Authentication successful!",
       );
@@ -181,7 +168,7 @@ describe("Auth Manager", () => {
       await expect(authPromise).rejects.toThrow();
 
       // Verify error message was shown
-      expect(mockOutputFormatter.formatOutput).toHaveBeenCalledWith(
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         "error",
         expect.stringContaining("failed"),
       );
@@ -192,7 +179,7 @@ describe("Auth Manager", () => {
     it("should return the cached token if not expired", async () => {
       // Set up mock to return a valid token
       const now = Math.floor(Date.now() / 1000);
-      mockKeytar.getPassword.mockResolvedValueOnce(
+      keytar.getPassword.mockResolvedValueOnce(
         JSON.stringify({
           accessToken: "valid-access-token",
           refreshToken: "refresh-token",
@@ -209,13 +196,22 @@ describe("Auth Manager", () => {
     it("should refresh the token if expired", async () => {
       // Set up mock to return an expired token
       const now = Math.floor(Date.now() / 1000);
-      mockKeytar.getPassword.mockResolvedValueOnce(
+      keytar.getPassword.mockResolvedValueOnce(
         JSON.stringify({
           accessToken: "expired-access-token",
           refreshToken: "refresh-token",
           expiresAt: now - 100, // Expired
         }),
       );
+
+      // Mock server context for the refresh token call
+      configManager.getServerContext = jest.fn().mockResolvedValueOnce({
+        name: "test-server",
+        providerOptions: {
+          orbDomain: "test.orb.local",
+        },
+        clientId: "test-client-id",
+      });
 
       // Mock successful token refresh response
       mockAxiosPost.mockResolvedValueOnce({
@@ -230,16 +226,16 @@ describe("Auth Manager", () => {
 
       expect(token).toBe("new-access-token");
       expect(mockAxiosPost).toHaveBeenCalled(); // Should try to refresh
-      expect(mockKeytar.setPassword).toHaveBeenCalled(); // Should store new tokens
+      expect(keytar.setPassword).toHaveBeenCalled(); // Should store new tokens
     });
 
     it("should throw an error if no tokens are found", async () => {
-      mockKeytar.getPassword.mockResolvedValueOnce(null);
+      keytar.getPassword.mockResolvedValueOnce(null);
 
       await expect(authManager.getAccessToken("test-server")).rejects.toThrow(
         "No authentication tokens found",
       );
-      expect(mockOutputFormatter.formatOutput).toHaveBeenCalledWith(
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         "error",
         "No authentication tokens found. Please authenticate first.",
       );
@@ -250,12 +246,12 @@ describe("Auth Manager", () => {
     it("should remove stored tokens", async () => {
       await authManager.logout("test-server");
 
-      expect(mockKeytar.deletePassword).toHaveBeenCalledWith(
+      expect(keytar.deletePassword).toHaveBeenCalledWith(
         "hola-cli",
         "test-server_tokens",
       );
 
-      expect(mockOutputFormatter.formatOutput).toHaveBeenCalledWith(
+      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         "success",
         'Logged out from server "test-server"',
       );

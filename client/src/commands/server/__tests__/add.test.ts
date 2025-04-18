@@ -1,40 +1,13 @@
-// Mock dependencies before importing modules
-jest.mock("../../../utils/config-manager", () => ({
-  getServerContexts: jest.fn().mockResolvedValue({}),
-  saveServerContext: jest.fn().mockResolvedValue({}),
-  setCurrentServerContext: jest.fn().mockResolvedValue({}),
-}));
-
-jest.mock("../../../utils/server-provider-registry", () => ({
-  getAvailableProviders: jest.fn().mockResolvedValue([
-    { type: "local", displayName: "Local Server" },
-    { type: "remote", displayName: "Remote Server" },
-  ]),
-  getProvider: jest.fn().mockImplementation((type) => {
-    if (type === "local" || type === "remote") {
-      return {
-        type,
-        displayName: type === "local" ? "Local Server" : "Remote Server",
-      };
-    }
-    return null;
-  }),
-}));
-
-jest.mock("../../../utils/output-formatter", () => ({
-  outputFormatter: {
-    formatOutput: jest.fn(),
-  },
-}));
-
-jest.mock("inquirer", () => ({
-  prompt: jest.fn(),
-}));
+// Import mocks - jest will automatically use mocks from __mocks__ directory
+jest.mock("../../../utils/config-manager");
+jest.mock("../../../utils/server-provider-registry");
+jest.mock("../../../utils/output-formatter");
+jest.mock("inquirer");
 
 // Import dependencies after mocking
 const configManager = require("../../../utils/config-manager");
 const serverProviderRegistry = require("../../../utils/server-provider-registry");
-const { outputFormatter } = require("../../../utils/output-formatter");
+const outputFormatter = require("../../../utils/output-formatter");
 const inquirer = require("inquirer");
 
 // Import the handler function directly
@@ -42,7 +15,26 @@ const { handler } = require("../add");
 
 describe("Server Add Command", () => {
   beforeEach(() => {
+    // Reset all mocks before each test
     jest.clearAllMocks();
+
+    // Set up default mock implementations
+    serverProviderRegistry.getAvailableProviders.mockResolvedValue([
+      { type: "local", displayName: "Local Server" },
+      { type: "remote", displayName: "Remote Server" },
+    ]);
+
+    serverProviderRegistry.getProvider.mockImplementation((type) => {
+      if (type === "local")
+        return { type: "local", displayName: "Local Server" };
+      if (type === "remote")
+        return { type: "remote", displayName: "Remote Server" };
+      return null;
+    });
+
+    configManager.getServerContexts.mockResolvedValue({});
+    configManager.saveServerContext.mockResolvedValue(undefined);
+    configManager.setCurrentServerContext.mockResolvedValue(undefined);
   });
 
   it("should add a server context with all options provided via CLI", async () => {

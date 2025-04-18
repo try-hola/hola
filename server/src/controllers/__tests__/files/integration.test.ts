@@ -4,14 +4,8 @@ import { TestServer } from "../../../test/test-server";
 const fs = require("fs-extra");
 const path = require("path");
 
-// Replace Docker operations with mock implementation for testing
-jest.mock("../../../utils/docker", () => {
-  return {
-    DockerRunner: jest.fn().mockImplementation(() => {
-      return new (require("../../../test/docker-test-adapter").DockerTestAdapter)();
-    }),
-  };
-});
+// Using centralized mocks from __mocks__ directory
+jest.mock("../../../utils/docker");
 
 describe("Files API Integration Tests", () => {
   let testServer: TestServer;

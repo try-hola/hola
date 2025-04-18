@@ -31,21 +31,6 @@ describe("Config Commands", () => {
     // Reset all mocks before each test
     jest.clearAllMocks();
 
-    // Set up specific mock behaviors for these tests
-    configManager.get.mockImplementation((key, defaultValue) => {
-      const config = {
-        log_level: "info",
-        server_url: "http://localhost:3000",
-        timeout: 5000,
-      };
-      return config[key] !== undefined ? config[key] : defaultValue;
-    });
-
-    configManager.getSettings.mockResolvedValue({
-      server_url: "http://localhost:3000",
-      timeout: 5000,
-    });
-
     // Create a mock commander object
     const mockCommand = {
       command: jest.fn().mockReturnThis(),

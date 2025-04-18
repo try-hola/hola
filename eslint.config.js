@@ -3,6 +3,7 @@
 const tseslint = require("@typescript-eslint/eslint-plugin");
 const tsParser = require("@typescript-eslint/parser");
 const eslint = require("@eslint/js");
+const globals = require("globals"); // Import globals
 
 /**
  * ESLint configuration using the new flat config format
@@ -31,7 +32,13 @@ module.exports = [
       parserOptions: {
         ecmaVersion: 2020,
         sourceType: "commonjs", // Use commonjs for Node.js/TypeScript server
-        project: "./tsconfig.json", // Point to your tsconfig for type-aware rules
+        // Use project service for type-aware linting
+        project: true, // Automatically find tsconfig.json
+        tsconfigRootDir: __dirname, // Set the root directory for tsconfig discovery
+      },
+      globals: {
+        // Add Node.js globals
+        ...globals.node,
       },
     },
     plugins: {
@@ -40,19 +47,57 @@ module.exports = [
     rules: {
       // Apply recommended TypeScript rules
       ...tseslint.configs["recommended-type-checked"].rules,
+      // Disable the rule conflicting with CommonJS requirement
+      "@typescript-eslint/no-require-imports": "off",
       // Add or override specific rules here if needed
       // e.g., '@typescript-eslint/no-unused-vars': 'warn',
     },
   },
 
-  // Configuration for JavaScript files (if any, e.g., config files)
+  // Configuration for JavaScript files (including mocks)
   {
     files: ["**/*.js"],
     languageOptions: {
       ecmaVersion: 2020,
       sourceType: "commonjs", // Assuming JS files are also CommonJS
+      globals: {
+        // Add Node.js and Jest globals
+        ...globals.node,
+        ...globals.jest,
+      },
     },
     // Add JS-specific rules if necessary
+  },
+
+  // Configuration specifically for TypeScript Test files
+  {
+    files: ["**/*.test.ts", "**/__tests__/**/*.ts"],
+    languageOptions: {
+      globals: {
+        // Add Jest globals specifically for TS test files
+        ...globals.jest,
+      },
+    },
+    // You might relax certain rules only for test files here if needed
+    rules: {
+      // Disable TypeScript safety rules in test files to facilitate testing
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/unbound-method": "off",
+    },
+  },
+
+  // Special configuration for mocks
+  {
+    files: ["**/__mocks__/**/*.js"],
+    rules: {
+      // Disable no-unused-vars for mock files since parameters are often defined but not used
+      "no-unused-vars": "off",
+    },
   },
 
   // General settings for all files (can refine if needed)

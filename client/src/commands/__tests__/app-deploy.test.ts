@@ -4,8 +4,10 @@ jest.mock("../../utils/output-formatter");
 jest.mock("../../utils/error-handler");
 jest.mock("../../utils/logger");
 
+// Import dependencies after mocking
 const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
+const errorHandler = require("../../utils/error-handler");
 const fs = require("fs");
 const deployModule = require("../app/deploy");
 const { handler: deployHandler } = deployModule;

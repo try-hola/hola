@@ -18,8 +18,17 @@ const resetMocks = () => {
   text.mockReset().mockImplementation((data) => data.toString());
 };
 
+// Create outputFormatter object to match the structure expected by auth-manager
+const outputFormatter = {
+  formatOutput,
+  table,
+  json,
+  text,
+};
+
 // Export as CommonJS module
 module.exports = {
+  outputFormatter,
   formatOutput,
   table,
   json,

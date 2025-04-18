@@ -6,14 +6,17 @@ const jwt = {
     header: { kid: "test-kid" },
   }),
 
-  verify: jest.fn().mockReturnValue({
-    sub: "test-user",
-    name: "Test User",
-    email: "test@example.com",
-    roles: [],
+  verify: jest.fn().mockImplementation((token, secret, callback) => {
+    if (token === "valid-token") {
+      callback(null, { userId: "test-user" });
+    } else {
+      callback(new Error("Invalid token"));
+    }
   }),
 
-  sign: jest.fn().mockReturnValue("mock.jwt.token"),
+  sign: jest.fn().mockImplementation((payload, secret, options) => {
+    return "mocked-jwt-token";
+  }),
 };
 
 module.exports = jwt;

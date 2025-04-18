@@ -1,22 +1,9 @@
 const request = require("supertest");
 import { TestServer } from "../../../test/test-server";
 
-// Mock Docker and ORAS runners to avoid actual container operations
-jest.mock("../../../utils/docker", () => {
-  return {
-    DockerRunner: jest.fn().mockImplementation(() => {
-      return new (require("../../../test/docker-test-adapter").DockerTestAdapter)();
-    }),
-  };
-});
-
-jest.mock("../../../utils/oras", () => {
-  return {
-    OrasRunner: jest.fn().mockImplementation(() => {
-      return new (require("../../../test/oras-test-adapter").OrasTestAdapter)();
-    }),
-  };
-});
+// Using centralized mocks from __mocks__ directory
+jest.mock("../../../utils/docker");
+jest.mock("../../../utils/oras");
 
 describe("App Logs API Tests", () => {
   let testServer: TestServer;

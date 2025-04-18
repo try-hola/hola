@@ -4,7 +4,7 @@
  */
 const inquirer = require("inquirer");
 const configManager = require("../../utils/config-manager");
-const { outputFormatter } = require("../../utils/output-formatter");
+const outputFormatter = require("../../utils/output-formatter");
 const serverProviderRegistry = require("../../utils/server-provider-registry");
 
 /**

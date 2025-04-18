@@ -1,17 +1,22 @@
-// Mock config-manager before importing modules
+// Mock dependencies before importing modules
 jest.mock("../../utils/config-manager", () => ({
   loadConfig: jest.fn().mockResolvedValue({
     server_url: "http://localhost:3000",
-    timeout: 60000,
+    timeout: 5000,
     output_format: "table",
   }),
   saveConfig: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock("../../utils/output-formatter");
 
-// Mock output-formatter
-jest.mock("../../utils/output-formatter", () => ({
-  formatOutput: jest.fn(),
-}));
+// Mock process.exit to prevent tests from exiting
+const originalExit = process.exit;
+process.exit = jest.fn() as any;
+
+// Restore original process.exit after tests
+afterAll(() => {
+  process.exit = originalExit;
+});
 
 // Import dependencies after mocking
 const configManager = require("../../utils/config-manager");
@@ -58,11 +63,16 @@ describe("Settings Commands", () => {
       const mockCommand = createMockCommand();
       registerGet(mockCommand);
       const handler = mockCommand._handler;
+      // Suppress process.exit
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       await handler({ key: "server_url" });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         { server_url: "http://localhost:3000" },
         "table",
       );
+      exitSpy.mockRestore();
     });
 
     it("should output error if key does not exist", async () => {

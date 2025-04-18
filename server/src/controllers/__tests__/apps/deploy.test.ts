@@ -5,51 +5,10 @@ const path = require("path");
 const tar = require("tar");
 import { TestServer } from "../../../test/test-server";
 
-// Mock the tar module to simulate package extraction without actual tar operations
-jest.mock("tar", () => {
-  return {
-    extract: jest
-      .fn()
-      .mockImplementation(async (options: { file: string; cwd: string }) => {
-        await fs.ensureDir(options.cwd);
-
-        // Simulate different extracted content based on the test scenario
-        if (
-          options.file.includes("upgrade-test-app") &&
-          options.file.includes("v2")
-        ) {
-          await fs.writeFile(
-            path.join(options.cwd, "docker-compose.yml"),
-            'version: "3"\nservices:\n  app:\n    image: nginx:alpine',
-          );
-        } else {
-          await fs.writeFile(
-            path.join(options.cwd, "docker-compose.yml"),
-            'version: "3"\nservices:\n  app:\n    image: test-app-image',
-          );
-        }
-        return Promise.resolve();
-      }),
-    create: jest.fn().mockResolvedValue(undefined),
-  };
-});
-
-// Mock Docker and ORAS runners to avoid actual container operations
-jest.mock("../../../utils/docker", () => {
-  return {
-    DockerRunner: jest.fn().mockImplementation(() => {
-      return new (require("../../../test/docker-test-adapter").DockerTestAdapter)();
-    }),
-  };
-});
-
-jest.mock("../../../utils/oras", () => {
-  return {
-    OrasRunner: jest.fn().mockImplementation(() => {
-      return new (require("../../../test/oras-test-adapter").OrasTestAdapter)();
-    }),
-  };
-});
+// Using centralized mocks from __mocks__ directory
+jest.mock("tar");
+jest.mock("../../../utils/docker");
+jest.mock("../../../utils/oras");
 
 describe("App Deployment API Tests", () => {
   let testServer: TestServer;
