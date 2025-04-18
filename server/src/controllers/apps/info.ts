@@ -31,7 +31,7 @@ interface ListAppsErrorResponse {
 }
 const listApps = async (
   req: Request,
-  res: Response<ListAppsResponse | ListAppsErrorResponse>
+  res: Response<ListAppsResponse | ListAppsErrorResponse>,
 ): Promise<void> => {
   try {
     // Get the deployments directory directly from path.dirname() of any app's deployment path
@@ -111,7 +111,7 @@ interface GetAppDetailsErrorResponse {
 
 const getAppDetails = async (
   req: Request<GetAppDetailsRequestParams>,
-  res: Response<GetAppDetailsResponse | GetAppDetailsErrorResponse>
+  res: Response<GetAppDetailsResponse | GetAppDetailsErrorResponse>,
 ): Promise<void> => {
   const { appName } = req.params;
 
@@ -152,7 +152,7 @@ const getAppDetails = async (
     // Get configuration files
     const configPath: string = path.join(
       PATHS.config.app(appName),
-      "config.json"
+      "config.json",
     );
     let config: Record<string, any> = {};
 
@@ -168,7 +168,7 @@ const getAppDetails = async (
       // Get files recursively
       const getFilesRecursive = async (
         dir: string,
-        baseDir: string
+        baseDir: string,
       ): Promise<string[]> => {
         const entries: fs.Dirent[] = await fs.readdir(dir, {
           withFileTypes: true,
@@ -183,7 +183,7 @@ const getAppDetails = async (
             } else {
               return [relativePath];
             }
-          })
+          }),
         );
         return allFiles.flat();
       };

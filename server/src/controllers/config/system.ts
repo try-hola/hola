@@ -26,7 +26,7 @@ interface SystemConfigErrorResponse {
 
 const getSystemConfig = async (
   req: Request<{}, {}, {}, GetSystemConfigQueryParams>,
-  res: Response<GetSystemConfigResponse | SystemConfigErrorResponse>
+  res: Response<GetSystemConfigResponse | SystemConfigErrorResponse>,
 ): Promise<void> => {
   const { key } = req.query;
   const configPath = path.join(PATHS.config.system(), "config.json");
@@ -100,7 +100,7 @@ interface CreateSystemConfigResponse {
 
 const createSystemConfig = async (
   req: Request<{}, {}, CreateSystemConfigRequestBody>,
-  res: Response<CreateSystemConfigResponse | SystemConfigErrorResponse>
+  res: Response<CreateSystemConfigResponse | SystemConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { config } = req.body;
@@ -137,7 +137,7 @@ const createSystemConfig = async (
           {
             path: configPath,
             error: readError.message,
-          }
+          },
         );
         // We'll create a new file with just the new config
       }
@@ -197,7 +197,7 @@ const updateSystemConfigValue = async (
     {},
     UpdateSystemConfigValueRequestBody
   >,
-  res: Response<UpdateSystemConfigValueResponse | SystemConfigErrorResponse>
+  res: Response<UpdateSystemConfigValueResponse | SystemConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { key } = req.params;
@@ -267,7 +267,7 @@ interface DeleteSystemConfigValueResponse {
 
 const deleteSystemConfigValue = async (
   req: Request<DeleteSystemConfigValueRequestParams>,
-  res: Response<DeleteSystemConfigValueResponse | SystemConfigErrorResponse>
+  res: Response<DeleteSystemConfigValueResponse | SystemConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { key } = req.params;
@@ -334,7 +334,7 @@ const deleteMultipleSystemConfigValues = async (
   req: Request<{}, {}, {}, DeleteMultipleSystemConfigValuesQuery>,
   res: Response<
     DeleteMultipleSystemConfigValuesResponse | SystemConfigErrorResponse
-  >
+  >,
 ): Promise<void> => {
   try {
     const { keys } = req.query;
@@ -390,7 +390,7 @@ const deleteMultipleSystemConfigValues = async (
       `Deleted ${deletedKeys.length} system config value(s)`,
       {
         keys: deletedKeys,
-      }
+      },
     );
 
     // Return success response

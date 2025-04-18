@@ -12,15 +12,30 @@ const { ApiResponse } = require("../../types");
  * @returns ApiResponse with stop result
  */
 interface StopOptions {}
-async function handler(appName: string, options: StopOptions): Promise<typeof ApiResponse> {
+async function handler(
+  appName: string,
+  options: StopOptions,
+): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Stopping application: ${appName}`);
     const response = await apiClient.post(`/api/apps/${appName}/stop`);
     if (response.success) {
-      outputFormatter.formatOutput({ message: `Application '${appName}' stopped successfully.` }, "table");
+      outputFormatter.formatOutput(
+        { message: `Application '${appName}' stopped successfully.` },
+        "table",
+      );
       return response;
     } else {
-      outputFormatter.formatOutput({ error: { code: response.error?.code || "STOP_FAILED", message: response.error?.message || "Application stop failed", details: response.error?.details } }, "table");
+      outputFormatter.formatOutput(
+        {
+          error: {
+            code: response.error?.code || "STOP_FAILED",
+            message: response.error?.message || "Application stop failed",
+            details: response.error?.details,
+          },
+        },
+        "table",
+      );
       return {
         success: false,
         error: {
@@ -31,7 +46,16 @@ async function handler(appName: string, options: StopOptions): Promise<typeof Ap
       };
     }
   } catch (error) {
-    outputFormatter.formatOutput({ error: { code: error.code || "STOP_ERROR", message: error.message || "Unknown error", details: error.details } }, "table");
+    outputFormatter.formatOutput(
+      {
+        error: {
+          code: error.code || "STOP_ERROR",
+          message: error.message || "Unknown error",
+          details: error.details,
+        },
+      },
+      "table",
+    );
     return {
       success: false,
       error: {

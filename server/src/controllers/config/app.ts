@@ -32,7 +32,7 @@ interface AppConfigErrorResponse {
 
 const getAppConfig = async (
   req: Request<GetAppConfigRequestParams, {}, {}, GetAppConfigQueryParams>,
-  res: Response<GetAppConfigResponse | AppConfigErrorResponse>
+  res: Response<GetAppConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   const { appName } = req.params;
   const { key } = req.query;
@@ -127,7 +127,7 @@ interface CreateAppConfigResponse {
 
 const createAppConfig = async (
   req: Request<CreateAppConfigRequestParams, {}, CreateAppConfigRequestBody>,
-  res: Response<CreateAppConfigResponse | AppConfigErrorResponse>
+  res: Response<CreateAppConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { appName } = req.params;
@@ -174,7 +174,7 @@ const createAppConfig = async (
             appName,
             path: configPath,
             error: readError.message,
-          }
+          },
         );
         // We'll create a new file with just the new config
       }
@@ -239,7 +239,7 @@ const updateAppConfigValue = async (
     {},
     UpdateAppConfigValueRequestBody
   >,
-  res: Response<UpdateAppConfigValueResponse | AppConfigErrorResponse>
+  res: Response<UpdateAppConfigValueResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { appName, key } = req.params;
@@ -288,7 +288,7 @@ const updateAppConfigValue = async (
               readError instanceof Error
                 ? readError.message
                 : String(readError),
-          }
+          },
         );
         // We'll create a new file with just the new config
       }
@@ -352,7 +352,7 @@ const deleteMultipleAppConfigValues = async (
     {},
     DeleteMultipleAppConfigValuesQuery
   >,
-  res: Response<DeleteMultipleAppConfigValuesResponse | AppConfigErrorResponse>
+  res: Response<DeleteMultipleAppConfigValuesResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { appName } = req.params;
@@ -445,7 +445,7 @@ const deleteMultipleAppConfigValues = async (
       {
         appName,
         keys: deletedKeys,
-      }
+      },
     );
 
     // Return success response
@@ -486,7 +486,7 @@ interface DeleteAppConfigValueResponse {
 
 const deleteAppConfigValue = async (
   req: Request<DeleteAppConfigValueRequestParams>,
-  res: Response<DeleteAppConfigValueResponse | AppConfigErrorResponse>
+  res: Response<DeleteAppConfigValueResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { appName, key } = req.params;
@@ -582,7 +582,7 @@ interface DeleteAppConfigResponse {
 
 const deleteAppConfig = async (
   req: Request<DeleteAppConfigRequestParams>,
-  res: Response<DeleteAppConfigResponse | AppConfigErrorResponse>
+  res: Response<DeleteAppConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   try {
     const { appName } = req.params;

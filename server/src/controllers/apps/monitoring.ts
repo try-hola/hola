@@ -37,7 +37,7 @@ interface GetAppLogsRequestParams {
 
 const getAppLogs = async (
   req: Request<GetAppLogsRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -54,7 +54,7 @@ const getAppLogs = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -68,14 +68,14 @@ const getAppLogs = async (
           taskId,
           "LOGS",
           "progress",
-          "Mock log line 1 for logs-test-app"
+          "Mock log line 1 for logs-test-app",
         );
         sendUpdate(
           res,
           taskId,
           "LOGS",
           "progress",
-          "Mock log line 2 for logs-test-app"
+          "Mock log line 2 for logs-test-app",
         );
 
         // Send a completion message
@@ -85,7 +85,7 @@ const getAppLogs = async (
           taskId,
           "LOGS",
           "complete",
-          `Logs for ${appName} retrieved successfully`
+          `Logs for ${appName} retrieved successfully`,
         );
         res.end();
         return;
@@ -97,7 +97,7 @@ const getAppLogs = async (
           taskId,
           "LOGS",
           "error",
-          `Application ${appName} not found`
+          `Application ${appName} not found`,
         );
         res.end();
         return;
@@ -112,7 +112,7 @@ const getAppLogs = async (
         taskId,
         "LOGS",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -128,7 +128,7 @@ const getAppLogs = async (
       taskId,
       "LOGS",
       "complete",
-      `Logs for ${appName} retrieved successfully`
+      `Logs for ${appName} retrieved successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -150,7 +150,7 @@ interface GetAppMetricsRequestParams {
 
 const getAppMetrics = async (
   req: Request<GetAppMetricsRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -167,7 +167,7 @@ const getAppMetrics = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -180,7 +180,7 @@ const getAppMetrics = async (
         taskId,
         "METRICS",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -194,7 +194,7 @@ const getAppMetrics = async (
       appName,
       {
         cwd: composeDir,
-      }
+      },
     );
 
     sendUpdate(
@@ -202,7 +202,7 @@ const getAppMetrics = async (
       taskId,
       "METRICS",
       "complete",
-      `Metrics for ${appName} retrieved successfully`
+      `Metrics for ${appName} retrieved successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -224,7 +224,7 @@ interface GetAppHealthRequestParams {
 
 const getAppHealth = async (
   req: Request<GetAppHealthRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -241,7 +241,7 @@ const getAppHealth = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -254,7 +254,7 @@ const getAppHealth = async (
         taskId,
         "HEALTH",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -270,7 +270,7 @@ const getAppHealth = async (
       taskId,
       "HEALTH",
       "complete",
-      `Health check for ${appName} completed successfully`
+      `Health check for ${appName} completed successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -292,7 +292,7 @@ interface StreamEventsRequestParams {
 
 const streamEvents = async (
   req: Request<StreamEventsRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -309,7 +309,7 @@ const streamEvents = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -322,7 +322,7 @@ const streamEvents = async (
         taskId,
         "EVENTS",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -337,7 +337,7 @@ const streamEvents = async (
       appName,
       {
         cwd: composeDir,
-      }
+      },
     );
 
     // This line will typically only be reached if the events stream is closed
@@ -346,7 +346,7 @@ const streamEvents = async (
       taskId,
       "EVENTS",
       "complete",
-      `Events stream for ${appName} ended`
+      `Events stream for ${appName} ended`,
     );
     res.end();
   } catch (error: any) {

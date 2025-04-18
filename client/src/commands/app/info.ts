@@ -11,7 +11,10 @@ const { AppInfoOptions, ApiResponse } = require("../../types");
  * @param {AppInfoOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(appName: string, options: import("../../types").AppInfoOptions): Promise<import("../../types").ApiResponse> {
+async function handler(
+  appName: string,
+  options: import("../../types").AppInfoOptions,
+): Promise<import("../../types").ApiResponse> {
   try {
     logger.debug(`Fetching details for app: ${appName}`);
 
@@ -25,7 +28,7 @@ async function handler(appName: string, options: import("../../types").AppInfoOp
 
         if (appDetails.createdAt) {
           appDetails.createdAt = new Date(
-            appDetails.createdAt
+            appDetails.createdAt,
           ).toLocaleString();
         }
 
@@ -39,7 +42,7 @@ async function handler(appName: string, options: import("../../types").AppInfoOp
         // Use formatOutput for heading and table
         outputFormatter.formatOutput(
           [{ property: "Application", value: appName }],
-          "table"
+          "table",
         );
         const tableData = Object.entries(appDetails).map(([key, value]) => {
           if (typeof value === "object" && value !== null) {

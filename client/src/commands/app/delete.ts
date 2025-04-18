@@ -11,15 +11,30 @@ const { ApiResponse } = require("../../types");
  * @returns ApiResponse with delete result
  */
 interface DeleteOptions {}
-async function handler(appName: string, options: DeleteOptions): Promise<typeof ApiResponse> {
+async function handler(
+  appName: string,
+  options: DeleteOptions,
+): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Deleting application: ${appName}`);
     const response = await apiClient.delete(`/api/apps/${appName}`);
     if (response.success) {
-      outputFormatter.formatOutput({ message: `Application '${appName}' deleted successfully.` }, "table");
+      outputFormatter.formatOutput(
+        { message: `Application '${appName}' deleted successfully.` },
+        "table",
+      );
       return response;
     } else {
-      outputFormatter.formatOutput({ error: { code: response.error?.code || "DELETE_FAILED", message: response.error?.message || "Application delete failed", details: response.error?.details } }, "table");
+      outputFormatter.formatOutput(
+        {
+          error: {
+            code: response.error?.code || "DELETE_FAILED",
+            message: response.error?.message || "Application delete failed",
+            details: response.error?.details,
+          },
+        },
+        "table",
+      );
       return {
         success: false,
         error: {
@@ -30,7 +45,16 @@ async function handler(appName: string, options: DeleteOptions): Promise<typeof 
       };
     }
   } catch (error) {
-    outputFormatter.formatOutput({ error: { code: error.code || "DELETE_ERROR", message: error.message || "Unknown error", details: error.details } }, "table");
+    outputFormatter.formatOutput(
+      {
+        error: {
+          code: error.code || "DELETE_ERROR",
+          message: error.message || "Unknown error",
+          details: error.details,
+        },
+      },
+      "table",
+    );
     return {
       success: false,
       error: {

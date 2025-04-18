@@ -34,7 +34,7 @@ interface CreateBackupRequestParams {
 
 const createBackup = async (
   req: Request<CreateBackupRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const { notes } = req.body;
@@ -52,7 +52,7 @@ const createBackup = async (
         taskId,
         "BACKUP",
         "error",
-        `Invalid app name: ${appName}`
+        `Invalid app name: ${appName}`,
       );
       res.end();
       return;
@@ -71,7 +71,7 @@ const createBackup = async (
         const backupFilesDir: string = PATHS.backups.files(appName, timestamp);
         const backupConfigDir: string = PATHS.backups.config(
           appName,
-          timestamp
+          timestamp,
         );
 
         await fs.ensureDir(backupRootDir);
@@ -102,7 +102,7 @@ const createBackup = async (
 
         await fs.writeJSON(
           PATHS.backups.metadata(appName, timestamp),
-          metadata
+          metadata,
         );
 
         sendUpdate(
@@ -110,7 +110,7 @@ const createBackup = async (
           taskId,
           "BACKUP",
           "progress",
-          `Creating backup directories for ${appName}`
+          `Creating backup directories for ${appName}`,
         );
 
         sendUpdate(
@@ -118,20 +118,20 @@ const createBackup = async (
           taskId,
           "BACKUP",
           "progress",
-          `Copying files for ${appName}`
+          `Copying files for ${appName}`,
         );
 
         logEvent(
           "BACKUP",
           "info",
-          `Backup for ${appName} created successfully`
+          `Backup for ${appName} created successfully`,
         );
         sendUpdate(
           res,
           taskId,
           "BACKUP",
           "complete",
-          `Backup for ${appName} created successfully`
+          `Backup for ${appName} created successfully`,
         );
         res.end();
         return;
@@ -150,7 +150,7 @@ const createBackup = async (
       taskId,
       "BACKUP",
       "progress",
-      `Creating backup directories for ${appName}`
+      `Creating backup directories for ${appName}`,
     );
 
     // Create timestamped backup directory
@@ -169,7 +169,7 @@ const createBackup = async (
       taskId,
       "BACKUP",
       "progress",
-      `Copying files for ${appName}`
+      `Copying files for ${appName}`,
     );
 
     try {
@@ -179,7 +179,7 @@ const createBackup = async (
         // Back up app files
         const appFilesDir: string = path.join(
           PATHS.deployments.files(appName),
-          "app"
+          "app",
         );
         if (await fs.pathExists(appFilesDir)) {
           await fs.copy(appFilesDir, path.join(backupFilesDir, "app"));
@@ -205,7 +205,7 @@ const createBackup = async (
         taskId,
         "BACKUP",
         "warning",
-        `Some files could not be backed up: ${copyError.message}`
+        `Some files could not be backed up: ${copyError.message}`,
       );
     }
 
@@ -226,14 +226,14 @@ const createBackup = async (
       taskId,
       "BACKUP",
       "complete",
-      `Backup for ${appName} created successfully`
+      `Backup for ${appName} created successfully`,
     );
     res.end();
   } catch (error: any) {
     logEvent(
       "BACKUP",
       "error",
-      `Failed to create backup for ${appName}: ${error.message}`
+      `Failed to create backup for ${appName}: ${error.message}`,
     );
     sendUpdate(res, taskId, "BACKUP", "error", error.message);
     res.end();
@@ -253,7 +253,7 @@ interface ListBackupsRequestParams {
 
 const listBackups = async (
   req: Request<ListBackupsRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
 
@@ -298,7 +298,7 @@ const listBackups = async (
           return metadata;
         }
         return null;
-      })
+      }),
     );
 
     res.json({ backups: backups.filter((backup) => backup !== null) });
@@ -324,7 +324,7 @@ interface GetBackupDetailsRequestParams {
 
 const getBackupDetails = async (
   req: Request<GetBackupDetailsRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName, backupId } = req.params;
 
@@ -376,7 +376,7 @@ interface RestoreFromBackupRequestParams {
 
 const restoreFromBackup = async (
   req: Request<RestoreFromBackupRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName, backupId } = req.params;
   const taskId: string = uuidv4();
@@ -393,7 +393,7 @@ const restoreFromBackup = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -416,7 +416,7 @@ const restoreFromBackup = async (
           taskId,
           "RESTORE",
           "complete",
-          `Application ${appName} restored from backup ${backupId} successfully`
+          `Application ${appName} restored from backup ${backupId} successfully`,
         );
         res.end();
         return;
@@ -431,7 +431,7 @@ const restoreFromBackup = async (
         taskId,
         "RESTORE",
         "error",
-        `Backup ${backupId} not found for ${appName}`
+        `Backup ${backupId} not found for ${appName}`,
       );
       res.end();
       return;
@@ -482,7 +482,7 @@ const restoreFromBackup = async (
       taskId,
       "RESTORE",
       "complete",
-      `Application ${appName} restored from backup ${backupId} successfully`
+      `Application ${appName} restored from backup ${backupId} successfully`,
     );
     res.end();
   } catch (error: any) {

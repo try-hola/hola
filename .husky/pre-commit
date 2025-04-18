@@ -1,9 +1,1 @@
-#!/usr/bin/env sh
-# Load NVM
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-# Load Node version from .nvmrc if it exists
-[ -f ".nvmrc" ] && nvm use
-
-# Run lint-staged
 npx lint-staged

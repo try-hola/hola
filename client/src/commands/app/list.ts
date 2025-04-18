@@ -10,7 +10,9 @@ const { AppListOptions, ApiResponse } = require("../../types");
  * @param options - Command options
  * @returns ApiResponse with application names
  */
-const handler = async (options: import("../../types").AppListOptions): Promise<import("../../types").ApiResponse> => {
+const handler = async (
+  options: import("../../types").AppListOptions,
+): Promise<import("../../types").ApiResponse> => {
   try {
     logger.debug("Fetching app list");
 
@@ -22,7 +24,7 @@ const handler = async (options: import("../../types").AppListOptions): Promise<i
         apps.length === 0
           ? { message: "No applications deployed" }
           : apps.map((name) => ({ name })),
-        options.output
+        options.output,
       );
       return { success: true, data: apps };
     } else {
@@ -30,7 +32,8 @@ const handler = async (options: import("../../types").AppListOptions): Promise<i
         success: false,
         error: {
           code: response.error?.code || "LIST_FAILED",
-          message: response.error?.message || "Failed to retrieve application list",
+          message:
+            response.error?.message || "Failed to retrieve application list",
           details: response.error?.details,
         },
       };

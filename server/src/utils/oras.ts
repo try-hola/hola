@@ -44,7 +44,7 @@ class OrasRunner extends EventEmitter {
     taskType: string,
     registry: string,
     appName: string,
-    options: OrasCommandOptions = {}
+    options: OrasCommandOptions = {},
   ): Promise<void> {
     const version = options.version || "latest";
     const reference = `${registry}/${appName}:${version}`;

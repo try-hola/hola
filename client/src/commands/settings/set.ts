@@ -16,12 +16,15 @@ module.exports = function registerSettingsSet(program) {
         for (const pair of pairs) {
           const idx = pair.indexOf("=");
           if (idx === -1) {
-            outputFormatter.formatOutput({
-              error: {
-                code: "INVALID_ARGUMENT",
-                message: `Invalid setting format: '${pair}'. Use key=value.`,
+            outputFormatter.formatOutput(
+              {
+                error: {
+                  code: "INVALID_ARGUMENT",
+                  message: `Invalid setting format: '${pair}'. Use key=value.`,
+                },
               },
-            }, "json");
+              "json",
+            );
             process.exit(1);
           }
           const key = pair.slice(0, idx);
@@ -31,14 +34,20 @@ module.exports = function registerSettingsSet(program) {
         const config = await configManager.loadConfig();
         Object.assign(config, updates);
         await configManager.saveConfig(config);
-        outputFormatter.formatOutput({ success: true, updated: updates }, "json");
+        outputFormatter.formatOutput(
+          { success: true, updated: updates },
+          "json",
+        );
       } catch (err) {
-        outputFormatter.formatOutput({
-          error: {
-            code: "SETTINGS_SET_ERROR",
-            message: err.message || "Failed to update settings.",
+        outputFormatter.formatOutput(
+          {
+            error: {
+              code: "SETTINGS_SET_ERROR",
+              message: err.message || "Failed to update settings.",
+            },
           },
-        }, "json");
+          "json",
+        );
         process.exit(1);
       }
     });

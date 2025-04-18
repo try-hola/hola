@@ -47,7 +47,7 @@ class DockerRunner extends EventEmitter {
     taskType: string,
     args: string[],
     appName: string,
-    options: DockerCommandOptions = {}
+    options: DockerCommandOptions = {},
   ): Promise<DockerCommandResult> {
     return new Promise((resolve, reject) => {
       // Default to docker-compose command

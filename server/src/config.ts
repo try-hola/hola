@@ -27,7 +27,7 @@ interface PathFunctions {
           appName: string,
           serviceName: string,
           key: string,
-          encrypted: boolean
+          encrypted: boolean,
         ) => string;
       };
     };
@@ -74,8 +74,8 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
 // OIDC configuration
 export const OIDC_ENABLED = !!process.env.HOLA_OIDC_ISSUER;
-export const OIDC_ISSUER = process.env.HOLA_OIDC_ISSUER || '';
-export const OIDC_CLIENT_ID = process.env.HOLA_OIDC_CLIENT_ID || '';
+export const OIDC_ISSUER = process.env.HOLA_OIDC_ISSUER || "";
+export const OIDC_CLIENT_ID = process.env.HOLA_OIDC_CLIENT_ID || "";
 
 // Storage path structure for all application components
 export const PATHS: PathFunctions = {
@@ -92,7 +92,7 @@ export const PATHS: PathFunctions = {
         "packages",
         appName,
         version === "latest" ? version : `version-${version}`,
-        "bundle.tgz"
+        "bundle.tgz",
       ),
   },
   apps: {
@@ -112,7 +112,7 @@ export const PATHS: PathFunctions = {
             appName,
             "env",
             encrypted ? "encrypted" : "regular",
-            key
+            key,
           ),
       },
       service: {
@@ -124,7 +124,7 @@ export const PATHS: PathFunctions = {
             "env",
             "services",
             serviceName,
-            "regular"
+            "regular",
           ),
         encrypted: (appName: string, serviceName: string): string =>
           path.join(
@@ -134,13 +134,13 @@ export const PATHS: PathFunctions = {
             "env",
             "services",
             serviceName,
-            "encrypted"
+            "encrypted",
           ),
         variable: (
           appName: string,
           serviceName: string,
           key: string,
-          encrypted: boolean
+          encrypted: boolean,
         ): string =>
           path.join(
             STORAGE_ROOT,
@@ -150,7 +150,7 @@ export const PATHS: PathFunctions = {
             "services",
             serviceName,
             encrypted ? "encrypted" : "regular",
-            key
+            key,
           ),
       },
     },
@@ -165,7 +165,7 @@ export const PATHS: PathFunctions = {
             appName,
             "files",
             "services",
-            serviceName
+            serviceName,
           ),
         config: (appName: string, serviceName: string): string =>
           path.join(
@@ -175,7 +175,7 @@ export const PATHS: PathFunctions = {
             "files",
             "services",
             serviceName,
-            "config"
+            "config",
           ),
         dockerfile: (appName: string, serviceName: string): string =>
           path.join(
@@ -185,7 +185,7 @@ export const PATHS: PathFunctions = {
             "files",
             "services",
             serviceName,
-            "Dockerfile"
+            "Dockerfile",
           ),
       },
     },
@@ -250,5 +250,5 @@ module.exports = {
     enabled: OIDC_ENABLED,
     issuer: OIDC_ISSUER,
     clientId: OIDC_CLIENT_ID,
-  }
+  },
 };

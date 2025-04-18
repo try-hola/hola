@@ -4,7 +4,9 @@
  * Root ESLint configuration using the new flat config format
  * @type {import('eslint').Linter.FlatConfig[]}
  */
-export default [
+// const somePlugin = require('eslint-plugin-some-plugin'); // Example if you have imports
+
+module.exports = [
   {
     // Global ignores for the entire workspace
     ignores: [
@@ -27,5 +29,11 @@ export default [
     linterOptions: {
       reportUnusedDisableDirectives: true,
     },
-  },
+    // plugins: {
+    //   somePlugin // Example
+    // },
+    rules: {
+      // ... your rules ...
+    }
+  }
 ];

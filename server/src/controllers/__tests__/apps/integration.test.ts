@@ -46,7 +46,7 @@ describe("Apps API Integration Tests", () => {
     await fs.ensureDir(appFilesDir);
     await fs.writeFile(
       path.join(appFilesDir, "test-config.json"),
-      '{"test": true}'
+      '{"test": true}',
     );
 
     // Create mock package bundles for deployment tests
@@ -56,7 +56,7 @@ describe("Apps API Integration Tests", () => {
     await fs.ensureDir(packageDirLatest);
     await fs.writeFile(
       path.join(packageDirLatest, "bundle.tgz"),
-      "mock latest bundle"
+      "mock latest bundle",
     );
 
     const mockUpgradePackageDir = testServer.environment
@@ -64,7 +64,7 @@ describe("Apps API Integration Tests", () => {
       .packages.version("test-app1", "new-version");
     const mockUpgradeBundlePath = path.join(
       mockUpgradePackageDir,
-      "bundle.tgz"
+      "bundle.tgz",
     );
     await fs.ensureDir(mockUpgradePackageDir);
     await fs.writeFile(mockUpgradeBundlePath, "mock tarball content");

@@ -15,7 +15,7 @@ const restartCommand = require("./restart");
 module.exports = function registerAppCommands(program) {
   // Create the app command
   const appCommand = new Command("app").description(
-    "Application management commands"
+    "Application management commands",
   );
 
   // Register all app subcommands

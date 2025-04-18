@@ -20,12 +20,12 @@ jest.mock("tar", () => {
         ) {
           await fs.writeFile(
             path.join(options.cwd, "docker-compose.yml"),
-            'version: "3"\nservices:\n  app:\n    image: nginx:alpine'
+            'version: "3"\nservices:\n  app:\n    image: nginx:alpine',
           );
         } else {
           await fs.writeFile(
             path.join(options.cwd, "docker-compose.yml"),
-            'version: "3"\nservices:\n  app:\n    image: test-app-image'
+            'version: "3"\nservices:\n  app:\n    image: test-app-image',
           );
         }
         return Promise.resolve();
@@ -79,7 +79,7 @@ describe("App Deployment API Tests", () => {
     await fs.ensureDir(tempDir);
     await fs.writeFile(
       path.join(tempDir, "docker-compose.yml"),
-      'version: "3"\nservices:\n  app:\n    image: test-app:latest'
+      'version: "3"\nservices:\n  app:\n    image: test-app:latest',
     );
 
     // Create the bundle file that the controller will extract during deployment
@@ -93,7 +93,7 @@ describe("App Deployment API Tests", () => {
     await fs.ensureDir(composeDir);
     await fs.writeFile(
       path.join(composeDir, "docker-compose.yml"),
-      'version: "3"\nservices:\n  app:\n    image: test-app:latest'
+      'version: "3"\nservices:\n  app:\n    image: test-app:latest',
     );
 
     const currentDir = testServer.environment
@@ -113,7 +113,7 @@ describe("App Deployment API Tests", () => {
 
     // Verify deployment output structure exists
     const composeFileExists = await fs.pathExists(
-      path.join(composeDir, "docker-compose.yml")
+      path.join(composeDir, "docker-compose.yml"),
     );
     expect(composeFileExists).toBe(true);
   });
@@ -135,7 +135,7 @@ describe("App Deployment API Tests", () => {
     await fs.ensureDir(tempDir);
     await fs.writeFile(
       path.join(tempDir, "docker-compose.yml"),
-      'version: "3"\nservices:\n  app:\n    image: nginx:alpine'
+      'version: "3"\nservices:\n  app:\n    image: nginx:alpine',
     );
 
     // Create a tarball simulating the new version package
@@ -146,7 +146,7 @@ describe("App Deployment API Tests", () => {
         cwd: tempDir,
         gzip: true,
       },
-      ["docker-compose.yml"]
+      ["docker-compose.yml"],
     );
 
     // Set up the current deployment directories
@@ -156,7 +156,7 @@ describe("App Deployment API Tests", () => {
     await fs.ensureDir(deploymentComposeDir);
     await fs.writeFile(
       path.join(deploymentComposeDir, "docker-compose.yml"),
-      'version: "3"\nservices:\n  app:\n    image: original-image:latest'
+      'version: "3"\nservices:\n  app:\n    image: original-image:latest',
     );
 
     const currentDir = testServer.environment
@@ -195,7 +195,7 @@ describe("App Deployment API Tests", () => {
         version: "v2",
         backupType: "upgrade",
         createdAt: new Date().toISOString(),
-      }
+      },
     );
 
     // Execute the upgrade API call
@@ -210,7 +210,7 @@ describe("App Deployment API Tests", () => {
     // Verify compose file after upgrade
     const composeFile = path.join(
       testServer.environment.getPaths().deployments.compose(testAppName),
-      "docker-compose.yml"
+      "docker-compose.yml",
     );
 
     // Ensure the file exists for test validation
@@ -218,7 +218,7 @@ describe("App Deployment API Tests", () => {
       await fs.ensureDir(path.dirname(composeFile));
       await fs.writeFile(
         composeFile,
-        'version: "3"\nservices:\n  app:\n    image: nginx:alpine'
+        'version: "3"\nservices:\n  app:\n    image: nginx:alpine',
       );
     }
 

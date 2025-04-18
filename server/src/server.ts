@@ -26,7 +26,7 @@ function setupServer() {
   });
 
   // Authentication middleware
-  app.use(require('./middlewares/auth'));
+  app.use(require("./middlewares/auth"));
 
   // Register API routes
   registerRoutes(app);

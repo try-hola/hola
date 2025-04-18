@@ -28,15 +28,15 @@ export interface ApiResponse<T = any> {
  */
 export interface AppInfo {
   name: string;
-  status: 'running' | 'stopped' | 'error';
+  status: "running" | "stopped" | "error";
   version: string;
   deployedAt: string;
   url?: string;
   health?: {
-    status: 'healthy' | 'unhealthy' | 'unknown';
+    status: "healthy" | "unhealthy" | "unknown";
     checks?: {
       [key: string]: {
-        status: 'passed' | 'failed';
+        status: "passed" | "failed";
         message?: string;
       };
     };
@@ -97,12 +97,12 @@ interface ConfigDeleteOptions {
  */
 
 // Re-export all server provider related types
-export * from './server-provider';
+export * from "./server-provider";
 
 // Command option types
 export interface CommonCommandOptions {
   server?: string;
-  output?: 'table' | 'json' | 'yaml';
+  output?: "table" | "json" | "yaml";
   verbose?: boolean;
 }
 

@@ -16,7 +16,7 @@ const { ConfigDeleteOptions, ApiResponse } = require("../../types");
  */
 async function handler(
   keys: string[],
-  options: import("../../types").ConfigDeleteOptions
+  options: import("../../types").ConfigDeleteOptions,
 ): Promise<import("../../types").ApiResponse> {
   try {
     let endpoint = "";
@@ -28,34 +28,62 @@ async function handler(
           endpoint = `/api/config/${app}/encrypted/${key}`;
           await apiClient.delete(endpoint);
         }
-        outputFormatter.formatOutput({ message: `Encrypted configuration for app '${app}' deleted successfully.` }, "table");
+        outputFormatter.formatOutput(
+          {
+            message: `Encrypted configuration for app '${app}' deleted successfully.`,
+          },
+          "table",
+        );
       } else if (keys.length === 1) {
         endpoint = `/api/config/${app}/${keys[0]}`;
         await apiClient.delete(endpoint);
-        outputFormatter.formatOutput({ message: `Configuration key '${keys[0]}' for app '${app}' deleted successfully.` }, "table");
+        outputFormatter.formatOutput(
+          {
+            message: `Configuration key '${keys[0]}' for app '${app}' deleted successfully.`,
+          },
+          "table",
+        );
       } else {
         endpoint = `/api/config/${app}`;
         await apiClient.delete(endpoint, {
           params: { keys: keys.join(",") },
         });
-        outputFormatter.formatOutput({ message: `Configuration keys [${keys.join(", ")}] for app '${app}' deleted successfully.` }, "table");
+        outputFormatter.formatOutput(
+          {
+            message: `Configuration keys [${keys.join(", ")}] for app '${app}' deleted successfully.`,
+          },
+          "table",
+        );
       }
     } else {
       if (keys.length === 1) {
         endpoint = `/api/config/${keys[0]}`;
         await apiClient.delete(endpoint);
-        outputFormatter.formatOutput({ message: `System configuration key '${keys[0]}' deleted successfully.` }, "table");
+        outputFormatter.formatOutput(
+          {
+            message: `System configuration key '${keys[0]}' deleted successfully.`,
+          },
+          "table",
+        );
       } else {
         endpoint = `/api/config`;
         await apiClient.delete(endpoint, {
           params: { keys: keys.join(",") },
         });
-        outputFormatter.formatOutput({ message: `System configuration keys [${keys.join(", ")}] deleted successfully.` }, "table");
+        outputFormatter.formatOutput(
+          {
+            message: `System configuration keys [${keys.join(", ")}] deleted successfully.`,
+          },
+          "table",
+        );
       }
     }
     return { success: true };
   } catch (error) {
-    outputFormatter.formatOutput({ error: error.message || "Delete failed" }, "table");
+    outputFormatter.formatOutput(
+      { error: error.message || "Delete failed" },
+      "table",
+    );
     return {
       success: false,
       error: {
@@ -118,7 +146,7 @@ Examples:
   $ hola config delete api_key
   $ hola config delete server_url db_host
   $ hola config delete --app myapp DB_USER DB_PASS
-  $ hola config delete --app myapp --secret SECRET_KEY`
+  $ hola config delete --app myapp --secret SECRET_KEY`,
       );
   },
 };

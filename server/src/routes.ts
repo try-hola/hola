@@ -39,11 +39,11 @@ export const registerRoutes = (app: Application): void => {
   app.get("/api/apps/:appName/backups", appsController.listBackups); // List all backups
   app.get(
     "/api/apps/:appName/backup/:backupId",
-    appsController.getBackupDetails
+    appsController.getBackupDetails,
   ); // Get backup details
   app.post(
     "/api/apps/:appName/restore/:backupId",
-    appsController.restoreFromBackup
+    appsController.restoreFromBackup,
   ); // Restore from backup
 
   // Logs & Monitoring routes (to be implemented)
@@ -55,13 +55,13 @@ export const registerRoutes = (app: Application): void => {
   app.post(
     "/api/apps/:appName/files",
     filesController.uploadFile,
-    filesController.handleFileUpload
+    filesController.handleFileUpload,
   ); // Upload a file
   app.get("/api/apps/:appName/files", filesController.listFiles); // List files for an application
   app.get("/api/apps/:appName/files/:filePath(*)", filesController.getFile); // Get a specific file
   app.delete(
     "/api/apps/:appName/files/:filePath(*)",
-    filesController.deleteFile
+    filesController.deleteFile,
   ); // Delete a specific file
 
   // Configuration management routes
@@ -98,7 +98,7 @@ export const registerRoutes = (app: Application): void => {
   app.put("/api/config/:appName/:key", configController.updateAppConfigValue); // Create/update a specific app config value
   app.delete(
     "/api/config/:appName/:key",
-    configController.deleteAppConfigValue
+    configController.deleteAppConfigValue,
   ); // Delete a specific app config value
   // Update this route handler to check for the keys query parameter
   app.delete("/api/config/:appName", (req, res) => {
@@ -111,19 +111,19 @@ export const registerRoutes = (app: Application): void => {
   // Encrypted app configuration routes
   app.get(
     "/api/config/:appName/encrypted",
-    configController.getAppEncryptedConfig
+    configController.getAppEncryptedConfig,
   ); // Get all encrypted app configuration
   app.post(
     "/api/config/:appName/encrypted",
-    configController.createAppEncryptedConfig
+    configController.createAppEncryptedConfig,
   ); // Create/update multiple encrypted values
   app.put(
     "/api/config/:appName/encrypted/:key",
-    configController.updateAppEncryptedValue
+    configController.updateAppEncryptedValue,
   ); // Create/update a specific encrypted value
   app.delete(
     "/api/config/:appName/encrypted/:key",
-    configController.deleteAppEncryptedValue
+    configController.deleteAppEncryptedValue,
   ); // Delete a specific encrypted value
 
   // Events stream route (SSE for real-time updates)

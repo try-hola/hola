@@ -8,7 +8,10 @@ const { ConfigSetOptions, ApiResponse } = require("../../types");
  * @param {ConfigSetOptions} options - Command options
  * @returns {Promise<ApiResponse<any>>}
  */
-async function handler(keyValues: string[], options: import("../../types").ConfigSetOptions): Promise<import("../../types").ApiResponse> {
+async function handler(
+  keyValues: string[],
+  options: import("../../types").ConfigSetOptions,
+): Promise<import("../../types").ApiResponse> {
   try {
     const { app, secret } = options;
     const configValues = keyValues.reduce((acc, pair) => {
@@ -24,15 +27,27 @@ async function handler(keyValues: string[], options: import("../../types").Confi
     if (app) {
       endpoint = secret ? `/api/config/${app}/encrypted` : `/api/config/${app}`;
       response = await apiClient.post(endpoint, { config: configValues });
-      outputFormatter.formatOutput({ message: `Configuration for app '${app}' updated successfully.` }, options.output);
+      outputFormatter.formatOutput(
+        { message: `Configuration for app '${app}' updated successfully.` },
+        options.output,
+      );
     } else {
       endpoint = "/api/config";
       response = await apiClient.post(endpoint, { config: configValues });
-      outputFormatter.formatOutput({ message: "System configuration updated successfully." }, options.output);
+      outputFormatter.formatOutput(
+        { message: "System configuration updated successfully." },
+        options.output,
+      );
     }
-    return { success: true, data: response && response.data ? response.data : undefined };
+    return {
+      success: true,
+      data: response && response.data ? response.data : undefined,
+    };
   } catch (error) {
-    outputFormatter.formatOutput({ error: error.message || "Unknown error" }, "table");
+    outputFormatter.formatOutput(
+      { error: error.message || "Unknown error" },
+      "table",
+    );
     return {
       success: false,
       error: {
@@ -53,11 +68,11 @@ function builder(yargs) {
   return yargs
     .option("app", {
       describe: "Target application name",
-      type: "string"
+      type: "string",
     })
     .option("secret", {
       describe: "Store values with encryption",
-      type: "boolean"
+      type: "boolean",
     });
 }
 
@@ -79,13 +94,16 @@ module.exports = {
   describe,
   builder,
   handler,
-  default: function(configCommand) {
+  default: function (configCommand) {
     return configCommand
       .command("set <keyValues...>")
       .description(describe)
       .option("--app <name>", "Target application name")
       .option("--secret", "Store values with encryption")
       .action(handler)
-      .addHelpText('after', `\nExamples:\n  $ hola config set server_url=http://localhost:3000    Set system config value\n  $ hola config set --app myapp DB_USER=admin DB_PASS=password    Set multiple app config values`);
-  }
+      .addHelpText(
+        "after",
+        `\nExamples:\n  $ hola config set server_url=http://localhost:3000    Set system config value\n  $ hola config set --app myapp DB_USER=admin DB_PASS=password    Set multiple app config values`,
+      );
+  },
 };

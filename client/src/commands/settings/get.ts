@@ -15,26 +15,35 @@ module.exports = function registerSettingsGet(program) {
         const config = await configManager.loadConfig();
         if (options.key) {
           if (Object.prototype.hasOwnProperty.call(config, options.key)) {
-            outputFormatter.formatOutput({ [options.key]: config[options.key] }, "table");
+            outputFormatter.formatOutput(
+              { [options.key]: config[options.key] },
+              "table",
+            );
           } else {
-            outputFormatter.formatOutput({
-              error: {
-                code: "NOT_FOUND",
-                message: `Setting '${options.key}' not found.`,
+            outputFormatter.formatOutput(
+              {
+                error: {
+                  code: "NOT_FOUND",
+                  message: `Setting '${options.key}' not found.`,
+                },
               },
-            }, "json");
+              "json",
+            );
             process.exit(1);
           }
         } else {
           outputFormatter.formatOutput(config, "table");
         }
       } catch (err) {
-        outputFormatter.formatOutput({
-          error: {
-            code: "SETTINGS_GET_ERROR",
-            message: err.message || "Failed to load settings.",
+        outputFormatter.formatOutput(
+          {
+            error: {
+              code: "SETTINGS_GET_ERROR",
+              message: err.message || "Failed to load settings.",
+            },
           },
-        }, "json");
+          "json",
+        );
         process.exit(1);
       }
     });

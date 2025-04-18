@@ -70,7 +70,7 @@ export class TestEnvironment {
     // Create storage root and all subdirectories
     await fs.ensureDir(this.storageRoot);
     await Promise.all(
-      Object.values(this.appDirectories).map((dir) => fs.ensureDir(dir))
+      Object.values(this.appDirectories).map((dir) => fs.ensureDir(dir)),
     );
   }
 
@@ -83,7 +83,7 @@ export class TestEnvironment {
   private async safeRemove(
     dirPath: string,
     maxRetries = 5,
-    retryDelay = 200
+    retryDelay = 200,
   ): Promise<boolean> {
     if (!(await fs.pathExists(dirPath))) {
       return true;
@@ -97,7 +97,7 @@ export class TestEnvironment {
         if (attempt === maxRetries - 1) {
           // On final attempt, don't throw but return false to indicate failure
           console.warn(
-            `Failed to remove directory ${dirPath} after ${maxRetries} attempts`
+            `Failed to remove directory ${dirPath} after ${maxRetries} attempts`,
           );
           return false;
         }
@@ -139,7 +139,7 @@ export class TestEnvironment {
     // Create deployment directories
     const appDeploymentPath = path.join(
       this.appDirectories.deployments,
-      appName
+      appName,
     );
     const appComposePath = path.join(appDeploymentPath, "compose");
     const appFilesPath = path.join(appDeploymentPath, "files");
@@ -198,13 +198,13 @@ export class TestEnvironment {
         timestamp,
         success: true,
         backupType: "test",
-      })
+      }),
     );
 
     // Verify backup directory creation
     if (!(await fs.pathExists(timestampedBackupDir))) {
       console.error(
-        `Backup directory creation failed: ${timestampedBackupDir}`
+        `Backup directory creation failed: ${timestampedBackupDir}`,
       );
     }
   }
@@ -226,7 +226,7 @@ export class TestEnvironment {
 
       if (!success) {
         console.warn(
-          `Could not completely remove test data directory: ${this.storageRoot}`
+          `Could not completely remove test data directory: ${this.storageRoot}`,
         );
       }
     } catch (error) {
@@ -250,7 +250,7 @@ export class TestEnvironment {
                 this.storageRoot,
                 "packages",
                 appName,
-                `version-${version}`
+                `version-${version}`,
               ),
         bundle: (appName: string, version: string): string =>
           path.join(
@@ -258,7 +258,7 @@ export class TestEnvironment {
             "packages",
             appName,
             version === "latest" ? version : `version-${version}`,
-            "bundle.tgz"
+            "bundle.tgz",
           ),
       },
       apps: {
@@ -275,7 +275,7 @@ export class TestEnvironment {
             variable: (
               appName: string,
               key: string,
-              encrypted: boolean
+              encrypted: boolean,
             ): string =>
               path.join(
                 this.storageRoot,
@@ -283,7 +283,7 @@ export class TestEnvironment {
                 appName,
                 "env",
                 encrypted ? "encrypted" : "regular",
-                key
+                key,
               ),
           },
           service: {
@@ -295,7 +295,7 @@ export class TestEnvironment {
                 "env",
                 "services",
                 serviceName,
-                "regular"
+                "regular",
               ),
             encrypted: (appName: string, serviceName: string): string =>
               path.join(
@@ -305,13 +305,13 @@ export class TestEnvironment {
                 "env",
                 "services",
                 serviceName,
-                "encrypted"
+                "encrypted",
               ),
             variable: (
               appName: string,
               serviceName: string,
               key: string,
-              encrypted: boolean
+              encrypted: boolean,
             ): string =>
               path.join(
                 this.storageRoot,
@@ -321,7 +321,7 @@ export class TestEnvironment {
                 "services",
                 serviceName,
                 encrypted ? "encrypted" : "regular",
-                key
+                key,
               ),
           },
         },
@@ -336,7 +336,7 @@ export class TestEnvironment {
                 appName,
                 "files",
                 "services",
-                serviceName
+                serviceName,
               ),
             config: (appName: string, serviceName: string): string =>
               path.join(
@@ -346,7 +346,7 @@ export class TestEnvironment {
                 "files",
                 "services",
                 serviceName,
-                "config"
+                "config",
               ),
             dockerfile: (appName: string, serviceName: string): string =>
               path.join(
@@ -356,7 +356,7 @@ export class TestEnvironment {
                 "files",
                 "services",
                 serviceName,
-                "Dockerfile"
+                "Dockerfile",
               ),
           },
         },
@@ -383,7 +383,7 @@ export class TestEnvironment {
             "deployments",
             appName,
             "services",
-            serviceName
+            serviceName,
           ),
       },
       backups: {

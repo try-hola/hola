@@ -1,4 +1,4 @@
-const { EventEmitter } = require('events');
+const { EventEmitter } = require("events");
 
 export interface OrasCommandOptions {
   outputDir?: string;
@@ -12,7 +12,7 @@ export interface OrasCommandOptions {
 export class OrasTestAdapter extends EventEmitter {
   /**
    * Simulates running an ORAS command with appropriate status events
-   * 
+   *
    * @param taskId - The unique task identifier
    * @param taskType - The type of operation being performed
    * @param registry - The OCI registry URL
@@ -24,37 +24,37 @@ export class OrasTestAdapter extends EventEmitter {
     taskType: string,
     registry: string,
     appName: string,
-    options?: OrasCommandOptions
+    options?: OrasCommandOptions,
   ): Promise<void> {
     // Simulate download delay
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     // Emit starting status
-    this.emit('status', {
+    this.emit("status", {
       taskId,
       taskType,
-      status: 'starting',
-      message: `Fetching ${appName}:${options?.version || 'latest'} from ${registry}`
+      status: "starting",
+      message: `Fetching ${appName}:${options?.version || "latest"} from ${registry}`,
     });
-    
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     // Emit download progress
-    this.emit('status', {
+    this.emit("status", {
       taskId,
       taskType,
-      status: 'running',
-      message: `Downloading package artifacts...`
+      status: "running",
+      message: `Downloading package artifacts...`,
     });
-    
-    await new Promise(resolve => setTimeout(resolve, 100));
-    
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
     // Mock successful download completion
-    this.emit('status', {
+    this.emit("status", {
       taskId,
       taskType,
-      status: 'complete',
-      message: `Downloaded ${appName}:${options?.version || 'latest'} successfully`
+      status: "complete",
+      message: `Downloaded ${appName}:${options?.version || "latest"} successfully`,
     });
   }
 }

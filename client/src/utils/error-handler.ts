@@ -38,19 +38,19 @@ function handleApiError(error) {
   switch (errorCode) {
     case 401:
       console.error(
-        chalk.red("Authentication failed. Please log in with your OIDC credentials.")
+        chalk.red(
+          "Authentication failed. Please log in with your OIDC credentials.",
+        ),
       );
-      console.log(
-        "Run: hola auth login"
-      );
+      console.log("Run: hola auth login");
       break;
     case "CONNECTION_ERROR":
       console.error(chalk.red("Connection failed. Please check:"));
       console.log(" - The server is running and accessible");
       console.log(
         ` - Your server URL is correct: ${chalk.bold(
-          require("./config-manager").get("server_url")
-        )}`
+          require("./config-manager").get("server_url"),
+        )}`,
       );
       console.log(" - Network connectivity is available");
       break;
@@ -83,7 +83,7 @@ function handleCommandError(error) {
   logger.error("Command error:", error);
   console.error(
     chalk.red("Error:"),
-    error.message || "An unknown error occurred"
+    error.message || "An unknown error occurred",
   );
   process.exit(1);
 }

@@ -1,4 +1,4 @@
-const { EventEmitter } = require('events');
+const { EventEmitter } = require("events");
 
 export interface DockerCommandResult {
   code: number;
@@ -24,7 +24,7 @@ export class DockerTestAdapter extends EventEmitter {
 
   /**
    * Executes a Docker command or simulates it in mock mode
-   * 
+   *
    * @param taskId - Unique identifier for the task
    * @param taskType - The type of Docker operation
    * @param args - Docker CLI arguments
@@ -37,57 +37,61 @@ export class DockerTestAdapter extends EventEmitter {
     taskType: string,
     args: string[],
     appName: string,
-    options?: DockerCommandOptions
+    options?: DockerCommandOptions,
   ): Promise<DockerCommandResult> {
     if (this.useMock) {
       // Simulate a delay for mock responses
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
       // Emit status updates like the real implementation would
-      this.emit('status', {
+      this.emit("status", {
         taskId,
         taskType,
-        status: 'starting',
-        message: `Running docker-compose ${args.join(' ')} for ${appName}`
+        status: "starting",
+        message: `Running docker-compose ${args.join(" ")} for ${appName}`,
       });
-      
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
-      this.emit('status', {
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      this.emit("status", {
         taskId,
         taskType,
-        status: 'running',
-        message: 'Command in progress...'
+        status: "running",
+        message: "Command in progress...",
       });
-      
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
       // Mock common Docker command responses based on command arguments
       let result: DockerCommandResult;
-      
-      if (args.includes('ps')) {
-        result = { code: 0, output: 'Up 2 hours' };
-      } else if (args.includes('down')) {
-        result = { code: 0, output: 'Removed network test-app_default' };
-      } else if (args.includes('up')) {
-        result = { code: 0, output: 'Creating network test-app_default\nCreating test-app_app_1 ... done' };
-      } else if (args.includes('stop')) {
-        result = { code: 0, output: 'Stopping test-app_app_1 ... done' };
+
+      if (args.includes("ps")) {
+        result = { code: 0, output: "Up 2 hours" };
+      } else if (args.includes("down")) {
+        result = { code: 0, output: "Removed network test-app_default" };
+      } else if (args.includes("up")) {
+        result = {
+          code: 0,
+          output:
+            "Creating network test-app_default\nCreating test-app_app_1 ... done",
+        };
+      } else if (args.includes("stop")) {
+        result = { code: 0, output: "Stopping test-app_app_1 ... done" };
       } else {
-        result = { code: 0, output: 'Command executed successfully' };
+        result = { code: 0, output: "Command executed successfully" };
       }
-      
-      this.emit('status', {
+
+      this.emit("status", {
         taskId,
         taskType,
-        status: 'complete',
-        message: `Command completed with code ${result.code}`
+        status: "complete",
+        message: `Command completed with code ${result.code}`,
       });
-      
+
       return result;
     } else {
       // Real Docker implementation would be implemented here
-      throw new Error('Real Docker implementation not available in test mode');
+      throw new Error("Real Docker implementation not available in test mode");
     }
   }
 }

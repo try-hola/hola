@@ -18,13 +18,18 @@ interface DeployOptions {
 async function handler(
   appName: string,
   packagePath: string | undefined,
-  options: DeployOptions
+  options: DeployOptions,
 ): Promise<typeof ApiResponse> {
   // Input validation
-  if (!appName || typeof appName !== "string" || !appName.match(/^[a-zA-Z0-9-_]+$/)) {
+  if (
+    !appName ||
+    typeof appName !== "string" ||
+    !appName.match(/^[a-zA-Z0-9-_]+$/)
+  ) {
     const error = {
       code: "DEPLOY_INVALID_APPNAME",
-      message: "Invalid or missing application name. App name must be alphanumeric (dashes/underscores allowed).",
+      message:
+        "Invalid or missing application name. App name must be alphanumeric (dashes/underscores allowed).",
     };
     outputFormatter.formatOutput({ error }, options.output);
     return { success: false, error };
@@ -55,7 +60,7 @@ async function handler(
     if (response && response.data) {
       outputFormatter.formatOutput(
         { message: `Deployment started for '${appName}'.`, ...response.data },
-        options.output
+        options.output,
       );
       return { success: true, data: response.data };
     } else {
@@ -91,12 +96,18 @@ module.exports = {
       .description(describe)
       .option("--force", "Force redeploy if app already exists")
       .option("-o, --output <format>", "output format (table, json)", "table")
-      .action((appName: string, packagePath: string | undefined, options: DeployOptions) => {
-        return handler(appName, packagePath, options);
-      })
+      .action(
+        (
+          appName: string,
+          packagePath: string | undefined,
+          options: DeployOptions,
+        ) => {
+          return handler(appName, packagePath, options);
+        },
+      )
       .addHelpText(
         "after",
-        `\nExamples:\n  $ hola app deploy myapp ./path/to/package.tgz\n  $ hola app deploy myapp --force\n`
+        `\nExamples:\n  $ hola app deploy myapp ./path/to/package.tgz\n  $ hola app deploy myapp --force\n`,
       );
   },
 };

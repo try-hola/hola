@@ -37,7 +37,7 @@ describe("Files API Integration Tests", () => {
 
     const deploymentFilesPath = path.join(
       testServer.environment.getPaths().deployments.files(testAppName),
-      "app"
+      "app",
     );
 
     // Ensure all directories exist
@@ -50,17 +50,17 @@ describe("Files API Integration Tests", () => {
     await fs.ensureDir(path.join(deploymentPath, "current"));
     await fs.writeFile(
       path.join(deploymentPath, "compose", "docker-compose.yml"),
-      "version: '3'\nservices:\n  test-service:\n    image: test"
+      "version: '3'\nservices:\n  test-service:\n    image: test",
     );
     await fs.writeFile(
       path.join(deploymentPath, "current", "docker-compose.yml"),
-      "version: '3'\nservices:\n  test-service:\n    image: test"
+      "version: '3'\nservices:\n  test-service:\n    image: test",
     );
 
     // Update references in config for tests
     const configPath = path.join(
       testServer.environment.getPaths().config.app(testAppName),
-      "config.json"
+      "config.json",
     );
 
     const configData = {
@@ -85,7 +85,7 @@ describe("Files API Integration Tests", () => {
       .apps.files.app(testAppName);
     const deploymentFilesDir = path.join(
       testServer.environment.getPaths().deployments.files(testAppName),
-      "app"
+      "app",
     );
 
     // Ensure parent directories exist and are clean
@@ -116,7 +116,7 @@ describe("Files API Integration Tests", () => {
 
     expect(response.body).toHaveProperty(
       "message",
-      "File uploaded successfully"
+      "File uploaded successfully",
     );
     expect(response.body).toHaveProperty("path");
 
@@ -133,7 +133,7 @@ describe("Files API Integration Tests", () => {
       await fs.ensureDir(path.dirname(appFilePath));
       await fs.writeFile(appFilePath, testContent);
       console.log(
-        "Warning: Manually created test file that API should have created"
+        "Warning: Manually created test file that API should have created",
       );
     }
 
@@ -165,7 +165,7 @@ describe("Files API Integration Tests", () => {
 
     expect(response.body).toHaveProperty(
       "message",
-      "File uploaded successfully"
+      "File uploaded successfully",
     );
 
     // Wait a bit for async file operations to complete
@@ -178,7 +178,7 @@ describe("Files API Integration Tests", () => {
     const fullPath = path.join(basePath, "app", nestedPath);
     const appFilePath = path.join(
       testServer.environment.getPaths().apps.files.app(testAppName),
-      nestedPath
+      nestedPath,
     );
 
     // Create test file if it doesn't exist (for test robustness)
@@ -189,7 +189,7 @@ describe("Files API Integration Tests", () => {
       await fs.ensureDir(path.dirname(appFilePath));
       await fs.writeFile(appFilePath, nestedContent);
       console.log(
-        "Warning: Manually created nested test file that API should have created"
+        "Warning: Manually created nested test file that API should have created",
       );
     }
 
@@ -276,13 +276,13 @@ describe("Files API Integration Tests", () => {
 
     // Verify both simple and nested files appear in the listing
     const fileNames = response.body.files.map(
-      (file: any) => file.path || file.name
+      (file: any) => file.path || file.name,
     );
     expect(fileNames).toContain("app/test-for-listing.txt");
     expect(
       fileNames.some((name: string) =>
-        name.includes("nested/directory/structure/test.txt")
-      )
+        name.includes("nested/directory/structure/test.txt"),
+      ),
     ).toBe(true);
   });
 
@@ -311,11 +311,11 @@ describe("Files API Integration Tests", () => {
   test("GET /api/apps/:appName/files/:filePath should return 404 for non-existent files", async () => {
     // Make sure directories exist before testing a non-existent file
     const appFilePath = path.join(
-      testServer.environment.getPaths().apps.files.app(testAppName)
+      testServer.environment.getPaths().apps.files.app(testAppName),
     );
     const deploymentFilePath = path.join(
       testServer.environment.getPaths().deployments.files(testAppName),
-      "app"
+      "app",
     );
 
     // Ensure parent directories exist
@@ -346,7 +346,7 @@ describe("Files API Integration Tests", () => {
 
     expect(deleteResponse.body).toHaveProperty(
       "message",
-      "File deleted successfully"
+      "File deleted successfully",
     );
 
     // Allow time for async file operations to complete
@@ -356,11 +356,11 @@ describe("Files API Integration Tests", () => {
     const deploymentFilePath = path.join(
       testServer.environment.getPaths().deployments.files(testAppName),
       "app",
-      tempFileName
+      tempFileName,
     );
     const appFilePath = path.join(
       testServer.environment.getPaths().apps.files.app(testAppName),
-      tempFileName
+      tempFileName,
     );
 
     // Force removal if files weren't properly deleted during test

@@ -26,7 +26,7 @@ interface AppConfigErrorResponse {
 
 const updateAppConfig = async (
   req: Request<UpdateAppConfigRequestParams, {}, UpdateAppConfigRequestBody>,
-  res: Response<UpdateAppConfigResponse | AppConfigErrorResponse>
+  res: Response<UpdateAppConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   // Implementation will go here
 };
@@ -49,7 +49,7 @@ interface AppEncryptedConfigResponse {
 
 const getAppEncryptedConfig = async (
   req: Request<GetAppEncryptedConfigRequestParams>,
-  res: Response<AppEncryptedConfigResponse | AppConfigErrorResponse>
+  res: Response<AppEncryptedConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   // Implementation will go here
 };
@@ -81,7 +81,7 @@ const createAppEncryptedConfig = async (
     {},
     CreateAppEncryptedConfigRequestBody
   >,
-  res: Response<CreateAppEncryptedConfigResponse | AppConfigErrorResponse>
+  res: Response<CreateAppEncryptedConfigResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   // Implementation will go here
 };
@@ -114,7 +114,7 @@ const updateAppEncryptedValue = async (
     {},
     UpdateAppEncryptedValueRequestBody
   >,
-  res: Response<UpdateAppEncryptedValueResponse | AppConfigErrorResponse>
+  res: Response<UpdateAppEncryptedValueResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   // Implementation will go here
 };
@@ -139,7 +139,7 @@ interface DeleteAppEncryptedValueResponse {
 
 const deleteAppEncryptedValue = async (
   req: Request<DeleteAppEncryptedValueRequestParams>,
-  res: Response<DeleteAppEncryptedValueResponse | AppConfigErrorResponse>
+  res: Response<DeleteAppEncryptedValueResponse | AppConfigErrorResponse>,
 ): Promise<void> => {
   // Implementation will go here
 };

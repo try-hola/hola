@@ -53,46 +53,52 @@ class OutputFormatter {
    */
   formatTable(data) {
     // Handle configuration objects (key-value pairs)
-    if (!Array.isArray(data) && typeof data === 'object' && data !== null) {
+    if (!Array.isArray(data) && typeof data === "object" && data !== null) {
       // Convert object to array of key-value pairs
       const rows = Object.entries(data).map(([key, value]) => {
         return { Key: key, Value: this.stringifyValue(value) };
       });
-      
+
       if (rows.length === 0) {
         return "No configuration values found";
       }
-      
+
       // Simple table formatting
-      const keyWidth = Math.max(...rows.map(row => row.Key.length), 'Key'.length);
-      const valueWidth = Math.max(...rows.map(row => row.Value.length), 'Value'.length);
-      
+      const keyWidth = Math.max(
+        ...rows.map((row) => row.Key.length),
+        "Key".length,
+      );
+      const valueWidth = Math.max(
+        ...rows.map((row) => row.Value.length),
+        "Value".length,
+      );
+
       // Table header
-      let table = `+-${'-'.repeat(keyWidth)}-+-${'-'.repeat(valueWidth)}-+\n`;
-      table += `| ${'Key'.padEnd(keyWidth)} | ${'Value'.padEnd(valueWidth)} |\n`;
-      table += `+-${'-'.repeat(keyWidth)}-+-${'-'.repeat(valueWidth)}-+\n`;
-      
+      let table = `+-${"-".repeat(keyWidth)}-+-${"-".repeat(valueWidth)}-+\n`;
+      table += `| ${"Key".padEnd(keyWidth)} | ${"Value".padEnd(valueWidth)} |\n`;
+      table += `+-${"-".repeat(keyWidth)}-+-${"-".repeat(valueWidth)}-+\n`;
+
       // Table rows
       for (const row of rows) {
         table += `| ${row.Key.padEnd(keyWidth)} | ${row.Value.padEnd(valueWidth)} |\n`;
       }
-      
+
       // Table footer
-      table += `+-${'-'.repeat(keyWidth)}-+-${'-'.repeat(valueWidth)}-+`;
-      
+      table += `+-${"-".repeat(keyWidth)}-+-${"-".repeat(valueWidth)}-+`;
+
       return table;
     }
-    
+
     // Handle arrays of objects
     if (Array.isArray(data)) {
       if (data.length === 0) {
         return "No data to display";
       }
-      
+
       // For arrays of objects, implement more complex table formatting later
       return this.formatJson(data);
     }
-    
+
     // Handle primitives or other types
     return this.stringifyValue(data);
   }
@@ -104,12 +110,12 @@ class OutputFormatter {
    */
   stringifyValue(value) {
     if (value === undefined) {
-      return '(undefined)';
+      return "(undefined)";
     }
     if (value === null) {
-      return '(null)';
+      return "(null)";
     }
-    if (typeof value === 'object') {
+    if (typeof value === "object") {
       return JSON.stringify(value);
     }
     return String(value);

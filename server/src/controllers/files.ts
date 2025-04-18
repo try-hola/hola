@@ -32,7 +32,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "UPLOAD",
       "error",
-      `Missing required fields or file for ${appName}`
+      `Missing required fields or file for ${appName}`,
     );
     res.status(400).json({ error: "Missing required fields or file" });
     return;
@@ -49,7 +49,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "SECURITY",
       "warning",
-      `Invalid filePath (path traversal attempt) for ${appName}: ${filePath}`
+      `Invalid filePath (path traversal attempt) for ${appName}: ${filePath}`,
     );
     res
       .status(400)
@@ -76,12 +76,12 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
       if (path.basename(filePath) === "Dockerfile") {
         targetFilePath = PATHS.apps.files.service.dockerfile(
           appName,
-          serviceName
+          serviceName,
         );
       } else {
         targetFilePath = path.join(
           PATHS.apps.files.service.config(appName, serviceName),
-          filePath
+          filePath,
         );
       }
     } else {
@@ -101,13 +101,13 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
       if (path.basename(filePath) === "Dockerfile") {
         deploymentFilePath = path.join(
           PATHS.deployments.service(appName, serviceName),
-          "Dockerfile"
+          "Dockerfile",
         );
       } else {
         deploymentFilePath = path.join(
           PATHS.deployments.service(appName, serviceName),
           "config",
-          filePath
+          filePath,
         );
       }
     } else {
@@ -115,7 +115,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
       deploymentFilePath = path.join(
         PATHS.deployments.files(appName),
         "app",
-        filePath
+        filePath,
       );
     }
 
@@ -128,7 +128,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "UPLOAD",
       "info",
-      `File also copied to active deployment: ${deploymentFilePath}`
+      `File also copied to active deployment: ${deploymentFilePath}`,
     );
 
     logEvent("UPLOAD", "info", `File uploaded successfully`, {
@@ -147,7 +147,7 @@ const handleFileUpload = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "UPLOAD",
       "error",
-      `Failed to save ${file?.originalname} for ${appName}: ${err}`
+      `Failed to save ${file?.originalname} for ${appName}: ${err}`,
     );
     res.status(500).json({ error: "File upload failed" });
   }
@@ -218,7 +218,7 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
   const serviceFilesBase = path.join(
     PATHS.apps.root(appName),
     "files",
-    "services"
+    "services",
   );
 
   try {
@@ -229,7 +229,7 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
     const appFiles = await getFilesFromDirectory(
       appFilesPath,
       "app-config",
-      "app"
+      "app",
     );
 
     // Get service-level files
@@ -243,11 +243,11 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
         // Check for Dockerfile
         if (
           await fs.pathExists(
-            PATHS.apps.files.service.dockerfile(appName, serviceName)
+            PATHS.apps.files.service.dockerfile(appName, serviceName),
           )
         ) {
           const stats = await fs.stat(
-            PATHS.apps.files.service.dockerfile(appName, serviceName)
+            PATHS.apps.files.service.dockerfile(appName, serviceName),
           );
           serviceFiles.push({
             path: `services/${serviceName}/Dockerfile`,
@@ -262,14 +262,14 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
         // Check for config files
         const serviceConfigPath = PATHS.apps.files.service.config(
           appName,
-          serviceName
+          serviceName,
         );
         if (await fs.pathExists(serviceConfigPath)) {
           const configFiles = await getFilesFromDirectory(
             serviceConfigPath,
             "service-config",
             `services/${serviceName}/config`,
-            serviceName
+            serviceName,
           );
           serviceFiles = serviceFiles.concat(configFiles);
         }
@@ -304,7 +304,7 @@ async function getFilesFromDirectory(
   dir: string,
   fileType: string,
   pathPrefix: string = "",
-  serviceName: string | null = null
+  serviceName: string | null = null,
 ): Promise<any[]> {
   if (!(await fs.pathExists(dir))) {
     return [];
@@ -321,7 +321,7 @@ async function getFilesFromDirectory(
           fullPath,
           fileType,
           pathPrefix ? `${pathPrefix}/${entry.name}` : entry.name,
-          serviceName
+          serviceName,
         );
         return nestedFiles;
       } else {
@@ -340,7 +340,7 @@ async function getFilesFromDirectory(
           ...(serviceName && { service: serviceName }),
         };
       }
-    })
+    }),
   );
 
   // Flatten the array of arrays
@@ -365,7 +365,7 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
     logEvent(
       "SECURITY",
       "warning",
-      `Invalid filePath (path traversal attempt) for ${appName}: ${filePath}`
+      `Invalid filePath (path traversal attempt) for ${appName}: ${filePath}`,
     );
     res
       .status(400)
@@ -408,12 +408,12 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
     if (filePath === "Dockerfile") {
       targetFilePath = PATHS.apps.files.service.dockerfile(
         appName,
-        serviceName as string
+        serviceName as string,
       );
     } else {
       targetFilePath = path.join(
         PATHS.apps.files.service.config(appName, serviceName as string),
-        filePath
+        filePath,
       );
     }
   } else {
@@ -439,25 +439,25 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
         if (filePath === "Dockerfile") {
           deploymentFilePath = path.join(
             PATHS.deployments.service(appName, serviceName as string),
-            "Dockerfile"
+            "Dockerfile",
           );
         } else {
           deploymentFilePath = path.join(
             PATHS.deployments.service(appName, serviceName as string),
             "config",
-            filePath
+            filePath,
           );
         }
       } else {
         deploymentFilePath = path.join(
           PATHS.deployments.files(appName),
           "app",
-          filePath
+          filePath,
         );
         // Also check and remove from alternate location
         const alternateDeploymentPath = path.join(
           PATHS.deployments.files(appName),
-          filePath
+          filePath,
         );
         if (await fs.pathExists(alternateDeploymentPath)) {
           await fs.remove(alternateDeploymentPath);
@@ -469,7 +469,7 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
         logEvent(
           "FILES",
           "info",
-          `File also removed from deployment: ${deploymentFilePath}`
+          `File also removed from deployment: ${deploymentFilePath}`,
         );
       }
     }
@@ -483,7 +483,7 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
       "FILES",
       "error",
       `Failed to delete file ${filePath} for ${appName}`,
-      { error: err }
+      { error: err },
     );
     res.status(500).json({ error: "Failed to delete file" });
   }
@@ -537,12 +537,12 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
     if (filePath === "Dockerfile") {
       targetFilePath = PATHS.apps.files.service.dockerfile(
         appName,
-        serviceName as string
+        serviceName as string,
       );
     } else {
       targetFilePath = path.join(
         PATHS.apps.files.service.config(appName, serviceName as string),
-        filePath
+        filePath,
       );
     }
   } else {
@@ -560,7 +560,7 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
       const deploymentFilePath = path.join(
         PATHS.deployments.files(appName),
         "app",
-        filePath
+        filePath,
       );
 
       // Ensure deployment directory exists

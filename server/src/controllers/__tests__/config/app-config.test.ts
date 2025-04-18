@@ -18,7 +18,7 @@ describe("App Config API Tests", () => {
     // Get the app-specific config path
     configPath = path.join(
       process.cwd(),
-      `data/config/apps/${testAppName}/config.json`
+      `data/config/apps/${testAppName}/config.json`,
     );
 
     // Ensure the config directory exists
@@ -115,7 +115,7 @@ describe("App Config API Tests", () => {
 
     expect(response.body).toHaveProperty("error");
     expect(response.body.error).toContain(
-      "Failed to parse application configuration"
+      "Failed to parse application configuration",
     );
   });
 
@@ -148,7 +148,7 @@ describe("App Config API Tests", () => {
     await fs.writeJSON(
       configPath,
       { existingKey: "oldValue", unchangedKey: "keepThisValue" },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const configData = {
@@ -227,7 +227,7 @@ describe("App Config API Tests", () => {
     await fs.writeJSON(
       configPath,
       { existingKey: "oldValue", keepThisKey: "keepThisValue" },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())
@@ -269,7 +269,7 @@ describe("App Config API Tests", () => {
       const savedConfig = await fs.readJSON(configPath);
       expect(savedConfig).toHaveProperty(testCase.key);
       expect(JSON.stringify(savedConfig[testCase.key])).toBe(
-        JSON.stringify(testCase.value)
+        JSON.stringify(testCase.value),
       );
     }
   });
@@ -302,7 +302,7 @@ describe("App Config API Tests", () => {
     await fs.writeJSON(
       configPath,
       { keyToDelete: "valueToDelete", keepThisKey: "keepThisValue" },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())

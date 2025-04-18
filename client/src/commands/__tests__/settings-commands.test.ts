@@ -50,7 +50,7 @@ describe("Settings Commands", () => {
       expect(configManager.loadConfig).toHaveBeenCalled();
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         expect.objectContaining({ server_url: expect.any(String) }),
-        "table"
+        "table",
       );
     });
 
@@ -61,7 +61,7 @@ describe("Settings Commands", () => {
       await handler({ key: "server_url" });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         { server_url: "http://localhost:3000" },
-        "table"
+        "table",
       );
     });
 
@@ -71,7 +71,9 @@ describe("Settings Commands", () => {
       registerGet(mockCommand);
       const handler = mockCommand._handler;
       // Suppress process.exit
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       await handler({ key: "not_found" });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         {
@@ -80,7 +82,7 @@ describe("Settings Commands", () => {
             message: "Setting 'not_found' not found.",
           },
         },
-        "json"
+        "json",
       );
       exitSpy.mockRestore();
     });
@@ -90,7 +92,9 @@ describe("Settings Commands", () => {
       const mockCommand = createMockCommand();
       registerGet(mockCommand);
       const handler = mockCommand._handler;
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       await handler({});
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         {
@@ -99,7 +103,7 @@ describe("Settings Commands", () => {
             message: "load failed",
           },
         },
-        "json"
+        "json",
       );
       exitSpy.mockRestore();
     });
@@ -113,11 +117,14 @@ describe("Settings Commands", () => {
       await handler(["timeout=120000", "output_format=json"]);
       expect(configManager.loadConfig).toHaveBeenCalled();
       expect(configManager.saveConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ timeout: "120000", output_format: "json" })
+        expect.objectContaining({ timeout: "120000", output_format: "json" }),
       );
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { success: true, updated: { timeout: "120000", output_format: "json" } },
-        "json"
+        {
+          success: true,
+          updated: { timeout: "120000", output_format: "json" },
+        },
+        "json",
       );
     });
 
@@ -125,7 +132,9 @@ describe("Settings Commands", () => {
       const mockCommand = createMockCommand();
       registerSet(mockCommand);
       const handler = mockCommand._handler;
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       await handler(["invalidpair"]);
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         {
@@ -134,7 +143,7 @@ describe("Settings Commands", () => {
             message: "Invalid setting format: 'invalidpair'. Use key=value.",
           },
         },
-        "json"
+        "json",
       );
       exitSpy.mockRestore();
     });
@@ -144,7 +153,9 @@ describe("Settings Commands", () => {
       const mockCommand = createMockCommand();
       registerSet(mockCommand);
       const handler = mockCommand._handler;
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
+      const exitSpy = jest
+        .spyOn(process, "exit")
+        .mockImplementation(() => undefined as never);
       await handler(["timeout=1000"]);
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
         {
@@ -153,7 +164,7 @@ describe("Settings Commands", () => {
             message: "save failed",
           },
         },
-        "json"
+        "json",
       );
       exitSpy.mockRestore();
     });

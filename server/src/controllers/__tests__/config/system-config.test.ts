@@ -94,7 +94,7 @@ describe("System Config API Tests", () => {
 
     expect(response.body).toHaveProperty("error");
     expect(response.body.error).toContain(
-      "Failed to parse system configuration"
+      "Failed to parse system configuration",
     );
   });
 
@@ -230,7 +230,7 @@ describe("System Config API Tests", () => {
     await fs.writeJSON(
       configPath,
       { keyToDelete: "valueToDelete", keepThisKey: "keepThisValue" },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())
@@ -284,7 +284,7 @@ describe("System Config API Tests", () => {
         key3: "value3",
         stayKey: "stayValue",
       },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())
@@ -313,7 +313,7 @@ describe("System Config API Tests", () => {
         existingKey: "existingValue",
         stayKey: "stayValue",
       },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())
@@ -337,7 +337,7 @@ describe("System Config API Tests", () => {
     await fs.writeJSON(
       configPath,
       { irrelevantKey: "irrelevantValue" },
-      { spaces: 2 }
+      { spaces: 2 },
     );
 
     const response = await request(testServer.getApp())
@@ -346,7 +346,7 @@ describe("System Config API Tests", () => {
 
     expect(response.body).toHaveProperty("error");
     expect(response.body.error).toContain(
-      "None of the specified keys were found"
+      "None of the specified keys were found",
     );
   });
 

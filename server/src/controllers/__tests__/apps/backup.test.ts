@@ -70,7 +70,7 @@ describe("App Backup API Tests", () => {
     await fs.ensureDir(appFilesDir);
     await fs.writeFile(
       path.join(appFilesDir, "test-file.txt"),
-      "Test file content for backup"
+      "Test file content for backup",
     );
 
     // Now create the backup
@@ -88,7 +88,7 @@ describe("App Backup API Tests", () => {
     // Verify that at least one backup exists
     const latestBackup = backupDirs[backupDirs.length - 1];
     const backupExists = await fs.pathExists(
-      path.join(backupDir, latestBackup)
+      path.join(backupDir, latestBackup),
     );
     expect(backupExists).toBe(true);
   });

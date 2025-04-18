@@ -19,7 +19,7 @@ describe("app delete command", () => {
     expect(apiClient.delete).toHaveBeenCalledWith("/api/apps/myapp");
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       { message: "Application 'myapp' deleted successfully." },
-      "table"
+      "table",
     );
     expect(result).toEqual({ success: true });
   });
@@ -39,7 +39,7 @@ describe("app delete command", () => {
           details: {},
         },
       },
-      "table"
+      "table",
     );
     expect(result).toEqual({
       success: false,
@@ -64,7 +64,7 @@ describe("app delete command", () => {
           details: error.details,
         },
       },
-      "table"
+      "table",
     );
     expect(result).toEqual({
       success: false,

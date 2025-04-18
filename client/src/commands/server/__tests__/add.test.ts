@@ -12,7 +12,10 @@ jest.mock("../../../utils/server-provider-registry", () => ({
   ]),
   getProvider: jest.fn().mockImplementation((type) => {
     if (type === "local" || type === "remote") {
-      return { type, displayName: type === "local" ? "Local Server" : "Remote Server" };
+      return {
+        type,
+        displayName: type === "local" ? "Local Server" : "Remote Server",
+      };
     }
     return null;
   }),
@@ -21,7 +24,7 @@ jest.mock("../../../utils/server-provider-registry", () => ({
 jest.mock("../../../utils/output-formatter", () => ({
   outputFormatter: {
     formatOutput: jest.fn(),
-  }
+  },
 }));
 
 jest.mock("inquirer", () => ({
@@ -62,9 +65,17 @@ describe("Server Add Command", () => {
       providerOptions: {},
     });
 
-    expect(configManager.setCurrentServerContext).toHaveBeenCalledWith("test-server");
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("success", "Server \"test-server\" added successfully");
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("info", "Server \"test-server\" is now your current context");
+    expect(configManager.setCurrentServerContext).toHaveBeenCalledWith(
+      "test-server",
+    );
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "success",
+      'Server "test-server" added successfully',
+    );
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "info",
+      'Server "test-server" is now your current context',
+    );
     expect(result.success).toBe(true);
     expect(result.data.server.name).toBe("test-server");
     expect(result.data.isCurrent).toBe(true);
@@ -91,7 +102,10 @@ describe("Server Add Command", () => {
     });
 
     expect(configManager.setCurrentServerContext).not.toHaveBeenCalled();
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("success", "Server \"prompt-server\" added successfully");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "success",
+      'Server "prompt-server" added successfully',
+    );
     expect(result.success).toBe(true);
     expect(result.data.server.name).toBe("prompt-server");
     expect(result.data.isCurrent).toBe(false);
@@ -105,12 +119,17 @@ describe("Server Add Command", () => {
       clientId: "test-client-id",
     };
 
-    configManager.getServerContexts.mockResolvedValueOnce({ "existing-server": {} });
+    configManager.getServerContexts.mockResolvedValueOnce({
+      "existing-server": {},
+    });
 
     const result = await handler(options);
 
     expect(configManager.saveServerContext).not.toHaveBeenCalled();
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("error", "Server context \"existing-server\" already exists");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "error",
+      'Server context "existing-server" already exists',
+    );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("DUPLICATE_NAME");
   });
@@ -126,7 +145,10 @@ describe("Server Add Command", () => {
     const result = await handler(options);
 
     expect(configManager.saveServerContext).not.toHaveBeenCalled();
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("error", "Invalid URL format");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "error",
+      "Invalid URL format",
+    );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("INVALID_URL");
   });
@@ -143,8 +165,8 @@ describe("Server Add Command", () => {
 
     expect(configManager.saveServerContext).not.toHaveBeenCalled();
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      "error", 
-      "Unknown provider type \"invalid-type\". Available types: local, remote"
+      "error",
+      'Unknown provider type "invalid-type". Available types: local, remote',
     );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("INVALID_PROVIDER");
@@ -164,7 +186,10 @@ describe("Server Add Command", () => {
 
     const result = await handler(options);
 
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("error", "Failed to add server: Test error");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "error",
+      "Failed to add server: Test error",
+    );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("ADD_SERVER_ERROR");
   });
@@ -181,7 +206,10 @@ describe("Server Add Command", () => {
     const result = await handler(options);
 
     expect(configManager.saveServerContext).not.toHaveBeenCalled();
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith("error", "No server providers available");
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      "error",
+      "No server providers available",
+    );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("NO_PROVIDERS");
   });

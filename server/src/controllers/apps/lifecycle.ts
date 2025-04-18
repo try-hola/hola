@@ -58,7 +58,7 @@ const deployApp = async (req: Request, res: Response): Promise<void> => {
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -68,7 +68,7 @@ const deployApp = async (req: Request, res: Response): Promise<void> => {
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -142,7 +142,7 @@ interface UpgradeAppRequestBody {
  */
 const upgradeApp = async (
   req: Request<UpgradeAppRequestParams, {}, UpgradeAppRequestBody>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const { version = "latest" } = req.body;
@@ -163,7 +163,7 @@ const upgradeApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -173,7 +173,7 @@ const upgradeApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -229,7 +229,7 @@ const upgradeApp = async (
         taskId,
         "UPGRADE",
         "warning",
-        `Failed to create backup directory: ${backupDir}`
+        `Failed to create backup directory: ${backupDir}`,
       );
       // Recreate it as a fallback
       await fs.ensureDir(backupDir);
@@ -292,7 +292,7 @@ interface RemoveAppRequestParams {
  */
 const removeApp = async (
   req: Request<RemoveAppRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -309,7 +309,7 @@ const removeApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -362,7 +362,7 @@ const removeApp = async (
         taskId,
         "REMOVE",
         "warning",
-        `Failed to create backup directory: ${backupDir}`
+        `Failed to create backup directory: ${backupDir}`,
       );
       // Recreate it as a fallback
       await fs.ensureDir(backupDir);
@@ -384,7 +384,7 @@ const removeApp = async (
         appName,
         {
           cwd: composeDirPath,
-        }
+        },
       );
     }
 
@@ -399,7 +399,7 @@ const removeApp = async (
       taskId,
       "REMOVE",
       "complete",
-      `Application ${appName} removed successfully`
+      `Application ${appName} removed successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -424,7 +424,7 @@ interface StartAppRequestParams {
  */
 const startApp = async (
   req: Request<StartAppRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -441,7 +441,7 @@ const startApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -454,7 +454,7 @@ const startApp = async (
         taskId,
         "START",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -469,7 +469,7 @@ const startApp = async (
       taskId,
       "START",
       "complete",
-      `Application ${appName} started successfully`
+      `Application ${appName} started successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -494,7 +494,7 @@ interface StopAppRequestParams {
  */
 const stopApp = async (
   req: Request<StopAppRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -511,7 +511,7 @@ const stopApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -524,7 +524,7 @@ const stopApp = async (
         taskId,
         "STOP",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -539,7 +539,7 @@ const stopApp = async (
       taskId,
       "STOP",
       "complete",
-      `Application ${appName} stopped successfully`
+      `Application ${appName} stopped successfully`,
     );
     res.end();
   } catch (error: any) {
@@ -564,7 +564,7 @@ interface RestartAppRequestParams {
  */
 const restartApp = async (
   req: Request<RestartAppRequestParams>,
-  res: Response
+  res: Response,
 ): Promise<void> => {
   const { appName } = req.params;
   const taskId: string = uuidv4();
@@ -581,7 +581,7 @@ const restartApp = async (
       update.taskId,
       update.taskType,
       update.status,
-      update.message
+      update.message,
     );
   });
 
@@ -594,7 +594,7 @@ const restartApp = async (
         taskId,
         "RESTART",
         "error",
-        `Application ${appName} not found`
+        `Application ${appName} not found`,
       );
       res.end();
       return;
@@ -609,7 +609,7 @@ const restartApp = async (
       taskId,
       "RESTART",
       "complete",
-      `Application ${appName} restarted successfully`
+      `Application ${appName} restarted successfully`,
     );
     res.end();
   } catch (error: any) {

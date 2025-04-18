@@ -12,15 +12,30 @@ const { ApiResponse } = require("../../types");
  * @returns ApiResponse with restart result
  */
 interface RestartOptions {}
-async function handler(appName: string, options: RestartOptions): Promise<typeof ApiResponse> {
+async function handler(
+  appName: string,
+  options: RestartOptions,
+): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Restarting application: ${appName}`);
     const response = await apiClient.post(`/api/apps/${appName}/restart`);
     if (response.success) {
-      outputFormatter.formatOutput({ message: `Application '${appName}' restarted successfully.` }, "table");
+      outputFormatter.formatOutput(
+        { message: `Application '${appName}' restarted successfully.` },
+        "table",
+      );
       return response;
     } else {
-      outputFormatter.formatOutput({ error: { code: response.error?.code || "RESTART_FAILED", message: response.error?.message || "Application restart failed", details: response.error?.details } }, "table");
+      outputFormatter.formatOutput(
+        {
+          error: {
+            code: response.error?.code || "RESTART_FAILED",
+            message: response.error?.message || "Application restart failed",
+            details: response.error?.details,
+          },
+        },
+        "table",
+      );
       return {
         success: false,
         error: {
@@ -31,7 +46,16 @@ async function handler(appName: string, options: RestartOptions): Promise<typeof
       };
     }
   } catch (error) {
-    outputFormatter.formatOutput({ error: { code: error.code || "RESTART_ERROR", message: error.message || "Unknown error", details: error.details } }, "table");
+    outputFormatter.formatOutput(
+      {
+        error: {
+          code: error.code || "RESTART_ERROR",
+          message: error.message || "Unknown error",
+          details: error.details,
+        },
+      },
+      "table",
+    );
     return {
       success: false,
       error: {

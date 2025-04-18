@@ -33,7 +33,7 @@ function getEncryptionKey(): Buffer {
     logEvent(
       "SECURITY",
       "warning",
-      "ENCRYPTION_KEY not set in environment variables, using fallback key. This is insecure for production!"
+      "ENCRYPTION_KEY not set in environment variables, using fallback key. This is insecure for production!",
     );
     // Return a deterministic fallback key for development environments
     // This is obviously not secure for production, but allows the system to function in dev
@@ -42,7 +42,7 @@ function getEncryptionKey(): Buffer {
       "fallback-salt",
       defaultConfig.iterations,
       defaultConfig.keyLength,
-      "sha256"
+      "sha256",
     );
   }
 
@@ -52,7 +52,7 @@ function getEncryptionKey(): Buffer {
     "static-salt", // This should ideally be unique per application in a production environment
     defaultConfig.iterations,
     defaultConfig.keyLength,
-    "sha256"
+    "sha256",
   );
 }
 

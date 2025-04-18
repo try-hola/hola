@@ -38,7 +38,7 @@ describe("App Management API Tests", () => {
     await fs.ensureDir(filesDir);
     await fs.writeFile(
       path.join(filesDir, "test-config.json"),
-      '{"test": true}'
+      '{"test": true}',
     );
   });
 
@@ -123,7 +123,7 @@ describe("App Management API Tests", () => {
         appName: testAppName,
         backupType: "remove",
         createdAt: new Date().toISOString(),
-      }
+      },
     );
 
     const response = await request(testServer.getApp())

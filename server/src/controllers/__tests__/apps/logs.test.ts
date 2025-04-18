@@ -45,7 +45,9 @@ describe("App Logs API Tests", () => {
     expect(response.headers["cache-control"]).toContain("no-cache");
 
     // Verify logs are being streamed
-    expect(response.text).toContain("Logs for logs-test-app retrieved successfully");
+    expect(response.text).toContain(
+      "Logs for logs-test-app retrieved successfully",
+    );
   });
 
   test("GET /api/apps/:appName/logs should return 404 for non-existent app", async () => {

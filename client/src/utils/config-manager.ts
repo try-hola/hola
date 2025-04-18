@@ -1,7 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { promisify } = require('util');
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { promisify } = require("util");
 
 const mkdir = promisify(fs.mkdir);
 const readFile = promisify(fs.readFile);
@@ -13,24 +13,26 @@ const writeFile = promisify(fs.writeFile);
  */
 class ConfigManager {
   constructor() {
-    this.configDir = path.join(os.homedir(), '.hola');
-    this.configFile = path.join(this.configDir, 'config.json');
-    this.serversFile = path.join(this.configDir, 'servers.json');
+    this.configDir = path.join(os.homedir(), ".hola");
+    this.configFile = path.join(this.configDir, "config.json");
+    this.serversFile = path.join(this.configDir, "servers.json");
     // In-memory cache for synchronous access
     this._cachedConfig = null;
     try {
       if (fs.existsSync(this.configFile)) {
-        this._cachedConfig = JSON.parse(fs.readFileSync(this.configFile, 'utf8'));
+        this._cachedConfig = JSON.parse(
+          fs.readFileSync(this.configFile, "utf8"),
+        );
       }
     } catch (error) {
       // Default values if config can't be read
       this._cachedConfig = {
-        server_url: 'http://localhost:3000',
+        server_url: "http://localhost:3000",
         timeout: 60000,
-        output_format: 'table',
-        color: 'auto',
-        log_level: 'info',
-        auto_update_check: true
+        output_format: "table",
+        color: "auto",
+        log_level: "info",
+        auto_update_check: true,
       };
     }
   }
@@ -47,22 +49,36 @@ class ConfigManager {
 
       // Create config file if it doesn't exist
       if (!fs.existsSync(this.configFile)) {
-        await writeFile(this.configFile, JSON.stringify({
-          server_url: 'http://localhost:3000',
-          timeout: 60000,
-          output_format: 'table',
-          color: 'auto',
-          log_level: 'info',
-          auto_update_check: true
-        }, null, 2));
+        await writeFile(
+          this.configFile,
+          JSON.stringify(
+            {
+              server_url: "http://localhost:3000",
+              timeout: 60000,
+              output_format: "table",
+              color: "auto",
+              log_level: "info",
+              auto_update_check: true,
+            },
+            null,
+            2,
+          ),
+        );
       }
 
       // Create servers file if it doesn't exist
       if (!fs.existsSync(this.serversFile)) {
-        await writeFile(this.serversFile, JSON.stringify({
-          servers: {},
-          current: null
-        }, null, 2));
+        await writeFile(
+          this.serversFile,
+          JSON.stringify(
+            {
+              servers: {},
+              current: null,
+            },
+            null,
+            2,
+          ),
+        );
       }
     } catch (error) {
       throw new Error(`Failed to initialize configuration: ${error.message}`);
@@ -75,7 +91,7 @@ class ConfigManager {
   async getSettings() {
     try {
       await this.init();
-      const data = await readFile(this.configFile, 'utf8');
+      const data = await readFile(this.configFile, "utf8");
       return JSON.parse(data);
     } catch (error) {
       throw new Error(`Failed to read settings: ${error.message}`);
@@ -96,20 +112,20 @@ class ConfigManager {
       throw new Error(`Failed to save settings: ${error.message}`);
     }
   }
-  
+
   /**
    * Get all server contexts
    */
   async getServerContexts() {
     try {
       await this.init();
-      const data = await readFile(this.serversFile, 'utf8');
+      const data = await readFile(this.serversFile, "utf8");
       return JSON.parse(data).servers || {};
     } catch (error) {
       throw new Error(`Failed to read server contexts: ${error.message}`);
     }
   }
-  
+
   /**
    * Get a specific server context
    */
@@ -117,94 +133,94 @@ class ConfigManager {
     const contexts = await this.getServerContexts();
     return contexts[name];
   }
-  
+
   /**
    * Save a server context
    */
   async saveServerContext(context) {
     try {
       await this.init();
-      const data = await readFile(this.serversFile, 'utf8');
+      const data = await readFile(this.serversFile, "utf8");
       const serversData = JSON.parse(data);
-      
+
       serversData.servers = {
         ...serversData.servers,
-        [context.name]: context
+        [context.name]: context,
       };
-      
+
       await writeFile(this.serversFile, JSON.stringify(serversData, null, 2));
       return context;
     } catch (error) {
       throw new Error(`Failed to save server context: ${error.message}`);
     }
   }
-  
+
   /**
    * Remove a server context
    */
   async removeServerContext(name) {
     try {
       await this.init();
-      const data = await readFile(this.serversFile, 'utf8');
+      const data = await readFile(this.serversFile, "utf8");
       const serversData = JSON.parse(data);
-      
+
       if (!serversData.servers[name]) {
         throw new Error(`Server context "${name}" not found`);
       }
-      
+
       delete serversData.servers[name];
-      
+
       // If we're removing the current context, set current to null
       if (serversData.current === name) {
         serversData.current = null;
       }
-      
+
       await writeFile(this.serversFile, JSON.stringify(serversData, null, 2));
       return true;
     } catch (error) {
       throw new Error(`Failed to remove server context: ${error.message}`);
     }
   }
-  
+
   /**
    * Get the current server context name
    */
   async getCurrentServerContextName() {
     try {
       await this.init();
-      const data = await readFile(this.serversFile, 'utf8');
+      const data = await readFile(this.serversFile, "utf8");
       return JSON.parse(data).current;
     } catch (error) {
       throw new Error(`Failed to get current server context: ${error.message}`);
     }
   }
-  
+
   /**
    * Get the current server context
    */
   async getCurrentServerContext() {
     const currentName = await this.getCurrentServerContextName();
-    
+
     if (!currentName) {
       return null;
     }
-    
+
     return this.getServerContext(currentName);
   }
-  
+
   /**
    * Set the current server context
    */
   async setCurrentServerContext(name) {
     try {
       await this.init();
-      const data = await readFile(this.serversFile, 'utf8');
+      const data = await readFile(this.serversFile, "utf8");
       const serversData = JSON.parse(data);
-      
+
       if (name && !serversData.servers[name]) {
         throw new Error(`Server context "${name}" not found`);
       }
-      
+
       serversData.current = name;
       await writeFile(this.serversFile, JSON.stringify(serversData, null, 2));
       return name;
@@ -212,10 +228,10 @@ class ConfigManager {
       throw new Error(`Failed to set current server context: ${error.message}`);
     }
   }
-  
+
   /**
    * Resolve the server context to use for a command
-   * 
+   *
    * Resolution order:
    * 1. Explicit server specified with --server option
    * 2. Environment variable HOLA_SERVER_CONTEXT
@@ -231,31 +247,37 @@ class ConfigManager {
       }
       return context;
     }
-    
+
     // 2. Check environment variable
     if (process.env.HOLA_SERVER_CONTEXT) {
-      const context = await this.getServerContext(process.env.HOLA_SERVER_CONTEXT);
+      const context = await this.getServerContext(
+        process.env.HOLA_SERVER_CONTEXT,
+      );
       if (!context) {
-        throw new Error(`Server context "${process.env.HOLA_SERVER_CONTEXT}" from environment variable not found`);
+        throw new Error(
+          `Server context "${process.env.HOLA_SERVER_CONTEXT}" from environment variable not found`,
+        );
       }
       return context;
     }
-    
+
     // 3. Check current server context
     const current = await this.getCurrentServerContext();
     if (current) {
       return current;
     }
-    
+
     // 4. Check if there's only one context
     const contexts = await this.getServerContexts();
     const contextNames = Object.keys(contexts);
-    
+
     if (contextNames.length === 1) {
       return contexts[contextNames[0]];
     }
-    
-    throw new Error('No server context selected. Use --server option or set a current context with "hola server switch"');
+
+    throw new Error(
+      'No server context selected. Use --server option or set a current context with "hola server switch"',
+    );
   }
 
   /**
@@ -268,7 +290,9 @@ class ConfigManager {
     if (!this._cachedConfig) {
       return defaultValue;
     }
-    return this._cachedConfig[key] !== undefined ? this._cachedConfig[key] : defaultValue;
+    return this._cachedConfig[key] !== undefined
+      ? this._cachedConfig[key]
+      : defaultValue;
   }
 }
 
