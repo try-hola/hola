@@ -6,10 +6,10 @@ jest.mock("../../utils/api-client", () => ({
 }));
 
 jest.mock("../../utils/output-formatter", () => ({
-  table: jest.fn(),
-  json: jest.fn(),
   formatOutput: jest.fn(),
   format: jest.fn(),
+  table: jest.fn(),
+  json: jest.fn(),
 }));
 
 jest.mock("../../utils/error-handler", () => ({
@@ -27,6 +27,7 @@ jest.mock("../../utils/logger", () => ({
 
 // Import dependencies after mocking
 const apiClient = require("../../utils/api-client");
+const outputFormatter = require("../../utils/output-formatter");
 const { handleCommandError } = require("../../utils/error-handler");
 const { ApiResponse } = require("../../types");
 
@@ -70,18 +71,16 @@ describe("App Start Command", () => {
       },
     });
 
-    // Spy on console.log
-    const consoleSpy = jest.spyOn(console, "log");
-
     // Execute the command
     const result = await startHandler("test-app", {});
 
     // Validate API was called correctly
     expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/start");
 
-    // Validate console output
-    expect(consoleSpy).toHaveBeenCalledWith(
-      "Application 'test-app' started successfully."
+    // Validate output formatter was called correctly
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      { message: "Application 'test-app' started successfully." },
+      "table"
     );
 
     // Validate result
@@ -92,9 +91,6 @@ describe("App Start Command", () => {
         message: "Application started successfully",
       },
     });
-
-    // Restore console.log
-    consoleSpy.mockRestore();
   });
 
   test("should handle API errors when starting an application", async () => {
@@ -116,6 +112,13 @@ describe("App Start Command", () => {
     apiClient.post.mockResolvedValue({ success: false, error: { code: "START_FAILED", message: "Application failed to start" } });
     const options = {};
     const result = await startHandler("test-app1", options);
+    
+    // Validate output formatter was called correctly
+    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
+      { error: { code: "START_FAILED", message: "Failed to start application 'test-app1'.", details: undefined } },
+      "table"
+    );
+    
     expect(result).toEqual({
       success: false,
       error: {

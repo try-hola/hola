@@ -2,15 +2,13 @@
 jest.mock("../../utils/config-manager", () => ({
   getConfig: jest.fn().mockReturnValue({
     server_url: "http://localhost:3000",
-    timeout: 5000,
-    api_key: "test-api-key",
+    timeout: 5000
   }),
   get: jest.fn().mockImplementation((key: string, defaultValue) => {
     const config: Record<string, string | number> = {
       log_level: "info",
       server_url: "http://localhost:3000",
-      timeout: 5000,
-      api_key: "test-api-key",
+      timeout: 5000
     };
     return config[key] !== undefined ? config[key] : defaultValue;
   }),

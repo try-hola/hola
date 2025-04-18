@@ -19,10 +19,10 @@ async function handler(appName: string, options: StartOptions): Promise<typeof A
     const response = await apiClient.post(`/api/apps/${appName}/start`);
 
     if (response.success) {
-      console.log(`Application '${appName}' started successfully.`);
+      outputFormatter.formatOutput({ message: `Application '${appName}' started successfully.` }, "table");
       return response;
     } else {
-      console.error(`Failed to start application '${appName}'.`);
+      outputFormatter.formatOutput({ error: { code: response.error?.code || "START_FAILED", message: `Failed to start application '${appName}'.`, details: response.error?.details } }, "table");
       return {
         success: false,
         error: {

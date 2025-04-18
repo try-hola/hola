@@ -1,129 +1,174 @@
-const axios = require("axios");
-const { handleApiError } = require("./error-handler");
-const configManager = require("./config-manager");
+const axios = require('axios');
+const configManager = require('./config-manager');
+const serverProviderRegistry = require('./server-provider-registry');
+const { handleError } = require('./error-handler');
 const { ApiResponse } = require("../types");
 
 /**
- * API Client for communicating with the Hola server.
- * Provides generic HTTP helpers for REST API calls.
- * Generic API client for making HTTP requests to the server.
- * Provides generic get, post, put, and delete methods.
- * Do not add command-specific logic here.
+ * Generic API client for communicating with the Hola server
+ * Generic by design to maintain flexibility across different server providers
  */
 class ApiClient {
-  // Axios client instance
-  private client;
   /**
-   * Create a new instance of the API client
+   * Create a new API client instance
    */
   constructor() {
-    const config = configManager.getConfig();
+    this.axiosInstance = null;
+  }
 
-    this.client = axios.create({
-      baseURL: config.server_url,
-      timeout: config.timeout,
-      headers: {
-        Authorization: `Bearer ${config.api_key}`,
-        "Content-Type": "application/json",
-      },
+  /**
+   * Initialize the API client with a specific server context
+   */
+  async init(serverContext) {
+    // Use provided context or resolve from config
+    const context = serverContext || await configManager.resolveServerContext();
+    
+    if (!context) {
+      throw new Error('No server context available. Use "hola server bootstrap" to set up a server.');
+    }
+    
+    // Get provider for this context to handle any provider-specific configuration
+    const provider = serverProviderRegistry.getProviderForContext(context);
+    
+    // Get access token
+    let headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    try {
+      // Use the auth manager to get a valid access token
+      const authManager = require('./auth-manager');
+      const accessToken = await authManager.getAccessToken(context.name);
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    } catch (error) {
+      // Handle authentication error
+      throw new Error('Authentication required. Please run: hola auth login');
+    }
+    
+    // Create a new axios instance
+    this.axiosInstance = axios.create({
+      baseURL: `${context.url}/api`,
+      timeout: context.timeout || 60000,
+      headers
     });
-
+    
+    // Add provider-specific configuration if needed
+    if (provider && typeof provider.configureApiClient === 'function') {
+      await provider.configureApiClient(this.axiosInstance, context);
+    }
+    
     // Add response interceptor for error handling
-    this.client.interceptors.response.use(
-      (response) => response.data,
-      (error) => handleApiError(error)
+    this.axiosInstance.interceptors.response.use(
+      response => response,
+      error => this.handleRequestError(error)
     );
+    
+    return this;
   }
-
+  
   /**
-   * Make a GET request to the API.
-   * @param {string} endpoint - API endpoint to call
-   * @param {Object} params - Query parameters
-   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
+   * Handle request errors
    */
-  async get(endpoint: string, params: Record<string, any> = {}): Promise<typeof ApiResponse> {
-    try {
-      const response = await this.client.get(endpoint, { params });
-      return { success: true, data: response };
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.response?.data,
-        },
-      };
+  handleRequestError(error) {
+    // Custom error handling logic
+    if (error.response) {
+      // Server responded with non-2xx status code
+      const apiError = new Error(error.response.data.message || 'API Error');
+      apiError.isApiError = true;
+      apiError.code = error.response.data.code;
+      apiError.status = error.response.status;
+      apiError.details = error.response.data.details;
+      return Promise.reject(apiError);
+    } else if (error.request) {
+      // Request was made but no response received
+      const networkError = new Error('No response from server. Please check your connection.');
+      networkError.isNetworkError = true;
+      return Promise.reject(networkError);
+    } else {
+      // Error setting up the request
+      return Promise.reject(error);
     }
   }
 
   /**
-   * Make a POST request to the API.
-   * @param {string} endpoint - API endpoint to call
-   * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
+   * Make a GET request to the API
    */
-  async post(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
+  async get(path, params = {}, options = {}) {
+    await this.ensureInitialized();
     try {
-      const response = await this.client.post(endpoint, data);
-      return { success: true, data: response };
+      const response = await this.axiosInstance.get(path, { params, ...options });
+      return response.data;
     } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.response?.data,
-        },
-      };
+      throw error;
     }
   }
 
   /**
-   * Make a PUT request to the API.
-   * @param {string} endpoint - API endpoint to call
-   * @param {Object} data - Request body
-   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
+   * Make a POST request to the API
    */
-  async put(endpoint: string, data: Record<string, any> = {}): Promise<typeof ApiResponse> {
+  async post(path, data = {}, options = {}) {
+    await this.ensureInitialized();
     try {
-      const response = await this.client.put(endpoint, data);
-      return { success: true, data: response };
+      const response = await this.axiosInstance.post(path, data, options);
+      return response.data;
     } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.response?.data,
-        },
-      };
+      throw error;
     }
   }
 
   /**
-   * Make a DELETE request to the API.
-   * @param {string} endpoint - API endpoint to call
-   * @returns {Promise<ApiResponse<any>>} ApiResponse with data or error
+   * Make a PUT request to the API
    */
-  async delete(endpoint: string): Promise<typeof ApiResponse> {
+  async put(path, data = {}, options = {}) {
+    await this.ensureInitialized();
     try {
-      const response = await this.client.delete(endpoint);
-      return { success: true, data: response };
+      const response = await this.axiosInstance.put(path, data, options);
+      return response.data;
     } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: error.code,
-          message: error.message,
-          details: error.response?.data,
-        },
-      };
+      throw error;
+    }
+  }
+
+  /**
+   * Make a DELETE request to the API
+   */
+  async delete(path, options = {}) {
+    await this.ensureInitialized();
+    try {
+      const response = await this.axiosInstance.delete(path, options);
+      return response.data;
+    } catch (error) {
+      throw error;
+    }
+  }
+  
+  /**
+   * Create a connection for Server-Sent Events (SSE)
+   */
+  async createEventSource(path, onMessage, onError) {
+    await this.ensureInitialized();
+    
+    // This is a placeholder for SSE implementation
+    // The actual implementation would connect to the server for real-time updates
+    
+    return {
+      close: () => {
+        // Close the event source
+      }
+    };
+  }
+  
+  /**
+   * Ensure the client is initialized
+   */
+  async ensureInitialized() {
+    if (!this.axiosInstance) {
+      await this.init();
     }
   }
 }
 
-/**
- * Exports a singleton instance of the API client for use throughout the CLI.
- */
-module.exports = new ApiClient();
+// Create a singleton instance
+const apiClient = new ApiClient();
+
+module.exports = apiClient;

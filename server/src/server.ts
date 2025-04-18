@@ -25,30 +25,8 @@ function setupServer() {
     next();
   });
 
-  // API key authentication middleware
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    // Skip authentication in test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
-      return next();
-    }
-
-    const apiKey = process.env.API_KEY;
-    if (!apiKey) {
-      logEvent(
-        "SECURITY",
-        "warning",
-        "No API key is configured. API is unsecured!"
-      );
-      return next();
-    }
-
-    const providedKey = req.headers["x-api-key"];
-    if (!providedKey || providedKey !== apiKey) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-
-    next();
-  });
+  // Authentication middleware
+  app.use(require('./middlewares/auth'));
 
   // Register API routes
   registerRoutes(app);

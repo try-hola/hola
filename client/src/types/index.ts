@@ -3,7 +3,6 @@
  */
 type ConfigStore = {
   server_url: string;
-  api_key: string;
   timeout: number;
   output_format: "table" | "json" | "yaml";
   color: "auto" | "always" | "never";
@@ -14,7 +13,7 @@ type ConfigStore = {
 /**
  * Standard response structure for API calls.
  */
-type ApiResponse<T = any> = {
+export interface ApiResponse<T = any> {
   success: boolean;
   data?: T;
   error?: {
@@ -22,18 +21,27 @@ type ApiResponse<T = any> = {
     message: string;
     details?: any;
   };
-};
+}
 
 /**
  * Information about an application.
  */
-type AppInfo = {
+export interface AppInfo {
   name: string;
-  status: string;
+  status: 'running' | 'stopped' | 'error';
   version: string;
-  created_at: string;
-  updated_at: string;
-};
+  deployedAt: string;
+  url?: string;
+  health?: {
+    status: 'healthy' | 'unhealthy' | 'unknown';
+    checks?: {
+      [key: string]: {
+        status: 'passed' | 'failed';
+        message?: string;
+      };
+    };
+  };
+}
 
 /**
  * Key-value pair for configuration values.
@@ -82,6 +90,20 @@ interface ConfigSetOptions {
 interface ConfigDeleteOptions {
   app?: string;
   secret?: boolean;
+}
+
+/**
+ * Export all type definitions
+ */
+
+// Re-export all server provider related types
+export * from './server-provider';
+
+// Command option types
+export interface CommonCommandOptions {
+  server?: string;
+  output?: 'table' | 'json' | 'yaml';
+  verbose?: boolean;
 }
 
 // Export types for CommonJS

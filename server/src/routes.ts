@@ -2,7 +2,8 @@ const express = require("express");
 import { Application } from "express";
 const appsController = require("./controllers/apps");
 const filesController = require("./controllers/files");
-const configController = require("./controllers/config"); // This controller needs to be created
+const configController = require("./controllers/config");
+const authMiddleware = require("./middlewares/auth"); // Import our OIDC auth middleware
 
 /**
  * Registers all API routes on the given Express application
@@ -10,13 +11,16 @@ const configController = require("./controllers/config"); // This controller nee
  * @param app - The Express application instance
  */
 export const registerRoutes = (app: Application): void => {
-  // Health check endpoint
+  // Health check endpoint (unprotected)
   app.get("/", (req, res) => {
     res.json({
       status: "ok",
       version: process.env.npm_package_version || "1.0.0",
     });
   });
+
+  // Auth middleware for all API routes
+  app.use("/api", authMiddleware);
 
   // Application management routes
   app.post("/api/apps/deploy", appsController.deployApp); // Deploy a new application

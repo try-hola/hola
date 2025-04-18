@@ -36,6 +36,18 @@ client/src/
 │   │   ├── get.ts
 │   │   ├── set.ts
 │   │   └── index.ts   # Aggregates all settings commands
+│   ├── server/
+│   │   ├── list.ts
+│   │   ├── current.ts
+│   │   ├── switch.ts
+│   │   ├── rename.ts
+│   │   ├── remove.ts
+│   │   ├── update.ts
+│   │   ├── bootstrap.ts
+│   │   ├── add.ts
+│   │   ├── rotate-key.ts
+│   │   ├── ping.ts
+│   │   └── index.ts   # Aggregates all server commands
 │   └── index.ts       # Central command registry
 └── index.ts           # Entry point
 ```

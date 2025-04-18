@@ -2,7 +2,6 @@
 jest.mock("../../utils/config-manager", () => ({
   loadConfig: jest.fn().mockResolvedValue({
     server_url: "http://localhost:3000",
-    api_key: "test-api-key",
     timeout: 60000,
     output_format: "table",
   }),
@@ -59,9 +58,9 @@ describe("Settings Commands", () => {
       const mockCommand = createMockCommand();
       registerGet(mockCommand);
       const handler = mockCommand._handler;
-      await handler({ key: "api_key" });
+      await handler({ key: "server_url" });
       expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { api_key: "test-api-key" },
+        { server_url: "http://localhost:3000" },
         "table"
       );
     });

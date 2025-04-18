@@ -72,6 +72,11 @@ export const ORAS_REGISTRY = process.env.ORAS_REGISTRY || "localhost:5000";
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3000;
 
+// OIDC configuration
+export const OIDC_ENABLED = !!process.env.HOLA_OIDC_ISSUER;
+export const OIDC_ISSUER = process.env.HOLA_OIDC_ISSUER || '';
+export const OIDC_CLIENT_ID = process.env.HOLA_OIDC_CLIENT_ID || '';
+
 // Storage path structure for all application components
 export const PATHS: PathFunctions = {
   packages: {
@@ -241,4 +246,9 @@ module.exports = {
   STORAGE_ROOT,
   PATHS,
   isValidAppName,
+  oidc: {
+    enabled: OIDC_ENABLED,
+    issuer: OIDC_ISSUER,
+    clientId: OIDC_CLIENT_ID,
+  }
 };

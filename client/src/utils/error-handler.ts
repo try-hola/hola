@@ -38,10 +38,10 @@ function handleApiError(error) {
   switch (errorCode) {
     case 401:
       console.error(
-        chalk.red("Authentication failed. Please check your API key.")
+        chalk.red("Authentication failed. Please log in with your OIDC credentials.")
       );
       console.log(
-        "You can set your API key with: hola config set api_key <your-key>"
+        "Run: hola auth login"
       );
       break;
     case "CONNECTION_ERROR":

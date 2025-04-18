@@ -69,6 +69,21 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Follow the pattern of importing test utilities and setting up mocks before importing the modules under test.
 - Use beforeEach() hooks to reset mocks and set up test fixtures for each test case.
 - Leverage Jest's mocking capabilities for API and external service testing.
+- **Use Jest's `__mocks__` directory for automatic module mocking:**
+  - Create a `__mocks__` directory at the same level as the module you want to mock
+  - Create a file with the same name as the module to be mocked
+  - Implement the mock with the same interface as the original module
+  - Example for mocking `jsonwebtoken`:
+    ```javascript
+    // src/__mocks__/jsonwebtoken.js
+    const jwt = {
+      decode: jest.fn().mockReturnValue({ header: { kid: "test-kid" } }),
+      verify: jest.fn().mockReturnValue({ sub: "test-user" }),
+      sign: jest.fn().mockReturnValue("mock.jwt.token"),
+    };
+    module.exports = jwt;
+    ```
+  - This approach is preferred over conditional imports or manual mocking in test files
 - Write meaningful test cases that cover edge cases and error handling.
 - Maintain consistent test structure across files:
   - Import and setup mocks first

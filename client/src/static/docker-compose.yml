@@ -1,0 +1,109 @@
+version: "3.8"
+
+services:
+  traefik:
+    image: traefik:v2.10
+    restart: unless-stopped
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DATA_DIR}/traefik:/etc/traefik
+    networks:
+      - hola-network
+
+  postgresql:
+    image: postgres:14-alpine
+    restart: unless-stopped
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_PASSWORD=authentik
+      - POSTGRES_USER=authentik
+      - POSTGRES_DB=authentik
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d $${POSTGRES_DB} -U $${POSTGRES_USER}"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    networks:
+      - hola-network
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      start_period: 20s
+      interval: 30s
+      retries: 5
+      timeout: 5s
+    networks:
+      - hola-network
+
+  authentik:
+    build:
+      context: ./authentik
+    restart: unless-stopped
+    command: server
+    depends_on:
+      - postgresql
+      - redis
+    volumes:
+      - ${DATA_DIR}/media:/media
+      - ${DATA_DIR}/custom-templates:/templates
+      - ${DATA_DIR}/certs:/certs
+    environment:
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+      AUTHENTIK_POSTGRESQL__USER: ${POSTGRES_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${POSTGRES_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${POSTGRES_PASSWORD:-authentik}
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN}
+      AUTHENTIK_BOOTSTRAP_EMAIL: admin@example.com
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.authentik.rule=Host(`auth.${ORB_DOMAIN}`)"
+      - "traefik.http.routers.authentik.entrypoints=websecure"
+      - "traefik.http.routers.authentik.tls=true"
+      - "traefik.http.services.authentik.loadbalancer.server.port=9000"
+    networks:
+      - hola-network
+
+  hola-server:
+    image: ghcr.io/holaplex/hola-server:latest
+    restart: unless-stopped
+    environment:
+      - API_KEY=${HOLA_API_KEY}
+      - DB_PATH=/data/hola.db
+      - AUTH_PROVIDER_URL=https://auth.${ORB_DOMAIN}
+    volumes:
+      - ${DATA_DIR}/hola:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.hola.rule=Host(`${ORB_DOMAIN}`)"
+      - "traefik.http.routers.hola.entrypoints=websecure"
+      - "traefik.http.routers.hola.tls=true"
+      - "traefik.http.services.hola.loadbalancer.server.port=3000"
+    networks:
+      - hola-network
+
+networks:
+  hola-network:
+    driver: bridge
