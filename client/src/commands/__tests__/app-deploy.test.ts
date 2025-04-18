@@ -1,20 +1,8 @@
-jest.mock("../../utils/api-client", () => ({
-  post: jest.fn(),
-}));
-jest.mock("../../utils/output-formatter", () => ({
-  formatOutput: jest.fn(),
-}));
-jest.mock("../../utils/error-handler", () => ({
-  handleCommandError: jest.fn().mockImplementation((error) => {
-    return { success: false, error };
-  }),
-}));
-jest.mock("../../utils/logger", () => ({
-  debug: jest.fn(),
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-}));
+// Mock dependencies before importing modules using centralized mocks
+jest.mock("../../utils/api-client");
+jest.mock("../../utils/output-formatter");
+jest.mock("../../utils/error-handler");
+jest.mock("../../utils/logger");
 
 const apiClient = require("../../utils/api-client");
 const outputFormatter = require("../../utils/output-formatter");
@@ -33,10 +21,18 @@ describe("app deploy command", () => {
     apiClient.post.mockResolvedValue({ data: { deploymentId: "123" } });
     const options = { output: "table" };
     const result = await deployHandler("myapp", "package.tgz", options);
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/deploy", expect.objectContaining({ appName: "myapp", packagePath: expect.any(String) }));
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/api/apps/deploy",
+      expect.objectContaining({
+        appName: "myapp",
+        packagePath: expect.any(String),
+      }),
+    );
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("Deployment started") }),
-      "table"
+      expect.objectContaining({
+        message: expect.stringContaining("Deployment started"),
+      }),
+      "table",
     );
     expect(result).toEqual({
       success: true,
@@ -51,7 +47,7 @@ describe("app deploy command", () => {
     const result = await deployHandler("myapp", undefined, options);
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       expect.objectContaining({ error: expect.any(Object) }),
-      "json"
+      "json",
     );
     expect(result).toEqual({
       success: false,
@@ -67,8 +63,10 @@ describe("app deploy command", () => {
     const options = { output: "table" };
     const result = await deployHandler("invalid name!", "package.tgz", options);
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.objectContaining({ code: "DEPLOY_INVALID_APPNAME" }) }),
-      "table"
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "DEPLOY_INVALID_APPNAME" }),
+      }),
+      "table",
     );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("DEPLOY_INVALID_APPNAME");
@@ -79,8 +77,10 @@ describe("app deploy command", () => {
     const options = { output: "table" };
     const result = await deployHandler("myapp", "missing.tgz", options);
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.objectContaining({ code: "DEPLOY_PACKAGE_NOT_FOUND" }) }),
-      "table"
+      expect.objectContaining({
+        error: expect.objectContaining({ code: "DEPLOY_PACKAGE_NOT_FOUND" }),
+      }),
+      "table",
     );
     expect(result.success).toBe(false);
     expect(result.error.code).toBe("DEPLOY_PACKAGE_NOT_FOUND");
@@ -92,7 +92,11 @@ describe("app deploy command", () => {
     await deployHandler("myapp", "package.tgz", options);
     expect(apiClient.post).toHaveBeenCalledWith(
       "/api/apps/deploy",
-      expect.objectContaining({ appName: "myapp", force: true, packagePath: expect.any(String) })
+      expect.objectContaining({
+        appName: "myapp",
+        force: true,
+        packagePath: expect.any(String),
+      }),
     );
   });
 
@@ -102,7 +106,7 @@ describe("app deploy command", () => {
     const result = await deployHandler("myapp", undefined, options);
     expect(apiClient.post).toHaveBeenCalledWith(
       "/api/apps/deploy",
-      expect.objectContaining({ appName: "myapp" })
+      expect.objectContaining({ appName: "myapp" }),
     );
     expect(result.success).toBe(true);
     expect(result.data.deploymentId).toBe("789");

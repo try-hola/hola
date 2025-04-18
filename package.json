@@ -12,6 +12,21 @@
   ],
   "scripts": {
     "test": "yarn workspaces run test",
-    "test:coverage": "yarn workspaces run test:coverage"
+    "test:coverage": "yarn workspaces run test:coverage",
+    "lint": "yarn workspaces run lint",
+    "lint:fix": "yarn workspaces run lint:fix",
+    "format": "yarn workspaces run format",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.1"
+  },
+  "lint-staged": {
+    "*.{js,ts,tsx}": [
+      "yarn workspace {workspaceRoot} lint:fix",
+      "yarn workspace {workspaceRoot} format",
+      "yarn workspace {workspaceRoot} test --findRelatedTests --passWithNoTests"
+    ]
   }
 }

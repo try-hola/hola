@@ -12,17 +12,33 @@ const { ApiResponse } = require("../../types");
  * @returns ApiResponse with start result
  */
 interface StartOptions {}
-async function handler(appName: string, options: StartOptions): Promise<typeof ApiResponse> {
+async function handler(
+  appName: string,
+  options: StartOptions,
+): Promise<typeof ApiResponse> {
   try {
     logger.debug(`Starting application: ${appName}`);
 
     const response = await apiClient.post(`/api/apps/${appName}/start`);
 
     if (response.success) {
-      outputFormatter.formatOutput({ message: `Application '${appName}' started successfully.` }, "table");
+      outputFormatter.formatOutput(
+        { message: `Application '${appName}' started successfully.` },
+        "table",
+      );
       return response;
     } else {
-      outputFormatter.formatOutput({ error: { code: response.error?.code || "START_FAILED", message: `Failed to start application '${appName}'.`, details: response.error?.details } }, "table");
+      outputFormatter.formatOutput(
+        {
+          error: {
+            code: response.error?.code || "START_FAILED",
+            message: `Failed to start application '${appName}'.`,
+            details: response.error?.details,
+          },
+        },
+        "table",
+      );
+
       return {
         success: false,
         error: {
@@ -33,6 +49,17 @@ async function handler(appName: string, options: StartOptions): Promise<typeof A
       };
     }
   } catch (error) {
+    outputFormatter.formatOutput(
+      {
+        error: {
+          code: error.code || "START_ERROR",
+          message: error.message || "Unknown error",
+          details: error.details,
+        },
+      },
+      "table",
+    );
+
     // Always return ApiResponse error structure
     return {
       success: false,

@@ -8,31 +8,41 @@ interface ServerProvider {
    * Unique identifier for this server provider type
    */
   readonly type: string;
-  
+
   /**
    * Human-readable name of the server provider
    */
   readonly displayName: string;
-  
+
   /**
    * Check if this provider is available on the current system
    */
   isAvailable(): Promise<boolean>;
-  
+
   /**
    * Bootstrap a new server using this provider
    */
   bootstrap(options: ServerBootstrapOptions): Promise<ServerContext>;
-  
+
   /**
    * Validate a server context for this provider type
    */
   validateContext(context: ServerContext): Promise<boolean>;
-  
+
   /**
    * Get provider-specific configuration options
    */
   getConfigOptions(): ServerProviderConfigOptions;
+
+  /**
+   * Get provider-specific options for a server
+   */
+  getOptions(): Promise<ServerProviderOptions>;
+
+  /**
+   * Validate provider-specific options
+   */
+  validateOptions(options: ServerProviderOptions): Promise<boolean>;
 }
 
 /**
@@ -82,7 +92,7 @@ interface ServerContext {
 interface ServerProviderConfigOptions {
   // Options that will appear in bootstrap wizard and server configuration
   [key: string]: {
-    type: 'string' | 'number' | 'boolean';
+    type: "string" | "number" | "boolean";
     label: string;
     description: string;
     default?: any;
@@ -90,9 +100,17 @@ interface ServerProviderConfigOptions {
   };
 }
 
+/**
+ * Represents a provider-specific options for a server
+ */
+interface ServerProviderOptions {
+  [key: string]: any;
+}
+
 export {
   ServerProvider,
   ServerBootstrapOptions,
   ServerContext,
-  ServerProviderConfigOptions
+  ServerProviderConfigOptions,
+  ServerProviderOptions,
 };

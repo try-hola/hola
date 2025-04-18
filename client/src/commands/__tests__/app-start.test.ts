@@ -1,29 +1,8 @@
-// Mock dependencies before importing modules
-jest.mock("../../utils/api-client", () => ({
-  get: jest.fn(),
-  post: jest.fn(),
-  delete: jest.fn(),
-}));
-
-jest.mock("../../utils/output-formatter", () => ({
-  formatOutput: jest.fn(),
-  format: jest.fn(),
-  table: jest.fn(),
-  json: jest.fn(),
-}));
-
-jest.mock("../../utils/error-handler", () => ({
-  handleCommandError: jest.fn().mockImplementation((error) => {
-    return { success: false, error };
-  }),
-}));
-
-jest.mock("../../utils/logger", () => ({
-  debug: jest.fn(),
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-}));
+// Mock dependencies before importing modules using centralized mocks
+jest.mock("../../utils/api-client");
+jest.mock("../../utils/output-formatter");
+jest.mock("../../utils/error-handler");
+jest.mock("../../utils/logger");
 
 // Import dependencies after mocking
 const apiClient = require("../../utils/api-client");
@@ -80,7 +59,7 @@ describe("App Start Command", () => {
     // Validate output formatter was called correctly
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       { message: "Application 'test-app' started successfully." },
-      "table"
+      "table",
     );
 
     // Validate result
@@ -109,16 +88,25 @@ describe("App Start Command", () => {
   });
 
   test("should handle unsuccessful application start", async () => {
-    apiClient.post.mockResolvedValue({ success: false, error: { code: "START_FAILED", message: "Application failed to start" } });
+    apiClient.post.mockResolvedValue({
+      success: false,
+      error: { code: "START_FAILED", message: "Application failed to start" },
+    });
     const options = {};
     const result = await startHandler("test-app1", options);
-    
+
     // Validate output formatter was called correctly
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      { error: { code: "START_FAILED", message: "Failed to start application 'test-app1'.", details: undefined } },
-      "table"
+      {
+        error: {
+          code: "START_FAILED",
+          message: "Failed to start application 'test-app1'.",
+          details: undefined,
+        },
+      },
+      "table",
     );
-    
+
     expect(result).toEqual({
       success: false,
       error: {
@@ -163,7 +151,10 @@ describe("App Stop Command", () => {
   });
 
   test("should handle unsuccessful application stop", async () => {
-    apiClient.post.mockResolvedValue({ success: false, error: { code: "STOP_FAILED", message: "Application failed to stop" } });
+    apiClient.post.mockResolvedValue({
+      success: false,
+      error: { code: "STOP_FAILED", message: "Application failed to stop" },
+    });
     const result = await stopHandler("test-app1", {});
     expect(result).toEqual({
       success: false,
@@ -209,7 +200,13 @@ describe("App Restart Command", () => {
   });
 
   test("should handle unsuccessful application restart", async () => {
-    apiClient.post.mockResolvedValue({ success: false, error: { code: "RESTART_FAILED", message: "Application failed to restart" } });
+    apiClient.post.mockResolvedValue({
+      success: false,
+      error: {
+        code: "RESTART_FAILED",
+        message: "Application failed to restart",
+      },
+    });
     const result = await restartHandler("test-app1", {});
     expect(result).toEqual({
       success: false,

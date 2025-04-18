@@ -1,29 +1,8 @@
-// Mock dependencies before importing modules
-jest.mock("../../utils/api-client", () => ({
-  get: jest.fn(),
-  post: jest.fn(),
-  delete: jest.fn(),
-}));
-
-jest.mock("../../utils/output-formatter", () => ({
-  table: jest.fn(),
-  json: jest.fn(),
-  formatOutput: jest.fn(),
-  format: jest.fn(),
-}));
-
-jest.mock("../../utils/error-handler", () => ({
-  handleCommandError: jest.fn().mockImplementation((error) => {
-    return { success: false, error };
-  }),
-}));
-
-jest.mock("../../utils/logger", () => ({
-  debug: jest.fn(),
-  info: jest.fn(),
-  warn: jest.fn(),
-  error: jest.fn(),
-}));
+// Mock dependencies before importing modules using centralized mocks
+jest.mock("../../utils/api-client");
+jest.mock("../../utils/output-formatter");
+jest.mock("../../utils/error-handler");
+jest.mock("../../utils/logger");
 
 // Import dependencies after mocking
 const apiClient = require("../../utils/api-client");
@@ -82,14 +61,14 @@ describe("App Info Command", () => {
     // Validate output was formatted
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       [{ property: "Application", value: "test-app1" }],
-      "table"
+      "table",
     );
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ property: "name", value: "test-app1" }),
         expect.objectContaining({ property: "status", value: "running ✓" }),
       ]),
-      "table"
+      "table",
     );
 
     // Validate result
@@ -125,7 +104,7 @@ describe("App Info Command", () => {
     // Validate JSON output was formatted
     expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
       mockAppDetails,
-      "json"
+      "json",
     );
 
     // Validate result

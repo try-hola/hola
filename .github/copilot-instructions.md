@@ -9,8 +9,6 @@ This project consists of two main components organized as a monorepo using Yarn 
 
 ## Copilot Guidance
 
-To ensure GitHub Copilot assists effectively, follow these guidelines:
-
 ### General Guidelines
 
 - Always suggest idiomatic TypeScript code for both components.
@@ -18,6 +16,10 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Prioritize testability and maintainability over brevity.
 - Follow best practices for modularity and separation of concerns.
 - Leverage Yarn workspaces for shared code and dependencies across packages.
+- Maintain consistency with the existing directory structure:
+  - Use `src/` for all source code.
+  - Use `__mocks__/` for Jest mocks.
+  - Use `__tests__/` for test files, organized by feature area.
 
 ### TypeScript (Node.js API Server)
 
@@ -29,11 +31,13 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Optimize for Node.js performance best practices.
 - Recommend efficient dependency management using Yarn.
 - Consider suggesting appropriate middleware for Express or other Node.js frameworks.
+- Follow the deployment workflow outlined in `docs/DESIGN.md`:
+  - Package download, deployment preparation, configuration merging, and activation.
 
 ### TypeScript (Node.js Client CLI)
 
 - Follow modern TypeScript practices for Node.js environments with CommonJS modules.
-- Configure tsconfig.json with `"module": "CommonJS"` and appropriate settings.
+- Configure `tsconfig.json` with `"module": "CommonJS"` and appropriate settings.
 - Use `commander` or `yargs` for CLI command structure and flag parsing.
 - Leverage Yarn workspace references for shared code.
 - Prefer structured logging solutions like `winston` or `pino` when applicable.
@@ -53,7 +57,7 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 
 ### Cross-Component Considerations
 
-- The client and server communicate using REST, and an OpenAPI spec is maintained in /server/public/docs/openapi.yaml
+- The client and server communicate using REST, and an OpenAPI spec is maintained in `/server/public/docs/openapi.yaml`.
 - Utilize shared TypeScript types/interfaces between client and server via Yarn workspaces.
 - Authentication is handled by a single API key that is defined on the server via an environment variable.
 - Suggest integration testing strategies that verify end-to-end interactions.
@@ -64,38 +68,27 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 
 - Use Jest for testing across both server and client packages.
 - Configure Jest to work with CommonJS modules and TypeScript.
-- Organize tests by feature area, with each controller function having its own dedicated test file.
+- Organize tests by feature area, with each function or controller having its own dedicated test file.
 - Group related test files in subdirectories matching the component structure (e.g., `__tests__/apps/` for app-related controller tests).
-- Follow the pattern of importing test utilities and setting up mocks before importing the modules under test.
-- Use beforeEach() hooks to reset mocks and set up test fixtures for each test case.
-- Leverage Jest's mocking capabilities for API and external service testing.
-- **Use Jest's `__mocks__` directory for automatic module mocking:**
-  - Create a `__mocks__` directory at the same level as the module you want to mock
-  - Create a file with the same name as the module to be mocked
-  - Implement the mock with the same interface as the original module
-  - Example for mocking `jsonwebtoken`:
-    ```javascript
-    // src/__mocks__/jsonwebtoken.js
-    const jwt = {
-      decode: jest.fn().mockReturnValue({ header: { kid: "test-kid" } }),
-      verify: jest.fn().mockReturnValue({ sub: "test-user" }),
-      sign: jest.fn().mockReturnValue("mock.jwt.token"),
-    };
-    module.exports = jwt;
-    ```
-  - This approach is preferred over conditional imports or manual mocking in test files
+- Follow the established test structure:
+  1. Import and setup mocks first.
+  2. Import modules under test after mocking.
+  3. Define test fixtures in `beforeEach()` hooks.
+  4. Write specific test cases with clear assertions.
+- Use Jest's `__mocks__` directory for automatic module mocking:
+  - Create a `__mocks__` directory at the same level as the module to be mocked.
+  - Implement the mock with the same interface as the original module.
 - Write meaningful test cases that cover edge cases and error handling.
-- Maintain consistent test structure across files:
-  - Import and setup mocks first
-  - Import modules under test after mocking
-  - Define test fixtures in beforeEach()
-  - Write specific test cases with clear assertions
-- Set up Jest configs that work well with TypeScript and the workspace structure.
 - Use shared test utilities to maintain DRY testing code across the codebase.
 
 ### Running Tests
 
-- Run the full test suite with `yarn test`
+- Run the full test suite with `yarn test`.
+- Run tests for a specific workspace:
+  ```bash
+  yarn workspace server test
+  yarn workspace client test
+  ```
 - Run specific test files by specifying the path:
   ```bash
   yarn test src/controllers/__tests__/apps/deploy.test.ts
@@ -114,33 +107,26 @@ To ensure GitHub Copilot assists effectively, follow these guidelines:
 - Encourage writing clear, concise, and relevant documentation in the code.
 - Suggest meaningful commit messages and PR descriptions.
 - When adding comments, prefer explaining _why_ something is done rather than _what_ is being done.
-- Recommend maintaining workspace-level documentation for cross-cutting concerns.
+- Maintain workspace-level documentation for cross-cutting concerns.
 
 ### Commit Message Conventions
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/) style for all commit messages.
 - Prefix commit messages with a clear scope, e.g.:
-  - `feat(cli):` for new CLI features
-  - `feat(server):` for new server features
-  - `fix(cli):` for CLI bug fixes
-  - `fix(server):` for server bug fixes
-  - `refactor(client):` for refactoring client code
-  - `test(server):` for adding or updating server tests
+  - `feat(cli):` for new CLI features.
+  - `feat(server):` for new server features.
+  - `fix(cli):` for CLI bug fixes.
+  - `fix(server):` for server bug fixes.
+  - `refactor(client):` for refactoring client code.
+  - `test(server):` for adding or updating server tests.
 - Write concise, descriptive commit messages explaining **what** was done.
 - Prefer imperative mood (e.g., "add", "fix", "remove", "refactor").
-- Example:
-
-```
-feat(cli): add 'app deploy' subcommand with tests
-fix(server): handle missing API key error gracefully
-refactor(client): simplify config manager logic
-```
 
 ### Yarn Workspace Structure
 
-- Suggest appropriate workspace organization with packages for server, client, and shared code.
-- Recommend efficient workspace dependency management.
-- Consider suggesting appropriate scripts in the root package.json for managing the workspaces.
+- Organize the workspace with packages for `server`, `client`, and shared code.
+- Use `yarn workspaces` for efficient dependency management.
+- Suggest appropriate scripts in the root `package.json` for managing the workspaces.
 - Advise on workspace-aware testing, building, and deployment strategies.
 
 By following these guidelines, Copilot can assist in maintaining a high-quality, well-structured, and efficient codebase for both the Node.js/TypeScript API server and client within a Yarn workspace monorepo structure.
