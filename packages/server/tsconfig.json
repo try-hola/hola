@@ -33,8 +33,15 @@
     "removeComments": false, // Does not remove comments from output.
     "forceConsistentCasingInFileNames": true, // Disallows inconsistently-cased references to the same file.
     "resolveJsonModule": true, // Includes modules imported with .json extension.
-    "rootDir": "src" // Specifies the root directory of input files.
+    "rootDir": "src", // Specifies the root directory of input files.
+    
+    // Project references specific options
+    "composite": true, // Enables project references
+    "declarationMap": true, // Generates a source map for .d.ts files
+    "incremental": true, // Enables incremental compilation
+    "tsBuildInfoFile": "./dist/.tsbuildinfo" // Specifies the file to store incremental compilation information
   },
   "include": ["src/**/*"], // Specifies an array of filenames or patterns to include in the program.
-  "exclude": ["node_modules", "dist"] // Specifies an array of filenames or patterns to exclude from the program.
+  "exclude": ["node_modules", "dist", "**/*.test.ts"], // Specifies an array of filenames or patterns to exclude from the program.
+  "references": [] // No references to other projects in the server package
 }

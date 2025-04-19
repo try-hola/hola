@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2019",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitThis": true,
+    "alwaysStrict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@hola/server/*": ["packages/server/src/*"],
+      "@hola/cli/*": ["packages/client/src/*"]
+    }
+  },
+  "references": [
+    { "path": "packages/server" },
+    { "path": "packages/client" }
+  ],
+  "files": [],
+  "exclude": ["node_modules", "**/*.test.ts"]
+}
