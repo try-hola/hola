@@ -11,14 +11,10 @@ module.exports = {
 
   // An array of glob patterns indicating a set of files for which coverage information should be collected
   collectCoverageFrom: [
-    "client/src/**/*.{js,ts}",
-    "!client/src/**/*.d.ts",
-    "!client/src/**/__tests__/**",
-    "!client/src/**/__mocks__/**",
-    "server/src/**/*.{js,ts}",
-    "!server/src/**/*.d.ts",
-    "!server/src/**/__tests__/**",
-    "!serv er/src/**/__mocks__/**",
+    "packages/*/src/**/*.{js,ts}",
+    "!packages/*/src/**/*.d.ts",
+    "!packages/*/src/**/__tests__/**",
+    "!packages/*/src/**/__mocks__/**",
   ],
 
   // A list of reporter names that Jest uses when writing coverage reports
@@ -44,8 +40,8 @@ module.exports = {
 
   // Use the projects configuration to run tests for each workspace
   projects: [
-    "<rootDir>/client/jest.config.js",
-    "<rootDir>/server/jest.config.js",
+    "<rootDir>/packages/client/jest.config.js",
+    "<rootDir>/packages/server/jest.config.js",
     // Add paths to other workspace jest configs if you have more
   ],
 

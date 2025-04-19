@@ -1,7 +1,7 @@
 {
   "name": "Node.js Project",
-  "dockerComposeFile": "docker-compose.yml",
-  "service": "devcontainer",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:latest",
+  
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {},
@@ -38,7 +38,7 @@
   "containerEnv": {
     "NODE_ENV": "development"
   },
-  "tasks": {
-    "test": "yarn test"
-  }
+  "postStartCommand": "yarn test",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/hola,type=bind,consistency=cached",
+  "workspaceFolder": "/workspaces/hola"
 }

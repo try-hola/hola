@@ -6,10 +6,7 @@
   "author": "Paul O'Fallon <pofallon@users.noreply.github.com>",
   "license": "MIT",
   "private": true,
-  "workspaces": [
-    "server",
-    "client"
-  ],
+  "workspaces": ["packages/*"],
   "scripts": {
     "test": "yarn workspaces run test",
     "test:coverage": "yarn workspaces run test:coverage",
