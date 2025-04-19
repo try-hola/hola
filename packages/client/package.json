@@ -16,7 +16,9 @@
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write 'src/**/*.{js,ts}'",
     "start": "node dist/index.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "dev": "ts-node src/index.ts",
+    "debug": "node --inspect-brk -r ts-node/register src/index.ts"
   },
   "dependencies": {
     "axios": "^1.8.4",
