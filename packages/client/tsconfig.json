@@ -47,8 +47,8 @@
     },
     "baseUrl": "."
   },
-  "include": ["src/**/*"], // Specifies an array of filenames or patterns to include in the program.
-  "exclude": ["node_modules", "dist", "**/*.test.ts"], // Specifies an array of filenames or patterns to exclude from the program.
+  "include": ["src/**/*", "src/**/*.node.test.ts"], // Include node test files
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "!**/*.node.test.ts"], // Exclude Jest test files but keep node test files
   "references": [
     { "path": "../server" } // Reference to the server project for shared types
   ]

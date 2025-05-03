@@ -9,6 +9,11 @@ We have successfully migrated the following test files:
 - `app-info.test.ts` → `app-info.node.test.ts`
 - `app-deploy.test.ts` → `app-deploy.node.test.ts`
 - `app-start.test.ts` → `app-start.node.test.ts` (includes tests for start, stop, and restart commands)
+- `auth-manager.test.ts` → `auth-manager.node.test.ts`
+- `config-manager.test.ts` → `config-manager.node.test.ts`
+- `app-commands.test.ts` → `app-commands.node.test.ts`
+- `server/add.test.ts` → `server/add.node.test.ts`
+- `app/delete.test.ts` → `app/delete.node.test.ts`
 
 ## Migration Strategy
 
@@ -29,6 +34,69 @@ The following files have been created to support the migration:
 - `src/test-utils/mocks.ts` - Provides mocking utilities
 - `src/test-utils/node-test-template.ts` - Template for new test files
 - `src/types/node-test-globals.d.ts` - TypeScript declarations for Node.js test APIs
+
+## Key Structural Patterns for Reliable Tests
+
+Based on our successful migrations, we've identified these five critical patterns for reliable Node.js tests:
+
+1. **Clear module cache for each test** - Begin each test by clearing the entire module cache for any paths that match your module patterns (like `/utils/`). This ensures each test starts with a clean state.
+
+2. **Track function calls with a helper function** - Use the `trackCalls` helper function to create Jest spy-like functionality for tracking function calls, arguments, and controlling return values.
+
+3. **Set up mocks by directly manipulating the require cache** - For consistent behavior, directly manipulate the `require.cache` object rather than using helper functions. This approach works more reliably across different test scenarios.
+
+4. **Import modules under test AFTER mocking** - Always import the module being tested after all mocks are set up, never before. This ensures the module uses your mock implementations.
+
+5. **Use Node.js native assertion library** - Use Node's built-in `assert` module for verifications rather than trying to replicate Jest's expect API. This leads to clearer, more maintainable tests that follow Node.js conventions.
+
+Example of these patterns in action:
+
+```typescript
+// 1. Clear module cache at beginning of each test
+Object.keys(require.cache).forEach((key) => {
+  if (key.includes("/utils/") && !key.includes("node_modules")) {
+    delete require.cache[key];
+  }
+});
+
+// 2. Track function calls with a helper function
+function trackCalls(fn) {
+  const calls = [];
+  const tracked = function (...args) {
+    calls.push([...args]);
+    return fn ? fn.apply(this, args) : undefined;
+  };
+  tracked.calls = calls;
+  return tracked;
+}
+
+const mockGet = trackCalls(async () => ({ data: { value: "test" } }));
+
+// 3. Set up mocks by directly manipulating require.cache
+require.cache[require.resolve("../../utils/api-client")] = {
+  exports: {
+    get: mockGet,
+    post: () => {},
+    delete: () => {},
+  },
+  id: require.resolve("../../utils/api-client"),
+  filename: require.resolve("../../utils/api-client"),
+  loaded: true,
+  children: [],
+  paths: [],
+};
+
+// 4. Import the module under test AFTER setting up mocks
+const moduleUnderTest = require("../path/to/module");
+
+// 5. Use Node.js native assertion library
+it("should make an API call", async () => {
+  const result = await moduleUnderTest.doSomething();
+  assert.strictEqual(mockGet.calls.length, 1, "API get should be called once");
+  assert.strictEqual(mockGet.calls[0][0], "/api/endpoint", "API endpoint should be correct");
+  assert.deepStrictEqual(result, { value: "test" }, "Result should match expected structure");
+});
+```
 
 ## How to Migrate a Test File
 

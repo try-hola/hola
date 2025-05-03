@@ -91,6 +91,28 @@ module.exports = [
     },
   },
 
+  // Configuration specifically for Node.js Test files
+  {
+    files: ["**/*.node.test.ts"],
+    languageOptions: {
+      globals: {
+        // Add Node.js test globals
+        ...globals.node,
+      },
+    },
+    rules: {
+      // Disable TypeScript safety rules in test files to facilitate testing
+      "@typescript-eslint/no-unsafe-assignment": "off",
+      "@typescript-eslint/no-unsafe-member-access": "off",
+      "@typescript-eslint/no-unsafe-call": "off",
+      "@typescript-eslint/no-unsafe-return": "off",
+      "@typescript-eslint/no-unsafe-argument": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/unbound-method": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+
   // Special configuration for mocks
   {
     files: ["**/__mocks__/**/*.js"],

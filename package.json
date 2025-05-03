@@ -47,7 +47,7 @@
   "lint-staged": {
     "*.{js,ts,tsx}": [
       "prettier --write",
-      "jest --bail --findRelatedTests --passWithNoTests"
+      "jest --bail --passWithNoTests --testPathIgnorePatterns=\".node.test.ts$\""
     ]
   }
 }
