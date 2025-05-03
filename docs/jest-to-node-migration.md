@@ -1,65 +1,94 @@
-# Migrating from Jest to Node.js Built-in Test Runner
+# Jest to Node.js Test Runner Migration Guide
 
-This document outlines the progress and next steps for migrating our client package tests from Jest to Node's built-in test runner.
+This document outlines the process for migrating tests from Jest to the built-in Node.js Test Runner.
 
-## Progress So Far
+## Why Migrate?
 
-We have successfully migrated the following test files:
+- **Reduced Dependencies**: The Node.js test runner is built into Node.js v18+, eliminating the need for external testing libraries.
+- **Faster Execution**: Native test runner is typically faster than Jest for most test scenarios.
+- **Simplified Setup**: No need for complex configuration files or transformers.
+- **ECMAScript Modules Support**: Better support for ESM without requiring additional plugins.
+- **Reduced Bundle Size**: Removing Jest reduces the overall package size.
 
-- `app-info.test.ts` → `app-info.node.test.ts`
-- `app-deploy.test.ts` → `app-deploy.node.test.ts`
-- `app-start.test.ts` → `app-start.node.test.ts` (includes tests for start, stop, and restart commands)
-- `auth-manager.test.ts` → `auth-manager.node.test.ts`
-- `config-manager.test.ts` → `config-manager.node.test.ts`
-- `app-commands.test.ts` → `app-commands.node.test.ts`
-- `server/add.test.ts` → `server/add.node.test.ts`
-- `app/delete.test.ts` → `app/delete.node.test.ts`
+## Migration Process
 
-## Migration Strategy
+### 1. Setup Environment
 
-We're using an incremental approach that allows both Jest and Node.js test runner to coexist:
+1. Create a test-register.js file in your project root:
 
-1. Create `.node.test.ts` versions of existing test files
-2. Update package.json to run both test frameworks
-3. Use common utilities for consistent testing patterns
-4. Gradually migrate all tests to Node.js test runner
-5. When all tests are migrated, remove Jest dependencies
+```javascript
+// test-register.js
+// This file is required to load any necessary hooks before tests run
+// For example, to handle TypeScript files
+require('ts-node/register');
+```
 
-## Setup and Configuration
+2. Update your package.json scripts:
 
-The following files have been created to support the migration:
+```json
+"scripts": {
+  "test": "node --require ./test-register.js --test \"src/**/*.node.test.ts\" && jest"
+}
+```
 
-- `test-register.js` - Enables TypeScript support for Node.js tests
-- `src/test-utils/assertions.ts` - Provides Jest-like assertion helpers
-- `src/test-utils/mocks.ts` - Provides mocking utilities
-- `src/test-utils/node-test-template.ts` - Template for new test files
-- `src/types/node-test-globals.d.ts` - TypeScript declarations for Node.js test APIs
+This allows running both Node.js tests and Jest tests during transition.
 
-## Key Structural Patterns for Reliable Tests
+### 2. Convert Test Files
 
-Based on our successful migrations, we've identified these five critical patterns for reliable Node.js tests:
+For each Jest test file, create a new file with `.node.test.ts` extension.
 
-1. **Clear module cache for each test** - Begin each test by clearing the entire module cache for any paths that match your module patterns (like `/utils/`). This ensures each test starts with a clean state.
+### 3. Convert Basic Test Structure
 
-2. **Track function calls with a helper function** - Use the `trackCalls` helper function to create Jest spy-like functionality for tracking function calls, arguments, and controlling return values.
+| Jest | Node.js Test Runner |
+|------|---------------------|
+| `describe()` | `require('node:test').describe()` |
+| `it()` or `test()` | `require('node:test').it()` |
+| `beforeEach()` | `require('node:test').beforeEach()` |
+| `afterEach()` | `require('node:test').afterEach()` |
+| `beforeAll()` | `require('node:test').before()` |
+| `afterAll()` | `require('node:test').after()` |
 
-3. **Set up mocks by directly manipulating the require cache** - For consistent behavior, directly manipulate the `require.cache` object rather than using helper functions. This approach works more reliably across different test scenarios.
-
-4. **Import modules under test AFTER mocking** - Always import the module being tested after all mocks are set up, never before. This ensures the module uses your mock implementations.
-
-5. **Use Node.js native assertion library** - Use Node's built-in `assert` module for verifications rather than trying to replicate Jest's expect API. This leads to clearer, more maintainable tests that follow Node.js conventions.
-
-Example of these patterns in action:
+Example:
 
 ```typescript
-// 1. Clear module cache at beginning of each test
-Object.keys(require.cache).forEach((key) => {
-  if (key.includes("/utils/") && !key.includes("node_modules")) {
-    delete require.cache[key];
-  }
+// Jest
+describe('My Test Suite', () => {
+  it('should do something', () => {
+    expect(1 + 1).toBe(2);
+  });
 });
 
-// 2. Track function calls with a helper function
+// Node.js Test Runner
+const { describe, it } = require('node:test');
+const assert = require('node:assert');
+
+describe('My Test Suite', () => {
+  it('should do something', () => {
+    assert.strictEqual(1 + 1, 2);
+  });
+});
+```
+
+### 4. Replace Jest Assertions with Node.js Assertions
+
+| Jest | Node.js Assert |
+|------|---------------|
+| `expect(x).toBe(y)` | `assert.strictEqual(x, y)` |
+| `expect(x).toEqual(y)` | `assert.deepStrictEqual(x, y)` |
+| `expect(x).toBeTruthy()` | `assert.ok(x)` |
+| `expect(x).toBeFalsy()` | `assert.ok(!x)` |
+| `expect(() => fn()).toThrow()` | `assert.throws(() => fn())` |
+| `expect(fn).toHaveBeenCalled()` | Custom implementation needed (see Function Mocking) |
+| `expect(x).toContain(y)` | `assert.ok(x.includes(y))` |
+
+### 5. Function Mocking and Spies
+
+Jest provides built-in mocking capabilities with `jest.fn()` and `jest.spyOn()`. For Node.js test runner, create a helper function:
+
+```typescript
+/**
+ * Helper function for tracking function calls (similar to Jest spies)
+ */
 function trackCalls(fn) {
   const calls = [];
   const tracked = function (...args) {
@@ -69,140 +98,215 @@ function trackCalls(fn) {
   tracked.calls = calls;
   return tracked;
 }
-
-const mockGet = trackCalls(async () => ({ data: { value: "test" } }));
-
-// 3. Set up mocks by directly manipulating require.cache
-require.cache[require.resolve("../../utils/api-client")] = {
-  exports: {
-    get: mockGet,
-    post: () => {},
-    delete: () => {},
-  },
-  id: require.resolve("../../utils/api-client"),
-  filename: require.resolve("../../utils/api-client"),
-  loaded: true,
-  children: [],
-  paths: [],
-};
-
-// 4. Import the module under test AFTER setting up mocks
-const moduleUnderTest = require("../path/to/module");
-
-// 5. Use Node.js native assertion library
-it("should make an API call", async () => {
-  const result = await moduleUnderTest.doSomething();
-  assert.strictEqual(mockGet.calls.length, 1, "API get should be called once");
-  assert.strictEqual(mockGet.calls[0][0], "/api/endpoint", "API endpoint should be correct");
-  assert.deepStrictEqual(result, { value: "test" }, "Result should match expected structure");
-});
 ```
 
-## How to Migrate a Test File
-
-Follow these steps to migrate a Jest test file to the Node.js test runner:
-
-1. Create a new file with the same name but using `.node.test.ts` extension
-2. Use the template from `src/test-utils/node-test-template.ts`
-3. Import the necessary test functions from `node:test`
-4. Use `assert` from `node:assert` or our custom assertion helpers
-5. Set up mocks using the require cache manipulation pattern
-6. Import modules under test after setting up mocks
-7. Update assertions to use Node.js assertions or our Jest-like helpers
-
-### Example Migration
-
-Here's a simplified example of what the migration looks like:
+Usage:
 
 ```typescript
-// Before (Jest)
-jest.mock("../../utils/api-client");
-const apiClient = require("../../utils/api-client");
+// Jest
+const mockFn = jest.fn();
+mockFn('arg1', 'arg2');
+expect(mockFn).toHaveBeenCalledWith('arg1', 'arg2');
 
-describe("My Test Suite", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-  
-  test("should do something", async () => {
-    apiClient.get.mockResolvedValue({ data: { value: "test" } });
-    const result = await myModule.doSomething();
-    expect(result).toBe("test");
-  });
-});
+// Node.js Test Runner
+const mockFn = trackCalls();
+mockFn('arg1', 'arg2');
+assert.deepStrictEqual(mockFn.calls[0], ['arg1', 'arg2']);
+```
 
-// After (Node.js test runner)
-const { describe, it, beforeEach } = require('node:test');
-const assert = require('node:assert');
+### 6. Module Mocking
 
-function mockModule(modulePath, implementation) {
+Jest offers `jest.mock()` to automatically mock modules. For Node.js test runner, manually manipulate the require cache:
+
+```typescript
+/**
+ * Helper function to mock a module in the require cache
+ */
+function mockModule(modulePath, mockImplementation) {
   const fullPath = require.resolve(modulePath);
   require.cache[fullPath] = {
-    exports: implementation,
+    exports: mockImplementation,
     id: fullPath,
     filename: fullPath,
     loaded: true,
     children: [],
-    paths: []
+    paths: [],
   };
 }
 
-describe("My Test Suite", () => {
-  beforeEach(() => {
-    // Clear mocks
-    Object.keys(require.cache).forEach(key => {
-      if (key.includes('/utils/') && !key.includes('node_modules')) {
-        delete require.cache[key];
-      }
-    });
-    
-    // Setup mocks
-    mockModule('../../utils/api-client', {
-      get: async () => ({ data: { value: "test" } })
-    });
+/**
+ * Helper function to clear all mocks from the require cache
+ */
+function clearMocks(pattern = "/utils/") {
+  Object.keys(require.cache).forEach((key) => {
+    if (key.includes(pattern) && !key.includes("node_modules")) {
+      delete require.cache[key];
+    }
   });
-  
-  it("should do something", async () => {
-    const myModule = require('../path/to/module');
-    const result = await myModule.doSomething();
-    assert.strictEqual(result, "test");
-  });
+}
+```
+
+Usage:
+
+```typescript
+// Jest
+jest.mock('../../utils/api-client', () => ({
+  get: jest.fn().mockResolvedValue({ data: { result: 'success' } }),
+}));
+
+// Node.js Test Runner
+mockModule('../../utils/api-client', {
+  get: trackCalls(async () => ({ data: { result: 'success' } })),
 });
 ```
 
-## Common Patterns
+### 7. Important Node.js Test Runner Patterns
 
-1. **Mocking modules**: Use the `mockModule` function to add mock implementations to the require cache
-2. **Clearing mocks**: Use `clearMocks` before each test to ensure a fresh state
-3. **Tracking calls**: Use the `trackCalls` helper to create spy-like functions
-4. **Assertions**: Use either Node's `assert` module directly or the helpers in `assertions.ts`
+#### Module Cache Management
 
-## Next Steps in Migration
+The Node.js test runner doesn't automatically reset modules between tests like Jest. Always clear the cache for modules under test:
 
-1. Choose additional test files to migrate based on priority or complexity
-2. Follow the migration pattern established in the initial migrations
-3. Update common utility functions as needed for more complex test cases
-4. After migrating all tests, consider removing Jest dependencies
-5. Run both test frameworks until confident in full migration
+```typescript
+beforeEach(() => {
+  // Clear the module under test from cache
+  if (require.cache[require.resolve('../module-under-test')]) {
+    delete require.cache[require.resolve('../module-under-test')];
+  }
+  
+  // Clear dependency modules
+  clearMocks();
+  
+  // Setup mocks before requiring the module under test
+  mockModule('../../utils/dependency', { mockImplementation });
+  
+  // Now import the module (after mocks are setup)
+  const moduleUnderTest = require('../module-under-test');
+});
+```
 
-## Running Tests
+#### Testing Side Effects
 
-- To run just the Node.js tests: `yarn test:node`
-- To run just the Jest tests: `yarn test:jest`
-- To run all tests: `yarn test`
-- To run Node.js tests with watch mode: `yarn test:node:watch`
-- To run Node.js tests with coverage: `yarn test:node:coverage` (experimental)
+For testing side effects like process.exit, save the original function and restore it after tests:
 
-## Tips for Successful Migration
+```typescript
+const originalExit = process.exit;
 
-1. Start with simpler test files before tackling complex ones
-2. Test each migration thoroughly before moving to the next file
-3. Don't try to migrate all tests at once; use the incremental approach
-4. Add new tests directly using the Node.js test runner
-5. Keep utility functions updated as you encounter new testing patterns
-6. Consistent mocking is key for reliable tests
+beforeEach(() => {
+  process.exit = trackCalls(() => {});
+});
 
-## Resources
+after(() => {
+  process.exit = originalExit;
+});
+```
 
-- [Node.js Test Runner Documentation](https://nodejs.org/api/test.html)
-- [Node.js Assert Documentation](https://nodejs.org/api/assert.html)
+#### Asynchronous Tests
+
+Both Jest and Node.js test runner handle async tests with async/await or by returning promises:
+
+```typescript
+// Both work similarly
+it('async test', async () => {
+  const result = await someAsyncFunction();
+  assert.strictEqual(result, expectedValue);
+});
+```
+
+#### Testing Error Cases
+
+```typescript
+// Jest
+await expect(asyncFunction()).rejects.toThrow('Error message');
+
+// Node.js Test Runner
+try {
+  await asyncFunction();
+  assert.fail('Should have thrown an error');
+} catch (error) {
+  assert.strictEqual(error.message, 'Error message');
+}
+```
+
+### 8. Handling Common Challenges
+
+#### Mocking FS Operations
+
+```typescript
+let originalExistsSync;
+
+beforeEach(() => {
+  originalExistsSync = fs.existsSync;
+  fs.existsSync = () => true; // Mock implementation
+});
+
+after(() => {
+  fs.existsSync = originalExistsSync; // Restore original
+});
+```
+
+#### Testing Output (Console.log)
+
+```typescript
+const originalConsoleLog = console.log;
+const consoleOutput = [];
+
+beforeEach(() => {
+  console.log = (...args) => { consoleOutput.push(args) };
+});
+
+after(() => {
+  console.log = originalConsoleLog;
+});
+
+it('should log correctly', () => {
+  functionThatLogs();
+  assert.deepStrictEqual(consoleOutput[0], ['Expected output']);
+});
+```
+
+### 9. Tips for Smooth Migration
+
+1. **Convert One Test Suite at a Time**: Start with simpler tests and gradually work towards more complex ones.
+
+2. **Create Utility Functions**: Build a library of utility functions for common operations like mocking and assertions.
+
+3. **Run Both Test Frameworks**: During migration, run both Jest and Node.js tests to ensure functionality is maintained.
+
+4. **Update CI Pipeline**: Ensure your CI pipeline runs both types of tests until migration is complete.
+
+5. **Use File Naming Convention**: Use `.node.test.ts` for Node.js tests to distinguish them from Jest tests.
+
+6. **Import Mocking Before Module Under Test**: Always set up mocks before importing the module under test to ensure the module uses the mocked dependencies.
+
+7. **Clear Module Cache Between Tests**: The Node.js test runner doesn't automatically reset modules between tests like Jest does, so manually clear the cache.
+
+### 10. Troubleshooting Common Issues
+
+#### Module Not Mocked
+
+**Issue**: Your mock isn't being used by the module under test.  
+**Solution**: Ensure you're clearing the module cache and setting up mocks before importing the module under test.
+
+#### Test State Leaking
+
+**Issue**: Changes made in one test affect other tests.  
+**Solution**: Clear module cache between tests and properly restore any global objects that were modified.
+
+#### Assertion Differences
+
+**Issue**: Assertions behave differently between Jest and Node.js assert.  
+**Solution**: Pay special attention to equality checks. Jest uses loose equality by default while Node.js assert uses strict equality.
+
+#### Mock Functions Not Recording Calls
+
+**Issue**: Custom spy implementations not tracking calls correctly.  
+**Solution**: Ensure you're using the trackCalls pattern correctly and accessing `.calls` property for assertions.
+
+### 11. Next Steps after Migration
+
+1. Remove Jest dependencies from package.json once all tests are migrated.
+2. Update documentation and README to reflect new test commands.
+3. Create shared utility files for common testing patterns to maintain consistency.
+4. Consider standardizing on a single format for all tests once migration is complete.
+
+By following this guide, you should be able to successfully migrate your tests from Jest to the built-in Node.js test runner.
