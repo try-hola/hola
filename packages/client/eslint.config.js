@@ -61,9 +61,8 @@ module.exports = [
       ecmaVersion: 2020,
       sourceType: "commonjs", // Assuming JS files are also CommonJS
       globals: {
-        // Add Node.js and Jest globals
+        // Add Node.js globals
         ...globals.node,
-        ...globals.jest,
       },
     },
     // Add JS-specific rules if necessary
@@ -74,32 +73,11 @@ module.exports = [
     files: ["**/*.test.ts", "**/__tests__/**/*.ts"],
     languageOptions: {
       globals: {
-        // Add Jest globals specifically for TS test files
-        ...globals.jest,
-      },
-    },
-    // You might relax certain rules only for test files here if needed
-    rules: {
-      // Disable TypeScript safety rules in test files to facilitate testing
-      "@typescript-eslint/no-unsafe-assignment": "off",
-      "@typescript-eslint/no-unsafe-member-access": "off",
-      "@typescript-eslint/no-unsafe-call": "off",
-      "@typescript-eslint/no-unsafe-return": "off",
-      "@typescript-eslint/no-unsafe-argument": "off",
-      "@typescript-eslint/no-unused-vars": "off",
-      "@typescript-eslint/unbound-method": "off",
-    },
-  },
-
-  // Configuration specifically for Node.js Test files
-  {
-    files: ["**/*.node.test.ts"],
-    languageOptions: {
-      globals: {
         // Add Node.js test globals
         ...globals.node,
       },
     },
+    // Rules for test files
     rules: {
       // Disable TypeScript safety rules in test files to facilitate testing
       "@typescript-eslint/no-unsafe-assignment": "off",
