@@ -37,7 +37,7 @@ project-root/
 - **Runtime**: Node.js (v16+)
 - **Package Management**: Yarn with workspaces
 - **API Documentation**: OpenAPI specification maintained at `/server/public/docs/openapi.yaml`
-- **Testing Framework**: Jest
+- **Testing Framework**: Node.js built-in test runner
 - **CLI Framework**: Commander.js
 
 ## Getting Started
@@ -113,7 +113,7 @@ hola file upload myapp config/nginx.conf static/logo.png
 
 ## Testing
 
-The project uses Jest for testing both server and client components. Tests are organized by feature area, with each controller function having its own dedicated test file.
+The project uses Node.js built-in test runner for testing both server and client components. Tests are organized by feature area, with each controller function having its own dedicated test file.
 
 ### Running Tests
 
@@ -161,13 +161,16 @@ Example:
 
 ```typescript
 // Import and setup mocks
-jest.mock("../../services/appService");
-const mockAppService = require("../../services/appService");
+const { mock } = require('node:test/mock');
+const mockAppService = mock.module("../../services/appService");
 
 // Import module under test
 const { deployApp } = require("../../controllers/appController");
 
 // Test implementation
+const { describe, it, beforeEach } = require('node:test');
+const assert = require('node:assert');
+
 describe("deployApp", () => {
   beforeEach(() => {
     // Set up test fixtures
@@ -176,6 +179,7 @@ describe("deployApp", () => {
 
   it("should deploy an app successfully", async () => {
     // Test implementation with assertions
+    assert.strictEqual(result.success, true);
   });
 });
 ```

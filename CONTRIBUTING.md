@@ -83,17 +83,17 @@ yarn workspace server test src/controllers/__tests__/apps/deploy.test.ts
 
 Run tests matching a specific pattern:
 ```bash
-yarn workspace server test -t "deployApp"
+yarn workspace server test --test-name-pattern="deployApp"
 ```
 
 Run tests in watch mode:
 ```bash
-yarn workspace server test:watch
+yarn workspace server test --watch
 ```
 
 Watch a specific test file:
 ```bash
-yarn workspace server test:watch src/controllers/__tests__/apps/deploy.test.ts
+yarn workspace server test --watch src/controllers/__tests__/apps/deploy.test.ts
 ```
 
 #### Linting
