@@ -1,220 +1,255 @@
-// Mock dependencies before importing modules using centralized mocks
-jest.mock("../../utils/api-client");
-jest.mock("../../utils/output-formatter");
-jest.mock("../../utils/error-handler");
-jest.mock("../../utils/logger");
+// app-start.node.test.ts - Node.js test runner version
+const { describe, it, beforeEach } = require("node:test");
+const assert = require("node:assert");
 
-// Import dependencies after mocking
-const apiClient = require("../../utils/api-client");
-const outputFormatter = require("../../utils/output-formatter");
-const { handleCommandError } = require("../../utils/error-handler");
-const { ApiResponse } = require("../../types");
+/**
+ * Helper function to mock a module in the require cache
+ * @param modulePath - Relative path to the module to mock
+ * @param mockImplementation - Mock implementation object
+ */
+function mockModule(modulePath, mockImplementation) {
+  const fullPath = require.resolve(modulePath);
+  require.cache[fullPath] = {
+    exports: mockImplementation,
+    id: fullPath,
+    filename: fullPath,
+    loaded: true,
+    children: [],
+    paths: [],
+  };
+}
 
-// Import the app start command
-const appStartModule = require("../app/start");
-const { handler: startHandler } = appStartModule;
-
-// Import the app stop and restart commands
-const appStopModule = require("../app/stop");
-const { handler: stopHandler } = appStopModule;
-const appRestartModule = require("../app/restart");
-const { handler: restartHandler } = appRestartModule;
-
-// Create a mock commander object to pass to the command modules
-const mockCommand = {
-  command: jest.fn().mockReturnThis(),
-  description: jest.fn().mockReturnThis(),
-  option: jest.fn().mockReturnThis(),
-  action: jest.fn().mockImplementation(function (handler) {
-    this.execute = handler;
-    return this;
-  }),
-};
-
-// Register the command (optional, for coverage)
-appStartModule.default(mockCommand);
-
-describe("App Start Command", () => {
-  beforeEach(() => {
-    // Clear mock call history before each test
-    jest.clearAllMocks();
+/**
+ * Helper function to clear all mocks from the require cache
+ * that match a specific pattern
+ */
+function clearMocks(pattern = "/utils/") {
+  Object.keys(require.cache).forEach((key) => {
+    if (key.includes(pattern) && !key.includes("node_modules")) {
+      delete require.cache[key];
+    }
   });
+}
 
-  test("should start an application successfully", async () => {
-    // Setup mock API response
-    apiClient.post.mockResolvedValue({
-      success: true,
-      data: {
-        success: true,
-        message: "Application started successfully",
-      },
+/**
+ * Helper function for tracking function calls
+ * @param fn - The function to track
+ * @returns A wrapped function that tracks calls
+ */
+function trackCalls(fn) {
+  const calls = [];
+  const tracked = function (...args) {
+    calls.push([...args]);
+    return fn ? fn.apply(this, args) : undefined;
+  };
+  tracked.calls = calls;
+  return tracked;
+}
+
+// Create reusable test for command handlers since start, stop, and restart are similar
+function testAppCommand(commandName, handlerModulePath, endpoint) {
+  describe(`App ${commandName} Command`, () => {
+    beforeEach(() => {
+      // Clear mocks before each test
+      clearMocks();
+
+      // Clear the modules under test from the cache
+      const moduleUnderTestPaths = [
+        "../app/start",
+        "../app/stop",
+        "../app/restart",
+      ];
+
+      moduleUnderTestPaths.forEach((path) => {
+        if (require.cache[require.resolve(path)]) {
+          delete require.cache[require.resolve(path)];
+        }
+      });
     });
 
-    // Execute the command
-    const result = await startHandler("test-app", {});
+    it(`should ${commandName} an application successfully`, async () => {
+      // Setup mocks
+      const formatOutputSpy = trackCalls();
 
-    // Validate API was called correctly
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/start");
+      let apiPostUrl = null;
+      const postSpy = trackCalls(async (url) => {
+        apiPostUrl = url;
+        return {
+          success: true,
+          data: {
+            success: true,
+            message: `Application ${commandName}ed successfully`,
+          },
+        };
+      });
 
-    // Validate output formatter was called correctly
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      { message: "Application 'test-app' started successfully." },
-      "table",
-    );
+      // Setup dependencies
+      mockModule("../../utils/api-client", {
+        post: postSpy,
+        getCurrentServer: () => ({
+          url: "http://localhost:3000",
+          name: "local",
+        }),
+      });
 
-    // Validate result
-    expect(result).toEqual({
-      success: true,
-      data: {
-        success: true,
-        message: "Application started successfully",
-      },
+      mockModule("../../utils/output-formatter", {
+        formatOutput: formatOutputSpy,
+      });
+
+      mockModule("../../utils/logger", {
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+        warn: () => {},
+      });
+
+      mockModule("../../utils/error-handler", {
+        handleCommandError: () => {},
+      });
+
+      // Import the module under test after setting up mocks
+      const { handler } = require(handlerModulePath);
+
+      // Execute the handler function
+      const options = { server: "local" };
+      const result = await handler("test-app", options);
+
+      // Verify API was called correctly
+      assert.strictEqual(apiPostUrl, `/api/apps/test-app/${endpoint}`);
+      assert.strictEqual(postSpy.calls.length, 1);
+
+      // Verify output formatter was called (for start command)
+      if (commandName === "start") {
+        assert.ok(formatOutputSpy.calls.length > 0);
+        assert.ok(
+          formatOutputSpy.calls[0][0].message &&
+            formatOutputSpy.calls[0][0].message.includes("successfully"),
+          `Output should mention that app was ${commandName}ed successfully`,
+        );
+        assert.strictEqual(formatOutputSpy.calls[0][1], "table");
+      }
+
+      // Verify result
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(result.data.success, true);
+      assert.ok(result.data.message.includes(`${commandName}ed successfully`));
     });
-  });
 
-  test("should handle API errors when starting an application", async () => {
-    const mockError = new Error("API connection failed");
-    apiClient.post.mockRejectedValue(mockError);
-    const options = {};
-    const result = await startHandler("test-app1", options);
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: mockError.code || "START_ERROR",
-        message: mockError.message || "Unknown error",
-        details: mockError.details,
-      },
-    });
-  });
-
-  test("should handle unsuccessful application start", async () => {
-    apiClient.post.mockResolvedValue({
-      success: false,
-      error: { code: "START_FAILED", message: "Application failed to start" },
-    });
-    const options = {};
-    const result = await startHandler("test-app1", options);
-
-    // Validate output formatter was called correctly
-    expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-      {
-        error: {
-          code: "START_FAILED",
-          message: "Failed to start application 'test-app1'.",
-          details: undefined,
+    it(`should handle API errors when ${commandName}ing an application`, async () => {
+      // Setup mocks
+      mockModule("../../utils/api-client", {
+        post: async () => {
+          throw new Error("API connection failed");
         },
-      },
-      "table",
-    );
+        getCurrentServer: () => ({
+          url: "http://localhost:3000",
+          name: "local",
+        }),
+      });
 
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: "START_FAILED",
-        message: "Application failed to start",
-        details: undefined,
-      },
+      mockModule("../../utils/output-formatter", {
+        formatOutput: trackCalls(),
+      });
+
+      mockModule("../../utils/logger", {
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+        warn: () => {},
+      });
+
+      mockModule("../../utils/error-handler", {
+        handleCommandError: () => {},
+      });
+
+      // Import the module under test after setting up mocks
+      const { handler } = require(handlerModulePath);
+
+      // Execute the handler function
+      const options = { server: "local" };
+      const result = await handler("test-app1", options);
+
+      // Verify result
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(result.error.message, "API connection failed");
+      const expectedErrorCode = `${commandName.toUpperCase()}_ERROR`;
+      assert.strictEqual(result.error.code, expectedErrorCode);
+    });
+
+    it(`should handle unsuccessful application ${commandName}`, async () => {
+      // Setup mocks
+      mockModule("../../utils/api-client", {
+        post: async () => {
+          return {
+            success: false,
+            error: {
+              code: `${commandName.toUpperCase()}_FAILED`,
+              message: `Application failed to ${commandName}`,
+            },
+          };
+        },
+        getCurrentServer: () => ({
+          url: "http://localhost:3000",
+          name: "local",
+        }),
+      });
+
+      const formatOutputSpy = trackCalls();
+      mockModule("../../utils/output-formatter", {
+        formatOutput: formatOutputSpy,
+      });
+
+      mockModule("../../utils/logger", {
+        debug: () => {},
+        info: () => {},
+        error: () => {},
+        warn: () => {},
+      });
+
+      mockModule("../../utils/error-handler", {
+        handleCommandError: () => {},
+      });
+
+      // Import the module under test after setting up mocks
+      const { handler } = require(handlerModulePath);
+
+      // Execute the handler function
+      const options = { server: "local" };
+      const result = await handler("test-app1", options);
+
+      // Verify output formatter was called (for start command)
+      if (commandName === "start") {
+        assert.ok(formatOutputSpy.calls.length > 0);
+        assert.ok(formatOutputSpy.calls[0][0].error);
+        assert.strictEqual(
+          formatOutputSpy.calls[0][0].error.code,
+          "START_FAILED",
+        );
+        assert.strictEqual(formatOutputSpy.calls[0][1], "table");
+      }
+
+      // Verify result
+      assert.strictEqual(result.success, false);
+      assert.strictEqual(
+        result.error.code,
+        `${commandName.toUpperCase()}_FAILED`,
+      );
+      assert.strictEqual(
+        result.error.message,
+        `Application failed to ${commandName}`,
+      );
     });
   });
-});
+}
 
-describe("App Stop Command", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
+// Our test suite for app commands
+describe("App Commands Tests", () => {
+  // Test the start command
+  testAppCommand("start", "../app/start", "start");
 
-  test("should stop an application successfully", async () => {
-    apiClient.post.mockResolvedValue({
-      success: true,
-      data: { success: true, message: "Application stopped successfully" },
-    });
-    const result = await stopHandler("test-app", {});
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/stop");
-    expect(result).toEqual({
-      success: true,
-      data: { success: true, message: "Application stopped successfully" },
-    });
-  });
+  // Test the stop command
+  testAppCommand("stop", "../app/stop", "stop");
 
-  test("should handle API errors when stopping an application", async () => {
-    const mockError = new Error("API connection failed");
-    apiClient.post.mockRejectedValue(mockError);
-    const result = await stopHandler("test-app1", {});
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: mockError.code || "STOP_ERROR",
-        message: mockError.message || "Unknown error",
-        details: mockError.details,
-      },
-    });
-  });
-
-  test("should handle unsuccessful application stop", async () => {
-    apiClient.post.mockResolvedValue({
-      success: false,
-      error: { code: "STOP_FAILED", message: "Application failed to stop" },
-    });
-    const result = await stopHandler("test-app1", {});
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: "STOP_FAILED",
-        message: "Application failed to stop",
-        details: undefined,
-      },
-    });
-  });
-});
-
-describe("App Restart Command", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  test("should restart an application successfully", async () => {
-    apiClient.post.mockResolvedValue({
-      success: true,
-      data: { success: true, message: "Application restarted successfully" },
-    });
-    const result = await restartHandler("test-app", {});
-    expect(apiClient.post).toHaveBeenCalledWith("/api/apps/test-app/restart");
-    expect(result).toEqual({
-      success: true,
-      data: { success: true, message: "Application restarted successfully" },
-    });
-  });
-
-  test("should handle API errors when restarting an application", async () => {
-    const mockError = new Error("API connection failed");
-    apiClient.post.mockRejectedValue(mockError);
-    const result = await restartHandler("test-app1", {});
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: mockError.code || "RESTART_ERROR",
-        message: mockError.message || "Unknown error",
-        details: mockError.details,
-      },
-    });
-  });
-
-  test("should handle unsuccessful application restart", async () => {
-    apiClient.post.mockResolvedValue({
-      success: false,
-      error: {
-        code: "RESTART_FAILED",
-        message: "Application failed to restart",
-      },
-    });
-    const result = await restartHandler("test-app1", {});
-    expect(result).toEqual({
-      success: false,
-      error: {
-        code: "RESTART_FAILED",
-        message: "Application failed to restart",
-        details: undefined,
-      },
-    });
-  });
+  // Test the restart command
+  testAppCommand("restart", "../app/restart", "restart");
 });

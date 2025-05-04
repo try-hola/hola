@@ -9,9 +9,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "jest --bail",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
+    "test": "node --require ./test-register.js --test \"src/**/*.test.ts\"",
+    "test:watch": "node --require ./test-register.js --test --watch \"src/**/*.test.ts\"",
+    "test:coverage": "node --require ./test-register.js --test --experimental-test-coverage \"src/**/*.test.ts\"",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write 'src/**/*.{js,ts}'",
@@ -31,6 +31,10 @@
     "open": "^8.4.2",
     "ora": "^5.4.1",
     "winston": "^3.8.2"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.1",
+    "@types/node": "^18.15.0"
   },
   "engines": {
     "node": ">=14.0.0"

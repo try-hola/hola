@@ -11,7 +11,7 @@ const config = require("../config");
  */
 async function verifyToken(req, res, next) {
   // Skip authentication in test environment
-  if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+  if (process.env.NODE_ENV === "test") {
     return next();
   }
 

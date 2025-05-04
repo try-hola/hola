@@ -59,7 +59,7 @@ const createBackup = async (
     }
 
     // Special handling for test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // For tests, we'll generate a successful backup without requiring real files
       if (appName === "backup-test-app") {
         // Generate a timestamp for the backup
@@ -259,7 +259,7 @@ const listBackups = async (
 
   try {
     // Special handling for test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // Return mock data for test apps with some test backups
       if (appName === "backup-test-app") {
         const mockBackupTimestamp = new Date().toISOString();
@@ -330,7 +330,7 @@ const getBackupDetails = async (
 
   try {
     // Special handling for test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // Return mock data for test apps with some test backups
       if (appName === "backup-test-app") {
         const mockBackupTimestamp = new Date().toISOString();
@@ -399,7 +399,7 @@ const restoreFromBackup = async (
 
   try {
     // Special handling for test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // For test apps, create the necessary directories to simulate a successful restore
       if (appName === "backup-test-app") {
         // Create the deployment directories for the app

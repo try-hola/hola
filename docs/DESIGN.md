@@ -825,7 +825,7 @@ project-root/
 ## 15. Next Steps
 
 1. Complete implementation of package, configuration and deployment managers
-2. Add comprehensive test coverage using Jest
+2. Add comprehensive test coverage using Node.js built-in test runner
 3. Document the configuration management feature in the user guide
 4. Consider adding configuration validation based on application requirements
 5. Implement CLI tools for managing docker-compose.override.yml files

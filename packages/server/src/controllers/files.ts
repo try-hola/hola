@@ -166,7 +166,7 @@ const listFiles = async (req: Request, res: Response): Promise<void> => {
   }
 
   // Special handling for test environment
-  if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+  if (process.env.NODE_ENV === "test") {
     // Ensure root directories exist in test environment
     await fs.ensureDir(PATHS.apps.root(""));
     await fs.ensureDir(PATHS.deployments.root(""));
@@ -374,7 +374,7 @@ const deleteFile = async (req: Request, res: Response): Promise<void> => {
   }
 
   // Special handling for test environment
-  if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+  if (process.env.NODE_ENV === "test") {
     // Ensure root directories exist in test environment
     await fs.ensureDir(PATHS.apps.root(""));
     await fs.ensureDir(PATHS.deployments.root(""));
@@ -503,7 +503,7 @@ const getFile = async (req: Request, res: Response): Promise<void> => {
   }
 
   // Special handling for test environment
-  if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+  if (process.env.NODE_ENV === "test") {
     // Ensure root directories exist in test environment
     await fs.ensureDir(PATHS.apps.root(""));
     await fs.ensureDir(PATHS.deployments.root(""));

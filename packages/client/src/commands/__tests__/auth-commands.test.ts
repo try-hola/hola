@@ -1,155 +1,285 @@
 /**
- * Tests for auth commands
+ * Tests for auth commands using Node.js test runner
  */
-// Mock dependencies using Jest's automatic mocking system
-jest.mock("../../utils/auth-manager");
-jest.mock("../../utils/config-manager");
-jest.mock("../../utils/output-formatter");
+// Import Node.js test API
+const { describe, it, beforeEach } = require("node:test");
+const assert = require("node:assert");
 
-// Import dependencies after mocking
-const authManager = require("../../utils/auth-manager");
-const configManager = require("../../utils/config-manager");
-const outputFormatter = require("../../utils/output-formatter");
+/**
+ * Helper function to mock a module in the require cache
+ */
+function mockModule(modulePath, mockImplementation) {
+  const fullPath = require.resolve(modulePath);
+  require.cache[fullPath] = {
+    exports: mockImplementation,
+    id: fullPath,
+    filename: fullPath,
+    loaded: true,
+    children: [],
+    paths: [],
+  };
+}
 
-// Import login and logout handlers for testing
-const { handler: loginHandler } = require("../auth/login");
-const { handler: logoutHandler } = require("../auth/logout");
+/**
+ * Helper function to clear all mocks from the require cache
+ */
+function clearMocks() {
+  Object.keys(require.cache).forEach((key) => {
+    if (
+      (key.includes("/utils/") || key.includes("/auth/")) &&
+      !key.includes("node_modules")
+    ) {
+      delete require.cache[key];
+    }
+  });
+}
+
+/**
+ * Helper function for tracking function calls
+ */
+function trackCalls(fn) {
+  const calls = [];
+  const tracked = function (...args) {
+    calls.push([...args]);
+    return fn ? fn.apply(this, args) : undefined;
+  };
+  tracked.calls = calls;
+  return tracked;
+}
 
 describe("Auth Commands", () => {
   beforeEach(() => {
-    // Reset all mocks before each test
-    jest.clearAllMocks(); // Use Jest's built-in clearAllMocks instead of individual resetMocks
+    // Clear mocks before each test
+    clearMocks();
 
-    // Set up specific mock behaviors for these tests
-    configManager.resolveServerContext = jest.fn().mockResolvedValue({
-      name: "test-server",
-      url: "https://example.org",
-      providerOptions: {
-        orbDomain: "example.org",
-      },
-      clientId: "mock-client-id",
+    // Setup mock for auth-manager
+    mockModule("../../utils/auth-manager", {
+      authenticate: trackCalls(async (serverContext) => {
+        return { success: true };
+      }),
+      logout: trackCalls(async (serverName) => {
+        return { success: true };
+      }),
     });
 
-    configManager.getServerContexts = jest.fn().mockResolvedValue({
-      "test-server": {
-        name: "test-server",
-        url: "https://example.org",
-      },
-      "other-server": {
-        name: "other-server",
-        url: "https://other.example.org",
-      },
+    // Setup mock for config-manager
+    mockModule("../../utils/config-manager", {
+      resolveServerContext: trackCalls(async (serverName) => {
+        return {
+          name: "test-server",
+          url: "https://example.org",
+          providerOptions: {
+            orbDomain: "example.org",
+          },
+          clientId: "mock-client-id",
+        };
+      }),
+      getServerContexts: trackCalls(async () => {
+        return {
+          "test-server": {
+            name: "test-server",
+            url: "https://example.org",
+          },
+          "other-server": {
+            name: "other-server",
+            url: "https://other.example.org",
+          },
+        };
+      }),
+    });
+
+    // Setup mock for output-formatter
+    mockModule("../../utils/output-formatter", {
+      formatOutput: trackCalls((type, message) => {}),
     });
   });
 
   describe("login command", () => {
     it("should authenticate with the resolved server context", async () => {
+      // Import after mocking
+      const { handler: loginHandler } = require("../auth/login");
+      const authManager = require("../../utils/auth-manager");
+      const configManager = require("../../utils/config-manager");
+      const outputFormatter = require("../../utils/output-formatter");
+
       const options = {};
       await loginHandler(options);
 
-      expect(configManager.resolveServerContext).toHaveBeenCalledWith(
+      assert.strictEqual(configManager.resolveServerContext.calls.length, 1);
+      assert.strictEqual(
+        configManager.resolveServerContext.calls[0][0],
         undefined,
       );
-      expect(authManager.authenticate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "test-server",
-        }),
+
+      assert.strictEqual(authManager.authenticate.calls.length, 1);
+      assert.strictEqual(
+        authManager.authenticate.calls[0][0].name,
+        "test-server",
       );
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "success",
-        expect.stringContaining("Successfully authenticated"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "success");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes(
+          "Successfully authenticated",
+        ),
       );
     });
 
     it("should use the specified server when --server option is provided", async () => {
+      // Import after mocking
+      const { handler: loginHandler } = require("../auth/login");
+      const configManager = require("../../utils/config-manager");
+
       const options = { server: "specific-server" };
       await loginHandler(options);
 
-      expect(configManager.resolveServerContext).toHaveBeenCalledWith(
+      assert.strictEqual(configManager.resolveServerContext.calls.length, 1);
+      assert.strictEqual(
+        configManager.resolveServerContext.calls[0][0],
         "specific-server",
       );
     });
 
     it("should handle errors when no server context is found", async () => {
-      configManager.resolveServerContext.mockResolvedValueOnce(null);
+      // Set up specific mock for this test
+      mockModule("../../utils/config-manager", {
+        resolveServerContext: trackCalls(async () => null),
+      });
+
+      // Import after mocking
+      const { handler: loginHandler } = require("../auth/login");
+      const authManager = require("../../utils/auth-manager");
+      const outputFormatter = require("../../utils/output-formatter");
 
       const options = {};
       await loginHandler(options);
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "error",
-        expect.stringContaining("No server context found"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "error");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes(
+          "No server context found",
+        ),
       );
 
-      expect(authManager.authenticate).not.toHaveBeenCalled();
+      assert.strictEqual(authManager.authenticate.calls.length, 0);
     });
 
     it("should handle authentication errors", async () => {
-      authManager.authenticate.mockRejectedValueOnce(
-        new Error("Authentication failed"),
-      );
+      // Set up specific mock for this test
+      mockModule("../../utils/auth-manager", {
+        authenticate: trackCalls(async () => {
+          throw new Error("Authentication failed");
+        }),
+      });
+
+      // Import after mocking
+      const { handler: loginHandler } = require("../auth/login");
+      const outputFormatter = require("../../utils/output-formatter");
 
       const options = {};
       await loginHandler(options);
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "error",
-        expect.stringContaining("Login failed"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "error");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes("Login failed"),
       );
     });
   });
 
   describe("logout command", () => {
     it("should log out from the resolved server context", async () => {
+      // Import after mocking
+      const { handler: logoutHandler } = require("../auth/logout");
+      const configManager = require("../../utils/config-manager");
+      const authManager = require("../../utils/auth-manager");
+      const outputFormatter = require("../../utils/output-formatter");
+
       const options = {};
       await logoutHandler(options);
 
-      expect(configManager.resolveServerContext).toHaveBeenCalled();
-      expect(authManager.logout).toHaveBeenCalledWith("test-server");
+      assert.strictEqual(configManager.resolveServerContext.calls.length, 1);
+      assert.strictEqual(authManager.logout.calls.length, 1);
+      assert.strictEqual(authManager.logout.calls[0][0], "test-server");
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "success",
-        expect.stringContaining("Logged out from server"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "success");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes(
+          "Logged out from server",
+        ),
       );
     });
 
     it("should log out from all servers when --all option is provided", async () => {
+      // Import after mocking
+      const { handler: logoutHandler } = require("../auth/logout");
+      const configManager = require("../../utils/config-manager");
+      const authManager = require("../../utils/auth-manager");
+      const outputFormatter = require("../../utils/output-formatter");
+
       const options = { all: true };
       await logoutHandler(options);
 
-      expect(configManager.getServerContexts).toHaveBeenCalled();
-      expect(authManager.logout).toHaveBeenCalled();
+      assert.strictEqual(configManager.getServerContexts.calls.length, 1);
+      assert.strictEqual(authManager.logout.calls.length, 2); // For two server contexts
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "success",
-        expect.stringContaining("Logged out from all"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "success");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes(
+          "Logged out from all",
+        ),
       );
     });
 
     it("should handle errors when no server context is found", async () => {
-      configManager.resolveServerContext.mockResolvedValueOnce(null);
+      // Set up specific mock for this test
+      mockModule("../../utils/config-manager", {
+        resolveServerContext: trackCalls(async () => null),
+        getServerContexts: trackCalls(async () => ({})),
+      });
+
+      // Import after mocking
+      const { handler: logoutHandler } = require("../auth/logout");
+      const authManager = require("../../utils/auth-manager");
+      const outputFormatter = require("../../utils/output-formatter");
 
       const options = {};
       await logoutHandler(options);
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "error",
-        expect.stringContaining("No server context found"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "error");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes(
+          "No server context found",
+        ),
       );
 
-      expect(authManager.logout).not.toHaveBeenCalled();
+      assert.strictEqual(authManager.logout.calls.length, 0);
     });
 
     it("should handle logout errors", async () => {
-      authManager.logout.mockRejectedValueOnce(new Error("Logout failed"));
+      // Set up specific mock for this test
+      mockModule("../../utils/auth-manager", {
+        logout: trackCalls(async () => {
+          throw new Error("Logout failed");
+        }),
+      });
+
+      // Import after mocking
+      const { handler: logoutHandler } = require("../auth/logout");
+      const outputFormatter = require("../../utils/output-formatter");
 
       const options = {};
       await logoutHandler(options);
 
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        "error",
-        expect.stringContaining("Logout failed"),
+      assert.strictEqual(outputFormatter.formatOutput.calls.length, 1);
+      assert.strictEqual(outputFormatter.formatOutput.calls[0][0], "error");
+      assert.ok(
+        outputFormatter.formatOutput.calls[0][1].includes("Logout failed"),
       );
     });
   });

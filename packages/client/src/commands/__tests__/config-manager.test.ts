@@ -1,314 +1,925 @@
 /**
- * Tests for config commands
+ * Tests for config commands using Node.js test runner
  */
+const test = require("node:test");
+const assert = require("node:assert");
 
-// Mock dependencies using Jest's automatic mocking system
-jest.mock("../../utils/config-manager");
-jest.mock("../../utils/api-client");
-jest.mock("../../utils/output-formatter");
-jest.mock("../../utils/logger");
-jest.mock("../../utils/error-handler");
+const describe = test.describe;
+const it = test.it;
+const beforeEach = test.beforeEach;
 
-// Import dependencies after mocking
-const configManager = require("../../utils/config-manager");
-const apiClient = require("../../utils/api-client");
-const outputFormatter = require("../../utils/output-formatter");
-const logger = require("../../utils/logger");
-const errorHandler = require("../../utils/error-handler");
+// Helper function for tracking function calls
+function trackCalls(fn) {
+  const calls = [];
+  const tracked = function (...args) {
+    calls.push(args);
+    return fn ? fn.apply(this, args) : undefined;
+  };
+  tracked.calls = calls;
+  tracked.mockImplementation = (newFn) => {
+    fn = newFn;
+  };
+  return tracked;
+}
 
-// Import commands
-const getModule = require("../../commands/config/get");
-const setModule = require("../../commands/config/set");
-const deleteModule = require("../../commands/config/delete");
-
-// Store handlers at module level for test access
-let getHandler;
-let setHandler;
-let deleteHandler;
+// Mock module helper
+function mockModule(modulePath, implementation) {
+  const fullPath = require.resolve(modulePath);
+  require.cache[fullPath] = {
+    exports: implementation,
+    id: fullPath,
+    filename: fullPath,
+    loaded: true,
+    children: [],
+    paths: [],
+  };
+}
 
 describe("Config Commands", () => {
   beforeEach(() => {
-    // Reset all mocks before each test
-    jest.clearAllMocks();
+    // Clear module cache before each test
+    Object.keys(require.cache).forEach((key) => {
+      if (key.includes("/utils/") || key.includes("/config/")) {
+        delete require.cache[key];
+      }
+    });
 
-    // Create a mock commander object
-    const mockCommand = {
-      command: jest.fn().mockReturnThis(),
-      description: jest.fn().mockReturnThis(),
-      option: jest.fn().mockReturnThis(),
-      alias: jest.fn().mockReturnThis(),
-      action: jest.fn().mockImplementation(function (handler) {
-        this._handler = handler;
-        return this;
-      }),
-      addHelpText: jest.fn().mockReturnThis(),
-    };
+    // Set up api-client mocks with tracked calls
+    const mockGet = trackCalls(async () => ({
+      data: { config: { server_url: "http://localhost:3000", timeout: 5000 } },
+    }));
+    const mockPost = trackCalls(async () => ({ data: { config: {} } }));
+    const mockDelete = trackCalls(async () => ({}));
 
-    // Register commands to get the handlers
-    getModule.default(mockCommand);
-    getHandler = mockCommand._handler;
+    mockModule("../../utils/api-client", {
+      get: mockGet,
+      post: mockPost,
+      delete: mockDelete,
+    });
 
-    setModule.default(mockCommand);
-    setHandler = mockCommand._handler;
+    // Set up output-formatter mock
+    mockModule("../../utils/output-formatter", {
+      formatOutput: trackCalls(),
+    });
 
-    deleteModule.default(mockCommand);
-    deleteHandler = mockCommand._handler;
+    // Set up other utility mocks
+    mockModule("../../utils/logger", {
+      debug: () => {},
+      error: () => {},
+    });
+
+    mockModule("../../utils/error-handler", {
+      handleError: (error) => error,
+    });
+
+    mockModule("../../utils/config-manager", {
+      // Add any config manager specific mocks if needed
+    });
   });
 
   describe("get command", () => {
     it("should get all system config values from the server when no app is provided", async () => {
+      // Import modules after mocking
+      const { get: mockGet } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const getModule = require("../../commands/config/get");
+
+      // Setup mock commander object
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      // Register command to get handler
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
+      // Setup test data
       const mockResponse = {
         success: true,
         data: {
           config: { server_url: "http://localhost:3000", timeout: 5000 },
         },
       };
-      apiClient.get.mockResolvedValueOnce(mockResponse);
+      mockGet.mockImplementation(async () => mockResponse);
 
+      // Execute test
       const argv = { output: "json" };
       const result = await getHandler(argv);
 
-      expect(apiClient.get).toHaveBeenCalledWith("/api/config", {});
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.config,
-        "json",
+      // Verify using Node's assertions
+      assert.strictEqual(
+        mockGet.calls.length,
+        1,
+        "API get should be called once",
       );
-      expect(result).toEqual({ success: true, data: mockResponse.data });
+      assert.deepStrictEqual(
+        mockGet.calls[0],
+        ["/api/config", {}],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [mockResponse.data.config, "json"],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should get a specific system config value from the server when key is provided", async () => {
-      const argv = { key: "server_url", output: "table" };
+      const { get: mockGet } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const getModule = require("../../commands/config/get");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
       const mockResponse = {
         data: { config: { server_url: "http://localhost:3000" } },
       };
-      apiClient.get.mockResolvedValueOnce(mockResponse);
+      mockGet.mockImplementation(async () => mockResponse);
+
+      const argv = { key: "server_url", output: "table" };
       const result = await getHandler(argv);
-      expect(apiClient.get).toHaveBeenCalledWith("/api/config", {
-        key: "server_url",
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.config.server_url,
-        "table",
+
+      assert.strictEqual(
+        mockGet.calls.length,
+        1,
+        "API get should be called once",
       );
-      expect(result).toEqual({ success: true, data: mockResponse.data });
+      assert.deepStrictEqual(
+        mockGet.calls[0],
+        ["/api/config", { key: "server_url" }],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [mockResponse.data.config.server_url, "table"],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should get all app config values from the server when app is provided", async () => {
-      const appName = "test-app";
-      const argv = { app: appName, output: "json" };
-      const mockResponse = { data: { config: { port: 3000, name: appName } } };
-      apiClient.get.mockResolvedValueOnce(mockResponse);
-      const result = await getHandler(argv);
-      expect(apiClient.get).toHaveBeenCalledWith(`/api/config/${appName}`, {});
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.config,
-        "json",
-      );
-      expect(result).toEqual({ success: true, data: mockResponse.data });
-    });
+      const { get: mockGet } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const getModule = require("../../commands/config/get");
 
-    it("should get a specific app config value from the server when app and key are provided", async () => {
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
       const appName = "test-app";
-      const key = "port";
-      const argv = { app: appName, key, output: "table" };
-      const mockResponse = { data: { config: { port: 3000 } } };
-      apiClient.get.mockResolvedValueOnce(mockResponse);
+      const mockResponse = { data: { config: { port: 3000, name: appName } } };
+      mockGet.mockImplementation(async () => mockResponse);
+
+      const argv = { app: appName, output: "json" };
       const result = await getHandler(argv);
-      expect(apiClient.get).toHaveBeenCalledWith(`/api/config/${appName}`, {
-        key,
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.config.port,
-        "table",
+
+      assert.strictEqual(
+        mockGet.calls.length,
+        1,
+        "API get should be called once",
       );
-      expect(result).toEqual({ success: true, data: mockResponse.data });
+      assert.deepStrictEqual(
+        mockGet.calls[0],
+        [`/api/config/${appName}`, {}],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [mockResponse.data.config, "json"],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should get encrypted app config values when secret flag is used", async () => {
+      const { get: mockGet } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const getModule = require("../../commands/config/get");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
       const appName = "test-app";
-      const argv = { app: appName, secret: true, output: "json" };
       const mockResponse = { data: { config: { DB_PASSWORD: "******" } } };
-      apiClient.get.mockResolvedValueOnce(mockResponse);
+      mockGet.mockImplementation(async () => mockResponse);
+
+      const argv = { app: appName, secret: true, output: "json" };
       const result = await getHandler(argv);
-      expect(apiClient.get).toHaveBeenCalledWith(
-        `/api/config/${appName}/encrypted`,
-        {},
+
+      assert.strictEqual(
+        mockGet.calls.length,
+        1,
+        "API get should be called once",
       );
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        mockResponse.data.config,
-        "json",
+      assert.deepStrictEqual(
+        mockGet.calls[0],
+        [`/api/config/${appName}/encrypted`, {}],
+        "API call should have correct parameters",
       );
-      expect(result).toEqual({ success: true, data: mockResponse.data });
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [mockResponse.data.config, "json"],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should handle errors gracefully", async () => {
-      const appName = "test-app";
-      const argv = { app: appName };
-      const mockError = new Error("API Error");
-      apiClient.get.mockRejectedValueOnce(mockError);
-      const result = await getHandler(argv);
-      expect(result).toEqual({
-        success: false,
-        error: {
-          code: mockError.code || "GET_ERROR",
-          message: mockError.message || "Unknown error",
-          details: mockError.details,
+      const { get: mockGet } = require("../../utils/api-client");
+      const getModule = require("../../commands/config/get");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
         },
-      });
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
+      const mockError = new Error("API Error") as ApiError;
+      mockGet.mockImplementation(() => Promise.reject(mockError));
+
+      const argv = { app: "test-app" };
+      const result = await getHandler(argv);
+
+      assert.deepStrictEqual(
+        result,
+        {
+          success: false,
+          error: {
+            code: mockError.code || "GET_ERROR",
+            message: mockError.message || "Unknown error",
+            details: mockError.details,
+          },
+        },
+        "Should return error response",
+      );
+    });
+
+    it("should get a specific app config value from the server when app and key are provided", async () => {
+      const { get: mockGet } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const getModule = require("../../commands/config/get");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      getModule.default(mockCommand);
+      const getHandler = mockCommand.handler;
+
+      const appName = "test-app";
+      const key = "port";
+      const mockResponse = { data: { config: { port: 3000 } } };
+      mockGet.mockImplementation(async () => mockResponse);
+
+      const argv = { app: appName, key, output: "table" };
+      const result = await getHandler(argv);
+
+      assert.strictEqual(
+        mockGet.calls.length,
+        1,
+        "API get should be called once",
+      );
+      assert.deepStrictEqual(
+        mockGet.calls[0],
+        [`/api/config/${appName}`, { key }],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [mockResponse.data.config.port, "table"],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
   });
 
   describe("set command", () => {
     it("should set system config values via the API", async () => {
-      const argv = {
-        keyValues: ["server_url=http://localhost:4000", "timeout=10000"],
+      const { post: mockPost } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const setModule = require("../../commands/config/set");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
       };
-      apiClient.post.mockResolvedValueOnce({
+
+      setModule.default(mockCommand);
+      const setHandler = mockCommand.handler;
+
+      const mockResponse = {
         data: {
           config: { server_url: "http://localhost:4000", timeout: "10000" },
         },
-      });
-      const result = await setHandler(argv.keyValues, {});
-      expect(apiClient.post).toHaveBeenCalledWith("/api/config", {
-        config: { server_url: "http://localhost:4000", timeout: "10000" },
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { message: "System configuration updated successfully." },
-        undefined,
+      };
+      mockPost.mockImplementation(async () => mockResponse);
+
+      const keyValues = ["server_url=http://localhost:4000", "timeout=10000"];
+      const result = await setHandler(keyValues, {});
+
+      assert.strictEqual(
+        mockPost.calls.length,
+        1,
+        "API post should be called once",
       );
-      expect(result).toEqual({
-        success: true,
-        data: {
-          config: { server_url: "http://localhost:4000", timeout: "10000" },
-        },
-      });
+      assert.deepStrictEqual(
+        mockPost.calls[0],
+        [
+          "/api/config",
+          { config: { server_url: "http://localhost:4000", timeout: "10000" } },
+        ],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [{ message: "System configuration updated successfully." }, undefined],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should set app-specific config values via the API", async () => {
-      const argv = {
-        keyValues: ["DB_USER=admin", "DB_PASS=secret"],
-        app: "myapp",
+      const { post: mockPost } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const setModule = require("../../commands/config/set");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
       };
-      apiClient.post.mockResolvedValueOnce({
+
+      setModule.default(mockCommand);
+      const setHandler = mockCommand.handler;
+
+      const mockResponse = {
         data: { config: { DB_USER: "admin", DB_PASS: "secret" } },
-      });
-      const result = await setHandler(argv.keyValues, { app: argv.app });
-      expect(apiClient.post).toHaveBeenCalledWith("/api/config/myapp", {
-        config: { DB_USER: "admin", DB_PASS: "secret" },
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        { message: `Configuration for app 'myapp' updated successfully.` },
-        undefined,
+      };
+      mockPost.mockImplementation(async () => mockResponse);
+
+      const keyValues = ["DB_USER=admin", "DB_PASS=secret"];
+      const options = { app: "myapp" };
+      const result = await setHandler(keyValues, options);
+
+      assert.strictEqual(
+        mockPost.calls.length,
+        1,
+        "API post should be called once",
       );
-      expect(result).toEqual({
-        success: true,
-        data: { config: { DB_USER: "admin", DB_PASS: "secret" } },
-      });
+      assert.deepStrictEqual(
+        mockPost.calls[0],
+        [
+          "/api/config/myapp",
+          { config: { DB_USER: "admin", DB_PASS: "secret" } },
+        ],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          { message: "Configuration for app 'myapp' updated successfully." },
+          undefined,
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true, data: mockResponse.data },
+        "Result should match expected structure",
+      );
     });
 
     it("should handle errors gracefully", async () => {
-      const argv = { keyValues: ["invalid-pair"] };
-      const result = await setHandler(argv.keyValues, {});
-      expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
+      const setModule = require("../../commands/config/set");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      setModule.default(mockCommand);
+      const setHandler = mockCommand.handler;
+
+      const keyValues = ["invalid-pair"];
+      const result = await setHandler(keyValues, {});
+
+      assert.strictEqual(result.success, false, "Should indicate failure");
+      assert.ok(result.error, "Should include error details");
     });
   });
 
   describe("delete command", () => {
     it("should delete a single system config value via the API", async () => {
-      const argv = { keys: ["server_url"] };
-      apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, {});
-      expect(apiClient.delete).toHaveBeenCalledWith("/api/config/server_url");
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        {
-          message: `System configuration key 'server_url' deleted successfully.`,
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const deleteModule = require("../../commands/config/delete");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
         },
-        "table",
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      mockDelete.mockImplementation(async () => ({}));
+
+      const keys = ["server_url"];
+      const result = await deleteHandler(keys, {});
+
+      assert.strictEqual(
+        mockDelete.calls.length,
+        1,
+        "API delete should be called once",
       );
-      expect(result).toEqual({ success: true });
+      assert.deepStrictEqual(
+        mockDelete.calls[0],
+        ["/api/config/server_url"],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          {
+            message:
+              "System configuration key 'server_url' deleted successfully.",
+          },
+          "table",
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true },
+        "Result should match expected structure",
+      );
     });
 
     it("should delete multiple system config values via the API", async () => {
-      const argv = { keys: ["server_url", "timeout"] };
-      apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, {});
-      expect(apiClient.delete).toHaveBeenCalledWith("/api/config", {
-        params: { keys: "server_url,timeout" },
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        {
-          message: `System configuration keys [server_url, timeout] deleted successfully.`,
-        },
-        "table",
-      );
-      expect(result).toEqual({ success: true });
-    });
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const deleteModule = require("../../commands/config/delete");
 
-    it("should delete a single app-specific config value via the API", async () => {
-      const argv = { keys: ["DB_USER"], app: "myapp" };
-      apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, { app: argv.app });
-      expect(apiClient.delete).toHaveBeenCalledWith(
-        "/api/config/myapp/DB_USER",
-      );
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        {
-          message: `Configuration key 'DB_USER' for app 'myapp' deleted successfully.`,
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
         },
-        "table",
-      );
-      expect(result).toEqual({ success: true });
-    });
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
 
-    it("should delete multiple app-specific config values via the API", async () => {
-      const argv = { keys: ["DB_USER", "DB_PASS"], app: "myapp" };
-      apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, { app: argv.app });
-      expect(apiClient.delete).toHaveBeenCalledWith("/api/config/myapp", {
-        params: { keys: "DB_USER,DB_PASS" },
-      });
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        {
-          message: `Configuration keys [DB_USER, DB_PASS] for app 'myapp' deleted successfully.`,
-        },
-        "table",
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      mockDelete.mockImplementation(async () => ({}));
+
+      const keys = ["server_url", "timeout"];
+      const result = await deleteHandler(keys, {});
+
+      assert.strictEqual(
+        mockDelete.calls.length,
+        1,
+        "API delete should be called once",
       );
-      expect(result).toEqual({ success: true });
+      assert.deepStrictEqual(
+        mockDelete.calls[0],
+        ["/api/config", { params: { keys: "server_url,timeout" } }],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          {
+            message:
+              "System configuration keys [server_url, timeout] deleted successfully.",
+          },
+          "table",
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true },
+        "Result should match expected structure",
+      );
     });
 
     it("should delete encrypted app-specific config values via the API", async () => {
-      const argv = { keys: ["SECRET_KEY"], app: "myapp", secret: true };
-      apiClient.delete.mockResolvedValueOnce({});
-      const result = await deleteHandler(argv.keys, {
-        app: argv.app,
-        secret: argv.secret,
-      });
-      expect(apiClient.delete).toHaveBeenCalledWith(
-        "/api/config/myapp/encrypted/SECRET_KEY",
-      );
-      expect(outputFormatter.formatOutput).toHaveBeenCalledWith(
-        {
-          message: `Encrypted configuration for app 'myapp' deleted successfully.`,
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const deleteModule = require("../../commands/config/delete");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
         },
-        "table",
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      mockDelete.mockImplementation(async () => ({}));
+
+      const keys = ["SECRET_KEY"];
+      const options = { app: "myapp", secret: true };
+      const result = await deleteHandler(keys, options);
+
+      assert.strictEqual(
+        mockDelete.calls.length,
+        1,
+        "API delete should be called once",
       );
-      expect(result).toEqual({ success: true });
+      assert.deepStrictEqual(
+        mockDelete.calls[0],
+        ["/api/config/myapp/encrypted/SECRET_KEY"],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          {
+            message:
+              "Encrypted configuration for app 'myapp' deleted successfully.",
+          },
+          "table",
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true },
+        "Result should match expected structure",
+      );
     });
 
     it("should handle errors gracefully", async () => {
-      const argv = { keys: ["DB_USER"], app: "myapp" };
-      const mockError = new Error("API Error");
-      apiClient.delete.mockRejectedValueOnce(mockError);
-      const result = await deleteHandler(argv.keys, { app: argv.app });
-      expect(result).toEqual({
-        success: false,
-        error: {
-          code: mockError.code || "DELETE_ERROR",
-          message: mockError.message || "Delete failed",
-          details: mockError.details,
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const deleteModule = require("../../commands/config/delete");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
         },
-      });
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      const mockError = new Error("API Error") as ApiError;
+      mockDelete.mockImplementation(() => Promise.reject(mockError));
+
+      const keys = ["DB_USER"];
+      const options = { app: "myapp" };
+      const result = await deleteHandler(keys, options);
+
+      assert.deepStrictEqual(
+        result,
+        {
+          success: false,
+          error: {
+            code: mockError.code || "DELETE_ERROR",
+            message: mockError.message || "Delete failed",
+            details: mockError.details,
+          },
+        },
+        "Should return error response",
+      );
+    });
+
+    it("should delete a single app-specific config value via the API", async () => {
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const deleteModule = require("../../commands/config/delete");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      mockDelete.mockImplementation(async () => ({}));
+
+      const keys = ["DB_USER"];
+      const options = { app: "myapp" };
+      const result = await deleteHandler(keys, options);
+
+      assert.strictEqual(
+        mockDelete.calls.length,
+        1,
+        "API delete should be called once",
+      );
+      assert.deepStrictEqual(
+        mockDelete.calls[0],
+        ["/api/config/myapp/DB_USER"],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          {
+            message:
+              "Configuration key 'DB_USER' for app 'myapp' deleted successfully.",
+          },
+          "table",
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true },
+        "Result should match expected structure",
+      );
+    });
+
+    it("should delete multiple app-specific config values via the API", async () => {
+      const { delete: mockDelete } = require("../../utils/api-client");
+      const {
+        formatOutput: mockFormatOutput,
+      } = require("../../utils/output-formatter");
+      const deleteModule = require("../../commands/config/delete");
+
+      const mockCommand: MockCommand = {
+        command: () => mockCommand,
+        description: () => mockCommand,
+        option: () => mockCommand,
+        alias: () => mockCommand,
+        action: (handler) => {
+          mockCommand.handler = handler;
+          return mockCommand;
+        },
+        addHelpText: () => mockCommand,
+        handler: () => Promise.resolve({}), // Default empty handler that will be replaced
+      };
+
+      deleteModule.default(mockCommand);
+      const deleteHandler = mockCommand.handler;
+
+      mockDelete.mockImplementation(async () => ({}));
+
+      const keys = ["DB_USER", "DB_PASS"];
+      const options = { app: "myapp" };
+      const result = await deleteHandler(keys, options);
+
+      assert.strictEqual(
+        mockDelete.calls.length,
+        1,
+        "API delete should be called once",
+      );
+      assert.deepStrictEqual(
+        mockDelete.calls[0],
+        ["/api/config/myapp", { params: { keys: "DB_USER,DB_PASS" } }],
+        "API call should have correct parameters",
+      );
+      assert.strictEqual(
+        mockFormatOutput.calls.length,
+        1,
+        "formatOutput should be called once",
+      );
+      assert.deepStrictEqual(
+        mockFormatOutput.calls[0],
+        [
+          {
+            message:
+              "Configuration keys [DB_USER, DB_PASS] for app 'myapp' deleted successfully.",
+          },
+          "table",
+        ],
+        "formatOutput should have correct parameters",
+      );
+      assert.deepStrictEqual(
+        result,
+        { success: true },
+        "Result should match expected structure",
+      );
     });
   });
 });

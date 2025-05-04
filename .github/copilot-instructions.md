@@ -18,7 +18,7 @@ This project consists of two main components organized as a monorepo using Yarn 
 - Leverage Yarn workspaces for shared code and dependencies across packages.
 - Maintain consistency with the existing directory structure:
   - Use `src/` for all source code.
-  - Use `__mocks__/` for Jest mocks.
+  - Use `__mocks__/` for Node.js test mocks.
   - Use `__tests__/` for test files, organized by feature area.
 
 ### TypeScript (Node.js API Server)
@@ -66,8 +66,8 @@ This project consists of two main components organized as a monorepo using Yarn 
 
 ### Testing Recommendations
 
-- Use Jest for testing across both server and client packages.
-- Configure Jest to work with CommonJS modules and TypeScript.
+- Use Node.js built-in test runner for testing across both server and client packages.
+- Configure the test runner to work with CommonJS modules and TypeScript.
 - Organize tests by feature area, with each function or controller having its own dedicated test file.
 - Group related test files in subdirectories matching the component structure (e.g., `__tests__/apps/` for app-related controller tests).
 - Follow the established test structure:
@@ -75,7 +75,7 @@ This project consists of two main components organized as a monorepo using Yarn 
   2. Import modules under test after mocking.
   3. Define test fixtures in `beforeEach()` hooks.
   4. Write specific test cases with clear assertions.
-- Use Jest's `__mocks__` directory for automatic module mocking:
+- Use the `__mocks__` directory for automatic module mocking:
   - Create a `__mocks__` directory at the same level as the module to be mocked.
   - Implement the mock with the same interface as the original module.
 - Write meaningful test cases that cover edge cases and error handling.
@@ -91,15 +91,15 @@ This project consists of two main components organized as a monorepo using Yarn 
   ```
 - Run specific test files by specifying the path:
   ```bash
-  yarn test src/controllers/__tests__/apps/deploy.test.ts
+  yarn test packages/server/src/controllers/__tests__/apps/deploy.test.ts
   ```
 - Run specific test cases by specifying the test name:
   ```bash
-  yarn test -t "deployApp"
+  yarn test --test-name-pattern="deployApp"
   ```
 - Run tests in watch mode:
   ```bash
-  yarn test:watch src/controllers/__tests__/apps/deploy.test.ts
+  yarn test --watch packages/server/src/controllers/__tests__/apps/deploy.test.ts
   ```
 
 ### Documentation & Comments

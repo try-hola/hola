@@ -1,31 +1,67 @@
-// Tests for application deployment and upgrade functionality
-const request = require("supertest");
-const fs = require("fs-extra");
-const path = require("path");
-const tar = require("tar");
+// Tests for application deployment and upgrade functionality using Node.js test runner
+import {
+  describe,
+  it,
+  beforeEach,
+  afterEach,
+  before,
+  after,
+  assert,
+} from "../../../test/node-test-utils";
+import request from "supertest";
+import fs from "fs-extra";
+import path from "path";
 import { TestServer } from "../../../test/test-server";
 
-// Using centralized mocks from __mocks__ directory
-jest.mock("tar");
-jest.mock("../../../utils/docker");
-jest.mock("../../../utils/oras");
+// Create mock implementations
+const mockTar = {
+  create: async (options: any, files: string[]) => {
+    // Simulate the file creation
+    const targetPath = options.file;
+    await fs.ensureDir(path.dirname(targetPath));
+    await fs.writeFile(targetPath, "mock tarball content");
+    return Promise.resolve();
+  },
+};
 
-describe("App Deployment API Tests", () => {
+// Rather than trying to mock tar directly, we'll mock it at each usage point
+// and use our own implementation for the tar operations in the tests
+
+describe("App Deployment API Tests", async () => {
   let testServer: TestServer;
 
-  beforeAll(async () => {
+  before(async () => {
     // Setup server only once for all tests
-    testServer = new TestServer();
+    testServer = new TestServer({
+      // Pass mock implementations through environment to TestServer
+      mockUtils: {
+        docker: {
+          startApp: async () => Promise.resolve(true),
+          stopApp: async () => Promise.resolve(true),
+          dockerComposeUp: async () =>
+            Promise.resolve({ stdout: "Started containers", stderr: "" }),
+          dockerComposeDown: async () =>
+            Promise.resolve({ stdout: "Stopped containers", stderr: "" }),
+          getAppContainerId: async () => Promise.resolve("mock-container-id"),
+        },
+        oras: {
+          pushPackage: async () =>
+            Promise.resolve({ output: "Push successful" }),
+          pullPackage: async () =>
+            Promise.resolve({ output: "Pull successful" }),
+        },
+      },
+    });
     await testServer.init();
     await testServer.start();
   });
 
-  afterAll(async () => {
+  after(async () => {
     // Ensure cleanup happens even if tests fail
     await testServer.stop();
   });
 
-  test("POST /api/apps should deploy a new app", async () => {
+  it("POST /api/apps should deploy a new app", async () => {
     // Set up the directory structure needed for package deployment
     const testAppName = "deploy-test-app";
     const packageDir = testServer.environment
@@ -63,21 +99,23 @@ describe("App Deployment API Tests", () => {
     // Execute the deployment API call
     const response = await request(testServer.getApp())
       .post("/api/apps/deploy")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .send({ appName: testAppName })
       .expect(200);
 
     // Verify deployment uses SSE for real-time progress updates
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
 
     // Verify deployment output structure exists
     const composeFileExists = await fs.pathExists(
       path.join(composeDir, "docker-compose.yml"),
     );
-    expect(composeFileExists).toBe(true);
+    assert.strictEqual(composeFileExists, true);
   });
 
-  test("POST /api/apps/:appName/upgrade should upgrade an existing app", async () => {
+  it("POST /api/apps/:appName/upgrade should upgrade an existing app", async () => {
     const testAppName = "upgrade-test-app";
 
     // Create the initial app structure before testing upgrade
@@ -97,9 +135,9 @@ describe("App Deployment API Tests", () => {
       'version: "3"\nservices:\n  app:\n    image: nginx:alpine',
     );
 
-    // Create a tarball simulating the new version package
+    // Create a tarball simulating the new version package using our mock function
     const bundlePath = path.join(packageDir, "bundle.tgz");
-    await tar.create(
+    await mockTar.create(
       {
         file: bundlePath,
         cwd: tempDir,
@@ -160,6 +198,8 @@ describe("App Deployment API Tests", () => {
     // Execute the upgrade API call
     const response = await request(testServer.getApp())
       .post(`/api/apps/${testAppName}/upgrade`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .send({ version: "v2" })
       .expect(200);
 
@@ -182,17 +222,19 @@ describe("App Deployment API Tests", () => {
     }
 
     const composeFileExists = await fs.pathExists(composeFile);
-    expect(composeFileExists).toBe(true);
+    assert.strictEqual(composeFileExists, true);
   });
 
-  test("POST /api/apps should return 400 if app name is missing", async () => {
+  it("POST /api/apps should return 400 if app name is missing", async () => {
     await request(testServer.getApp())
       .post("/api/apps/deploy")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .send({}) // Empty request body to test validation
       .expect(400);
   });
 
-  test("POST /api/apps/:appName/upgrade should handle errors gracefully", async () => {
+  it("POST /api/apps/:appName/upgrade should handle errors gracefully", async () => {
     // Set up package for a non-existent app to test error handling
     const packageDir = testServer.environment
       .getPaths()
@@ -205,10 +247,12 @@ describe("App Deployment API Tests", () => {
     // Test upgrade for non-existent app - verifies error handling
     const response = await request(testServer.getApp())
       .post("/api/apps/non-existent-app/upgrade")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .send({ version: "v2" })
       .expect(200); // Status stays 200 since errors are sent through SSE
 
     // Verify SSE headers are still present for error streaming
-    expect(response.headers["content-type"]).toContain("text/event-stream");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
   });
 });
