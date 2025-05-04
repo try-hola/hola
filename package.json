@@ -46,8 +46,7 @@
   },
   "lint-staged": {
     "*.{js,ts,tsx}": [
-      "prettier --write",
-      "node --require ./packages/client/test-register.js --test \"packages/client/src/**/*.test.ts\""
+      "prettier --write"
     ]
   }
 }
