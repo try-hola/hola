@@ -32,7 +32,7 @@ function clearMocks(pattern = "/utils/") {
 }
 
 /**
- * Helper function for tracking function calls (similar to Jest spies)
+ * Helper function for tracking function calls
  * @param fn - The function to track
  * @returns A wrapped function that tracks calls
  */

@@ -2,7 +2,7 @@
  * Test utilities for Node.js test runner
  *
  * This module provides properly typed test utilities for the Node.js test runner
- * to make migration from Jest easier.
+ *
  */
 import * as nodeTest from "node:test";
 import * as assert from "node:assert";
@@ -16,7 +16,7 @@ export const before = nodeTest.before;
 export const after = nodeTest.after;
 
 /**
- * Helper function for tracking function calls (similar to Jest spies)
+ * Helper function for tracking function calls
  */
 export function trackCalls<T extends (...args: any[]) => any>(fn?: T) {
   const calls: any[][] = [];

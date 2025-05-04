@@ -193,59 +193,6 @@ class OutputFormatter {
 }
 ```
 
-## Testing Approach
-
-Create unit tests for command modules using Jest:
-
-```typescript
-// Example: client/src/commands/app/__tests__/list.test.ts
-const { Command } = require("commander");
-const mockApiClient = jest.mock("../../../api/client");
-
-describe("app list command", () => {
-  let program;
-  let registerCommand;
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    program = new Command();
-    registerCommand = require("../list");
-    registerCommand(program);
-  });
-
-  it("should display a table of apps by default", async () => {
-    // Setup
-    mockApiClient.getApps.mockResolvedValue([
-      { name: "app1", status: "running" },
-      { name: "app2", status: "stopped" },
-    ]);
-
-    // Execute
-    await program.parseAsync(["list"]);
-
-    // Assert
-    expect(mockApiClient.getApps).toHaveBeenCalled();
-    // Additional assertions for output
-    // ...
-  });
-
-  it("should output JSON when specified", async () => {
-    // Setup
-    mockApiClient.getApps.mockResolvedValue([
-      { name: "app1", status: "running" },
-    ]);
-
-    // Execute
-    await program.parseAsync(["list", "--output", "json"]);
-
-    // Assert
-    expect(mockApiClient.getApps).toHaveBeenCalled();
-    // Assert JSON output
-    // ...
-  });
-});
-```
-
 ## Best Practices
 
 1. **Avoid Deep Nesting**: Limit command nesting to 2-3 levels for usability

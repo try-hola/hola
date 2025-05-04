@@ -61,9 +61,8 @@ module.exports = [
       ecmaVersion: 2020,
       sourceType: "commonjs", // Assuming JS files are also CommonJS
       globals: {
-        // Add Node.js and Jest globals
+        // Add Node.js globals
         ...globals.node,
-        ...globals.jest,
       },
     },
     // Add JS-specific rules if necessary
@@ -74,8 +73,7 @@ module.exports = [
     files: ["**/*.test.ts", "**/__tests__/**/*.ts"],
     languageOptions: {
       globals: {
-        // Add Jest globals specifically for TS test files
-        ...globals.jest,
+        ...globals.node,
       },
     },
     // You might relax certain rules only for test files here if needed

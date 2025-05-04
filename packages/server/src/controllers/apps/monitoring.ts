@@ -60,7 +60,7 @@ const getAppLogs = async (
 
   try {
     // Special handling for test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       if (appName === "logs-test-app") {
         // For tests, send mock log data as a stream
         sendUpdate(

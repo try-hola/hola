@@ -4,7 +4,7 @@
 const { describe, it } = require("node:test");
 const assert = require("node:assert");
 
-// Helper function for tracking function calls (similar to Jest spies)
+// Helper function for tracking function calls
 function trackCalls(fn) {
   const calls = [];
   const tracked = function (...args) {

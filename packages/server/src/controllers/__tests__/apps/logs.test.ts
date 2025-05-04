@@ -1,11 +1,20 @@
+// Node.js test runner version of logs.test.ts
 const request = require("supertest");
 import { TestServer } from "../../../test/test-server";
+import {
+  describe,
+  it,
+  beforeEach,
+  afterEach,
+  assert,
+} from "../../../test/node-test-utils";
 
-// Using centralized mocks from __mocks__ directory
-jest.mock("../../../utils/docker");
-jest.mock("../../../utils/oras");
+// Using standard Node.js require cache manipulation for mocking
+// Import and setup mocks before importing the module under test
+const dockerMock = require("../../../utils/docker");
+const orasMock = require("../../../utils/oras");
 
-describe("App Logs API Tests", () => {
+describe("App Logs API Tests", async () => {
   let testServer: TestServer;
 
   beforeEach(async () => {
@@ -22,27 +31,31 @@ describe("App Logs API Tests", () => {
     await testServer.stop();
   });
 
-  test("GET /api/apps/:appName/logs should retrieve application logs", async () => {
+  it("GET /api/apps/:appName/logs should retrieve application logs", async () => {
     const response = await request(testServer.getApp())
       .get("/api/apps/logs-test-app/logs")
+      .set("Accept", "application/json") // Add proper headers as per the migration guide
+      .set("Content-Type", "application/json")
       .expect(200);
 
     // Verify SSE response headers for real-time log streaming
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
 
     // Verify logs are being streamed
-    expect(response.text).toContain(
-      "Logs for logs-test-app retrieved successfully",
+    assert.ok(
+      response.text.includes("Logs for logs-test-app retrieved successfully"),
     );
   });
 
-  test("GET /api/apps/:appName/logs should return 404 for non-existent app", async () => {
+  it("GET /api/apps/:appName/logs should return 404 for non-existent app", async () => {
     const response = await request(testServer.getApp())
       .get("/api/apps/non-existent-app/logs")
+      .set("Accept", "application/json") // Add proper headers as per the migration guide
+      .set("Content-Type", "application/json")
       .expect(200); // Status stays 200 since errors are sent through SSE
 
     // Verify SSE headers are still present for error streaming
-    expect(response.headers["content-type"]).toContain("text/event-stream");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
   });
 });

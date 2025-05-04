@@ -35,7 +35,7 @@ function clearMocks() {
 }
 
 /**
- * Helper function for tracking function calls (similar to Jest spies)
+ * Helper function for tracking function calls
  */
 function trackCalls(fn) {
   const calls = [];

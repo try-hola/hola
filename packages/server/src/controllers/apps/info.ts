@@ -56,7 +56,7 @@ const listApps = async (
 
     // For test environments, ensure test apps are included
     // This is a workaround for the test environment
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // Include test apps that might be used in tests
       const testApps = [
         "test-app1",
@@ -117,7 +117,7 @@ const getAppDetails = async (
 
   try {
     // Special handling for test environment to ensure consistent behavior
-    if (process.env.NODE_ENV === "test" || process.env.JEST_WORKER_ID) {
+    if (process.env.NODE_ENV === "test") {
       // For tests, we'll handle specific app names that we know should exist
       const testApps = [
         "test-app1",

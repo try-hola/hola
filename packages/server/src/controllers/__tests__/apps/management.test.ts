@@ -1,17 +1,27 @@
+// Node.js test runner version of management.test.ts
 // Tests for App Management API endpoints (start, stop, details, removal)
 const request = require("supertest");
 const fs = require("fs-extra");
 const path = require("path");
 import { TestServer } from "../../../test/test-server";
+import {
+  describe,
+  it,
+  before,
+  beforeEach,
+  after,
+  assert,
+} from "../../../test/node-test-utils";
 
-// Using centralized mocks from __mocks__ directory
-jest.mock("../../../utils/docker");
+// Using standard Node.js require cache manipulation for mocking
+// Import and setup mocks before importing the module under test
+const dockerMock = require("../../../utils/docker");
 
-describe("App Management API Tests", () => {
+describe("App Management API Tests", async () => {
   let testServer: TestServer;
   const testAppName = "management-test-app";
 
-  beforeAll(async () => {
+  before(async () => {
     testServer = new TestServer();
     await testServer.init();
     await testServer.start();
@@ -36,57 +46,65 @@ describe("App Management API Tests", () => {
     );
   });
 
-  afterAll(async () => {
+  after(async () => {
     await testServer.stop();
   });
 
-  test("GET /api/apps/:appName should return complete app details", async () => {
+  it("GET /api/apps/:appName should return complete app details", async () => {
     const response = await request(testServer.getApp())
       .get(`/api/apps/${testAppName}`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
     // Verify the app details include all required fields
-    expect(response.body).toHaveProperty("appName", testAppName);
-    expect(response.body).toHaveProperty("status");
-    expect(response.body).toHaveProperty("config");
-    expect(response.body.config).toHaveProperty("name", testAppName);
-    expect(response.body.config).toHaveProperty("test", true);
+    assert.strictEqual(response.body.appName, testAppName);
+    assert.ok(response.body.status);
+    assert.ok(response.body.config);
+    assert.strictEqual(response.body.config.name, testAppName);
+    assert.strictEqual(response.body.config.test, true);
 
     // Verify files array contains the test files we created
-    expect(response.body).toHaveProperty("files");
-    expect(Array.isArray(response.body.files)).toBe(true);
-    expect(response.body.files.length).toBeGreaterThan(0);
+    assert.ok(response.body.files);
+    assert.ok(Array.isArray(response.body.files));
+    assert.ok(response.body.files.length > 0);
   });
 
-  test("POST /api/apps/:appName/start should start the app and return SSE headers", async () => {
+  it("POST /api/apps/:appName/start should start the app and return SSE headers", async () => {
     const response = await request(testServer.getApp())
       .post(`/api/apps/${testAppName}/start`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
     // Start operation uses SSE for providing real-time updates
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
   });
 
-  test("POST /api/apps/:appName/stop should stop the app and return SSE headers", async () => {
+  it("POST /api/apps/:appName/stop should stop the app and return SSE headers", async () => {
     const response = await request(testServer.getApp())
       .post(`/api/apps/${testAppName}/stop`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
   });
 
-  test("POST /api/apps/:appName/restart should restart the app and return SSE headers", async () => {
+  it("POST /api/apps/:appName/restart should restart the app and return SSE headers", async () => {
     const response = await request(testServer.getApp())
       .post(`/api/apps/${testAppName}/restart`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
   });
 
-  test("DELETE /api/apps/:appName should remove the app and return SSE headers", async () => {
+  it("DELETE /api/apps/:appName should remove the app and return SSE headers", async () => {
     // Create backup infrastructure before testing app removal
     const timestamp = new Date().toISOString();
     const backupsDir = testServer.environment
@@ -122,10 +140,12 @@ describe("App Management API Tests", () => {
 
     const response = await request(testServer.getApp())
       .delete(`/api/apps/${testAppName}`)
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
-    expect(response.headers["content-type"]).toContain("text/event-stream");
-    expect(response.headers["cache-control"]).toContain("no-cache");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
+    assert.ok(response.headers["cache-control"].includes("no-cache"));
 
     // Wait briefly for async file operations to complete
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -151,37 +171,43 @@ describe("App Management API Tests", () => {
 
     // Test passes if we get the SSE response - actual removal
     // may be handled asynchronously, so we don't test for directory removal
-    expect(response.headers["content-type"]).toContain("text/event-stream");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
   });
 
-  test("POST /api/apps/:appName/start should return an error for non-existent app", async () => {
+  it("POST /api/apps/:appName/start should return an error for non-existent app", async () => {
     const response = await request(testServer.getApp())
       .post("/api/apps/non-existent-app/start")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200); // Still returns 200 for SSE responses with error content
 
     // SSE error messages are sent as individual SSE events
     // The headers should still indicate a stream response
-    expect(response.headers["content-type"]).toContain("text/event-stream");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
   });
 
-  test("POST /api/apps/:appName/restart should return an error for non-existent app", async () => {
+  it("POST /api/apps/:appName/restart should return an error for non-existent app", async () => {
     const response = await request(testServer.getApp())
       .post("/api/apps/non-existent-app/restart")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200); // Still returns 200 for SSE responses with error content
 
     // SSE error messages are sent as individual SSE events
     // The headers should still indicate a stream response
-    expect(response.headers["content-type"]).toContain("text/event-stream");
+    assert.ok(response.headers["content-type"].includes("text/event-stream"));
   });
 
-  test("GET /api/apps should return a list of all deployed apps", async () => {
+  it("GET /api/apps should return a list of all deployed apps", async () => {
     const response = await request(testServer.getApp())
       .get("/api/apps")
+      .set("Accept", "application/json")
+      .set("Content-Type", "application/json")
       .expect(200);
 
-    expect(response.body).toHaveProperty("apps");
-    expect(Array.isArray(response.body.apps)).toBe(true);
-    expect(response.body.apps).toContain("list-test-app1");
-    expect(response.body.apps).toContain("list-test-app2");
+    assert.ok(response.body.apps);
+    assert.ok(Array.isArray(response.body.apps));
+    assert.ok(response.body.apps.includes("list-test-app1"));
+    assert.ok(response.body.apps.includes("list-test-app2"));
   });
 });
