@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "hola"
+version = "0.1.0"
+description = "Hola application management platform"
+authors = ["Your Name <your.email@example.com>"]
+# Remove the packages field since we're using path dependencies
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+# Define workspace packages as path dependencies
+hola_server = {path = "hola_server", develop = true}
+hola_cli = {path = "hola_cli", develop = true}
+hola_shared = {path = "hola_shared", develop = true}
+hola_client_sdk = {path = "hola_client_sdk", develop = true}
+pydantic-settings = "^2.9.1"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.5"
+openapi-python-client = "^0.24.3"
+
+# Add some useful scripts for managing the workspace
+[tool.poetry.scripts]
+format = "poetry:run black . && poetry:run isort ."
+lint = "poetry:run black --check . && poetry:run isort --check ."
+test = "pytest"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,1 @@
+"""Hola Server package - FastAPI-based backend server for the Hola application management system."""
