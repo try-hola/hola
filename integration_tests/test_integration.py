@@ -91,7 +91,9 @@ def test_cli_config(tmp_path_factory) -> Generator[Tuple[Path, CliSettings], Non
     Returns the config directory and the settings object.
     """
     # Create temp directory for this test session
-    config_dir = tmp_path_factory.mktemp("hola_cli_config")
+    tmp_base = tmp_path_factory.mktemp("pytest_config")
+    config_dir = tmp_base / "hola"  # Create a hola subdirectory to match CLI expectations
+    config_dir.mkdir(exist_ok=True, parents=True)
     settings_file = config_dir / "settings.json"
     
     # Create test settings
