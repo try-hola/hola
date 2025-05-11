@@ -43,6 +43,7 @@ markers = [
     "integration: marks tests as integration tests (select with -m integration)",
     "unit: marks tests as unit tests (select with -m unit)",
 ]
+asyncio_default_fixture_loop_scope = "function"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
