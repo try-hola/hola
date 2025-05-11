@@ -11,6 +11,10 @@ from hola_shared.errors import HolaException
 from .config import get_settings
 from .api import hello
 
+# Server start timestamp for uptime calculation
+import time
+SERVER_START_TIME = time.time()
+
 app = FastAPI(
     title="Hola API",
     description="API server for Hola application management",
@@ -42,5 +46,18 @@ async def hola_exception_handler(request: Request, exc: HolaException):
         status_code=exc.status_code,
         content=exc.to_response().dict()
     )
+
+@app.get("/health", tags=["system"])
+async def health_check():
+    """
+    Health check endpoint for monitoring and integration testing.
+    
+    Returns:
+        Health status of the API server
+    """
+    return {
+        "status": "ok",
+        "uptime_seconds": time.time() - SERVER_START_TIME
+    }
 
 app.include_router(hello.router, prefix="/hello", tags=["hello"])

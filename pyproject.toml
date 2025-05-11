@@ -27,6 +27,7 @@ isort = "^6.0.1"
 # Add some useful scripts for managing the workspace
 pydantic-factories = "^1.17.3"
 polyfactory = "^2.21.0"
+requests = "^2.32.3"
 [tool.poetry.scripts]
 format = "black . && isort ."
 lint = "black --check . && isort --check ."
