@@ -18,13 +18,30 @@ pydantic-settings = "^2.9.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
+pytest-cov = "^6.1.1"
+pytest-asyncio = "^0.26.0"
 openapi-python-client = "^0.24.3"
+black = "^25.1.0"
+isort = "^6.0.1"
 
 # Add some useful scripts for managing the workspace
+pydantic-factories = "^1.17.3"
+polyfactory = "^2.21.0"
 [tool.poetry.scripts]
-format = "poetry:run black . && poetry:run isort ."
-lint = "poetry:run black --check . && poetry:run isort --check ."
+format = "black . && isort ."
+lint = "black --check . && isort --check ."
 test = "pytest"
+test-cov = "pytest --cov=hola_server --cov=hola_cli --cov=hola_shared --cov-report=term --cov-report=html"
+test-watch = "ptw"
+
+[tool.pytest.ini_options]
+testpaths = ["hola_server/tests", "hola_cli/tests", "hola_shared/tests"]
+python_files = "test_*.py"
+python_functions = "test_*"
+markers = [
+    "integration: marks tests as integration tests (select with -m integration)",
+    "unit: marks tests as unit tests (select with -m unit)",
+]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

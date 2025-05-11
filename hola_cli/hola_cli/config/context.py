@@ -4,6 +4,7 @@ Handles connection configuration and client creation for API requests.
 """
 from typing import Dict, Optional
 from hola_client_sdk.client import Client
+from hola_shared.errors import ConfigurationException
 from .settings import get_settings
 
 class ServerContext:
@@ -51,7 +52,7 @@ def get_current_server(server_name: Optional[str] = None) -> ServerContext:
         ServerContext for API communication
         
     Raises:
-        ValueError: If the requested server doesn't exist in settings or no default server available
+        ConfigurationException: If the requested server doesn't exist or no server is available
     """
     # Load CLI settings
     settings = get_settings()
@@ -70,7 +71,14 @@ def get_current_server(server_name: Optional[str] = None) -> ServerContext:
             server = settings.servers[server_name]
             return ServerContext(url=server.url, api_key=server.api_key)
         else:
-            raise ValueError(f"Server '{server_name}' not found in configuration")
+            raise ConfigurationException(
+                message=f"Server '{server_name}' not found in configuration",
+                details={
+                    "server_name": server_name, 
+                    "available_servers": list(settings.servers.keys()),
+                    "help": "Use 'hola server list' to see available servers"
+                }
+            )
     
     # Use default server if available
     if settings.default_server and settings.default_server in settings.servers:
@@ -78,6 +86,16 @@ def get_current_server(server_name: Optional[str] = None) -> ServerContext:
         return ServerContext(url=server.url, api_key=server.api_key)
     
     # Fall back to first server in list if no default specified
-    first_server_name = next(iter(settings.servers))
-    server = settings.servers[first_server_name]
-    return ServerContext(url=server.url, api_key=server.api_key)
+    try:
+        first_server_name = next(iter(settings.servers))
+        server = settings.servers[first_server_name]
+        return ServerContext(url=server.url, api_key=server.api_key)
+    except StopIteration:
+        # This should not happen due to the check at the beginning,
+        # but added for defensive programming
+        raise ConfigurationException(
+            message="No servers configured",
+            details={
+                "help": "Use 'hola server add' to add a server connection"
+            }
+        )

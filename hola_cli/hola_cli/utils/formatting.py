@@ -34,15 +34,15 @@ def format_output(data: Any, format_type: str = "table") -> Any:
     else:
         return str(data)
 
-def create_table_from_list(data: List[Any]) -> str:
+def create_table_from_list(data: List[Any]) -> Table:
     """
-    Convert a list into a formatted table string.
+    Convert a list into a Rich Table object.
     
     Args:
         data: The list to format as a table
         
     Returns:
-        A string representation of the list formatted as a table
+        A Rich Table object representing the list
     """
     table = Table()
     table.add_column("Index", style="dim")
@@ -51,19 +51,17 @@ def create_table_from_list(data: List[Any]) -> str:
     for index, value in enumerate(data):
         table.add_row(str(index), str(value))
     
-    console = Console(record=True)
-    console.print(table)
-    return console.export_text()
+    return table
 
-def create_table_from_dict(data: Dict[str, Any]) -> str:
+def create_table_from_dict(data: Dict[str, Any]) -> Table:
     """
-    Convert a dictionary into a formatted table string.
+    Convert a dictionary into a Rich Table object.
     
     Args:
         data: The dictionary to format as a table
         
     Returns:
-        A string representation of the dictionary formatted as a table
+        A Rich Table object representing the dictionary
     """
     table = Table()
     table.add_column("Key", style="bold")
@@ -72,6 +70,4 @@ def create_table_from_dict(data: Dict[str, Any]) -> str:
     for key, value in data.items():
         table.add_row(str(key), str(value))
     
-    console = Console(record=True)
-    console.print(table)
-    return console.export_text()
+    return table

@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["*"]  # List of allowed CORS origins
     log_level: str = "INFO"  # Application logging level
     
-    class Config:
-        """Pydantic configuration for settings behavior."""
-        env_prefix = "HOLA_"  # Prefix for all environment variables
-        env_file = ".env"  # Optional .env file to load settings from
+    model_config = {
+        "env_prefix": "HOLA_",  # Prefix for all environment variables
+        "env_file": ".env",  # Optional .env file to load settings from
+    }
 
 @lru_cache()
 def get_settings() -> Settings:
