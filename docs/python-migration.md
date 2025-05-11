@@ -434,10 +434,21 @@ The hola_shared package needs improved documentation following Python standards.
 
 ### 2. Test Infrastructure Setup
 
-The migration plan outlines testing as a deliverable, but specific test scaffolding should be more clearly defined:
+Our tests follow a well-organized structure across all workspaces, with proper package initialization:
 
 ```python
-# Example test structure for Phase 1
+# hola_shared/tests/__init__.py
+"""Test package for hola_shared.
+
+This package contains the test suite for the hola_shared library, which provides
+common models and utilities shared between the server and client components.
+
+The testing approach follows the project's overall testing strategy:
+- Using pytest as the test framework
+- Preferring fakes over mocks for testing external dependencies
+- Using fixtures to provide standardized test objects
+- Organizing tests by feature area with dedicated test files
+"""
 
 # hola_server/tests/conftest.py
 import pytest
@@ -452,6 +463,8 @@ def client():
 # hola_cli/tests/conftest.py 
 import pytest
 from unittest.mock import patch
+from rich.console import Console
+from io import StringIO
 from hola_cli.config.settings import CliSettings, ServerConnection
 
 @pytest.fixture
@@ -462,6 +475,51 @@ def fake_settings():
         default_server="test",
         output_format="table"
     )
+
+@pytest.fixture
+def captured_output():
+    """Fixture to capture console output for testing."""
+    string_io = StringIO()
+    console = Console(file=string_io, highlight=False)
+    yield console, string_io
+```
+
+The test directory structure follows a consistent pattern across all workspaces:
+
+```
+hola/
+├── hola_shared/tests/      # Tests for shared models and utilities
+│   ├── models/             # Tests for models
+│   └── fakes/              # Shared fake implementations
+│
+├── hola_server/tests/      # Tests for the server application
+│   ├── api/                # API endpoint tests
+│   └── fakes/              # Server-specific fake implementations
+│
+└── hola_cli/tests/         # Tests for the CLI application
+    ├── commands/           # CLI command tests
+    ├── services/           # Service tests
+    ├── utils/              # Utility tests
+    └── fakes/              # CLI-specific fake implementations
+```
+
+Tests can be run using consistent commands across all workspaces:
+
+```bash
+# Run all tests
+poetry run pytest
+
+# Run tests for a specific workspace
+poetry run pytest hola_server/tests/
+poetry run pytest hola_cli/tests/
+poetry run pytest hola_shared/tests/
+
+# Run specific test files
+poetry run pytest hola_server/tests/api/test_hello.py
+poetry run pytest hola_cli/tests/commands/test_hello.py
+
+# Run tests with coverage
+poetry run pytest --cov=hola_server --cov=hola_cli --cov=hola_shared
 ```
 
 ### 4. Server Context Implementation

@@ -20,6 +20,7 @@ This project consists of two main components organized as a monorepo using Poetr
   - Use package directories for all source code.
   - Use `__mocks__/` for test mocks.
   - Use `tests/` for test files, organized by feature area.
+- Use `poetry add` to add dependencies to the correct workspace.
 
 ### MCP Servers
 

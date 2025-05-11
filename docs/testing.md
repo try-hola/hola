@@ -44,14 +44,11 @@ poetry run pytest
 ### Running Tests for a Specific Package
 
 ```bash
-cd /Users/paul/GitHub/hola/hola_server
-poetry run pytest
+poetry run pytest hola_server/tests/
 
-cd /Users/paul/GitHub/hola/hola_cli
-poetry run pytest
+poetry run pytest hola_cli/tests/
 
-cd /Users/paul/GitHub/hola/hola_shared
-poetry run pytest
+poetry run pytest hola_shared/tests/
 ```
 
 ### Running Specific Test Files
