@@ -138,6 +138,8 @@ def run_cli_command(monkeypatch, test_cli_config):
         """
         # Set up environment for CLI
         monkeypatch.setenv("XDG_CONFIG_HOME", str(config_dir.parent))
+        # Disable logging in environment to prevent it from mixing with command output
+        monkeypatch.setenv("HOLA_LOG_LEVEL", "ERROR")
         
         # Build the complete command
         full_command = [sys.executable, "-m", "hola_cli.main"] + command
@@ -199,10 +201,14 @@ class TestHelloIntegration:
     def test_cli_hello_json_output(self, server_process, run_cli_command):
         """Test the CLI hello command with JSON output format."""
         output = run_cli_command(["hello", "greet", "--output", "json"])
-        # Output should be valid JSON
+        # The output includes log messages and then the JSON string
+        # Get the last line which should be the JSON output
         import json
-        data = json.loads(output)
-        assert "Hello, World!" == data
+        last_line = output.strip().split('\n')[-1]
+        
+        # Now parse the JSON string - it's a quoted string like "Hello, World!"
+        data = json.loads(last_line)
+        assert data == "Hello, World!"
 
 
 # class TestServerStatusIntegration:

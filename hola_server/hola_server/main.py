@@ -8,8 +8,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hola_shared.errors import HolaException
-from .config import get_settings
+from hola_shared.logger import configure_logging, get_logger
+from .config.settings import get_settings
 from .api import hello
+
+# Initialize logging
+configure_logging(get_settings())
+logger = get_logger(__name__)
 
 # Server start timestamp for uptime calculation
 import time

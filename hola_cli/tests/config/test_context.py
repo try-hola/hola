@@ -57,7 +57,7 @@ class TestGetCurrentServer:
             default_server="other"
         )
         
-        monkeypatch.setattr("hola_cli.config.context.get_settings", lambda: settings)
+        monkeypatch.setattr("hola_cli.config.context.load_settings", lambda: settings)
         
         context = get_current_server("test")
         assert context.url == "http://test.url"
@@ -77,7 +77,7 @@ class TestGetCurrentServer:
             default_server="default"
         )
         
-        monkeypatch.setattr("hola_cli.config.context.get_settings", lambda: settings)
+        monkeypatch.setattr("hola_cli.config.context.load_settings", lambda: settings)
         
         context = get_current_server()
         assert context.url == "http://default.url"
@@ -96,7 +96,7 @@ class TestGetCurrentServer:
             default_server="test"
         )
         
-        monkeypatch.setattr("hola_cli.config.context.get_settings", lambda: settings)
+        monkeypatch.setattr("hola_cli.config.context.load_settings", lambda: settings)
         
         with pytest.raises(ConfigurationException) as excinfo:
             get_current_server("nonexistent")

@@ -8,7 +8,8 @@ from contextlib import contextmanager
 from functools import wraps
 from hola_client_sdk.client import Client
 from hola_shared.errors import ConfigurationException
-from .settings import get_settings
+from hola_shared.environment import Environment
+from .settings import load_settings
 
 class ServerContext:
     """
@@ -58,57 +59,62 @@ class ServerContext:
 
 def get_current_server(server_name: Optional[str] = None) -> ServerContext:
     """
-    Get the ServerContext for the specified server or default server.
+    Get a server context for the specified or default server.
+    
+    Resolves server in the following order:
+    1. Explicitly provided server_name parameter
+    2. HOLA_SERVER environment variable
+    3. Default server from settings
+    4. First server in settings if no default
     
     Args:
-        server_name: Optional name of the server to use. If None, uses the default server.
+        server_name: Optional name of the server to use
         
     Returns:
         ServerContext for API communication
         
     Raises:
-        ConfigurationException: If the requested server doesn't exist or no server is available
+        ConfigurationException: If server cannot be found or configured
     """
-    # Load CLI settings
-    settings = get_settings()
+    settings = load_settings()
     
-    # No servers configured
-    if not settings.servers:
-        # Provide a default local development server configuration
-        return ServerContext(
-            url="http://localhost:8000",
-            api_key="dev-api-key",
-            name="local-dev"
+    # Use specified server, environment variable, or default
+    name = server_name or Environment.get("SERVER") or settings.default_server
+    
+    # Override URL and API key from environment if specified
+    env_url = Environment.get("SERVER_URL")
+    env_api_key = Environment.get("API_KEY")
+    
+    # If server was explicitly requested but not found, raise an exception
+    if server_name and (not name or name not in settings.servers):
+        raise ConfigurationException(
+            message=f"Server '{server_name}' not found",
+            details={
+                "help": "Use 'hola server add' to add a server connection"
+            }
         )
     
-    # If server name provided, look for that specific server
-    if server_name:
-        if server_name in settings.servers:
-            server = settings.servers[server_name]
-            return ServerContext(url=server.url, api_key=server.api_key, name=server_name)
-        else:
-            raise ConfigurationException(
-                message=f"Server '{server_name}' not found in configuration",
-                details={
-                    "server_name": server_name, 
-                    "available_servers": list(settings.servers.keys()),
-                    "help": "Use 'hola server list' to see available servers"
-                }
-            )
-    
-    # Use default server if available
-    if settings.default_server and settings.default_server in settings.servers:
-        server = settings.servers[settings.default_server]
-        return ServerContext(url=server.url, api_key=server.api_key, name=settings.default_server)
-    
-    # Fall back to first server in list if no default specified
-    try:
+    if name and name in settings.servers:
+        # Use server from settings
+        server = settings.servers[name]
+        # Override with env vars if provided
+        url = env_url or server.url
+        api_key = env_api_key or server.api_key
+        return ServerContext(url=url, api_key=api_key, name=name)
+    elif env_url and env_api_key:
+        # Create server context from environment variables
+        # Use the HOLA_SERVER value for the name if available, otherwise fallback to "env"
+        server_name = Environment.get("SERVER") or "env"
+        return ServerContext(url=env_url, api_key=env_api_key, name=server_name)
+    elif len(settings.servers) > 0:
+        # Fall back to first server in list
         first_server_name = next(iter(settings.servers))
         server = settings.servers[first_server_name]
-        return ServerContext(url=server.url, api_key=server.api_key, name=first_server_name)
-    except StopIteration:
-        # This should not happen due to the check at the beginning,
-        # but added for defensive programming
+        url = env_url or server.url
+        api_key = env_api_key or server.api_key
+        return ServerContext(url=url, api_key=api_key, name=first_server_name)
+    else:
+        # No server configured
         raise ConfigurationException(
             message="No servers configured",
             details={

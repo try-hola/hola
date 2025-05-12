@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from pydantic import BaseModel
 from functools import lru_cache
+from hola_shared.environment import Environment  # Import from shared package
 
 class ServerConnection(BaseModel):
     """Server connection details for API communication."""
@@ -70,7 +71,7 @@ def load_settings(check_legacy: bool = True) -> CliSettings:
         try:
             with open(settings_path, "r") as f:
                 data = json.load(f)
-            return CliSettings.parse_obj(data)
+            return CliSettings.model_validate(data)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Error loading settings: {e}")
             # Fall back to default settings if file is invalid

@@ -21,6 +21,63 @@ from hola_shared.models.response import ApiResponse, ApiError
 
 
 @pytest.fixture
+def mock_environment():
+    """
+    Fixture to mock environment variables for testing.
+    
+    This fixture temporarily sets environment variables with the HOLA_ prefix
+    for testing environment-dependent functionality, then restores the original
+    environment after the test completes. This provides a clean, isolated
+    environment for each test that interacts with environment variables.
+    
+    The fixture sets common test values that can be used by default in tests,
+    but individual tests can modify the environment as needed for specific test cases.
+    
+    Example:
+        def test_server_from_env(mock_environment):
+            # Environment is pre-configured with test values
+            context = get_current_server()
+            assert context.name == "env"
+            assert context.url == "http://test-url"
+            
+            # Test can modify environment for specific test cases
+            os.environ["HOLA_SERVER_URL"] = "http://different-url"
+            context = get_current_server()
+            assert context.url == "http://different-url"
+    
+    Yields:
+        dict: Dictionary containing the set environment variables
+    """
+    # Define test environment variables
+    env_vars = {
+        "HOLA_SERVER": "test-server",
+        "HOLA_SERVER_URL": "http://test-url",
+        "HOLA_API_KEY": "test-env-key",
+        "HOLA_OUTPUT_FORMAT": "json",
+        "HOLA_LOG_LEVEL": "DEBUG"
+    }
+    
+    # Save original environment
+    original_env = {}
+    for key in env_vars:
+        if key in os.environ:
+            original_env[key] = os.environ[key]
+    
+    # Set test environment
+    for key, value in env_vars.items():
+        os.environ[key] = value
+        
+    yield env_vars
+    
+    # Restore original environment
+    for key in env_vars:
+        if key in original_env:
+            os.environ[key] = original_env[key]
+        elif key in os.environ:
+            del os.environ[key]
+
+
+@pytest.fixture
 def fake_settings() -> CliSettings:
     """
     Return test CLI settings.

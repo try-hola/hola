@@ -4,9 +4,69 @@ Shared fixtures and configuration for hola_server tests.
 import pytest
 from fastapi.testclient import TestClient
 from typing import Dict, Generator, Any
+import os
 
 # Import main app after setting up fakes
 from hola_server.main import app
+
+
+@pytest.fixture
+def mock_environment():
+    """
+    Fixture to mock server environment variables for testing.
+    
+    This fixture temporarily sets environment variables with the HOLA_ prefix
+    for testing environment-dependent server functionality, then restores the
+    original environment after the test completes. This provides a clean, 
+    isolated environment for each test that interacts with environment variables.
+    
+    The fixture sets common test values including:
+    - API key for authentication
+    - Host and port settings
+    - CORS configuration
+    - Logging settings
+    - Data directory location
+    
+    Example:
+        def test_api_key_from_env(mock_environment):
+            # Test accessing API key from environment
+            from hola_server.config import get_settings
+            settings = get_settings()
+            assert settings.api_key == "test-env-api-key"
+    
+    Yields:
+        dict: Dictionary containing the set environment variables
+    """
+    # Define test environment variables
+    env_vars = {
+        "HOLA_API_KEY": "test-env-api-key",
+        "HOLA_HOST": "127.0.0.1",
+        "HOLA_PORT": "9999",
+        "HOLA_DEBUG": "true",
+        "HOLA_LOG_LEVEL": "DEBUG",
+        "HOLA_DATA_DIR": "./test-data"
+        # CORS is not configurable via environment variables
+    }
+    
+    # Save original environment
+    original_env = {}
+    for key in env_vars:
+        if key in os.environ:
+            original_env[key] = os.environ[key]
+    
+    # Set test environment
+    for key, value in env_vars.items():
+        os.environ[key] = value
+        
+    yield env_vars
+    
+    # Restore original environment
+    for key in env_vars:
+        if key in original_env:
+            os.environ[key] = original_env[key]
+        else:
+            if key in os.environ:
+                del os.environ[key]
 
 
 @pytest.fixture
@@ -32,7 +92,7 @@ def override_config() -> Generator[None, None, None]:
     and restores original configurations after tests.
     """
     # Import here to avoid circular imports
-    from hola_server.config import get_settings
+    from hola_server.config.settings import get_settings
     
     # Save original
     original_get_settings = get_settings
@@ -42,11 +102,19 @@ def override_config() -> Generator[None, None, None]:
         return Settings(api_key="test-api-key")
     
     # Replace the get_settings function with our test version
+    from hola_server.config import settings
+    settings.get_settings = get_test_settings
+    
+    # Also update the legacy import for backward compatibility
     from hola_server import config
     config.get_settings = get_test_settings
     
     yield
     
     # Restore original
+    from hola_server.config import settings
+    settings.get_settings = original_get_settings
+    
+    # Also restore the legacy import
     from hola_server import config
     config.get_settings = original_get_settings

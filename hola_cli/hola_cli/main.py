@@ -6,6 +6,8 @@ defining the command structure and registering all subcommands.
 """
 import typer
 from rich.console import Console
+from hola_shared.logger import configure_logging, get_logger
+from .config.settings import get_settings
 from .utils.version import get_cli_version
 from .commands import hello
 
@@ -15,6 +17,9 @@ app = typer.Typer(
     add_completion=True,
 )
 
+# Initialize CLI logging
+configure_logging(get_settings())
+logger = get_logger(__name__)
 console = Console()
 
 @app.callback()

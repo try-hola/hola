@@ -15,6 +15,7 @@ These fixtures are automatically available to all tests in the hola_shared packa
 through pytest's fixture discovery mechanism.
 """
 import pytest
+import os
 from polyfactory.factories.pydantic_factory import ModelFactory
 
 from hola_shared.models.response import ApiResponse, ApiError
@@ -106,3 +107,48 @@ def error_response() -> ApiResponse:
         data=None,
         error=ApiError(code="TEST_ERROR", message="Test error message", details={"test": "error"})
     )
+
+
+@pytest.fixture
+def mock_environment():
+    """
+    Fixture to mock environment variables for testing.
+    
+    This fixture temporarily sets environment variables with the HOLA_ prefix
+    for testing environment-dependent functionality, then restores the original
+    environment after the test completes. This provides a clean, isolated
+    environment for each test that interacts with environment variables.
+    
+    The fixture sets common test values that can be used by default in tests,
+    but individual tests can modify the environment as needed for specific test cases.
+    
+    Yields:
+        dict: Dictionary containing the set environment variables
+    """
+    # Define test environment variables
+    env_vars = {
+        "HOLA_SERVER": "test-server",
+        "HOLA_SERVER_URL": "http://test-url",
+        "HOLA_API_KEY": "test-env-key",
+        "HOLA_OUTPUT_FORMAT": "json",
+        "HOLA_LOG_LEVEL": "DEBUG"
+    }
+    
+    # Save original environment
+    original_env = {}
+    for key in env_vars:
+        if key in os.environ:
+            original_env[key] = os.environ[key]
+    
+    # Set test environment
+    for key, value in env_vars.items():
+        os.environ[key] = value
+        
+    yield env_vars
+    
+    # Restore original environment
+    for key in env_vars:
+        if key in original_env:
+            os.environ[key] = original_env[key]
+        else:
+            del os.environ[key]

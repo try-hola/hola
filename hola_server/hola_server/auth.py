@@ -10,7 +10,7 @@ but the actual implementation will be added in a later phase.
 from fastapi import Security, HTTPException, status
 from fastapi.security import APIKeyHeader
 from hola_shared.errors import AuthenticationException
-from .config import get_settings
+from .config.settings import get_settings
 
 # Define the API key header security scheme
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)

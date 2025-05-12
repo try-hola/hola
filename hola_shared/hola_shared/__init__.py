@@ -7,6 +7,8 @@ and behavior throughout the application.
 Package Contents:
     - models: Shared Pydantic data models for API requests/responses
     - errors: Common error handling utilities and exception classes
+    - logger: Common logging configuration and utilities
+    - environment: Environment variable access helpers
 
 This package is designed to be used as a dependency in both the
 hola_server and hola_cli packages through Poetry workspaces.

@@ -73,6 +73,59 @@ project-root/
    # Edit the .env file with your configuration
    ```
 
+## Environment Variables
+
+### Server Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HOLA_HOST` | Server host address | `0.0.0.0` |
+| `HOLA_PORT` | Server port | `8000` |
+| `HOLA_DEBUG` | Enable debug mode | `false` |
+| `HOLA_API_KEY` | API authentication key | (required) |
+| `HOLA_CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `*` |
+| `HOLA_LOG_LEVEL` | Logging level | `INFO` |
+| `HOLA_LOG_FORMAT` | Log message format | `%(asctime)s - %(name)s - %(levelname)s - %(message)s` |
+| `HOLA_DATA_DIR` | Data storage directory | `./data` |
+| `HOLA_DOCKER_SOCKET` | Docker socket path | (auto-detected) |
+
+### CLI Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `HOLA_SERVER` | Target server name | (from settings) |
+| `HOLA_SERVER_URL` | Override server URL | (from settings) |
+| `HOLA_API_KEY` | Override server API key | (from settings) |
+| `HOLA_OUTPUT_FORMAT` | Default output format | `table` |
+| `HOLA_LOG_LEVEL` | CLI logging level | `INFO` |
+| `HOLA_DEBUG` | Enable debug mode | `false` |
+| `XDG_CONFIG_HOME` | Custom config directory location | (system default) |
+
+### Usage Examples
+
+#### Server Examples
+
+```bash
+# Basic server setup
+HOLA_API_KEY=secure-key-here poetry run uvicorn hola_server.main:app
+
+# Custom port and logging
+HOLA_PORT=9000 HOLA_LOG_LEVEL=DEBUG poetry run uvicorn hola_server.main:app
+```
+
+#### CLI Examples
+
+```bash
+# Target a specific server
+HOLA_SERVER=production hola app list
+
+# Override server connection
+HOLA_SERVER_URL=https://new-server.example.com HOLA_API_KEY=new-key hola app list
+
+# Change output format
+HOLA_OUTPUT_FORMAT=json hola app list
+```
+
 ## Development
 
 ### Starting the Development Server
