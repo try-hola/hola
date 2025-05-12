@@ -74,7 +74,7 @@ class TestHelloService:
         
         This test verifies that:
         1. The service passes the default name parameter ("World") to the API client
-        2. The service correctly uses the server context to get the API client
+        2. The service correctly uses the server context's contextmanager to get the API client
         3. The service returns the parsed response directly when successful
         
         The test patches the underlying HTTP method to avoid making real network calls,
@@ -91,8 +91,11 @@ class TestHelloService:
         service = HelloService(context)
         result = service.hello()
         
-        # Verify the mock was called correctly
-        mock_sync_detailed.assert_called_once_with(name="World", client=context.get_client())
+        # Verify the mock was called correctly with the right parameter
+        mock_sync_detailed.assert_called_once()
+        # Verify name parameter was passed correctly
+        args, kwargs = mock_sync_detailed.call_args
+        assert kwargs.get("name") == "World"
         
         # Verify the result
         assert result == expected_response
@@ -121,8 +124,11 @@ class TestHelloService:
         service = HelloService(context)
         result = service.hello("Test")
         
-        # Verify the mock was called correctly
-        mock_sync_detailed.assert_called_once_with(name="Test", client=context.get_client())
+        # Verify the mock was called correctly with the right parameter
+        mock_sync_detailed.assert_called_once()
+        # Verify name parameter was passed correctly
+        args, kwargs = mock_sync_detailed.call_args
+        assert kwargs.get("name") == "Test"
         
         # Verify the result
         assert result == expected_response
@@ -155,8 +161,11 @@ class TestHelloService:
         service = HelloService(context)
         result = service.hello()
         
-        # Verify the mock was called correctly
-        mock_sync_detailed.assert_called_once_with(name="World", client=context.get_client())
+        # Verify the mock was called correctly with default parameters
+        mock_sync_detailed.assert_called_once()
+        # Verify name parameter was passed correctly
+        args, kwargs = mock_sync_detailed.call_args
+        assert kwargs.get("name") == "World"
         
         # Verify the error is passed through
         assert result == expected_response

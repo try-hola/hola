@@ -42,10 +42,12 @@ class HelloService:
         """
         # Use the generated client SDK to call the API
         try:
-            response = hello_hello_get.sync_detailed(
-                name=name,
-                client=self.server_context.get_client()
-            )
+            # Use the context manager to ensure proper resource management
+            with self.server_context.create_client() as client:
+                response = hello_hello_get.sync_detailed(
+                    name=name,
+                    client=client
+                )
             
             # Convert to ApiResponse format
             if response.parsed:
