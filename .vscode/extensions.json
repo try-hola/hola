@@ -1,7 +1,5 @@
 {
   "recommendations": [
-    "esbenp.prettier-vscode",
-    "eamodio.gitlens",
     "github.copilot",
     "ms-python.python"
   ]
