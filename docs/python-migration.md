@@ -506,21 +506,30 @@ hola/
 Tests can be run using consistent commands across all workspaces:
 
 ```bash
-# Run all tests
-poetry run pytest
-
-# Run tests for a specific workspace
+# Run tests for a specific workspace from the project root
 poetry run pytest hola_server/tests/
 poetry run pytest hola_cli/tests/
 poetry run pytest hola_shared/tests/
 
-# Run specific test files
+# Run specific test files from the project root
 poetry run pytest hola_server/tests/api/test_hello.py
 poetry run pytest hola_cli/tests/commands/test_hello.py
 
-# Run tests with coverage
+# Run tests with coverage from the project root
 poetry run pytest --cov=hola_server --cov=hola_cli --cov=hola_shared
 ```
+
+### Running Tests
+
+To run tests for a specific package, use the following commands from the root directory:
+
+```bash
+poetry run pytest hola_shared/tests/  # Run tests for the shared package
+poetry run pytest hola_server/tests/  # Run tests for the server package
+poetry run pytest hola_cli/tests/     # Run tests for the CLI package
+```
+
+**Note**: Running all tests at once using `poetry run pytest` is currently not supported due to conflicts between `conftest.py` files in different packages.
 
 ### 4. Server Context Implementation
 

@@ -197,23 +197,19 @@ The project uses pytest for testing both server and client components. Tests are
 
 ### Running Tests
 
-Run tests for all workspaces:
+To run tests for a specific package, use the following commands from the root directory:
 
 ```bash
-poetry run pytest
+poetry run pytest hola_shared/tests/  # Run tests for the shared package
+poetry run pytest hola_server/tests/  # Run tests for the server package
+poetry run pytest hola_cli/tests/     # Run tests for the CLI package
 ```
 
-Run tests for a specific workspace:
+**Note**: Running all tests at once using `poetry run pytest` is currently not supported due to conflicts between `conftest.py` files in different packages.
 
+Run specific test files by specifying the path from the project root:
 ```bash
-cd hola_server && poetry run pytest
-cd hola_cli && poetry run pytest
-```
-
-Run specific test files by specifying the path:
-
-```bash
-poetry run pytest hola_server/tests/controllers/test_apps_deploy.py
+poetry run pytest hola_server/tests/api/test_hello.py
 ```
 
 Run specific test cases by specifying the test name:

@@ -34,22 +34,15 @@ Following project guidance, we prioritize fake implementations over mocks:
 
 ## Running Tests
 
-### Running the Full Test Suite
+To run tests for a specific package, use the following commands from the root directory:
 
 ```bash
-cd /Users/paul/GitHub/hola
-poetry run pytest
+poetry run pytest hola_shared/tests/  # Run tests for the shared package
+poetry run pytest hola_server/tests/  # Run tests for the server package
+poetry run pytest hola_cli/tests/     # Run tests for the CLI package
 ```
 
-### Running Tests for a Specific Package
-
-```bash
-poetry run pytest hola_server/tests/
-
-poetry run pytest hola_cli/tests/
-
-poetry run pytest hola_shared/tests/
-```
+**Note**: Running all tests at once using `poetry run pytest` is currently not supported due to conflicts between `conftest.py` files in different packages.
 
 ### Running Specific Test Files
 
