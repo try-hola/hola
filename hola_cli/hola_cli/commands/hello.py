@@ -13,12 +13,14 @@ from hola_shared.errors import (
     ConfigurationException, 
     format_exception
 )
+from hola_shared.logger import get_logger
 from ..services.hello_service import HelloService
 from ..config.context import get_current_server
 from ..utils.formatting import format_output
+from ..utils.logging import log_command_start, log_command_success, log_command_error, console, error_console
 
 hello_commands = typer.Typer(help="Hello commands for testing connectivity")
-console = Console()
+logger = get_logger(__name__)
 
 @hello_commands.command("greet")
 def greet(
@@ -37,73 +39,91 @@ def greet(
         output: Output format (text or json)
         server: Target server name or URL
     """
+    log_command_start(logger, "hello.greet", name=name, output=output, server=server)
+    
     try:
         # Get server context
         server_context = get_current_server(server)
+        logger.debug(f"Using server: {server_context.name} ({server_context.url})")
         
         # Call API via service
         service = HelloService(server_context)
+        logger.debug(f"Sending greeting to server for name: {name}")
         result = service.hello(name)
         
         # Format output
         formatted = format_output(result.data, output)
         console.print(formatted)
+        
+        # Log success
+        log_command_success(logger, "hello.greet")
     except ConfigurationException as e:
         # Configuration error (like missing or invalid server)
-        console.print(Panel.fit(
+        log_command_error(logger, "hello.greet", e)
+        
+        error_console.print(Panel.fit(
             f"[bold red]Configuration Error:[/] {e.message}",
             title="Error",
             border_style="red"
         ))
         if e.details and "help" in e.details:
-            console.print(f"[bold yellow]Hint:[/] {e.details['help']}")
+            error_console.print(f"[bold yellow]Hint:[/] {e.details['help']}")
         elif e.details:
-            console.print("[dim]Details:[/]")
-            console.print_json(data=e.details)
+            error_console.print("[dim]Details:[/]")
+            error_console.print_json(data=e.details)
         raise typer.Exit(code=1)
     except AuthenticationException as e:
         # Authentication error (like invalid API key)
-        console.print(Panel.fit(
+        log_command_error(logger, "hello.greet", e)
+        
+        error_console.print(Panel.fit(
             f"[bold red]Authentication Error:[/] {e.message}",
             title="Error",
             border_style="red"
         ))
-        console.print("[bold yellow]Hint:[/] Check your API key configuration")
+        error_console.print("[bold yellow]Hint:[/] Check your API key configuration")
         if e.details:
-            console.print("[dim]Details:[/]")
-            console.print_json(data=e.details)
+            error_console.print("[dim]Details:[/]")
+            error_console.print_json(data=e.details)
         raise typer.Exit(code=1)
     except ServiceException as e:
         # Service communication error
-        console.print(Panel.fit(
+        log_command_error(logger, "hello.greet", e)
+        
+        error_console.print(Panel.fit(
             f"[bold red]Service Error:[/] {e.message}",
             title=f"Error with {e.details.get('service_name', 'API')}",
             border_style="red"
         ))
         if e.details:
-            console.print("[dim]Details:[/]")
-            console.print_json(data=e.details)
+            error_console.print("[dim]Details:[/]")
+            error_console.print_json(data=e.details)
         raise typer.Exit(code=1)
     except HolaException as e:
         # Other Hola-specific exceptions
-        console.print(Panel.fit(
+        log_command_error(logger, "hello.greet", e)
+        
+        error_console.print(Panel.fit(
             f"[bold red]Error ({e.code}):[/] {e.message}",
             title="Error",
             border_style="red"
         ))
         if e.details:
-            console.print("[dim]Details:[/]")
-            console.print_json(data=e.details)
+            error_console.print("[dim]Details:[/]")
+            error_console.print_json(data=e.details)
         raise typer.Exit(code=1)
     except Exception as e:
+        # Unexpected exception
+        log_command_error(logger, "hello.greet", e)
+        
         # Convert generic exceptions to our format
         error = format_exception(e)
-        console.print(Panel.fit(
+        error_console.print(Panel.fit(
             f"[bold red]Unexpected Error:[/] {error.message}",
             title="Error",
             border_style="red"
         ))
         if error.details:
-            console.print("[dim]Details:[/]")
-            console.print_json(data=error.details)
+            error_console.print("[dim]Details:[/]")
+            error_console.print_json(data=error.details)
         raise typer.Exit(code=1)

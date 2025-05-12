@@ -87,6 +87,26 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
 - Write meaningful test cases that cover edge cases and error handling.
 - Use shared test utilities to maintain DRY testing code across the codebase.
 
+### Test Best Practices
+
+1. Each test should be isolated and not depend on the state from other tests
+2. Use fixtures to share setup code
+3. Write both positive and negative test cases
+4. Test edge cases and error conditions
+5. Keep tests focused on a single functionality
+6. Use meaningful assertions that clearly indicate what's being tested
+7. Use predefined test utilities and helper functions to maintain consistency
+
+### Test Fixtures
+
+Each package should have its own `conftest.py` with package-specific fixtures:
+
+- **hola_shared**: Provide model factories and common response fixtures
+- **hola_server**: Provide FastAPI TestClient and configuration overrides
+- **hola_cli**: Provide fake settings, output capture, and server context
+
+Use these fixtures consistently across test files to maintain standardized test setups.
+
 ### Running Tests
 
 - Run the full test suite with `poetry run pytest`.
@@ -107,6 +127,32 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
   ```bash
   poetry run pytest-watch hola_server/tests/controllers/test_apps_deploy.py
   ```
+
+### Running Tests with Coverage
+
+```bash
+poetry run pytest --cov=hola_server --cov=hola_cli --cov=hola_shared
+```
+
+Or use the predefined script:
+
+```bash
+poetry run test-cov
+```
+
+### Running Tests in Watch Mode
+
+Use watch mode to automatically re-run tests when files change:
+
+```bash
+poetry run pytest-watch hola_server/tests/
+```
+
+Or use the predefined script:
+
+```bash
+poetry run test-watch
+```
 
 ### Documentation & Comments
 
@@ -135,3 +181,74 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
 - Use Poetry for efficient dependency management.
 - Suggest appropriate scripts in the root pyproject.toml for managing the workspaces.
 - Advise on workspace-aware testing, building, and deployment strategies.
+
+### Test Directory Structure
+
+Follow the established test directory structure:
+
+```
+hola/
+├── hola_shared/tests/      # Tests for shared models and utilities
+│   ├── models/             # Tests for models
+│   └── fakes/              # Shared fake implementations
+│
+├── hola_server/tests/      # Tests for the server application
+│   ├── api/                # API endpoint tests
+│   └── fakes/              # Server-specific fake implementations
+│
+└── hola_cli/tests/         # Tests for the CLI application
+    ├── commands/           # CLI command tests
+    ├── services/           # Service tests
+    ├── utils/              # Utility tests
+    └── fakes/              # CLI-specific fake implementations
+```
+
+### Logging Architecture
+
+Follow the project's layered approach to logging:
+
+1. **Shared Layer**: Base logging functionality in `hola_shared.logger`
+2. **Component-Specific Layer**: Extended logging in component-specific modules
+3. **Application Layer**: Actual logging calls within application code
+
+#### CLI Logging
+
+Use CLI-specific logging helpers for command execution:
+
+```python
+from ..utils.logging import log_command_start, log_command_success, log_command_error
+
+# Log command execution
+log_command_start(logger, "command.name", arg1="value1")
+try:
+    # Command execution
+    result = do_something()
+    log_command_success(logger, "command.name", result)
+except Exception as e:
+    log_command_error(logger, "command.name", e)
+```
+
+#### Server Logging
+
+Use server-specific logging helpers for request processing:
+
+```python
+from ..utils.logging import log_request_start, log_request_end, log_api_error
+
+# Log request processing
+log_request_start(logger, "request-id", "GET", "/api/path")
+try:
+    # Request handling
+    result = process_request()
+    log_request_end(logger, "request-id", "GET", "/api/path", 200, 150.5)
+except Exception as e:
+    log_api_error(logger, e, "request-id")
+```
+
+#### Logging Best Practices
+
+1. Use component-specific logging utilities rather than direct calls to the shared layer
+2. Separate user-facing output from logs
+3. Include appropriate context with each log (command name, request ID, etc.)
+4. Use debug logs for detailed tracing and info/warning/error for significant events
+5. Never log sensitive information (API keys, passwords, etc.)

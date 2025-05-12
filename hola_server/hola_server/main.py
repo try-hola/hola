@@ -8,12 +8,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from hola_shared.errors import HolaException
-from hola_shared.logger import configure_logging, get_logger
+from hola_shared.logger import get_logger
 from .config.settings import get_settings
+from .utils.logging import setup_server_logging, setup_request_logging, log_api_error
 from .api import hello
 
-# Initialize logging
-configure_logging(get_settings())
+# Initialize logging first thing
+setup_server_logging()
 logger = get_logger(__name__)
 
 # Server start timestamp for uptime calculation
@@ -25,6 +26,9 @@ app = FastAPI(
     description="API server for Hola application management",
     version="1.0.0"
 )
+
+# Configure request logging
+setup_request_logging(app, exclude_paths=["/health"])
 
 # Configure CORS middleware
 app.add_middleware(
@@ -47,6 +51,9 @@ async def hola_exception_handler(request: Request, exc: HolaException):
     Returns:
         JSONResponse with the appropriate status code and error details
     """
+    # Log the exception using our utility
+    log_api_error(logger, exc)
+    
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_response().dict()
