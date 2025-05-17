@@ -1,9 +1,6 @@
 # OS files
 .DS_Store
 
-# Node.js
-node_modules
-
 # Build and distribution
 dist
 build/
