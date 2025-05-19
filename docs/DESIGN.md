@@ -4,10 +4,25 @@
 
 The project consists of two main components:
 
-- **CLI Component**: A TypeScript/Node.js CLI application that handles user commands, communicates with the server, and processes responses.
-- **Server-Side Component**: A Node.js/TypeScript API server that manages application deployments, configurations, and file storage. Handles long-running tasks with Server-Sent Events (SSE) for real-time updates.
+- **CLI Component**: A Python CLI application built with Typer that handles user commands, communicates with the server, and processes responses.
+- **Server-Side Component**: A Python FastAPI server that manages application deployments, configurations, and file storage. Handles long-running tasks with Server-Sent Events (SSE) for real-time updates.
 
-Both components are organized as a monorepo using Yarn workspaces with CommonJS modules.
+Both components are organized as a monorepo using Poetry workspaces with shared modules.
+
+### 1.1 CLI-Server Architecture
+
+The CLI component can manage multiple server instances of different types through the Provider Pattern:
+
+- **ServerProvider Interface**: Defined in the shared package, implemented by provider classes in the CLI
+- **Provider Registry**: The CLI maintains a registry of available provider types (Docker Desktop, OrbStack, etc.)
+- **Instance Manager**: Tracks and manages server instances across different providers
+- **Server Commands**: The CLI includes commands for creating, starting, stopping, and managing server instances
+
+Each server instance is a standalone API server that can be run in different environments (Docker, OrbStack, etc.), while the CLI can connect to and manage multiple server instances. This architecture allows:
+
+1. **Flexibility**: Support for multiple execution environments based on user preference
+2. **Simplicity**: Each server focuses solely on API functionality without provider-specific code
+3. **Centralized Management**: The CLI provides a unified interface for managing multiple servers
 
 ## 2. API Endpoints
 
@@ -123,6 +138,48 @@ hola app stop <appName>
 hola app restart <appName>
 ```
 
+### Server Management
+
+```
+hola servers providers                                      # List available server providers
+hola servers create <name> --provider <provider_type>       # Create a new server instance
+                    [--port <port>]                         # Port to expose the server on (default: 8000)
+                    [--image <image>]                       # Docker image to use (default: hola:latest)
+                    [--env KEY=VALUE...]                    # Environment variables for the server
+hola servers list                                           # List all server instances
+hola servers info <instance_id>                             # Get info about a server instance
+hola servers start <instance_id>                            # Start a server instance
+hola servers stop <instance_id>                             # Stop a server instance
+hola servers delete <instance_id>                           # Delete a server instance record
+```
+
+The CLI supports managing multiple server instances of different types (Docker Desktop, OrbStack, etc.) through the Provider Pattern. Each server instance runs one instance of the Hola API server in its specific environment.
+
+#### Server Management Architecture
+
+The server management functionality follows these principles:
+
+1. **Provider Abstraction**: The CLI implements the Provider Pattern through:
+   - `ServerProvider` Protocol defined in the shared library 
+   - Provider implementations in the CLI package (OrbStackProvider, DockerDesktopProvider)
+   - `ServerProviderRegistry` for managing available providers
+
+2. **Instance Management**: The `ServerInstanceManager` handles:
+   - Creating new server instances with specific providers
+   - Starting and stopping existing instances
+   - Tracking instance status and metadata
+   - Persisting instance information to disk (~/.hola/instances)
+
+3. **Environment Isolation**: Each server instance:
+   - Runs in its own isolated environment (container)
+   - Has its own API key and configuration
+   - Can be created, started, stopped independently of other instances
+
+4. **Connection Management**: The CLI stores connection information for each server:
+   - URL and port mapping to connect to the server
+   - API key for authentication
+   - Provider-specific connection context
+
 ### File Management
 
 ```
@@ -181,13 +238,13 @@ The CLI client provides clear, actionable feedback for different error scenarios
 
 ## 2.3 Client Configuration Options
 
-The CLI client can be customized through a local configuration file (`~/.hola/config.json`) with the following options:
+The CLI client can be customized through a local configuration file (`~/.hola/config.toml`) with the following options:
 
 | Setting             | Default                 | Description                                          |
 | ------------------- | ----------------------- | ---------------------------------------------------- |
 | `server_url`        | `http://localhost:3000` | Server base URL                                      |
 | `api_key`           | -                       | Authentication key (encrypted at rest)               |
-| `timeout`           | `60000`                 | Request timeout in milliseconds                      |
+| `timeout`           | `60`                    | Request timeout in seconds                           |
 | `output_format`     | `table`                 | Default output format (`table`, `json`, `yaml`)      |
 | `color`             | `auto`                  | Terminal color support (`auto`, `always`, `never`)   |
 | `log_level`         | `info`                  | Logging verbosity (`debug`, `info`, `warn`, `error`) |
@@ -196,7 +253,7 @@ The CLI client can be customized through a local configuration file (`~/.hola/co
 These settings can be overridden per command using equivalent command-line options:
 
 ```bash
-hola app list --output-format json --timeout 30000
+hola app list --output-format json --timeout 30
 ```
 
 ## 2.4 Client Output Formatting
@@ -256,44 +313,52 @@ The CLI client is designed to provide meaningful functionality even with limited
 
 Each CLI command follows a consistent implementation pattern:
 
-1. **Command Definition**: Using Commander.js for command structure and option parsing
+1. **Command Definition**: Using Typer for command structure and option parsing
 2. **Input Validation**: Local validation before sending requests
 3. **API Request**: Communication with the server API
 4. **Response Processing**: Transforming the API response for display
-5. **Output Formatting**: Rendering the result in the selected format
+5. **Output Formatting**: Rendering the result in the selected format using the `format_output` utility
 6. **Error Handling**: Providing clear error messages and recovery steps
 
-### Commander.js Implementation
+### Typer Implementation
 
-The CLI leverages Commander.js with the following implementation strategies:
+The CLI leverages Typer with the following implementation strategies:
 
-1. **TypeScript Decorators**: Using decorators to simplify command registration and improve code readability
+1. **Type Hints**: Using Python type hints for argument validation and documentation
 2. **Modular Command Structure**: Organizing commands in a directory structure that mirrors the command hierarchy
 3. **Consistent Command Pattern**: Maintaining a predictable pattern for all commands to enhance maintainability
 
 Example command implementation structure:
 
-```typescript
-// Example command registration using Commander.js
-const { Command } = require("commander");
-const program = new Command();
+```python
+# Example command registration using Typer
+import typer
+from rich.console import Console
+from typing import Optional
+from ..utils.formatting import format_output
+from ..utils.logging import log_command_start, log_command_success, log_command_error
 
-program
-  .name("hola")
-  .description("Hola CLI for application deployment and management")
-  .version("0.1.0");
+app_commands = typer.Typer(help="Application management commands")
+console = Console()
 
-program
-  .command("app list")
-  .description("List all deployed applications")
-  .option("-o, --output <format>", "output format (table, json, yaml)", "table")
-  .action(async (options) => {
-    // Command implementation
-  });
-
-// Additional commands registered here...
-
-module.exports = program;
+@app_commands.command("list")
+def list_apps(
+    output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)"),
+    server: Optional[str] = typer.Option(None, "--server", "-s", help="Target server"),
+):
+    """List all deployed applications."""
+    log_command_start(logger, "app.list", output=output, server=server)
+    
+    try:
+        # Command implementation logic
+        result = {"apps": [...]}
+        
+        # Format and display the output
+        format_output(result, output_format=output)
+        log_command_success(logger, "app.list", result)
+    except Exception as e:
+        log_command_error(logger, "app.list", e)
+        raise
 ```
 
 ### Plugin Architecture
@@ -302,7 +367,9 @@ The CLI supports extensibility through plugins:
 
 - Custom commands can be registered via plugins
 - Plugins are discovered in `~/.hola/plugins/`
+- Uses Python's entry point system for plugin registration
 - Official and community plugins extend functionality without core changes
+- Plugins can add new commands, modify existing functionality, and provide integrations
 
 ## 3. Communication Protocols
 
@@ -336,32 +403,29 @@ Each context contains:
 
 ### Server Configuration Structure
 
-Server contexts are stored in the user configuration file (`~/.hola/servers.json`), separate from regular client configuration:
+Server contexts are stored in the user configuration file (`~/.hola/config.toml`), separate from regular client configuration:
 
-```json
-{
-  "servers": {
-    "production": {
-      "url": "https://hola.example.com",
-      "api_key": "prod-encrypted-key",
-      "docker_context": "production",
-      "timeout": 120000
-    },
-    "staging": {
-      "url": "https://staging-hola.example.com",
-      "api_key": "staging-encrypted-key",
-      "docker_context": "staging",
-      "timeout": 60000
-    },
-    "local": {
-      "url": "http://localhost:3000",
-      "api_key": "local-encrypted-key",
-      "docker_context": "default",
-      "timeout": 30000
-    }
-  },
-  "current": "local"
-}
+```toml
+[servers]
+current = "local"
+
+[servers.production]
+url = "https://hola.example.com"
+api_key = "prod-encrypted-key"
+docker_context = "production"
+timeout = 120000
+
+[servers.staging]
+url = "https://staging-hola.example.com"
+api_key = "staging-encrypted-key"
+docker_context = "staging"
+timeout = 60000
+
+[servers.local]
+url = "http://localhost:3000"
+api_key = "local-encrypted-key"
+docker_context = "default"
+timeout = 30000
 ```
 
 All CLI commands implicitly use the active context, but can target a specific server using the --server flag:
@@ -418,7 +482,7 @@ hola server bootstrap --create-docker-context remote --docker-host "ssh://user@r
 
 ### Docker Compose Template
 
-The bootstrap process uses a Docker Compose template for deploying the Hola server:
+The bootstrap process uses a Docker Compose template for deploying the Hola server, managed using Python's `docker` package:
 
 ```yaml
 version: "3.8"
@@ -689,6 +753,7 @@ All environment variables are stored under a single namespace per application to
 - This single `.env` file is used by Docker Compose for the entire application
 - Since Docker Compose uses a flat namespace for variables, this approach ensures all services have access to the required variables
 - Encrypted variables are decrypted during deployment before being written to the `.env` file
+- Secure encryption is handled using Python's `cryptography` library for strong security
 
 ### Configuration Files
 
@@ -768,31 +833,55 @@ Service-specific Dockerfiles allow users to customize individual services:
 ```
 project-root/
 │
-├── packages/                 # Yarn workspace packages
-│   ├── client/               # CLI client application
-│   │   ├── src/              # TypeScript source code
-│   │   ├── tsconfig.json     # TypeScript configuration
-│   │   └── package.json      # Package information and dependencies
-│   │
-│   ├── server/               # API server application
-│   │   ├── src/              # TypeScript source code
-│   │   ├── public/           # Public assets
-│   │   │   └── docs/         # Documentation
-│   │   │       └── openapi.yaml  # OpenAPI specification
-│   │   ├── tsconfig.json     # TypeScript configuration
-│   │   └── package.json      # Package information and dependencies
-│   │
-│   └── shared/               # Shared types and utilities
-│       ├── src/              # TypeScript source code
-│       ├── tsconfig.json     # TypeScript configuration
-│       └── package.json      # Package information and dependencies
+├── hola_cli/                 # CLI client application
+│   ├── pyproject.toml        # Poetry project config
+│   ├── poetry.lock           # Lock file for dependencies
+│   ├── hola_cli/             # Python package directory
+│   │   ├── __init__.py
+│   │   ├── main.py           # CLI entry point
+│   │   ├── commands/         # Command implementations
+│   │   ├── config/           # Configuration management
+│   │   ├── services/         # Business logic
+│   │   └── utils/            # Utility functions
+│   └── tests/                # Test directory
+│       ├── commands/         # Command tests
+│       ├── services/         # Service tests
+│       ├── utils/            # Utility tests
+│       └── conftest.py       # Test fixtures
+│
+├── hola_server/              # API server application
+│   ├── pyproject.toml        # Poetry project config
+│   ├── poetry.lock           # Lock file for dependencies
+│   ├── hola_server/          # Python package directory
+│   │   ├── __init__.py
+│   │   ├── main.py           # FastAPI app entry point
+│   │   ├── api/              # API endpoint controllers
+│   │   ├── config/           # Server configuration
+│   │   ├── services/         # Business logic
+│   │   └── utils/            # Utility functions
+│   └── tests/                # Test directory
+│
+├── hola_shared/              # Shared modules and utilities
+│   ├── pyproject.toml        # Poetry project config
+│   ├── poetry.lock           # Lock file for dependencies
+│   ├── hola_shared/          # Python package directory
+│   │   ├── __init__.py
+│   │   ├── models/           # Shared Pydantic models
+│   │   ├── errors.py         # Error handling
+│   │   └── logger.py         # Logging utilities
+│   └── tests/                # Test directory
+│
+├── hola_client_sdk/          # Client SDK for API communication
+│   ├── pyproject.toml        # Poetry project config
+│   └── hola_client_sdk/      # Python package directory
 │
 ├── docs/                     # Project documentation
-│   ├── TECHNICAL_COMBINED.md # This comprehensive technical document
+│   ├── DESIGN.md             # This comprehensive technical document
 │   └── ...                   # Other documentation files
 │
+├── integration_tests/        # End-to-end tests
 ├── .gitignore                # Git ignore file
-├── package.json              # Root package.json for Yarn workspaces
+├── pyproject.toml            # Root Poetry workspace config
 └── README.md                 # Project overview and setup instructions
 ```
 
@@ -804,7 +893,7 @@ project-root/
 - **Flexible Configuration**: Multiple levels of configuration
 - **Safe Deployment**: Changes isolated until activation
 - **Rollback Support**: Previous state can be restored easily
-- **Modular Design**: Yarn workspaces for code sharing between packages
+- **Modular Design**: Poetry workspaces for code sharing between packages
 
 ## 13. Implementation Notes
 
@@ -813,6 +902,11 @@ project-root/
 - Maintain careful permissions management
 - Consider filesystem performance for large deployments
 - Plan for disaster recovery scenarios
+- Follow Python best practices (PEP 8) for code style
+- Use type hints throughout the codebase
+- Use Pydantic models for data validation and serialization
+- Prefer async implementations in FastAPI endpoints
+- Implement proper error handling with standardized ApiResponse structure
 
 ## 14. Open Questions and Future Considerations
 
@@ -825,10 +919,131 @@ project-root/
 ## 15. Next Steps
 
 1. Complete implementation of package, configuration and deployment managers
-2. Add comprehensive test coverage using Node.js built-in test runner
+2. Add comprehensive test coverage using pytest
 3. Document the configuration management feature in the user guide
 4. Consider adding configuration validation based on application requirements
 5. Implement CLI tools for managing docker-compose.override.yml files
 6. Design CLI commands for service-level configuration management
 7. Implement service detection from docker-compose files
 8. Create examples of multi-service configuration scenarios
+9. Expand test coverage with integration tests between CLI and server
+10. Implement proper logging and error handling across all components
+## 16. Python Implementation Specifics
+
+### Error Handling
+
+The Python implementation uses a standardized error handling approach across all components:
+
+```python
+# Base exception type in hola_shared
+class HolaError(Exception):
+    """Base exception for Hola applications."""
+    
+    def __init__(
+        self, 
+        message: str,
+        status_code: int = 400,
+        error_code: str = "bad_request",
+        details: Optional[Dict[str, Any]] = None
+    ):
+        self.message = message
+        self.status_code = status_code
+        self.error_code = error_code
+        self.details = details or {}
+        super().__init__(message)
+        
+    def to_api_error(self) -> ApiError:
+        """Convert to an API error object."""
+        return ApiError(
+            code=self.error_code,
+            message=self.message,
+            details=self.details
+        )
+        
+    def to_response(self) -> ApiResponse:
+        """Convert to an API response object."""
+        return ApiResponse(
+            success=False,
+            error=self.to_api_error()
+        )
+```
+
+### Response Format
+
+All API responses use a consistent format defined by the `ApiResponse` class:
+
+```python
+class ApiResponse(Generic[T]):
+    """Standard API response wrapper.
+    
+    A consistent response structure for all API endpoints that includes
+    a success flag, optional data payload, and optional error information.
+    
+    Attributes:
+        success: Boolean indicating if the request was successful.
+        data: Optional data payload for successful requests.
+        error: Optional error details for failed requests.
+    """
+    success: bool
+    data: Optional[T] = None
+    error: Optional[ApiError] = None
+```
+
+### Logging
+
+The Python implementation uses a layered approach to logging:
+
+1. **Base Layer**: Shared logging utilities in `hola_shared.logger`
+2. **Component Layer**: Component-specific extensions in both server and client
+3. **Usage Layer**: Consistent logging patterns across the codebase
+
+```python
+# Example CLI command logging pattern
+from ..utils.logging import log_command_start, log_command_success, log_command_error
+
+log_command_start(logger, "command.name", arg1="value1")
+try:
+    # Command execution
+    result = do_something()
+    log_command_success(logger, "command.name", result)
+except Exception as e:
+    log_command_error(logger, "command.name", e)
+    raise
+```
+
+### Output Formatting
+
+The CLI uses a consistent output formatting utility that supports multiple formats:
+
+```python
+def format_output(data: Any, format_type: str = "table") -> Any:
+    """
+    Format output based on format type.
+    
+    Args:
+        data: The data to format
+        format_type: The desired format ("json", "table", or "text")
+    
+    Returns:
+        Formatted output as a string
+    """
+    if format_type == "json":
+        return json.dumps(data, indent=2)
+    elif format_type == "table":
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return create_table_from_list(data)
+        elif isinstance(data, dict):
+            return create_table_from_dict(data)
+    # Additional formats and default handling
+```
+
+### Testing Best Practices
+
+The Python implementation uses pytest for testing with the following best practices:
+
+1. **Isolated Tests**: Each test is independent and does not rely on state from other tests
+2. **Fixture Usage**: Shared setup code is in fixtures
+3. **Positive and Negative Tests**: Testing both success and failure paths
+4. **Test Focus**: Each test focuses on a single functionality
+5. **Clear Assertions**: Assertions clearly indicate what's being tested
+6. **Standard Utilities**: Using predefined test helpers for consistency
