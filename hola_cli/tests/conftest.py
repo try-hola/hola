@@ -5,10 +5,14 @@ This module provides common test fixtures used across the CLI test suite. It inc
 - Configuration fixtures that override production settings for testing purposes
 - Response fixtures that simulate server API responses
 - Console output capture utilities for validating CLI command output
+- Provider fixtures for testing with fake providers instead of real ones
 
 These fixtures follow the project's testing strategy of preferring fakes over mocks
 and ensuring tests are isolated from external dependencies like file systems and network calls.
 """
+# Make this module unique to avoid conflicts when running all tests
+__name__ = "hola_cli.tests.conftest"
+
 import pytest
 import json
 import os
@@ -18,6 +22,9 @@ from unittest.mock import patch
 
 from hola_cli.config.settings import CliSettings, ServerConnection
 from hola_shared.models.response import ApiResponse, ApiError
+from hola_cli.providers.registry import ServerProviderRegistry
+from hola_cli.providers.providers import get_provider_registry
+from .fakes.fake_provider import FakeServerProvider
 
 
 @pytest.fixture
@@ -260,3 +267,29 @@ def error_api_response() -> ApiResponse:
         success=False,
         error=ApiError(code="TEST_ERROR", details={"reason": "Test error"})
     )
+
+
+@pytest.fixture
+def fake_provider():
+    """Fixture providing a FakeServerProvider instance."""
+    return FakeServerProvider()
+
+@pytest.fixture
+def fake_provider_registry():
+    """
+    Fixture providing a ServerProviderRegistry with only the fake provider registered.
+    
+    This fixture patches the get_provider_registry function to return a registry
+    with only the fake provider, ensuring tests don't depend on real providers.
+    
+    Returns:
+        A server provider registry with only the fake provider registered
+    """
+    # Create a clean registry with only the fake provider
+    registry = ServerProviderRegistry()
+    fake_provider = FakeServerProvider()
+    registry.register_provider(fake_provider)
+    
+    # Patch the get_provider_registry function to return our test registry
+    with patch('hola_cli.providers.providers.get_provider_registry', return_value=registry):
+        yield registry

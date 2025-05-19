@@ -22,7 +22,17 @@ def setup_cli_logging() -> None:
     Configure logging specifically for the CLI application.
     
     This ensures the log level from settings is applied and sets up
-    appropriate logging configuration for a CLI environment.
+    appropriate logging configuration for a CLI environment. The function
+    integrates with the shared logger configuration while adding CLI-specific
+    enhancements.
+    
+    The configured logging system follows the project's layered approach:
+    1. Base functionality from hola_shared.logger
+    2. CLI-specific extensions in this module
+    3. Application-level logging calls in command modules
+    
+    This function should be called early in the CLI application lifecycle,
+    ideally before any other operations are performed.
     """
     settings = get_settings()
     configure_logging(settings)
@@ -34,6 +44,15 @@ def setup_cli_logging() -> None:
 def log_command_start(logger: logging.Logger, command_name: str, **kwargs) -> None:
     """
     Log the start of a CLI command execution with its parameters.
+    
+    This function should be called at the beginning of each command handler to
+    provide a consistent logging pattern across the CLI application. It logs
+    the command name and any passed parameters at debug level.
+    
+    The function is part of the recommended command logging pattern:
+    1. Call log_command_start at the beginning of the command
+    2. Execute the command logic
+    3. Call log_command_success or log_command_error based on the outcome
     
     Args:
         logger: Logger instance to use
@@ -50,12 +69,21 @@ def log_command_start(logger: logging.Logger, command_name: str, **kwargs) -> No
 
 def log_command_success(logger: logging.Logger, command_name: str, result: Any = None) -> None:
     """
-    Log successful command completion.
+    Log the successful completion of a CLI command.
+    
+    This function should be called at the end of a command handler when the command
+    executes successfully. It logs the successful completion of the command along
+    with an optional result value at debug level.
+    
+    The function is part of the recommended command logging pattern:
+    1. Call log_command_start at the beginning of the command
+    2. Execute the command logic
+    3. Call log_command_success when the command completes successfully
     
     Args:
         logger: Logger instance to use
-        command_name: Name of the command that was executed
-        result: Optional result information (non-sensitive)
+        command_name: Name of the command that completed
+        result: Optional result data to include in the log (non-sensitive data only)
     """
     if result:
         logger.debug(f"Command '{command_name}' completed successfully with result: {result}")
@@ -65,7 +93,17 @@ def log_command_success(logger: logging.Logger, command_name: str, result: Any =
 
 def log_command_error(logger: logging.Logger, command_name: str, error: Exception) -> None:
     """
-    Log command execution error.
+    Log a command execution error.
+    
+    This function should be called when a command handler encounters an exception.
+    It logs the error with appropriate detail level based on the exception type:
+    - For HolaException instances (expected errors), it logs a simple error message
+    - For other exceptions (unexpected errors), it logs the full traceback
+    
+    The function is part of the recommended command logging pattern:
+    1. Call log_command_start at the beginning of the command
+    2. Execute the command logic in a try block
+    3. Call log_command_error in the exception handler
     
     Args:
         logger: Logger instance to use

@@ -1,6 +1,13 @@
 """
 CLI settings management for Hola.
-Handles loading, saving, and accessing user settings.
+
+This module provides functionality for managing user settings in the CLI application,
+including loading settings from disk, saving settings back to disk, and providing
+a programmatic interface for accessing and modifying settings throughout the application.
+
+The module uses Pydantic models to ensure type safety and validation of settings data,
+and provides helper functions for common operations like getting server connection details
+and managing default server selection.
 """
 import os
 import json
@@ -11,12 +18,37 @@ from functools import lru_cache
 from hola_shared.environment import Environment  # Import from shared package
 
 class ServerConnection(BaseModel):
-    """Server connection details for API communication."""
+    """
+    Server connection details for API communication.
+    
+    This model represents the configuration needed to connect to a Hola server
+    instance, including the server URL and API key for authentication.
+    
+    Attributes:
+        url: The base URL of the server API endpoint
+        api_key: The authentication key for the server API
+    """
     url: str
     api_key: str
 
 class CliSettings(BaseModel):
-    """CLI settings model for Hola."""
+    """
+    CLI settings model for Hola.
+    
+    This model represents the complete configuration for the CLI application,
+    including server connections, default server selection, output formatting
+    preferences, logging configuration, and editor settings.
+    
+    The settings are typically loaded from a JSON file stored in the user's
+    home directory, but can be overridden by environment variables.
+    
+    Attributes:
+        servers: Dictionary of server connections by name
+        default_server: Name of the default server to use
+        output_format: Default output format (table, json, etc.)
+        log_level: Logging level for the CLI application
+        editor: Preferred editor for opening files
+    """
     servers: Dict[str, ServerConnection] = {}
     default_server: Optional[str] = None  # Renamed from current_server for clarity
     output_format: str = "table"

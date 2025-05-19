@@ -264,6 +264,36 @@ def test_deploy_app_successfully(app_service):
 - Common Pydantic models are shared between client and server via the `hola_shared` package
 - The client SDK is automatically generated from the OpenAPI specification using `openapi-python-client`
 
+## Running Tests
+
+The project uses pytest for testing. To run all tests, use the provided script:
+
+```bash
+# Run all tests
+./run_tests.sh
+```
+
+You can also run tests for individual packages:
+
+```bash
+# Run server tests
+./run_tests.sh hola_server
+
+# Run CLI tests
+./run_tests.sh hola_cli
+
+# Run shared package tests
+./run_tests.sh hola_shared
+
+# Run integration tests
+./run_tests.sh integration
+
+# Run integration tests
+poetry run pytest integration_tests/
+```
+
+Each package has its own testing structure with dedicated fixtures in its `tests/conftest.py` file.
+
 ## Contributing
 
 Please see [CONTRIBUTING.md] for detailed information on how to contribute to this project, including our development workflow, testing guidelines, and documentation standards.

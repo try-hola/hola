@@ -11,6 +11,7 @@ from .config.settings import get_settings
 from .utils.version import get_cli_version
 from .utils.logging import setup_cli_logging
 from .commands import hello
+from .commands.servers import servers
 
 # Initialize CLI logging first thing
 setup_cli_logging()
@@ -48,6 +49,7 @@ def version():
     log_command_success(logger, "version", {"version": cli_version})
 
 app.add_typer(hello.hello_commands, name="hello")
+app.add_typer(servers, name="servers")
 
 if __name__ == "__main__":
     app()

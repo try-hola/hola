@@ -1,6 +1,15 @@
 """
 Server context management for the Hola CLI.
-Handles connection configuration and client creation for API requests.
+
+This module provides functionality for managing server connections in the CLI,
+including client creation, configuration, and context management. It serves as 
+the primary interface for establishing and maintaining server connections throughout
+the CLI's operation.
+
+The module offers both function-based and class-based approaches to context management,
+with the ServerContext class handling the details of client creation and configuration,
+while helper functions like get_current_server provide convenient access to the current
+server context.
 """
 from typing import Dict, Optional
 import warnings
@@ -14,7 +23,21 @@ from .settings import load_settings
 class ServerContext:
     """
     Context for server connections, handling client creation and configuration.
-    This provides a consistent interface for services to access the API.
+    
+    This class provides a consistent interface for services to access the API,
+    encapsulating the details of client creation, configuration, and authentication.
+    It maintains connection details like URL and API key, and provides methods to
+    create pre-configured API clients for different services.
+    
+    The class is designed to be used as a dependency in service classes, allowing
+    them to focus on business logic while delegating connection management to
+    this context object.
+    
+    Attributes:
+        name: Name of the server connection, used for identification
+        url: Base URL of the server API
+        api_key: Authentication API key for the server
+        environment: Optional environment indicator (production, development, etc.)
     """
     def __init__(self, url: str, api_key: str, name: str = "default"):
         """
@@ -61,11 +84,20 @@ def get_current_server(server_name: Optional[str] = None) -> ServerContext:
     """
     Get a server context for the specified or default server.
     
+    This function is the primary entry point for obtaining a server context
+    throughout the CLI application. It handles the resolution of which server
+    to connect to based on a cascading preference order, ensuring that the
+    application always has a valid server connection when possible.
+    
     Resolves server in the following order:
     1. Explicitly provided server_name parameter
     2. HOLA_SERVER environment variable
     3. Default server from settings
     4. First server in settings if no default
+    
+    If no server can be resolved through any of these methods, a
+    ConfigurationException is raised with clear instructions on how to
+    configure a server connection.
     
     Args:
         server_name: Optional name of the server to use
