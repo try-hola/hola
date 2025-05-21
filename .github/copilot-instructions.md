@@ -2,6 +2,8 @@
 
 ## Overview
 
+This is a new project and backwards compatibility is not necessary.
+
 This project consists of two main components organized as a monorepo using Poetry workspaces:
 
 1. **Python FastAPI Server** - A backend server built using Python with FastAPI framework.
@@ -14,11 +16,12 @@ This project consists of two main components organized as a monorepo using Poetr
 - Always suggest idiomatic Python code for both components.
 - Follow Python best practices with PEP 8 style guidelines.
 - Prioritize testability and maintainability over brevity.
+- NEVER conditionally import test code into production code
 - Follow best practices for modularity and separation of concerns.
+- Make appropriate use of dependency injection to allow for proper testing via fakes
 - Leverage Poetry workspaces for shared code and dependencies across packages.
 - Maintain consistency with the existing directory structure:
   - Use package directories for all source code.
-  - Use `__mocks__/` for test mocks.
   - Use `tests/` for test files, organized by feature area.
 - Use `poetry add` to add dependencies to the correct workspace.
 
@@ -109,11 +112,10 @@ Use these fixtures consistently across test files to maintain standardized test 
 
 ### Running Tests
 
-- Run the full test suite with `poetry run pytest`.
 - Run tests for a specific workspace:
   ```bash
-  cd hola_server && poetry run pytest
-  cd hola_cli && poetry run pytest
+  poetry run pytest hola_server/tests
+  poetry run pytest hola_cli/tests
   ```
 - Run specific test files by specifying the path:
   ```bash
@@ -127,32 +129,6 @@ Use these fixtures consistently across test files to maintain standardized test 
   ```bash
   poetry run pytest-watch hola_server/tests/controllers/test_apps_deploy.py
   ```
-
-### Running Tests with Coverage
-
-```bash
-poetry run pytest --cov=hola_server --cov=hola_cli --cov=hola_shared
-```
-
-Or use the predefined script:
-
-```bash
-poetry run test-cov
-```
-
-### Running Tests in Watch Mode
-
-Use watch mode to automatically re-run tests when files change:
-
-```bash
-poetry run pytest-watch hola_server/tests/
-```
-
-Or use the predefined script:
-
-```bash
-poetry run test-watch
-```
 
 ### Documentation & Comments
 
@@ -252,3 +228,169 @@ except Exception as e:
 3. Include appropriate context with each log (command name, request ID, etc.)
 4. Use debug logs for detailed tracing and info/warning/error for significant events
 5. Never log sensitive information (API keys, passwords, etc.)
+
+### CLI Command Implementation Pattern
+
+Follow this consistent pattern when implementing new CLI commands:
+
+#### 1. Command Structure
+
+- **Package Organization**: 
+  - Organize commands in packages (directories with `__init__.py`) by functionality
+  - Export a Typer instance from each package's `__init__.py`
+  ```python
+  # commands/app/__init__.py
+  import typer
+  from .commands import app_commands
+  
+  app = typer.Typer(name="app", help="Manage applications")
+  app.add_typer(app_commands)
+  ```
+
+- **Command Module Organization**:
+  - Define command implementations in a `commands.py` file within each package
+  - Group related commands into a single Typer instance
+  ```python
+  # commands/app/commands.py
+  import typer
+  
+  app_commands = typer.Typer(help="Application management commands")
+  
+  @app_commands.command("list")
+  def list_apps(...):
+      """Command docstring."""
+  ```
+
+- **Command Registration**:
+  - Register command groups in main.py with consistent naming
+  ```python
+  # main.py
+  from .commands.app import app
+  
+  cli_app = typer.Typer(...)
+  cli_app.add_typer(app, name="app")
+  ```
+
+#### 2. Command Implementation
+
+- **Function Signature**:
+  - Use type hints for all parameters
+  - Use Typer's Options and Arguments with descriptive help text
+  - Include default values where appropriate
+  - Define server context option consistently across commands
+  ```python
+  @app_commands.command("list")
+  def list_apps(
+      output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)"),
+      details: bool = typer.Option(False, "--details", "-d", help="Show detailed information"),
+      server: Optional[str] = typer.Option(None, "--server", "-s", help="Target server"),
+  ):
+      """List all deployed applications."""
+  ```
+
+- **Command Flow**:
+  - Follow this consistent execution flow pattern:
+  ```python
+  @app_commands.command("command-name")
+  def command_function(...):
+      """Command docstring."""
+      try:
+          # 1. Log command start
+          log_command_start(logger, "command.name", param1=param1, param2=param2)
+          
+          # 2. Get server context if needed
+          server_context = get_current_server(server)
+          
+          # 3. Initialize service and execute business logic
+          service = SomeService(server_context)
+          result = service.some_method(...)
+          
+          # 4. Format and display output
+          if output == "table":
+              _print_table(result.data)
+          else:
+              formatted = format_output(result.data, output)
+              console.print(formatted)
+          
+          # 5. Log command success
+          log_command_success(logger, "command.name", result)
+          
+      except Exception as e:
+          # 6. Handle errors consistently
+          console.print(f"[bold red]Error:[/] {str(e)}")
+          logger.error(f"Error executing command: {str(e)}")
+          log_command_error(logger, "command.name", e)
+          raise typer.Exit(code=1)
+  ```
+
+#### 3. Output Formatting
+
+- **Table Output**:
+  - Use Rich tables for tabular data with consistent styling
+  - Define helper functions for complex table formatting
+  ```python
+  def _print_table(data: List[SomeModel]):
+      table = Table(title="Some Title", box=box.ROUNDED)
+      # Add columns with consistent styling
+      table.add_column("Name", style="cyan")
+      table.add_column("Status", style="bold")
+      # Add rows with styled content
+      for item in data:
+          table.add_row(
+              item.name,
+              f"[{_get_status_style(item.status)}]{item.status}[/{_get_status_style(item.status)}]"
+          )
+      console.print(table)
+  ```
+
+- **Rich Output**:
+  - Use Rich panels for detailed information
+  - Follow consistent styling conventions
+  ```python
+  def _print_details(item: SomeModel):
+      console.print(Panel(
+          f"[bold]Name:[/bold] {item.name}\n"
+          f"[bold]Status:[/bold] [{_get_status_style(item.status)}]{item.status}[/{_get_status_style(item.status)}]",
+          title="Item Details",
+          border_style="cyan",
+          expand=False
+      ))
+  ```
+
+#### 4. Error Handling
+
+- Use try/except blocks for all commands
+- Format error messages consistently
+- Log errors with appropriate context
+- Use typer.Exit with non-zero code for command failures
+- Handle expected errors specifically with helpful messages
+
+#### 5. Service Integration
+
+- Commands should delegate business logic to service classes
+- Services should handle API client interactions
+- Commands should only handle input/output and error presentation
+- Keep command implementations focused on user interaction
+
+### Server and Provider Architecture
+
+The project uses a specific architecture for server management that follows these principles:
+
+1. **Provider** - A type of server deployment environment
+   - Providers exist only in the CLI
+   - Each provider knows how to bootstrap/create servers in its specific environment (e.g., OrbStack, Docker Desktop)
+   - Providers are implemented in the CLI as classes that follow the provider interface
+   - Examples: OrbStackProvider, DockerDesktopProvider
+
+2. **Server** - A running instance of the Hola API server
+   - Created via a specific provider
+   - Has a provider type but no knowledge of the provider itself (it just runs)
+   - Represented by ServerInstanceInfo in the model
+   - Can be managed (created, started, stopped) through the CLI
+
+3. **ServerContext** - A client-side connection configuration to a specific server
+   - Includes URL, API key, and other connection details
+   - Used by CLI commands to interact with a specific server through its API
+   - Created either directly or through the get_current_server helper
+
+This architecture allows the CLI to manage multiple servers of different provider types while keeping the server implementation simple and provider-agnostic.
