@@ -64,10 +64,12 @@ class FakeServerProvider(ServerProvider):
         self._start_called = False
         self._stop_called = False
         self._get_info_called = False
+        self._delete_called = False
         self._bootstrap_options = None
         self._start_context = None
         self._stop_context = None
         self._get_info_context = None
+        self._delete_context = None
     
     async def is_available(self) -> bool:
         """
@@ -83,7 +85,7 @@ class FakeServerProvider(ServerProvider):
         logger.debug("Fake provider availability check")
         return self._available
     
-    async def bootstrap(self, options: Dict[str, Any]) -> Dict[str, Any]:
+    async def bootstrap(self, name: str, options: Dict[str, Any]) -> Dict[str, Any]:
         """
         Simulate bootstrapping a new server instance.
         
@@ -92,22 +94,23 @@ class FakeServerProvider(ServerProvider):
         the provided options for later inspection in tests.
         
         The returned context includes standard fields like provider type,
-        container ID, name, port, and status, which are used by the instance
+        container ID, name, port, and status, which are used by the server
         manager and other parts of the system.
         
         Args:
-            options: Configuration options for the server, including name and port
+            name: Name to give to the new server
+            options: Configuration options for the server, including port
             
         Returns:
             Dict[str, Any]: Context data for the fake server, including provider,
                 container_id, name, port, and initial status
         """
-        logger.info(f"Bootstrapping fake server with options: {options}")
+        logger.info(f"Bootstrapping fake server {name} with options: {options}")
         # Track method call for testing
         self._bootstrap_called = True
-        self._bootstrap_options = options
+        self._bootstrap_options = options.copy()
+        self._bootstrap_options["name"] = name
         
-        name = options.get("name", "fake-server")
         port = options.get("port", 8000)
         
         # Return simulated context for a fake server
@@ -119,11 +122,11 @@ class FakeServerProvider(ServerProvider):
             "status": "created",
         }
     
-    async def start_server(self, context: Dict[str, Any]) -> None:
+    async def start_server(self, server_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Simulate starting a server instance.
+        Simulate starting a server.
         
-        This method simulates the process of starting a server instance by 
+        This method simulates the process of starting a server by 
         updating the context's status field to "running" and adding a URL field. 
         It also includes a short simulated delay to mimic the time it takes 
         to start a real server.
@@ -132,10 +135,13 @@ class FakeServerProvider(ServerProvider):
         for later inspection in tests.
         
         Args:
-            context: Server context data from bootstrap, which will be modified in-place
-                    to reflect the running state
+            server_id: ID of the server to start
+            context: Server context data from bootstrap
+            
+        Returns:
+            Dict[str, Any]: Updated context with running state
         """
-        logger.info(f"Starting fake server with context: {context}")
+        logger.info(f"Starting fake server {server_id} with context: {context}")
         # Track method call for testing
         self._start_called = True
         self._start_context = context
@@ -146,12 +152,15 @@ class FakeServerProvider(ServerProvider):
         # Update the context in-place with running status
         context["status"] = "running"
         context["url"] = f"http://localhost:{context.get('port', 8000)}"
-    
-    async def stop_server(self, context: Dict[str, Any]) -> None:
-        """
-        Simulate stopping a server instance.
         
-        This method simulates the process of stopping a running server instance by
+        # Return the updated context
+        return context
+    
+    async def stop_server(self, server_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Simulate stopping a server.
+        
+        This method simulates the process of stopping a running server by
         updating the context's status field to "stopped". It also includes a short 
         simulated delay to mimic the time it takes to stop a real server.
         
@@ -160,10 +169,13 @@ class FakeServerProvider(ServerProvider):
         to maintain accurate state tracking.
         
         Args:
-            context: Server context data, which will be modified in-place to
-                    reflect the stopped state
+            server_id: ID of the server to stop
+            context: Server context data
+            
+        Returns:
+            Dict[str, Any]: Updated context with stopped state
         """
-        logger.info(f"Stopping fake server with context: {context}")
+        logger.info(f"Stopping fake server {server_id} with context: {context}")
         # Track method call for testing
         self._stop_called = True
         self._stop_context = context
@@ -174,12 +186,15 @@ class FakeServerProvider(ServerProvider):
         
         # Update the context in-place with stopped status
         context["status"] = "stopped"
-    
-    async def get_server_info(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Get information about a server instance.
         
-        This method simulates retrieving information about a server instance.
+        # Return the updated context
+        return context
+    
+    async def get_server_info(self, server_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Get information about a server.
+        
+        This method simulates retrieving information about a server.
         It mainly returns the context as-is, but adds a started_at timestamp
         if the server is in a running state (indicated by _start_called).
         
@@ -187,13 +202,14 @@ class FakeServerProvider(ServerProvider):
         for later inspection in tests.
         
         Args:
-            context: Server context data containing current instance state
+            server_id: ID of the server to get info for
+            context: Server context data containing current server state
             
         Returns:
-            Dict[str, Any]: Server instance information, including the original
+            Dict[str, Any]: Server information, including the original
                 context and potentially additional metadata like started_at timestamp
         """
-        logger.debug(f"Getting fake server info with context: {context}")
+        logger.debug(f"Getting fake server info for server {server_id} with context: {context}")
         # Track method call for testing
         self._get_info_called = True
         self._get_info_context = context
@@ -206,3 +222,20 @@ class FakeServerProvider(ServerProvider):
             result["started_at"] = "2023-01-01T00:00:00Z"
             
         return result
+        
+    async def delete_server(self, server_id: str, context: Dict[str, Any]) -> None:
+        """
+        Delete a server.
+        
+        This method simulates deleting a server by tracking that it was called
+        and providing the expected behavior for tests.
+        
+        Args:
+            server_id: ID of the server to delete
+            context: Server context data
+        """
+        logger.info(f"Deleting fake server {server_id}")
+        
+        # Track that this method was called
+        self._delete_called = True
+        self._delete_context = context

@@ -6,8 +6,8 @@ provider registry and available providers.
 import logging
 from functools import lru_cache
 from .registry import ServerProviderRegistry
-from .orbstack import OrbStackProvider
-from .docker_desktop import DockerDesktopProvider
+from .orbstack_updated import OrbStackProvider
+from .docker_desktop_updated import DockerDesktopProvider
 
 logger = logging.getLogger(__name__)
 
