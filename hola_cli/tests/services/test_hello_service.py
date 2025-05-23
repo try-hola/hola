@@ -20,7 +20,7 @@ from typing import Any
 
 from hola_cli.services.hello_service import HelloService
 from hola_shared.models.response import ApiResponse, ApiError
-from ..fakes.api import FakeServerContext
+from hola_cli.test_utils.fakes.api import FakeServerContext
 
 
 @dataclass

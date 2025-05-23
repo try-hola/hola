@@ -24,7 +24,7 @@ from hola_cli.config.settings import CliSettings, ServerConnection
 from hola_shared.models.response import ApiResponse, ApiError
 from hola_cli.providers.registry import ServerProviderRegistry
 from hola_cli.providers.providers import get_provider_registry
-from .fakes.fake_provider import FakeServerProvider
+from hola_cli.test_utils.fakes.fake_provider import FakeServerProvider
 
 
 @pytest.fixture

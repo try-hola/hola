@@ -19,7 +19,7 @@ from typer.testing import CliRunner
 
 from hola_cli.main import app
 from hola_shared.models.response import ApiResponse
-from ..fakes.api import FakeServerContext
+from hola_cli.test_utils.fakes.api import FakeServerContext
 
 
 @pytest.fixture

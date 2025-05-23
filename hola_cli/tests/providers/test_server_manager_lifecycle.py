@@ -16,7 +16,7 @@ from hola_shared.models.providers import ServerStatus
 
 # Import the fake provider using a relative import with proper context
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from fakes.fake_provider import FakeServerProvider
+from hola_cli.test_utils.fakes.fake_provider import FakeServerProvider
 
 
 @pytest.fixture
