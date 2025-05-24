@@ -77,10 +77,11 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
 - Configure pytest to work with Python type hints and async code.
 - Organize tests by feature area, with each function or controller having its own dedicated test file.
 - Group related test files in subdirectories matching the component structure (e.g., `tests/apps/` for app-related controller tests).
+- Tests must have unique names across all submodules to avoid conflicts.
 - Strongly prefer fakes over mocks for testing, particularly at the periphery of the system:
   - Create proper fake implementations that mimic external dependencies (HTTP clients, file systems, databases) instead of using mocks.
   - Use fakes that implement the same interface as the real dependency but with simplified in-memory behavior.
-  - Store fake implementations in a dedicated `tests/fakes/` directory for reusability across tests.
+  - Store fake implementations in the module source in a dedicated `test_utils/fakes/` directory for reusability across tests.
   - Only use mocks for simple cases where creating a fake would be excessive.
 - Follow the established test structure:
   1. Import and set up fakes first.
