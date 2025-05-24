@@ -14,7 +14,7 @@ The tests follow the project's strategy of preferring fakes over mocks when poss
 particularly at system boundaries like the API client interface.
 """
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from typer.testing import CliRunner
 
 from hola_cli.main import app

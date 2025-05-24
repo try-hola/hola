@@ -7,11 +7,11 @@ from typing import Dict, Any, Protocol
 from hola_shared.providers.base import ServerProvider
 
 
-class MockServerProvider:
-    """Mock implementation of the ServerProvider protocol for testing."""
+class FakeServerProvider:
+    """Fake implementation of the ServerProvider protocol for testing."""
     
-    type = "mock"
-    display_name = "Mock Provider"
+    type = "fake"
+    display_name = "Fake Provider"
     
     async def is_available(self) -> bool:
         """Check if this provider is available."""
@@ -19,7 +19,7 @@ class MockServerProvider:
     
     async def bootstrap(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """Bootstrap a new server instance."""
-        return {"provider": self.type, "container_id": "mock-id", "status": "created"}
+        return {"provider": self.type, "container_id": "fake-id", "status": "created"}
     
     async def get_server_info(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Get information about a server instance."""
@@ -35,8 +35,8 @@ class MockServerProvider:
 
 
 def test_server_provider_protocol():
-    """Test that our mock correctly implements the ServerProvider protocol."""
-    provider = MockServerProvider()
+    """Test that our fake correctly implements the ServerProvider protocol."""
+    provider = FakeServerProvider()
     
     # Type checking should pass if the protocol is properly implemented
     # This is a static check, but we can verify the required attributes exist

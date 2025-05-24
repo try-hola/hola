@@ -4,25 +4,37 @@ Tests for the shared logger configuration.
 import pytest
 import logging
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from hola_shared.logger import configure_logging, get_logger
 from typing import Protocol
 
 
-class MockConfig(Protocol):
-    """Mock protocol for testing logging configuration."""
-    log_level: str
-    log_format: str
+class FakeConfig:
+    """Fake config implementation for testing logging configuration."""
+    def __init__(self, log_level: str = "INFO", log_format: str = "test-format"):
+        self.log_level = log_level
+        self.log_format = log_format
+
+
+class FakeLogger:
+    """Fake logger implementation for testing."""
+    def __init__(self, name: str):
+        self.name = name
+        self.level = None
+        self.set_level_calls = []
+    
+    def setLevel(self, level):
+        """Record setLevel calls."""
+        self.level = level
+        self.set_level_calls.append(level)
 
 
 def test_configure_logging_uses_config():
     """Test that configure_logging uses the log level from provided config."""
-    mock_config = MagicMock()
-    mock_config.log_level = "DEBUG"
-    mock_config.log_format = "test-format"
+    fake_config = FakeConfig(log_level="DEBUG", log_format="test-format")
     
     with patch("logging.basicConfig") as mock_logging:
-        configure_logging(mock_config)
+        configure_logging(fake_config)
         
         # Verify logging was configured with config values
         mock_logging.assert_called_once()
@@ -35,13 +47,11 @@ def test_configure_logging_uses_config():
 
 def test_configure_logging_level_override():
     """Test that configure_logging can override the log level."""
-    mock_config = MagicMock()
-    mock_config.log_level = "INFO"  # Default from config
-    mock_config.log_format = "test-format"
+    fake_config = FakeConfig(log_level="INFO", log_format="test-format")
     
     with patch("logging.basicConfig") as mock_logging:
         # Override with explicit level
-        configure_logging(mock_config, level="ERROR")
+        configure_logging(fake_config, level="ERROR")
         
         # Verify logging was configured with override level
         mock_logging.assert_called_once()
@@ -83,17 +93,23 @@ def test_logger_levels_for_third_party_libraries():
     """Test that third-party loggers have their levels set correctly."""
     with patch("logging.basicConfig"):
         with patch("logging.getLogger") as mock_get_logger:
-            mock_uvicorn_access = MagicMock()
-            mock_uvicorn_error = MagicMock()
+            fake_uvicorn_access = FakeLogger("uvicorn.access")
+            fake_uvicorn_error = FakeLogger("uvicorn.error")
+            fake_default = FakeLogger("default")
             
-            # Setup mock to return different loggers
-            mock_get_logger.side_effect = lambda name: {
-                "uvicorn.access": mock_uvicorn_access,
-                "uvicorn.error": mock_uvicorn_error
-            }.get(name, MagicMock())
+            # Setup fake to return different loggers
+            def get_fake_logger(name):
+                if name == "uvicorn.access":
+                    return fake_uvicorn_access
+                elif name == "uvicorn.error":
+                    return fake_uvicorn_error
+                else:
+                    return fake_default
+            
+            mock_get_logger.side_effect = get_fake_logger
             
             configure_logging()
             
             # Verify levels were set for uvicorn loggers
-            mock_uvicorn_access.setLevel.assert_called_once_with(logging.WARNING)
-            mock_uvicorn_error.setLevel.assert_called_once_with(logging.WARNING)
+            assert fake_uvicorn_access.level == logging.WARNING
+            assert fake_uvicorn_error.level == logging.WARNING

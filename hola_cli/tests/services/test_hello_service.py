@@ -4,19 +4,19 @@ Tests for the hello service.
 This module tests the HelloService which acts as an intermediary between
 CLI commands and the API client. The tests demonstrate:
 
-1. Using mock responses to simulate the API client behavior
+1. Using fake responses to simulate the API client behavior
 2. Testing different parameter combinations and their effects
 3. Verifying correct error handling and response processing
 4. Maintaining isolation from external dependencies
 
 The testing approach here follows the project's overall strategy of creating
-focused tests with clear boundaries, using mocks or fakes as appropriate
+focused tests with clear boundaries, using fakes rather than mocks
 for external dependencies.
 """
 import pytest
-from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
 from typing import Any
+from unittest.mock import patch
 
 from hola_cli.services.hello_service import HelloService
 from hola_shared.models.response import ApiResponse, ApiError
@@ -24,27 +24,18 @@ from hola_cli.test_utils.fakes.api import FakeServerContext
 
 
 @dataclass
-class MockResponse:
+class FakeSDKResponse:
     """
-    Mock response for the hello endpoint.
+    Fake response that mimics the SDK's Response object structure.
     
-    This simple data class simulates the structure of responses from the
-    client SDK's HTTP methods. It provides the minimum structure needed
-    for the service to process responses, including:
+    This class simulates the structure of responses returned by the
+    client SDK's sync_detailed methods. It provides the minimum structure
+    needed for the service to process responses, including:
     
     - status_code: The HTTP status code returned by the server
     - parsed: The parsed response body (typically an ApiResponse)
     
-    Using a dedicated class for mocking responses makes tests more readable
-    and ensures that mock responses match the structure expected by the code.
-    
-    This approach is part of the testing strategy's selective mocking pattern:
-    - Create simple, focused mock objects that mimic the interface of real components
-    - Include only the properties and methods that the tested code actually uses
-    - Make the mock's structure explicit through dataclasses or similar constructs
-    - Keep mocks simple enough that they're unlikely to contain bugs themselves
-    
-    This mock specifically mimics the Response object returned by the client SDK's
+    This fake specifically mimics the Response object returned by the client SDK's
     sync_detailed methods, which follows a consistent pattern of including both
     a status_code and a parsed response body.
     """
@@ -81,14 +72,14 @@ class TestHelloService:
         focusing on the service's logic for calling the API and processing responses.
         """
         # Create a fake server context
-        context = FakeServerContext()
+        context = FakeServerContext()  # type: ignore
         
         # Create expected response
         expected_response = ApiResponse(success=True, data="Hello, World!")
-        mock_sync_detailed.return_value = MockResponse(status_code=200, parsed=expected_response)
+        mock_sync_detailed.return_value = FakeSDKResponse(status_code=200, parsed=expected_response)
         
         # Create the service and call it
-        service = HelloService(context)
+        service = HelloService(context)  # type: ignore
         result = service.hello()
         
         # Verify the mock was called correctly with the right parameter
@@ -114,14 +105,14 @@ class TestHelloService:
         correctly handles parametrized requests with custom values.
         """
         # Create a fake server context
-        context = FakeServerContext()
+        context = FakeServerContext()  # type: ignore
         
         # Create expected response
         expected_response = ApiResponse(success=True, data="Hello, Test!")
-        mock_sync_detailed.return_value = MockResponse(status_code=200, parsed=expected_response)
+        mock_sync_detailed.return_value = FakeSDKResponse(status_code=200, parsed=expected_response)
         
         # Create the service and call it
-        service = HelloService(context)
+        service = HelloService(context)  # type: ignore
         result = service.hello("Test")
         
         # Verify the mock was called correctly with the right parameter
@@ -150,15 +141,15 @@ class TestHelloService:
         layer, preserving details that will help users understand and resolve issues.
         """
         # Create a fake server context
-        context = FakeServerContext()
+        context = FakeServerContext()  # type: ignore
         
         # Create an error response
         error = ApiError(code="TEST_ERROR", message="Test error")
         expected_response = ApiResponse(success=False, error=error)
-        mock_sync_detailed.return_value = MockResponse(status_code=400, parsed=expected_response)
+        mock_sync_detailed.return_value = FakeSDKResponse(status_code=400, parsed=expected_response)
         
         # Create the service and call it
-        service = HelloService(context)
+        service = HelloService(context)  # type: ignore
         result = service.hello()
         
         # Verify the mock was called correctly with default parameters
@@ -170,4 +161,5 @@ class TestHelloService:
         # Verify the error is passed through
         assert result == expected_response
         assert result.success is False
+        assert result.error is not None
         assert result.error.code == "TEST_ERROR"

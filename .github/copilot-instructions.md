@@ -17,6 +17,7 @@ This project consists of two main components organized as a monorepo using Poetr
 - Follow Python best practices with PEP 8 style guidelines.
 - Prioritize testability and maintainability over brevity.
 - NEVER conditionally import test code into production code
+- **NEVER use Mock objects (`unittest.mock.MagicMock`, `AsyncMock`, etc.) for business dependencies in tests - always use fakes instead**
 - Follow best practices for modularity and separation of concerns.
 - Make appropriate use of dependency injection to allow for proper testing via fakes
 - Leverage Poetry workspaces for shared code and dependencies across packages.
@@ -78,11 +79,15 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
 - Organize tests by feature area, with each function or controller having its own dedicated test file.
 - Group related test files in subdirectories matching the component structure (e.g., `tests/apps/` for app-related controller tests).
 - Tests must have unique names across all submodules to avoid conflicts.
-- Strongly prefer fakes over mocks for testing, particularly at the periphery of the system:
-  - Create proper fake implementations that mimic external dependencies (HTTP clients, file systems, databases) instead of using mocks.
-  - Use fakes that implement the same interface as the real dependency but with simplified in-memory behavior.
-  - Store fake implementations in the module source in a dedicated `test_utils/fakes/` directory for reusability across tests.
-  - Only use mocks for simple cases where creating a fake would be excessive.
+- **NEVER use `unittest.mock.MagicMock`, `AsyncMock`, or similar Mock objects for business dependencies**:
+  - Mock objects make tests brittle, hard to maintain, and don't provide type safety
+  - Create proper fake implementations that mimic external dependencies (HTTP clients, file systems, databases) instead of using mocks
+  - Use fakes that implement the same interface as the real dependency but with simplified in-memory behavior
+  - Store fake implementations in the module source in a dedicated `test_utils/fakes/` directory for reusability across tests
+  - The ONLY acceptable uses of `unittest.mock` are:
+    - `patch` for environment control (environment variables, settings injection)
+    - `mock_open` for file system operations where a fake filesystem would be excessive
+    - Simple patching of external system calls that don't represent business dependencies
 - Follow the established test structure:
   1. Import and set up fakes first.
   2. Import modules under test after setting up fakes.
@@ -100,6 +105,8 @@ This project uses Context7 MCP Server with get-library-docs and resolve-library-
 5. Keep tests focused on a single functionality
 6. Use meaningful assertions that clearly indicate what's being tested
 7. Use predefined test utilities and helper functions to maintain consistency
+8. **NEVER introduce new Mock objects** - always create or use existing fake implementations
+9. Name test fakes with "Fake" prefix (e.g., `FakeApiClient`, `FakeLogger`) for clarity
 
 ### Test Fixtures
 
@@ -112,7 +119,10 @@ Each package should have its own `conftest.py` with package-specific fixtures:
 Use these fixtures consistently across test files to maintain standardized test setups.
 
 ### Running Tests
-
+- Run all tests across the workspace:
+  ```bash
+  poetry run pytest
+  ```
 - Run tests for a specific workspace:
   ```bash
   poetry run pytest hola_server/tests
@@ -395,3 +405,37 @@ The project uses a specific architecture for server management that follows thes
    - Created either directly or through the get_current_server helper
 
 This architecture allows the CLI to manage multiple servers of different provider types while keeping the server implementation simple and provider-agnostic.
+
+### Fake Implementation Guidelines
+
+When creating test fakes, follow these principles:
+
+1. **Naming Convention**: Always use "Fake" prefix (e.g., `FakeApiClient`, `FakeLogger`, `FakeServerProvider`)
+2. **Interface Compliance**: Fakes should implement the same interface as the real dependency
+3. **Simplified Behavior**: Provide in-memory, deterministic behavior without external dependencies
+4. **State Tracking**: Include methods to verify interactions (e.g., `has_message()`, `get_messages()`)
+5. **Reset Capability**: Provide `reset()` methods to clear state between tests
+6. **Type Safety**: Use proper type hints to maintain IDE support and type checking
+7. **Reusability**: Store fakes in `test_utils/fakes/` directories for cross-test usage
+
+Example fake structure:
+```python
+class FakeApiClient:
+    def __init__(self):
+        self.requests: List[RequestInfo] = []
+        self.responses: Dict[str, Any] = {}
+    
+    def register_response(self, endpoint: str, response: Any) -> None:
+        """Pre-configure response for an endpoint."""
+        self.responses[endpoint] = response
+    
+    def get(self, endpoint: str) -> Any:
+        """Record request and return configured response."""
+        self.requests.append(RequestInfo("GET", endpoint))
+        return self.responses.get(endpoint, {})
+    
+    def reset(self) -> None:
+        """Clear all recorded state."""
+        self.requests.clear()
+        self.responses.clear()
+```

@@ -3,7 +3,7 @@ Test logging functionality for the server application.
 """
 import logging
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -16,71 +16,90 @@ from hola_server.utils.logging import (
     RequestLoggingMiddleware
 )
 from hola_shared.errors import HolaException
+from hola_shared.test_utils.fakes.logging import FakeLogger
 
 
 def test_setup_server_logging():
     """Test that setup_server_logging configures logging correctly."""
-    # Mock the get_settings function
-    mock_settings = MagicMock()
-    mock_settings.log_level = "DEBUG"
+    # Create a fake settings object
+    class FakeSettings:
+        log_level = "DEBUG"
     
-    with patch('hola_server.utils.logging.get_settings', return_value=mock_settings):
+    fake_settings = FakeSettings()
+    
+    with patch('hola_server.utils.logging.get_settings', return_value=fake_settings):
         with patch('hola_server.utils.logging.configure_logging') as mock_configure:
             # Call the function
             setup_server_logging()
             
             # Verify configure_logging was called with our settings object
-            mock_configure.assert_called_once_with(mock_settings)
+            mock_configure.assert_called_once_with(fake_settings)
 
 
 def test_log_request_functions():
     """Test request logging functions."""
-    # Create a mock logger
-    mock_logger = MagicMock(spec=logging.Logger)
+    # Create a fake logger
+    fake_logger = FakeLogger("test.request")
     
     # Test log_request_start
-    log_request_start(mock_logger, "req-123", "GET", "/api/test")
-    mock_logger.debug.assert_called_once()
-    assert "req-123" in mock_logger.debug.call_args[0][0]
-    assert "GET" in mock_logger.debug.call_args[0][0]
-    assert "/api/test" in mock_logger.debug.call_args[0][0]
+    log_request_start(fake_logger, "req-123", "GET", "/api/test")  # type: ignore
     
-    # Reset the mock
-    mock_logger.reset_mock()
+    # Verify the message was logged
+    assert len(fake_logger.messages) == 1
+    assert fake_logger.has_message("req-123", "DEBUG")
+    assert fake_logger.has_message("GET", "DEBUG")
+    assert fake_logger.has_message("/api/test", "DEBUG")
+    
+    # Reset the fake logger
+    fake_logger.reset()
     
     # Test log_request_end
-    log_request_end(mock_logger, "req-123", "GET", "/api/test", 200, 150.5)
-    mock_logger.debug.assert_called_once()
-    assert "req-123" in mock_logger.debug.call_args[0][0]
-    assert "200" in mock_logger.debug.call_args[0][0]
-    assert "150.50ms" in mock_logger.debug.call_args[0][0]
+    log_request_end(fake_logger, "req-123", "GET", "/api/test", 200, 150.5)  # type: ignore
+    
+    # Verify the end message was logged
+    assert len(fake_logger.messages) == 1
+    assert fake_logger.has_message("req-123", "DEBUG")
+    assert fake_logger.has_message("200", "DEBUG")
+    assert fake_logger.has_message("150.50ms", "DEBUG")
 
 
 def test_log_api_error():
     """Test logging API errors."""
-    # Create a mock logger
-    mock_logger = MagicMock(spec=logging.Logger)
+    # Create a fake logger
+    fake_logger = FakeLogger("test.error")
     
     # Test with HolaException
     error = HolaException(code="TEST_ERROR", message="Test error")
-    log_api_error(mock_logger, error)
-    mock_logger.error.assert_called_once()
-    mock_logger.exception.assert_not_called()
+    log_api_error(fake_logger, error)  # type: ignore
     
-    # Reset the mock
-    mock_logger.reset_mock()
+    # Verify error was logged but not as exception
+    assert len(fake_logger.messages) == 1
+    error_messages = fake_logger.get_messages("ERROR")
+    assert len(error_messages) == 1
+    assert fake_logger.has_message("API error", "ERROR")
+    assert fake_logger.has_message("Test error", "ERROR")
+    
+    # Reset the fake logger
+    fake_logger.reset()
     
     # Test with request_id
-    log_api_error(mock_logger, error, "req-123")
-    assert "req-123" in mock_logger.error.call_args[0][0]
+    log_api_error(fake_logger, error, "req-123")  # type: ignore
+    assert len(fake_logger.messages) == 1
+    assert fake_logger.has_message("req-123", "ERROR")
     
-    # Reset the mock
-    mock_logger.reset_mock()
+    # Reset the fake logger
+    fake_logger.reset()
     
     # Test with standard Exception
     error = ValueError("Unexpected error")
-    log_api_error(mock_logger, error)
-    mock_logger.exception.assert_called_once()
+    log_api_error(fake_logger, error)  # type: ignore
+    
+    # Verify exception was logged with exception info
+    assert len(fake_logger.messages) == 1
+    error_messages = fake_logger.get_messages("ERROR")
+    assert len(error_messages) == 1
+    # Check that the exception method was called (exc_info=True in kwargs)
+    assert error_messages[0].kwargs.get("exc_info") is True
 
 
 def test_request_logging_middleware():
@@ -102,20 +121,19 @@ def test_request_logging_middleware():
     # Create a test client
     client = TestClient(app)
     
-    # Mock the logger
-    with patch('hola_server.utils.logging.get_logger') as mock_get_logger:
-        mock_logger = MagicMock()
-        mock_get_logger.return_value = mock_logger
-        
+    # Create a fake logger to use
+    fake_logger = FakeLogger("test.request")
+    
+    with patch('hola_server.utils.logging.get_logger', return_value=fake_logger):
         # Test endpoint that should be logged
         response = client.get("/test")
         assert response.status_code == 200
-        assert mock_logger.debug.call_count >= 2  # Start and end logs
+        assert len(fake_logger.messages) >= 2  # Start and end logs
         
-        # Reset the mock
-        mock_logger.reset_mock()
+        # Reset the fake logger
+        fake_logger.reset()
         
         # Test health endpoint which should be excluded
         response = client.get("/health")
         assert response.status_code == 200
-        assert mock_logger.debug.call_count == 0  # No logs for excluded path
+        assert len(fake_logger.messages) == 0  # No logs for excluded path

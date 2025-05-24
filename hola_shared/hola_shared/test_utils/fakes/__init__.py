@@ -69,3 +69,7 @@ class FakeServerProvider:
         if "info_response" in kwargs:
             self._info_response = kwargs["info_response"]
         return self
+
+
+from .logging import FakeLogger, LogMessage
+from .environment import FakeEnvironment
