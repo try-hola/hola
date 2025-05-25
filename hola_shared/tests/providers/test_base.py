@@ -18,19 +18,19 @@ class FakeServerProvider:
         return True
     
     async def bootstrap(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        """Bootstrap a new server instance."""
+        """Bootstrap a new server."""
         return {"provider": self.type, "container_id": "fake-id", "status": "created"}
     
     async def get_server_info(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get information about a server instance."""
+        """Get information about a server."""
         return {"status": "running", **context}
     
     async def start_server(self, context: Dict[str, Any]) -> None:
-        """Start a server instance."""
+        """Start a server."""
         pass
     
     async def stop_server(self, context: Dict[str, Any]) -> None:
-        """Stop a server instance."""
+        """Stop a server."""
         pass
 
 

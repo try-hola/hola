@@ -33,24 +33,24 @@ class FakeServerProvider:
         return self._available
     
     async def bootstrap(self, options: Dict[str, Any]) -> Dict[str, Any]:
-        """Bootstrap a new server instance."""
+        """Bootstrap a new server."""
         self.bootstrap_called += 1
         self.last_bootstrap_options = options
         return {**self._bootstrap_response, "options": options}
     
     async def get_server_info(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Get information about a server instance."""
+        """Get information about a server."""
         self.get_server_info_called += 1
         self.last_context = context
         return {**self._info_response, **context}
     
     async def start_server(self, context: Dict[str, Any]) -> None:
-        """Start a server instance."""
+        """Start a server."""
         self.start_server_called += 1
         self.last_start_context = context
     
     async def stop_server(self, context: Dict[str, Any]) -> None:
-        """Stop a server instance."""
+        """Stop a server."""
         self.stop_server_called += 1
         self.last_stop_context = context
     

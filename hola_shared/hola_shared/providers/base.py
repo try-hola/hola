@@ -10,7 +10,7 @@ class ServerProvider(Protocol):
     """Protocol defining the interface for server providers.
     
     ServerProvider abstracts the underlying platform or technology used
-    to host and manage server instances. It enables the system to interact
+    to host and manage servers. It enables the system to interact
     with different server environments (like Docker, cloud providers, etc.)
     through a consistent interface.
     
@@ -35,7 +35,7 @@ class ServerProvider(Protocol):
     
     async def bootstrap(self, options: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Bootstrap a new server instance.
+        Bootstrap a new server.
         
         Creates and initializes a new server environment using this provider.
         The specific bootstrap process depends on the provider implementation.
@@ -50,9 +50,9 @@ class ServerProvider(Protocol):
     
     async def get_server_info(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Get information about a server instance.
+        Get information about a server.
         
-        Retrieves current status and metadata about a server instance
+        Retrieves current status and metadata about a server
         managed by this provider.
         
         Args:
@@ -65,9 +65,9 @@ class ServerProvider(Protocol):
     
     async def start_server(self, context: Dict[str, Any]) -> None:
         """
-        Start a server instance.
+        Start a server.
         
-        Starts a stopped or paused server instance managed by this provider.
+        Starts a stopped or pause a server managed by this provider.
         
         Args:
             context: Provider-specific context for the server
@@ -76,9 +76,9 @@ class ServerProvider(Protocol):
     
     async def stop_server(self, context: Dict[str, Any]) -> None:
         """
-        Stop a server instance.
+        Stop a server.
         
-        Stops a running server instance managed by this provider.
+        Stops a running server managed by this provider.
         
         Args:
             context: Provider-specific context for the server
