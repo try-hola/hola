@@ -11,7 +11,7 @@ from hola_shared.errors import HolaException
 from hola_shared.logger import get_logger
 from .config.settings import get_settings
 from .utils.logging import setup_server_logging, setup_request_logging, log_api_error
-from .api import hello
+from .api import hello, apps
 
 # Initialize logging first thing
 setup_server_logging()
@@ -73,3 +73,4 @@ async def health_check():
     }
 
 app.include_router(hello.router, prefix="/hello", tags=["hello"])
+app.include_router(apps.router, prefix="/api/apps", tags=["applications"])

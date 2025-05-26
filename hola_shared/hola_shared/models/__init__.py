@@ -5,3 +5,7 @@ including API response structures and error handling models.
 """
 
 from .response import ApiResponse, ApiError
+from .app import (
+    App, AppStatus, AppHealth, AppDeployRequest, AppUpgradeRequest,
+    AppActionResponse, AppListResponse, AppDeployResponse
+)
