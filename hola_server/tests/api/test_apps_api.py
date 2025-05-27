@@ -2,19 +2,16 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch
-from datetime import datetime, timezone
 
 from hola_server.test_utils.fakes.fake_app_service import FakeAppService
-from hola_shared.models.app import AppDeployRequest, AppUpgradeRequest, AppStatus
+from hola_shared.models.app import AppStatus
 
 
-def test_deploy_app_success(client: TestClient):
-    """Test successful app deployment."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+class TestAppsAPI:
+    """Tests for the application API endpoints."""
+
+    def test_deploy_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test successful app deployment."""
         request_data = {
             "name": "test-app",
             "image": "nginx:latest",
@@ -23,7 +20,7 @@ def test_deploy_app_success(client: TestClient):
             "description": "Test application"
         }
         
-        response = client.post(
+        response = client_with_fake_app_service.post(
             "/api/apps/deploy",
             json=request_data,
             headers={"X-API-Key": "test-key"}
@@ -34,22 +31,17 @@ def test_deploy_app_success(client: TestClient):
         assert data["success"] is True
         assert data["data"]["app"]["name"] == "test-app"
         assert data["data"]["deployment_id"].startswith("test-deploy-")
-        assert fake_service.has_app("test-app")
+        assert fake_app_service.has_app("test-app")
 
-
-def test_deploy_app_duplicate_name(client: TestClient):
-    """Test deploying app with duplicate name."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
-        # First deployment
+    def test_deploy_app_duplicate_name(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test deploying app with duplicate name."""
         request_data = {
             "name": "test-app",
             "image": "nginx:latest"
         }
         
-        response1 = client.post(
+        # First deployment
+        response1 = client_with_fake_app_service.post(
             "/api/apps/deploy",
             json=request_data,
             headers={"X-API-Key": "test-key"}
@@ -57,7 +49,7 @@ def test_deploy_app_duplicate_name(client: TestClient):
         assert response1.status_code == 200
         
         # Second deployment with same name
-        response2 = client.post(
+        response2 = client_with_fake_app_service.post(
             "/api/apps/deploy",
             json=request_data,
             headers={"X-API-Key": "test-key"}
@@ -65,14 +57,9 @@ def test_deploy_app_duplicate_name(client: TestClient):
         assert response2.status_code == 422
         assert "already exists" in response2.json()["detail"]
 
-
-def test_list_apps_empty(client: TestClient):
-    """Test listing apps when none exist."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
-        response = client.get(
+    def test_list_apps_empty(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test listing apps when none exist."""
+        response = client_with_fake_app_service.get(
             "/api/apps/",
             headers={"X-API-Key": "test-key"}
         )
@@ -83,13 +70,8 @@ def test_list_apps_empty(client: TestClient):
         assert data["data"]["apps"] == []
         assert data["data"]["total_count"] == 0
 
-
-def test_list_apps_with_apps(client: TestClient):
-    """Test listing apps when some exist."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_list_apps_with_apps(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test listing apps when some exist."""
         # Deploy some apps first
         apps_to_deploy = [
             {"name": "app1", "image": "nginx:latest"},
@@ -97,13 +79,13 @@ def test_list_apps_with_apps(client: TestClient):
         ]
         
         for app_data in apps_to_deploy:
-            client.post(
+            client_with_fake_app_service.post(
                 "/api/apps/deploy",
                 json=app_data,
                 headers={"X-API-Key": "test-key"}
             )
         
-        response = client.get(
+        response = client_with_fake_app_service.get(
             "/api/apps/",
             headers={"X-API-Key": "test-key"}
         )
@@ -118,15 +100,10 @@ def test_list_apps_with_apps(client: TestClient):
         assert "app1" in app_names
         assert "app2" in app_names
 
-
-def test_get_app_success(client: TestClient):
-    """Test getting app details."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_get_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test getting app details."""
         # Deploy an app first
-        deploy_response = client.post(
+        deploy_response = client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:latest"},
             headers={"X-API-Key": "test-key"}
@@ -134,7 +111,7 @@ def test_get_app_success(client: TestClient):
         assert deploy_response.status_code == 200
         
         # Get app details
-        response = client.get(
+        response = client_with_fake_app_service.get(
             "/api/apps/test-app",
             headers={"X-API-Key": "test-key"}
         )
@@ -146,14 +123,9 @@ def test_get_app_success(client: TestClient):
         assert data["data"]["status"] == AppStatus.RUNNING
         assert data["data"]["image"] == "nginx:latest"
 
-
-def test_get_app_not_found(client: TestClient):
-    """Test getting non-existent app."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
-        response = client.get(
+    def test_get_app_not_found(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test getting non-existent app."""
+        response = client_with_fake_app_service.get(
             "/api/apps/nonexistent",
             headers={"X-API-Key": "test-key"}
         )
@@ -161,15 +133,10 @@ def test_get_app_not_found(client: TestClient):
         assert response.status_code == 404
         assert "not found" in response.json()["detail"]
 
-
-def test_upgrade_app_success(client: TestClient):
-    """Test successful app upgrade."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_upgrade_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test successful app upgrade."""
         # Deploy an app first
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:1.0"},
             headers={"X-API-Key": "test-key"}
@@ -182,7 +149,7 @@ def test_upgrade_app_success(client: TestClient):
             "backup_before_upgrade": True
         }
         
-        response = client.post(
+        response = client_with_fake_app_service.post(
             "/api/apps/test-app/upgrade",
             json=upgrade_data,
             headers={"X-API-Key": "test-key"}
@@ -195,22 +162,17 @@ def test_upgrade_app_success(client: TestClient):
         assert data["data"]["app"]["version"] == "2.0"
         assert data["data"]["deployment_id"].startswith("test-upgrade-")
 
-
-def test_delete_app_success(client: TestClient):
-    """Test successful app deletion."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_delete_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test successful app deletion."""
         # Deploy an app first
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:latest"},
             headers={"X-API-Key": "test-key"}
         )
         
         # Delete the app
-        response = client.delete(
+        response = client_with_fake_app_service.delete(
             "/api/apps/test-app",
             headers={"X-API-Key": "test-key"}
         )
@@ -220,29 +182,24 @@ def test_delete_app_success(client: TestClient):
         assert data["success"] is True
         assert data["data"]["success"] is True
         assert "deleted successfully" in data["data"]["message"]
-        assert not fake_service.has_app("test-app")
+        assert not fake_app_service.has_app("test-app")
 
-
-def test_start_app_success(client: TestClient):
-    """Test starting a stopped app."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_start_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test starting a stopped app."""
         # Deploy and stop an app first
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:latest"},
             headers={"X-API-Key": "test-key"}
         )
         
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/test-app/stop",
             headers={"X-API-Key": "test-key"}
         )
         
         # Start the app
-        response = client.post(
+        response = client_with_fake_app_service.post(
             "/api/apps/test-app/start",
             headers={"X-API-Key": "test-key"}
         )
@@ -253,22 +210,17 @@ def test_start_app_success(client: TestClient):
         assert data["data"]["success"] is True
         assert data["data"]["new_status"] == AppStatus.RUNNING
 
-
-def test_stop_app_success(client: TestClient):
-    """Test stopping a running app."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_stop_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test stopping a running app."""
         # Deploy an app first
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:latest"},
             headers={"X-API-Key": "test-key"}
         )
         
         # Stop the app
-        response = client.post(
+        response = client_with_fake_app_service.post(
             "/api/apps/test-app/stop",
             headers={"X-API-Key": "test-key"}
         )
@@ -279,22 +231,17 @@ def test_stop_app_success(client: TestClient):
         assert data["data"]["success"] is True
         assert data["data"]["new_status"] == AppStatus.STOPPED
 
-
-def test_restart_app_success(client: TestClient):
-    """Test restarting an app."""
-    with patch('hola_server.api.apps.AppService') as MockAppService:
-        fake_service = FakeAppService()
-        MockAppService.return_value = fake_service
-        
+    def test_restart_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
+        """Test restarting an app."""
         # Deploy an app first
-        client.post(
+        client_with_fake_app_service.post(
             "/api/apps/deploy",
             json={"name": "test-app", "image": "nginx:latest"},
             headers={"X-API-Key": "test-key"}
         )
         
         # Restart the app
-        response = client.post(
+        response = client_with_fake_app_service.post(
             "/api/apps/test-app/restart",
             headers={"X-API-Key": "test-key"}
         )
@@ -306,16 +253,18 @@ def test_restart_app_success(client: TestClient):
         assert data["data"]["new_status"] == AppStatus.RUNNING
 
 
-# def test_unauthorized_request(client: TestClient):
-#     """Test request without API key."""
-#     response = client.get("/api/apps/")
-#     assert response.status_code == 401
+# class TestAppsAPIAuth:
+#     """Tests for authentication on application API endpoints."""
 
+#     def test_unauthorized_request(self, client: TestClient):
+#         """Test request without API key."""
+#         response = client.get("/api/apps/")
+#         assert response.status_code == 401
 
-# def test_invalid_api_key(client: TestClient):
-#     """Test request with invalid API key."""
-#     response = client.get(
-#         "/api/apps/",
-#         headers={"X-API-Key": "invalid-key"}
-#     )
-#     assert response.status_code == 401
+#     def test_invalid_api_key(self, client: TestClient):
+#         """Test request with invalid API key."""
+#         response = client.get(
+#             "/api/apps/",
+#             headers={"X-API-Key": "invalid-key"}
+#         )
+#         assert response.status_code == 401

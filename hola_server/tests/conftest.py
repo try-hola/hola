@@ -82,6 +82,23 @@ def base_headers() -> Dict[str, str]:
 
 
 from hola_server.config import Settings
+from hola_server.test_utils.fakes.fake_app_service import FakeAppService
+from hola_server.api.apps import get_app_service
+
+@pytest.fixture
+def fake_app_service() -> FakeAppService:
+    """Return a fake app service for testing."""
+    service = FakeAppService()
+    return service
+
+@pytest.fixture
+def client_with_fake_app_service(fake_app_service: FakeAppService) -> Generator[TestClient, None, None]:
+    """Return a FastAPI test client with fake app service dependency override."""
+    app.dependency_overrides[get_app_service] = lambda: fake_app_service
+    client = TestClient(app)
+    yield client
+    # Clean up dependency overrides after test
+    app.dependency_overrides.clear()
 
 @pytest.fixture
 def override_config() -> Generator[None, None, None]:
