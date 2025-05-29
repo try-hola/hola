@@ -4,6 +4,7 @@ import pytest
 from datetime import datetime
 import io
 from hola_shared.models.file import FileInfo
+from hola_shared.errors import NotFoundException
 from hola_server.test_utils.fakes.fake_file_storage import FakeFileStorage
 
 
@@ -157,7 +158,50 @@ class TestFakeFileStorage:
         file_io = await populated_file_storage.get_file("app1", "non-existent.txt")
         
         assert file_io is None
-    
+
+    @pytest.mark.asyncio
+    async def test_get_file_info_existing(self, populated_file_storage):
+        """Test getting file info for an existing file."""
+        file_info = await populated_file_storage.get_file_info("app1", "file1.txt")
+        
+        assert file_info.path == "file1.txt"
+        assert file_info.size == len(b"File 1 content")
+        assert file_info.content_type == "text/plain"
+        assert file_info.modified_at is not None
+        
+        # Verify method was tracked
+        assert populated_file_storage.get_method_call_count("get_file_info") == 1
+        assert populated_file_storage.was_method_called_with(
+            "get_file_info",
+            app_name="app1",
+            file_path="file1.txt"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_file_info_non_existent(self, fake_file_storage):
+        """Test getting file info for a non-existent file."""
+        with pytest.raises(NotFoundException) as excinfo:
+            await fake_file_storage.get_file_info("test-app", "non-existent.txt")
+        
+        assert excinfo.value.details["resource_type"] == "file"
+        assert excinfo.value.details["resource_id"] == "non-existent.txt"
+        assert excinfo.value.details["app_name"] == "test-app"
+
+    @pytest.mark.asyncio
+    async def test_get_file_info_different_content_types(self, populated_file_storage):
+        """Test getting file info for files with different content types."""
+        # Test PNG file
+        png_info = await populated_file_storage.get_file_info("app2", "image.png")
+        assert png_info.path == "image.png"
+        assert png_info.content_type == "image/png"
+        assert png_info.size == len(b"Fake image content")
+        
+        # Test text file  
+        txt_info = await populated_file_storage.get_file_info("app1", "file2.txt")
+        assert txt_info.path == "file2.txt"
+        assert txt_info.content_type == "text/plain"
+        assert txt_info.size == len(b"File 2 content is longer")
+
     @pytest.mark.asyncio
     async def test_delete_file_existing(self, populated_file_storage):
         """Test deleting an existing file."""

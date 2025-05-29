@@ -96,6 +96,31 @@ class FakeFileStorage:
         
         return BytesIO(self.files[app_name][file_path]["content"])
     
+    async def get_file_info(self, app_name: str, file_path: str) -> FileInfo:
+        """Get file information without reading content."""
+        self.method_calls.append({
+            "method": "get_file_info",
+            "app_name": app_name,
+            "file_path": file_path,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        if app_name not in self.files or file_path not in self.files[app_name]:
+            from hola_shared.errors import NotFoundException
+            raise NotFoundException(
+                resource_type="file",
+                resource_id=file_path,
+                details={"app_name": app_name}
+            )
+        
+        file_data = self.files[app_name][file_path]
+        return FileInfo(
+            path=file_path,
+            size=len(file_data["content"]),
+            modified_at=file_data["modified_at"],
+            content_type=file_data["content_type"]
+        )
+
     async def delete_file(self, app_name: str, file_path: str) -> bool:
         """Delete a file."""
         self.method_calls.append({

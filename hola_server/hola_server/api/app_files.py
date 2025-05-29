@@ -157,17 +157,18 @@ async def get_file(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message="File not found.")).model_dump(exclude_none=True)
             )
-        # Determine content type
-        content_type = getattr(file_stream, 'content_type', 'application/octet-stream') # Ideal if service could provide this
-        if isinstance(file_stream, io.BytesIO): # Common case for fakes or simple reads
-             # For BytesIO, we might try to guess from file_path if not available on stream
-            if content_type == 'application/octet-stream' and '.' in file_path:
-                import mimetypes
-                guessed_type = mimetypes.guess_type(file_path)[0]
-                if guessed_type:
-                    content_type = guessed_type
         
-        return StreamingResponse(file_stream, media_type=content_type)
+        # Get file info for content type and other metadata
+        file_info = await service.file_storage.get_file_info(app_name, file_path)
+        
+        def generate():
+            yield file_stream.read()
+        
+        return StreamingResponse(
+            generate(),
+            media_type=file_info.content_type,
+            headers={"Content-Disposition": f"attachment; filename={file_path.split('/')[-1]}"}
+        )
     except NotFoundException as e:
         log_api_error(logger, exc=e, method="GET", path=f"/api/apps/{app_name}/files/{file_path}", status_code=404, error_message=str(e))
         # Let the global exception handler handle this

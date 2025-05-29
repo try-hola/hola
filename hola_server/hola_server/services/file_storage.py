@@ -202,6 +202,53 @@ class FileStorage:
         content_bytes = await asyncio.to_thread(_read_file_sync)
         return io.BytesIO(content_bytes) # Using io.BytesIO as per strategy example
     
+    async def get_file_info(self, app_name: str, file_path: str) -> FileInfo:
+        """Get file information without reading content.
+        
+        Args:
+            app_name: Name of the application
+            file_path: Path to the file within app's storage
+            
+        Returns:
+            File information
+            
+        Raises:
+            NotFoundException: If file doesn't exist
+            ServiceException: If there's an error accessing file
+        """
+        logger.debug(f"Getting file info for app '{app_name}': {file_path}")
+        
+        full_path = self._get_file_full_path(app_name, file_path)
+        
+        def _stat_file_sync():
+            try:
+                return os.stat(full_path)
+            except FileNotFoundError:
+                raise NotFoundException(
+                    resource_type="file", 
+                    resource_id=file_path,
+                    details={"app_name": app_name}
+                )
+            except OSError as e:
+                raise ServiceException(message=f"Failed to access file: {e}", service_name="file_storage")
+        
+        try:
+            stat_info = await asyncio.to_thread(_stat_file_sync)
+            size = stat_info.st_size
+            modified_at = datetime.fromtimestamp(stat_info.st_mtime, tz=timezone.utc)
+            content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
+            
+            return FileInfo(
+                path=file_path,
+                size=size,
+                modified_at=modified_at,
+                content_type=content_type
+            )
+        except (NotFoundException, ServiceException):
+            raise
+        except Exception as e:
+            raise ServiceException(message=f"Unexpected error getting file info: {e}", service_name="file_storage")
+    
     async def delete_file(self, app_name: str, file_path: str) -> bool:
         """Delete a file.
         

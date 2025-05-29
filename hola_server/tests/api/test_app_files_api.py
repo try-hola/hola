@@ -189,6 +189,37 @@ class TestAppFilesApi:
             app_name="test-app",
             file_path="test.txt"
         )
+
+    @pytest.mark.asyncio
+    async def test_get_file_content_type_and_headers(self, client_with_fake_app_service, mock_api_key, fake_app_service_with_app):
+        """Test getting a file with proper content type and headers."""
+        # Pre-populate files with different content types
+        text_content = b"This is a text file"
+        image_content = b"Fake PNG image data"
+        
+        await fake_app_service_with_app.file_storage.upload_file(
+            "test-app", "document.txt", text_content, "text/plain"
+        )
+        await fake_app_service_with_app.file_storage.upload_file(
+            "test-app", "photo.jpg", image_content, "image/jpeg"
+        )
+        
+        # Test text file
+        text_response = client_with_fake_app_service.get("/api/apps/test-app/files/document.txt")
+        assert text_response.status_code == 200
+        assert text_response.content == text_content
+        assert text_response.headers["content-type"].startswith("text/plain")
+        assert "attachment; filename=document.txt" in text_response.headers.get("content-disposition", "")
+        
+        # Test image file  
+        image_response = client_with_fake_app_service.get("/api/apps/test-app/files/photo.jpg")
+        assert image_response.status_code == 200
+        assert image_response.content == image_content
+        assert image_response.headers["content-type"] == "image/jpeg"
+        assert "attachment; filename=photo.jpg" in image_response.headers.get("content-disposition", "")
+        
+        # Verify get_file_info was called through file_storage (indirectly via API)
+        assert fake_app_service_with_app.file_storage.get_method_call_count("get_file_info") == 2
     
     @pytest.mark.asyncio
     async def test_get_file_not_found(self, client_with_fake_app_service, mock_api_key, fake_app_service_with_app):
