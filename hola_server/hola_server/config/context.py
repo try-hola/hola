@@ -24,7 +24,36 @@ class ServerContext:
             settings: Optional settings to use, or load from environment if None
         """
         self.settings = settings or get_settings()
+        # Services are created lazily when accessed
+        self._config_service = None
+        self._file_storage = None # Initialize file storage service
         # Additional shared resources can be initialized here
+    
+    def get_config_service(self):
+        """Get the configuration service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            ConfigService instance
+        """
+        if self._config_service is None:
+            from ..services.config_service import ConfigService
+            self._config_service = ConfigService(self)
+        return self._config_service
+
+    def get_file_storage(self):
+        """Get the file storage service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            FileStorage instance
+        """
+        if self._file_storage is None:
+            from ..services.file_storage import FileStorage
+            self._file_storage = FileStorage(self)
+        return self._file_storage
 
 
 @lru_cache()

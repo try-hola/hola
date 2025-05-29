@@ -1,12 +1,15 @@
 """Fake implementation of AppService for testing."""
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime, timezone
+from fastapi import UploadFile
 from hola_shared.models.app import (
     App, AppStatus, AppHealth, AppDeployRequest, AppUpgradeRequest,
     AppActionResponse, AppDeployResponse, AppListResponse
 )
+from hola_shared.models.file import FileInfo, FileListResponse
 from hola_shared.errors import ValidationException, NotFoundException
+from .fake_file_storage import FakeFileStorage
 
 
 class FakeAppService:
@@ -26,6 +29,15 @@ class FakeAppService:
         self.should_fail_stop = False
         self.should_fail_restart = False
         self.should_fail_delete = False
+        self.should_fail_file_upload = False
+        self.should_fail_file_delete = False
+        
+        # Initialize file storage
+        self.file_storage = FakeFileStorage()
+        
+        # Initialize config service
+        from .fake_config_service import FakeConfigService
+        self._config_service = FakeConfigService()
     
     async def deploy_app(self, request: AppDeployRequest) -> AppDeployResponse:
         """Deploy a new application."""
@@ -265,6 +277,196 @@ class FakeAppService:
             new_status=app.status
         )
     
+    async def list_app_files(self, app_name: str) -> FileListResponse:
+        """List files for an application."""
+        self.method_calls.append({
+            "method": "list_app_files",
+            "app_name": app_name,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        # Ensure app exists
+        await self.get_app(app_name)
+        
+        file_list = await self.file_storage.list_files(app_name)
+        
+        # Update app's file stats
+        app = self.apps[app_name]
+        app.files_count = file_list.count
+        app.files_total_size_bytes = file_list.total_size_bytes
+        
+        return file_list
+    
+    async def upload_app_file(self, app_name: str, file: UploadFile, path: Optional[str] = None) -> FileInfo:
+        """Upload a file for an application."""
+        self.method_calls.append({
+            "method": "upload_app_file",
+            "app_name": app_name,
+            "file_name": file.filename,
+            "path": path,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        if self.should_fail_file_upload:
+            raise ValidationException(
+                message="Forced file upload failure for testing",
+                details={"app_name": app_name}
+            )
+        
+        # Ensure app exists
+        await self.get_app(app_name)
+        
+        # Determine file path
+        file_path = path or file.filename
+        if file_path is None:
+            raise ValidationException(
+                message="File path must be provided if file has no filename",
+                details={"app_name": app_name}
+            )
+        
+        # Read file content - in a real implementation we'd use file.file.read() 
+        # but for testing we'll simulate with a simple string
+        content = f"Content for {file.filename}".encode('utf-8')
+        
+        # Upload the file
+        file_info = await self.file_storage.upload_file(
+            app_name, 
+            file_path, 
+            content,
+            file.content_type
+        )
+        
+        # Update app stats
+        files = await self.file_storage.list_files(app_name)
+        app = self.apps[app_name]
+        app.files_count = files.count
+        app.files_total_size_bytes = files.total_size_bytes
+        
+        return file_info
+    
+    async def get_app_file(self, app_name: str, file_path: str) -> BinaryIO:
+        """Get a file's contents."""
+        self.method_calls.append({
+            "method": "get_app_file",
+            "app_name": app_name,
+            "file_path": file_path,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        # Ensure app exists
+        await self.get_app(app_name)
+        
+        file_content = await self.file_storage.get_file(app_name, file_path)
+        if file_content is None:
+            raise NotFoundException(
+                resource_type="file",
+                resource_id=file_path,
+                details={"app_name": app_name}
+            )
+        
+        return file_content
+    
+    async def delete_app_file(self, app_name: str, file_path: str) -> None:
+        """Delete a file."""
+        self.method_calls.append({
+            "method": "delete_app_file",
+            "app_name": app_name,
+            "file_path": file_path,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        
+        if self.should_fail_file_delete:
+            raise ValidationException(
+                message="Forced file deletion failure for testing",
+                details={"app_name": app_name, "file_path": file_path}
+            )
+        
+        # Ensure app exists
+        await self.get_app(app_name)
+        
+        success = await self.file_storage.delete_file(app_name, file_path)
+        if not success:
+            raise NotFoundException(
+                resource_type="file",
+                resource_id=file_path,
+                details={"app_name": app_name}
+            )
+        
+        # Update app stats
+        files = await self.file_storage.list_files(app_name)
+        app = self.apps[app_name]
+        app.files_count = files.count
+        app.files_total_size_bytes = files.total_size_bytes
+    
+    # --- Configuration Delegation Methods ---
+    async def get_app_config(self, app_name: str) -> 'ConfigResponse':
+        """Get app configuration via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "get_app_config",
+            "app_name": app_name,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.get_app_config(app_name)
+
+    async def list_config_entries(self, app_name: str) -> 'ConfigListResponse':
+        """List config entries via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "list_config_entries",
+            "app_name": app_name,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.list_config_entries(app_name)
+
+    async def get_config_entry(self, app_name: str, key: str) -> 'ConfigEntryResponse':
+        """Get config entry via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "get_config_entry",
+            "app_name": app_name,
+            "key": key,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.get_config_entry(app_name, key)
+
+    async def create_config_entry(self, app_name: str, request: 'ConfigCreateRequest') -> 'ConfigEntryResponse':
+        """Create config entry via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "create_config_entry",
+            "app_name": app_name,
+            "request": request,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.create_config_entry(app_name, request)
+
+    async def update_config_entry(self, app_name: str, key: str, request: 'ConfigUpdateRequest') -> 'ConfigEntryResponse':
+        """Update config entry via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "update_config_entry",
+            "app_name": app_name,
+            "key": key,
+            "request": request,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.update_config_entry(app_name, key, request)
+
+    async def delete_config_entry(self, app_name: str, key: str) -> None:
+        """Delete config entry via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "delete_config_entry",
+            "app_name": app_name,
+            "key": key,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.delete_config_entry(app_name, key)
+
+    async def delete_app_config(self, app_name: str) -> None:
+        """Delete app config via delegation to FakeConfigService."""
+        self.method_calls.append({
+            "method": "delete_app_config",
+            "app_name": app_name,
+            "timestamp": datetime.now(timezone.utc)
+        })
+        return await self._config_service.delete_app_config(app_name)
+
     # Helper methods for testing
     def has_app(self, app_name: str) -> bool:
         """Check if an app exists."""
@@ -299,7 +501,9 @@ class FakeAppService:
             "start": "should_fail_start",
             "stop": "should_fail_stop",
             "restart": "should_fail_restart",
-            "delete": "should_fail_delete"
+            "delete": "should_fail_delete",
+            "file_upload": "should_fail_file_upload",
+            "file_delete": "should_fail_file_delete"
         }
         
         if operation in failure_map:
@@ -316,3 +520,8 @@ class FakeAppService:
         self.should_fail_stop = False
         self.should_fail_restart = False
         self.should_fail_delete = False
+        self.should_fail_file_upload = False
+        self.should_fail_file_delete = False
+        self.file_storage.reset()
+        self.should_fail_file_upload = False
+        self.should_fail_file_delete = False

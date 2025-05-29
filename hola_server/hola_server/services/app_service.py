@@ -4,11 +4,16 @@ This module provides business logic for managing applications including
 deployment, lifecycle management, and status monitoring.
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime, timezone
+from fastapi import UploadFile
 from hola_shared.models.app import (
     App, AppStatus, AppHealth, AppDeployRequest, AppUpgradeRequest,
     AppActionResponse, AppDeployResponse, AppListResponse
+)
+from hola_shared.models.file import FileInfo, FileListResponse
+from hola_shared.models.config import (
+    ConfigCreateRequest, ConfigUpdateRequest, ConfigResponse, ConfigListResponse, ConfigEntryResponse
 )
 from hola_shared.errors import ValidationException, NotFoundException, ServiceException
 from hola_shared.logger import get_logger
@@ -35,11 +40,19 @@ class AppService:
         self.context = context
         self.settings = context.settings
         
-        # In-memory storage for now - will be replaced with persistent storage
+        self.file_storage = context.get_file_storage() # Initialize file storage
         self._apps: Dict[str, App] = {}
         self._deployment_counter = 1
         
         logger.debug("AppService initialized")
+    
+    def _get_config_service(self):
+        """Get the configuration service from context.
+        
+        Returns:
+            ConfigService instance
+        """
+        return self.context.get_config_service()
     
     async def deploy_app(self, request: AppDeployRequest) -> AppDeployResponse:
         """Deploy a new application.
@@ -79,7 +92,11 @@ class AppService:
             description=request.description,
             version=request.version,
             created_at=now,
-            updated_at=now
+            updated_at=now,
+            url=f"http://localhost:{request.port}" if request.port else None,
+            backup_count=0,
+            files_count=0,
+            files_total_size_bytes=0
         )
         
         # Store the app
@@ -238,6 +255,15 @@ class AppService:
         try:
             # In real implementation, this would stop and remove the container
             del self._apps[app_name]
+            
+            # Clean up app configuration
+            try:
+                config_service = self._get_config_service()
+                await config_service.delete_app_config(app_name)
+                logger.debug(f"Cleaned up configuration for deleted app '{app_name}'")
+            except Exception as config_error:
+                logger.warning(f"Failed to clean up configuration for app '{app_name}': {config_error}")
+                # Don't fail the app deletion if config cleanup fails
             
             logger.info(f"Successfully deleted app '{app_name}'")
             
@@ -419,3 +445,193 @@ class AppService:
                 service_name="container_runtime",
                 details={"app_name": app_name}
             )
+    
+    async def list_app_files(self, app_name: str) -> FileListResponse:
+        """List files for an application.
+        
+        Args:
+            app_name: Name of the application
+            
+        Returns:
+            List of file information
+            
+        Raises:
+            NotFoundException: If the app doesn't exist
+        """
+        logger.info(f"Listing files for app '{app_name}'")
+        
+        app = await self.get_app(app_name)
+        
+        file_list = await self.file_storage.list_files(app_name)
+        
+        # Update app's file stats
+        app.files_count = file_list.count
+        app.files_total_size_bytes = file_list.total_size_bytes
+        
+        logger.debug(f"Found {file_list.count} files for app '{app_name}'")
+        return file_list
+    
+    async def upload_app_file(self, app_name: str, file: UploadFile, path: Optional[str] = None) -> FileInfo:
+        """Upload a file for an application.
+        
+        Args:
+            app_name: Name of the application
+            file: File to upload
+            path: Target path within app's file storage (optional)
+            
+        Returns:
+            Information about the uploaded file
+            
+        Raises:
+            NotFoundException: If the app doesn't exist
+            ValidationException: If the file is invalid or path conflicts
+        """
+        logger.info(f"Uploading file for app '{app_name}': {file.filename}")
+        
+        app = await self.get_app(app_name)
+        
+        # Determine file path
+        file_path = path or file.filename
+        if file_path is None:
+            raise ValidationException(
+                message="File path must be provided if file has no filename",
+                details={"app_name": app_name}
+            )
+        
+        # Read file content
+        content = await file.read()
+        
+        # Upload the file
+        file_info = await self.file_storage.upload_file(
+            app_name,
+            file_path,
+            content,
+            file.content_type
+        )
+        
+        # Update app stats
+        files = await self.file_storage.list_files(app_name)
+        app.files_count = files.count
+        app.files_total_size_bytes = files.total_size_bytes
+        
+        return file_info
+        
+        # This block seems to be a leftover simulation and should be removed
+        # as the actual upload logic is above it.
+        # logger.info(f"Successfully uploaded file for app '{app_name}': {file_info.path}")
+        # return file_info
+        pass # Placeholder if the above lines are removed and nothing else is here.
+    
+    async def get_app_file(self, app_name: str, file_path: str) -> Optional[BinaryIO]:
+        """Get a file's contents.
+        
+        Args:
+            app_name: Name of the application
+            file_path: Path of the file to retrieve
+            
+        Returns:
+            File contents as a BytesIO object, or None if not found
+            
+        Raises:
+            NotFoundException: If the app or file doesn't exist
+        """
+        logger.info(f"Retrieving file for app '{app_name}': {file_path}")
+        
+        _ = await self.get_app(app_name) # Ensure app exists
+        
+        file_io = await self.file_storage.get_file(app_name, file_path)
+        
+        if file_io is None:
+            raise NotFoundException(
+                resource_type="file",
+                resource_id=file_path,
+                details={"app_name": app_name, "message": f"File '{file_path}' not found in app '{app_name}'."}
+            )
+            
+        logger.debug(f"Successfully retrieved file for app '{app_name}': {file_path}")
+        return file_io
+    
+    async def delete_app_file(self, app_name: str, file_path: str) -> None:
+        """Delete a file.
+        
+        Args:
+            app_name: Name of the application
+            file_path: Path of the file to delete
+            
+        Raises:
+            NotFoundException: If the app or file doesn't exist
+            ServiceException: If deletion fails in storage
+        """
+        logger.info(f"Deleting file for app '{app_name}': {file_path}")
+        
+        app = await self.get_app(app_name) # Ensure app exists
+        
+        # Check if file exists before attempting deletion to provide a clear NotFoundException
+        # This relies on FileStorage.get_file returning None if not found.
+        # Alternatively, FileStorage.delete_file could return a more specific status or raise.
+        # For now, let's assume FileStorage.delete_file handles non-existence gracefully (returns False)
+        # or raises its own NotFoundException if appropriate.
+        # The current FileStorage.delete_file returns False if not found.
+        
+        existing_file = await self.file_storage.get_file(app_name, file_path)
+        if existing_file is None:
+            raise NotFoundException(
+                resource_type="file",
+                resource_id=file_path,
+                details={"app_name": app_name, "message": f"File '{file_path}' not found for deletion in app '{app_name}'."}
+            )
+        if hasattr(existing_file, 'close'): # Close the stream if it was opened
+            existing_file.close()
+
+        deleted = await self.file_storage.delete_file(app_name, file_path)
+        
+        if not deleted:
+            # This case should ideally be caught by the check above,
+            # but as a fallback if FileStorage.delete_file itself indicates not found.
+            # However, our FileStorage.delete_file raises ServiceException on OS error,
+            # and returns False if os.path.exists was false.
+            # The check above with get_file should make this redundant.
+            # If FileStorage.delete_file returns False because it didn't exist,
+            # the NotFoundException above should have caught it.
+            # If it returns False for other reasons (e.g. permission denied but not an OSError),
+            # then this might be a ServiceException.
+            # For now, let's assume the get_file check is sufficient for NotFound.
+            logger.warning(f"FileStorage.delete_file returned False for '{file_path}' in app '{app_name}', but was expected to exist.")
+            # Potentially raise ServiceException here if this state is unexpected.
+
+        # Update app stats
+        file_list_response = await self.file_storage.list_files(app_name)
+        app.files_count = file_list_response.count
+        app.files_total_size_bytes = file_list_response.total_size_bytes
+        
+        logger.info(f"Successfully processed deletion for file for app '{app_name}': {file_path}")
+    
+    # --- Configuration Delegation Methods ---
+    async def get_app_config(self, app_name: str) -> 'ConfigResponse':
+        """Get app configuration via delegation to ConfigService."""
+        config_service = self._get_config_service()
+        return await config_service.get_app_config(app_name)
+
+    async def list_config_entries(self, app_name: str) -> 'ConfigListResponse':
+        config_service = self._get_config_service()
+        return await config_service.list_config_entries(app_name)
+
+    async def get_config_entry(self, app_name: str, key: str) -> 'ConfigEntryResponse':
+        config_service = self._get_config_service()
+        return await config_service.get_config_entry(app_name, key)
+
+    async def create_config_entry(self, app_name: str, request: 'ConfigCreateRequest') -> 'ConfigEntryResponse':
+        config_service = self._get_config_service()
+        return await config_service.create_config_entry(app_name, request)
+
+    async def update_config_entry(self, app_name: str, key: str, request: 'ConfigUpdateRequest') -> 'ConfigEntryResponse':
+        config_service = self._get_config_service()
+        return await config_service.update_config_entry(app_name, key, request)
+
+    async def delete_config_entry(self, app_name: str, key: str) -> None:
+        config_service = self._get_config_service()
+        return await config_service.delete_config_entry(app_name, key)
+
+    async def delete_app_config(self, app_name: str) -> None:
+        config_service = self._get_config_service()
+        return await config_service.delete_app_config(app_name)

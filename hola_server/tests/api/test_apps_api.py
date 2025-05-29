@@ -55,7 +55,9 @@ class TestAppsAPI:
             headers={"X-API-Key": "test-key"}
         )
         assert response2.status_code == 422
-        assert "already exists" in response2.json()["detail"]
+        response_data = response2.json()
+        assert not response_data["success"]
+        assert "already exists" in response_data["error"]["message"]
 
     def test_list_apps_empty(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
         """Test listing apps when none exist."""
@@ -131,7 +133,9 @@ class TestAppsAPI:
         )
         
         assert response.status_code == 404
-        assert "not found" in response.json()["detail"]
+        response_data = response.json()
+        assert not response_data["success"]
+        assert "not found" in response_data["error"]["message"]
 
     def test_upgrade_app_success(self, client_with_fake_app_service: TestClient, fake_app_service: FakeAppService):
         """Test successful app upgrade."""

@@ -159,7 +159,7 @@ class NotFoundException(HolaException):
             merged_details.update(details)
             
         super().__init__(
-            code="NOT_FOUND", 
+            code="RESOURCE_NOT_FOUND", 
             message=message,
             details=merged_details,
             status_code=404

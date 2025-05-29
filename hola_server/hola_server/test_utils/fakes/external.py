@@ -48,6 +48,11 @@ class FakeFileSystem:
     A fake file system implementation for testing.
     Stores all files in memory rather than on disk.
     """
+# NOTE (Refactor 2025-05-29): This FakeFileSystem is currently not directly used by
+    # FakeFileStorage. FakeFileStorage implements its own in-memory async logic.
+    # If FakeFileSystem were to be used by an async component in the future,
+    # its methods would need to be made `async def` or called via `asyncio.to_thread`.
+    # For now, its synchronous interface is maintained as it's isolated.
     
     def __init__(self):
         """Initialize an empty in-memory file system."""

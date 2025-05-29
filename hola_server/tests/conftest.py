@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from typing import Dict, Generator, Any
 import os
 
+pytest_plugins = ["pytest_asyncio"] # Added to explicitly load pytest-asyncio
+
 # Import main app after setting up fakes
 from hola_server.main import app
 

@@ -9,3 +9,7 @@ from .app import (
     App, AppStatus, AppHealth, AppDeployRequest, AppUpgradeRequest,
     AppActionResponse, AppListResponse, AppDeployResponse
 )
+from .config import (
+    ConfigEntry, ConfigUpdateRequest, ConfigCreateRequest, AppConfig,
+    ConfigResponse, ConfigListResponse, ConfigEntryResponse
+)

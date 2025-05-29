@@ -10,6 +10,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp # Import ASGIApp
 from hola_shared.logger import get_logger, configure_logging
 from hola_shared.errors import HolaException
 from ..config.settings import get_settings
@@ -76,23 +77,48 @@ def log_request_end(
     )
 
 
-def log_api_error(logger: logging.Logger, error: Exception, request_id: Optional[str] = None) -> None:
+def log_api_error(
+    logger: logging.Logger,
+    request_id: Optional[str] = None,
+    method: Optional[str] = None,
+    path: Optional[str] = None,
+    status_code: Optional[int] = None,
+    error_message: Optional[str] = None,
+    exc: Optional[Exception] = None
+) -> None:
     """
     Log API errors with appropriate context.
-    
+
     Args:
         logger: Logger instance to use
-        error: The exception that occurred
-        request_id: Optional request identifier for correlation
+        request_id: Request identifier for correlation
+        method: HTTP method of the request
+        path: Path of the request
+        status_code: HTTP status code of the response
+        error_message: Error message to log
+        exc: Optional HolaException object to extract details from
     """
+    if exc:
+        if isinstance(exc, HolaException):
+            status_code = exc.status_code
+            error_message = exc.message
+        else:
+            status_code = status_code if status_code is not None else 500
+            error_message = str(exc)
+
     context = f" (request_id: {request_id})" if request_id else ""
-    
-    if isinstance(error, HolaException):
-        # For known exceptions, log without the traceback
-        logger.error(f"API error{context}: {str(error)}")
+    method_path = f"{method} {path}" if method and path else ""
+    status_info = f" - Status: {status_code}" if status_code is not None else ""
+    error_info = f" - Error: {error_message}" if error_message else ""
+
+    if isinstance(exc, Exception) and not isinstance(exc, HolaException):
+        logger.exception(
+            f"API error{context}: {method_path}{status_info}{error_info}"
+        )
     else:
-        # For unexpected exceptions, include the traceback
-        logger.exception(f"Unexpected API error{context}")
+        logger.error(
+            f"API error{context}: {method_path}{status_info}{error_info}"
+        )
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
@@ -103,7 +129,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     duration and status code.
     """
     
-    def __init__(self, app: FastAPI, exclude_paths: Optional[list] = None) -> None:
+    def __init__(self, app: ASGIApp, exclude_paths: Optional[list] = None) -> None:
         """
         Initialize the middleware.
         
@@ -158,7 +184,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             # Log unexpected errors
             duration_ms = (time.time() - start_time) * 1000
-            log_api_error(self.logger, e, request_id)
+            log_api_error(self.logger, request_id, request.method, request.url.path, 500, str(e), exc=e)
             raise
 
 

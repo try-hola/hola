@@ -43,7 +43,10 @@ class FakeLogger:
 
     def exception(self, message: str, *args: Any, exc_info: bool = True, **kwargs: Any) -> None:
         """Log an error message with exception information."""
-        kwargs['exc_info'] = exc_info
+        # The standard logging.exception automatically sets exc_info=True
+        # We just need to pass it through if it's explicitly provided
+        if exc_info:
+            kwargs['exc_info'] = exc_info
         self._log(logging.ERROR, message, *args, **kwargs)
         
     def log(self, level: int, message: str, *args: Any, **kwargs: Any) -> None:

@@ -46,6 +46,8 @@ class App(BaseModel):
     description: Optional[str] = Field(None, description="Application description")
     url: Optional[str] = Field(None, description="Application access URL")
     backup_count: Optional[int] = Field(0, description="Number of available backups")
+    files_count: int = Field(0, description="Number of application files")
+    files_total_size_bytes: int = Field(0, description="Total size of application files in bytes") 
     
     model_config = ConfigDict(use_enum_values=True)
 

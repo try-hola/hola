@@ -5,8 +5,9 @@ deployment, lifecycle operations, and status monitoring.
 """
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse # Added import
 from typing import List
-from hola_shared.models.response import ApiResponse
+from hola_shared.models.response import ApiResponse, ApiError # Added ApiError import
 from hola_shared.models.app import (
     App, AppDeployRequest, AppUpgradeRequest, AppActionResponse,
     AppListResponse, AppDeployResponse
@@ -55,14 +56,17 @@ async def deploy_app(
         result = await service.deploy_app(request)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path="/api/apps/deploy", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="POST", path="/api/apps/deploy", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error during app deployment")).model_dump(exclude_none=True)
+        )
 
 
 @router.get("/", response_model=ApiResponse[AppListResponse])
@@ -88,12 +92,18 @@ async def list_apps(
     try:
         result = await service.list_apps()
         return ApiResponse(success=True, data=result)
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+    except ServiceException as e: # ServiceException should be treated as a server error
+        log_api_error(logger, request_id=None, method="GET", path="/api/apps", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="GET", path="/api/apps", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error listing apps")).model_dump(exclude_none=True)
+        )
 
 
 @router.get("/{app_name}", response_model=ApiResponse[App])
@@ -124,17 +134,23 @@ async def get_app(
         result = await service.get_app(app_name)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="GET", path=f"/api/apps/{app_name}", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="GET", path=f"/api/apps/{app_name}", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="GET", path=f"/api/apps/{app_name}", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error retrieving app")).model_dump(exclude_none=True)
+        )
 
 
 @router.post("/{app_name}/upgrade", response_model=ApiResponse[AppDeployResponse])
@@ -167,17 +183,23 @@ async def upgrade_app(
         result = await service.upgrade_app(app_name, request)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/upgrade", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/upgrade", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/upgrade", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error upgrading app")).model_dump(exclude_none=True)
+        )
 
 
 @router.delete("/{app_name}", response_model=ApiResponse[AppActionResponse])
@@ -208,17 +230,23 @@ async def delete_app(
         result = await service.delete_app(app_name)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="DELETE", path=f"/api/apps/{app_name}", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="DELETE", path=f"/api/apps/{app_name}", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="DELETE", path=f"/api/apps/{app_name}", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error deleting app")).model_dump(exclude_none=True)
+        )
 
 
 @router.post("/{app_name}/start", response_model=ApiResponse[AppActionResponse])
@@ -248,17 +276,23 @@ async def start_app(
         result = await service.start_app(app_name)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/start", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/start", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/start", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error starting app")).model_dump(exclude_none=True)
+        )
 
 
 @router.post("/{app_name}/stop", response_model=ApiResponse[AppActionResponse])
@@ -288,17 +322,23 @@ async def stop_app(
         result = await service.stop_app(app_name)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/stop", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/stop", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/stop", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error stopping app")).model_dump(exclude_none=True)
+        )
 
 
 @router.post("/{app_name}/restart", response_model=ApiResponse[AppActionResponse])
@@ -329,14 +369,20 @@ async def restart_app(
         result = await service.restart_app(app_name)
         return ApiResponse(success=True, data=result)
     except ValidationException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=422, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/restart", status_code=422, error_message=str(e))
+        return JSONResponse(
+            status_code=422,
+            content=ApiResponse(success=False, error=ApiError(code="VALIDATION_ERROR", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except NotFoundException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=404, detail=str(e))
-    except ServiceException as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail=str(e))
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/restart", status_code=404, error_message=str(e))
+        return JSONResponse(
+            status_code=404,
+            content=ApiResponse(success=False, error=ApiError(code="NOT_FOUND", message=str(e), details=e.details if hasattr(e, 'details') else None)).model_dump(exclude_none=True)
+        )
     except Exception as e:
-        log_api_error(logger, e)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        log_api_error(logger, request_id=None, method="POST", path=f"/api/apps/{app_name}/restart", status_code=500, error_message=str(e))
+        return JSONResponse(
+            status_code=500,
+            content=ApiResponse(success=False, error=ApiError(code="SERVER_ERROR", message="Internal server error restarting app")).model_dump(exclude_none=True)
+        )

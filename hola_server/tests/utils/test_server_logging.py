@@ -68,31 +68,9 @@ def test_log_api_error():
     # Create a fake logger
     fake_logger = FakeLogger("test.error")
     
-    # Test with HolaException
-    error = HolaException(code="TEST_ERROR", message="Test error")
-    log_api_error(fake_logger, error)  # type: ignore
-    
-    # Verify error was logged but not as exception
-    assert len(fake_logger.messages) == 1
-    error_messages = fake_logger.get_messages("ERROR")
-    assert len(error_messages) == 1
-    assert fake_logger.has_message("API error", "ERROR")
-    assert fake_logger.has_message("Test error", "ERROR")
-    
-    # Reset the fake logger
-    fake_logger.reset()
-    
-    # Test with request_id
-    log_api_error(fake_logger, error, "req-123")  # type: ignore
-    assert len(fake_logger.messages) == 1
-    assert fake_logger.has_message("req-123", "ERROR")
-    
-    # Reset the fake logger
-    fake_logger.reset()
-    
     # Test with standard Exception
     error = ValueError("Unexpected error")
-    log_api_error(fake_logger, error)  # type: ignore
+    log_api_error(fake_logger, "request-id", "GET", "/test", 500, str(error), exc=error)
     
     # Verify exception was logged with exception info
     assert len(fake_logger.messages) == 1

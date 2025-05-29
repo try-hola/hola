@@ -1,4 +1,10 @@
-"""Main entry point for the Hola Server FastAPI application.
+"""Main entry point for the Hola Server FastAPI appli    # Log the exception using our utility
+    log_api_error(logger, exc=exc, method="", path="", status_code=exc.status_code, error_message=str(exc))
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.to_response().model_dump()
+    )
 
 This module initializes the FastAPI app, configures middleware,
 and registers API routes for the Hola server.
@@ -11,7 +17,7 @@ from hola_shared.errors import HolaException
 from hola_shared.logger import get_logger
 from .config.settings import get_settings
 from .utils.logging import setup_server_logging, setup_request_logging, log_api_error
-from .api import hello, apps
+from .api import hello, apps, app_files, app_config
 
 # Initialize logging first thing
 setup_server_logging()
@@ -56,7 +62,7 @@ async def hola_exception_handler(request: Request, exc: HolaException):
     
     return JSONResponse(
         status_code=exc.status_code,
-        content=exc.to_response().dict()
+        content=exc.to_response().model_dump()
     )
 
 @app.get("/health", tags=["system"])
@@ -74,3 +80,13 @@ async def health_check():
 
 app.include_router(hello.router, prefix="/hello", tags=["hello"])
 app.include_router(apps.router, prefix="/api/apps", tags=["applications"])
+app.include_router(
+    app_files.router,
+    prefix="/api/apps/{app_name}/files",
+    tags=["files"]
+)
+app.include_router(
+    app_config.router,
+    prefix="/api/config",
+    tags=["configuration"]
+)
