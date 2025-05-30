@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings
 from typing import List, Optional
 from functools import lru_cache
 from hola_shared.environment import Environment
+from datetime import datetime # Add datetime import
 
 class Settings(BaseSettings):
     """Server configuration settings loaded from environment variables."""
@@ -20,6 +21,12 @@ class Settings(BaseSettings):
     port: int = 8000
     debug: bool = False
     
+    # Version and Build Info
+    APP_VERSION: str = "0.1.0-dev"
+    BUILD_ID: str = "local-dev-build"
+    GIT_COMMIT: str = "unknown"
+    BUILD_DATE: Optional[datetime] = None # Add BUILD_DATE
+    
     # CORS settings - hardcoded for simplicity
     # Not configurable via environment variables
     cors_origins: List[str] = ["*"]
@@ -30,6 +37,12 @@ class Settings(BaseSettings):
     
     # Data storage
     data_dir: str = "./data"
+
+    # Health Check Thresholds (NEW)
+    HEALTH_CHECK_DISK_MIN_GB: float = 1.0
+    HEALTH_CHECK_DISK_MIN_PERCENT: float = 5.0 # Percentage
+    HEALTH_CHECK_MEM_MIN_GB: float = 0.5
+    HEALTH_CHECK_MEM_MIN_PERCENT: float = 10.0 # Percentage
     
     # Docker integration
     docker_socket: Optional[str] = None  # e.g. "unix:///var/run/docker.sock"
@@ -39,6 +52,16 @@ class Settings(BaseSettings):
         "env_file": ".env",     # Optional .env file to load settings from
         "case_sensitive": False # Allow case-insensitive env vars
     }
+    
+    @property
+    def data_path(self) -> str:
+        """Alias for data_dir to provide consistent access."""
+        return self.data_dir
+
+    @data_path.setter
+    def data_path(self, value: str):
+        """Setter for data_path to update data_dir."""
+        self.data_dir = value
     
     @classmethod
     def get_environment_variable(cls, key: str, default: Optional[str] = None) -> Optional[str]:

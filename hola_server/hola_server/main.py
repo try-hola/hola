@@ -17,7 +17,7 @@ from hola_shared.errors import HolaException
 from hola_shared.logger import get_logger
 from .config.settings import get_settings
 from .utils.logging import setup_server_logging, setup_request_logging, log_api_error
-from .api import hello, apps, app_files, app_config
+from .api import hello, apps, app_files, app_config, server, backup, logs, metrics
 
 # Initialize logging first thing
 setup_server_logging()
@@ -58,7 +58,7 @@ async def hola_exception_handler(request: Request, exc: HolaException):
         JSONResponse with the appropriate status code and error details
     """
     # Log the exception using our utility
-    log_api_error(logger, exc)
+    log_api_error(logger, exc=exc, method=request.method, path=request.url.path)
     
     return JSONResponse(
         status_code=exc.status_code,
@@ -90,3 +90,7 @@ app.include_router(
     prefix="/api/config",
     tags=["configuration"]
 )
+app.include_router(server.router)  # Already has prefix in router
+app.include_router(backup.router)  # Already has prefix in router
+app.include_router(logs.router, tags=["logs"])
+app.include_router(metrics.router, tags=["metrics"])

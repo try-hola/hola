@@ -27,6 +27,10 @@ class ServerContext:
         # Services are created lazily when accessed
         self._config_service = None
         self._file_storage = None # Initialize file storage service
+        self._server_service = None
+        self._backup_service = None
+        self._log_service = None
+        self._metrics_service = None
         # Additional shared resources can be initialized here
     
     def get_config_service(self):
@@ -54,6 +58,58 @@ class ServerContext:
             from ..services.file_storage import FileStorage
             self._file_storage = FileStorage(self)
         return self._file_storage
+
+    def get_server_service(self):
+        """Get the server service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            ServerService instance
+        """
+        if self._server_service is None:
+            from ..services.server_service import ServerService
+            self._server_service = ServerService(self)
+        return self._server_service
+
+    def get_backup_service(self):
+        """Get the backup service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            BackupService instance
+        """
+        if self._backup_service is None:
+            from ..services.backup_service import BackupService
+            self._backup_service = BackupService(self)
+        return self._backup_service
+
+    def get_log_service(self):
+        """Get the log service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            LogService instance
+        """
+        if self._log_service is None:
+            from ..services.log_service import LogService
+            self._log_service = LogService(self)
+        return self._log_service
+
+    def get_metrics_service(self):
+        """Get the metrics service instance.
+        
+        Creates the service on first access for lazy initialization.
+        
+        Returns:
+            MetricsService instance
+        """
+        if self._metrics_service is None:
+            from ..services.metrics_service import MetricsService
+            self._metrics_service = MetricsService(self)
+        return self._metrics_service
 
 
 @lru_cache()

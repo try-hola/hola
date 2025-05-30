@@ -86,6 +86,8 @@ def base_headers() -> Dict[str, str]:
 from hola_server.config import Settings
 from hola_server.test_utils.fakes.fake_app_service import FakeAppService
 from hola_server.api.apps import get_app_service
+from hola_server.config.context import ServerContext
+from hola_server.config.settings import get_settings
 
 @pytest.fixture
 def fake_app_service() -> FakeAppService:
@@ -99,8 +101,34 @@ def client_with_fake_app_service(fake_app_service: FakeAppService) -> Generator[
     app.dependency_overrides[get_app_service] = lambda: fake_app_service
     client = TestClient(app)
     yield client
-    # Clean up dependency overrides after test
-    app.dependency_overrides.clear()
+    # It's good practice to clear overrides after the test
+    del app.dependency_overrides[get_app_service]
+
+
+@pytest.fixture
+def mock_context(mock_environment: Dict[str, Any]) -> ServerContext:
+    """
+    Fixture to provide a mock ServerContext for testing.
+
+    This fixture initializes a ServerContext using settings derived from
+    the `mock_environment` fixture, ensuring that services within the context
+    operate with test-specific configurations. It also clears the cache
+    for `get_settings` to ensure fresh settings are loaded based on the
+    mocked environment for each test.
+
+    Args:
+        mock_environment: Fixture that sets up test environment variables.
+
+    Returns:
+        ServerContext: An instance of ServerContext configured for testing.
+    """
+    # Clear LRU cache for get_settings to ensure it re-reads env vars
+    # set by mock_environment for the current test.
+    get_settings.cache_clear()
+    
+    settings = get_settings()
+    return ServerContext(settings=settings)
+
 
 @pytest.fixture
 def override_config() -> Generator[None, None, None]:

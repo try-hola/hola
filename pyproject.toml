@@ -16,6 +16,7 @@ hola_shared = {path = "hola_shared", develop = true}
 hola_client_sdk = {path = "hola_client_sdk", develop = true}
 pydantic-settings = "^2.9.1"
 pytest-watch = "^4.2.0"
+psutil = "^7.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.5"
