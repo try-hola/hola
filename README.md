@@ -138,10 +138,7 @@ poetry run uvicorn hola_server.main:app --reload
 ### Client SDK Generation
 
 ```bash
-# Generate Python client SDK from OpenAPI schema
-poetry run openapi-python-client generate --url http://localhost:8000/openapi.json --output-path hola_client_sdk --overwrite --config openapi-client-config.yaml
-
-# Or use the automated script that starts server, generates SDK, and shuts down server
+# This automated script starts server, generates SDK, and shuts down server
 ./generate_client_sdk.sh
 ```
 
