@@ -444,6 +444,212 @@ api/
 ├── your_feature.py   # Your new feature
 ```
 
+## Docstring Guidelines
+
+### Module Docstrings
+
+Every API module must include a comprehensive module-level docstring:
+
+```python
+"""Application management API endpoints.
+
+This module provides REST API endpoints for managing applications including
+deployment, lifecycle operations, and status monitoring.
+
+Endpoints:
+- `create_app`: Create a new application without deploying it.
+- `deploy_app`: Deploy a new application.
+- `list_apps`: List all deployed applications.
+- `get_app`: Get details about a deployed application.
+- `upgrade_app`: Upgrade an application.
+- `delete_app`: Remove a deployed application.
+
+Dependencies:
+- `get_app_service`: Provides the app service instance with dependency injection.
+"""
+```
+
+Required module docstring elements:
+1. **Summary Line**: Brief one-line description of the module's purpose
+2. **Detailed Description**: Paragraph explaining what the module provides
+3. **Endpoints Section**: List all endpoints with format `- `endpoint_name`: Description.`
+4. **Dependencies Section**: List all service dependencies used by endpoints
+
+### Function Docstrings
+
+Endpoint docstrings must follow the Google Python Style Guide format:
+
+```python
+@router.get("/{app_name}", response_model=ApiResponse[App])
+async def get_app(
+    app_name: str,
+    service: AppService = Depends(get_app_service),
+    api_key: str = Depends(get_api_key),
+):
+    """Get details about a deployed application.
+
+    Retrieves detailed information about a specific application including
+    its configuration, current status, health metrics, and metadata.
+
+    Args:
+        app_name (str): Name of the application to retrieve.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
+
+    Returns:
+        ApiResponse[App]: Application details.
+
+    Raises:
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid.
+        ServiceException: If the retrieval of app details fails.
+    """
+```
+
+Required function docstring elements:
+
+1. **Summary Line**: Brief one-line description of what the endpoint does 
+2. **Detailed Description**: 1-3 sentences explaining purpose and behavior
+3. **Args Section**:
+   - List all parameters including dependencies
+   - Format: `param_name (type): Description.`
+4. **Returns Section**:
+   - Describe the response model and structure
+   - Format: `ApiResponse[Type]: Description.`  
+5. **Raises Section**:
+   - List all exceptions that might be raised
+   - Order: ValidationException, NotFoundException, ServiceException, Exception
+   - Format: `ExceptionType: Description of when this occurs.`
+
+### Dependency Function Docstrings
+
+Dependency functions should have concise one-line docstrings:
+
+```python
+def get_app_service(context=Depends(get_context)) -> AppService:
+    """Get app service instance with dependency injection."""
+    return AppService(context)
+```
+
+### Docstring Style Rules
+
+1. **Consistency**: Use imperative mood for summary lines ("Get details" not "Gets details")
+2. **Completeness**: Document all parameters, returns, and possible exceptions
+3. **Clarity**: Explain the "why" and edge cases, not just the obvious functionality
+4. **No Type Duplication**: Don't repeat type information already in annotations
+5. **Parameter Ordering**: Document all parameters in the same order they appear in the signature
+
+### Advanced Docstrings
+
+For complex endpoints, consider adding code examples in docstrings:
+
+```python
+"""Create a new application.
+
+Creates a new application in CREATED status that can be deployed later.
+This allows setting up application configuration before actual deployment.
+
+Example:
+    ```
+    POST /api/apps
+    {
+        "name": "my-app",
+        "image": "nginx:latest",
+        "port": 80
+    }
+    ```
+
+Args:
+    ...
+"""
+```
+
+### API Versioning in Docstrings
+
+When an API endpoint changes behavior or parameters, update the docstring accordingly:
+
+```python
+"""Deploy an application.
+
+Deploys an application using the provided configuration.
+
+Version Changes:
+    - v1.2.0: Added support for environment variables through `env_vars` parameter
+    - v1.1.0: Added `replicas` parameter for scaling deployments
+    - v1.0.0: Initial implementation
+
+Args:
+    ...
+"""
+```
+
+### Docstring Maintenance
+
+1. **Keep Synchronized**: Update docstrings whenever endpoint behavior changes
+2. **Be Explicit About Breaking Changes**: Note when parameters become required or change meaning
+3. **Review Docstrings**: Include docstrings in code reviews to maintain quality and accuracy
+4. **Check Generated API Docs**: Verify that docstrings render correctly in OpenAPI documentation
+
+### Special Case Docstrings
+
+#### Streaming Response Endpoints
+
+For endpoints that return streaming responses, include details about the stream format:
+
+```python
+@router.get("/{app_name}/logs")
+async def stream_logs(
+    app_name: str,
+    service: AppService = Depends(get_app_service),
+    api_key: str = Depends(get_api_key),
+):
+    """Stream application logs in real-time.
+    
+    Returns a Server-Sent Events (SSE) stream of log entries as they are generated.
+    Each event contains a single log entry in JSON format.
+    
+    Args:
+        app_name (str): Name of the application to stream logs from.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
+        
+    Returns:
+        StreamingResponse: A streaming response with the following format:
+            data: {"timestamp": "2023-01-01T12:00:00Z", "level": "INFO", "message": "Log message"}
+            
+    Raises:
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid.
+    """
+```
+
+#### Middleware Docstrings
+
+For middleware components, document the request flow and modifications:
+
+```python
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Validate API key for protected endpoints.
+    
+    Extracts API key from X-API-Key header and validates it against configuration.
+    Public endpoints (health, metrics) are exempt from this check.
+    
+    Flow:
+    1. Check if endpoint is in public_endpoints list
+    2. For protected endpoints, extract and validate API key
+    3. If valid, attach API key to request state and proceed
+    4. If invalid, return 401 Unauthorized response
+    
+    Args:
+        request (Request): FastAPI request object
+        call_next (Callable): Next middleware in chain
+        
+    Returns:
+        Response: Either the next middleware's response or a 401 error
+    """
+```
+
 ## Testing Requirements
 
 ### Test File Structure

@@ -2,6 +2,16 @@
 
 This module provides REST API endpoints for application backup creation,
 management, and restore operations.
+
+Endpoints:
+- `create_backup`: Create a new backup for an application.
+- `list_backups`: List all backups for an application.
+- `get_backup_info`: Get backup information by ID.
+- `delete_backup`: Delete a backup.
+- `restore_backup`: Restore an application from a backup.
+
+Dependencies:
+- `get_backup_service`: Provides the backup service instance with dependency injection.
 """
 
 from fastapi import APIRouter, Depends, Path, Body
@@ -44,11 +54,18 @@ async def create_backup(
     """Create a new backup for an application.
 
     Args:
-        app_name: Name of the application to backup
-        request: Backup creation parameters
+        app_name (str): Name of the application to backup.
+        request (BackupCreateRequest): Backup creation parameters.
+        api_key (str): API key for authentication.
+        backup_service (BackupService): Backup service instance.
 
     Returns:
-        Created backup information
+        ApiResponse[BackupCreateResponse]: Created backup information.
+
+    Raises:
+        ValidationException: If the backup creation parameters are invalid.
+        NotFoundException: If the application is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -135,10 +152,15 @@ async def list_backups(
     """List all backups for an application.
 
     Args:
-        app_name: Application name to list backups for
+        app_name (str): Application name to list backups for.
+        api_key (str): API key for authentication.
+        backup_service (BackupService): Backup service instance.
 
     Returns:
-        List of backup information
+        ApiResponse[BackupListResponse]: List of backup information.
+
+    Raises:
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -196,11 +218,17 @@ async def get_backup_info(
     """Get backup information by ID.
 
     Args:
-        app_name: Application name
-        backup_id: Backup identifier
+        app_name (str): Application name.
+        backup_id (str): Backup identifier.
+        api_key (str): API key for authentication.
+        backup_service (BackupService): Backup service instance.
 
     Returns:
-        Backup information details
+        ApiResponse[BackupInfo]: Backup information details.
+
+    Raises:
+        NotFoundException: If the backup or application is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -294,11 +322,18 @@ async def delete_backup(
     """Delete a backup.
 
     Args:
-        app_name: Application name
-        backup_id: Backup identifier to delete
+        app_name (str): Application name.
+        backup_id (str): Backup identifier to delete.
+        api_key (str): API key for authentication.
+        backup_service (BackupService): Backup service instance.
 
     Returns:
-        Success confirmation
+        ApiResponse[None]: Success confirmation.
+
+    Raises:
+        NotFoundException: If the backup or application is not found.
+        ValidationException: If the backup identifier is invalid.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "DELETE"
@@ -413,12 +448,19 @@ async def restore_backup(
     """Restore an application from a backup.
 
     Args:
-        app_name: Application name
-        backup_id: Backup identifier to restore from
-        request: Restore operation parameters
+        app_name (str): Application name.
+        backup_id (str): Backup identifier to restore from.
+        request (RestoreRequest): Restore operation parameters.
+        api_key (str): API key for authentication.
+        backup_service (BackupService): Backup service instance.
 
     Returns:
-        Restore operation information
+        ApiResponse[RestoreResponse]: Restore operation information.
+
+    Raises:
+        NotFoundException: If the backup or application is not found.
+        ValidationException: If the restore parameters are invalid.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "POST"

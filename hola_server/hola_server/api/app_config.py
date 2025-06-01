@@ -1,7 +1,20 @@
 """Configuration API endpoints.
 
-This module provides REST API endpoints for managing application configurations
+This module provides REST API endpoints for managing application configurations,
 including CRUD operations for configuration entries.
+
+Endpoints:
+- `get_app_config`: Retrieve all configurations for a specific application.
+- `list_config_entries`: List all configuration entries for an application.
+- `get_config_entry`: Retrieve a specific configuration entry.
+- `create_config_entry`: Create a new configuration entry.
+- `update_config_entry`: Update an existing configuration entry.
+- `delete_config_entry`: Delete a specific configuration entry.
+- `delete_app_config`: Delete all configurations for an application.
+
+Dependencies:
+- `get_config_service`: Provides the configuration service.
+- `get_app_service`: Provides the app service with configuration delegation.
 """
 
 import uuid
@@ -45,20 +58,20 @@ async def get_app_config(
     app_service=Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """Get all configuration for an application.
+    """Retrieve all configurations for a specific application.
 
     Args:
-        app_name: Name of the application
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Returns:
-        Configuration response with app config
+        JSONResponse: Configuration response with app config.
 
     Raises:
-        400: Validation error - invalid app name
-        404: Application not found
-        500: Internal server error
+        ValidationException: If the app name is invalid.
+        NotFoundException: If the application is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -163,19 +176,19 @@ async def list_config_entries(
     app_service=Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """List all configuration entries for an application.
+    """List all configuration entries for a specific application.
 
     Args:
-        app_name: Name of the application
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Returns:
-        Configuration list response
+        JSONResponse: Configuration list response.
 
     Raises:
-        400: Validation error - invalid app name
-        500: Internal server error
+        ValidationException: If the app name is invalid.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -267,21 +280,21 @@ async def get_config_entry(
     app_service=Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """Get a specific configuration entry.
+    """Retrieve a specific configuration entry.
 
     Args:
-        app_name: Name of the application
-        key: Configuration key
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        key (str): Configuration key.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Returns:
-        Configuration entry response
+        JSONResponse: Configuration entry response.
 
     Raises:
-        400: Validation error - invalid app name or key
-        404: Entry not found
-        500: Internal server error
+        ValidationException: If the app name or key is invalid.
+        NotFoundException: If the entry is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -413,17 +426,17 @@ async def create_config_entry(
     """Create a new configuration entry.
 
     Args:
-        app_name: Name of the application
-        request: Configuration creation request
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        request (ConfigCreateRequest): Configuration creation request.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Returns:
-        Configuration entry response
+        JSONResponse: Configuration entry response.
 
     Raises:
-        400: Validation error - invalid app name or key
-        500: Internal server error
+        ValidationException: If the app name or key is invalid.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -538,19 +551,19 @@ async def update_config_entry(
     """Update an existing configuration entry.
 
     Args:
-        app_name: Name of the application
-        key: Configuration key
-        request: Configuration update request
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        key (str): Configuration key.
+        request (ConfigUpdateRequest): Configuration update request.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Returns:
-        Configuration entry response
+        JSONResponse: Configuration entry response.
 
     Raises:
-        400: Validation error - invalid app name or key
-        404: Entry not found
-        500: Internal server error
+        ValidationException: If the app name or key is invalid.
+        NotFoundException: If the entry is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "PUT"
@@ -675,18 +688,18 @@ async def delete_config_entry(
     app_service=Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """Delete a configuration entry.
+    """Delete a specific configuration entry.
 
     Args:
-        app_name: Name of the application
-        key: Configuration key
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        key (str): Configuration key.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Raises:
-        400: Validation error - invalid app name or key
-        404: Entry not found
-        500: Internal server error
+        ValidationException: If the app name or key is invalid.
+        NotFoundException: If the entry is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "DELETE"
@@ -807,16 +820,16 @@ async def delete_app_config(
     app_service=Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """Delete all configuration for an application.
+    """Delete all configurations for an application.
 
     Args:
-        app_name: Name of the application
-        app_service: App service with configuration delegation
-        api_key: API key for authentication
+        app_name (str): Name of the application.
+        app_service: App service with configuration delegation.
+        api_key (str): API key for authentication.
 
     Raises:
-        400: Validation error - invalid app name
-        500: Internal server error
+        ValidationException: If the app name is invalid.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
     method = "DELETE"

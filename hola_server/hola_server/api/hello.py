@@ -2,6 +2,12 @@
 
 Contains simple health check and diagnostic endpoints to verify
 the API server is functioning correctly.
+
+Endpoints:
+- `hello`: Simple hello endpoint to verify API functionality.
+
+Dependencies:
+- None currently, but may include authentication in the future.
 """
 
 import uuid
@@ -26,11 +32,14 @@ async def hello(
     Returns a greeting message with the provided name parameter.
 
     Args:
-        request: The incoming HTTP request
-        name: Name to include in the greeting message. Defaults to "World".
+        request (Request): The incoming HTTP request.
+        name (str): Name to include in the greeting message. Defaults to "World".
 
     Returns:
         ApiResponse[str]: A successful API response with greeting message.
+
+    Raises:
+        Exception: If an unexpected error occurs.
     """
     request_id = str(uuid.uuid4())
 

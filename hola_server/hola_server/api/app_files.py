@@ -1,7 +1,16 @@
 """API endpoints for application file management.
 
-This module provides REST API endpoints for managing application files including
-uploads, listings, downloads, and deletions.
+This module provides REST API endpoints for managing application files,
+including uploads, listings, downloads, and deletions.
+
+Endpoints:
+- `list_files`: List all files for an application.
+- `upload_file`: Upload a file for an application.
+- `get_file`: Retrieve a specific file.
+- `delete_file`: Delete a specific file.
+
+Dependencies:
+- `get_app_service`: Provides the app service with dependency injection.
 """
 
 import io
@@ -34,21 +43,21 @@ async def list_files(
     service: AppService = Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """List all files for an application.
+    """List all files for a specific application.
 
     Args:
-        request: FastAPI request object
-        app_name: Name of the application
-        service: App service instance
-        api_key: API key for authentication
+        request (Request): FastAPI request object.
+        app_name (str): Name of the application.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        List of files for the application
+        JSONResponse: List of files for the application.
 
     Raises:
-        400: Validation error
-        404: Application not found
-        500: Internal server error
+        ValidationException: If the app name is invalid.
+        NotFoundException: If the application is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
 
@@ -111,23 +120,23 @@ async def upload_file(
     service: AppService = Depends(get_app_service),
     api_key: str = Depends(get_api_key),
 ):
-    """Upload a file for the application.
+    """Upload a file for a specific application.
 
     Args:
-        request: FastAPI request object
-        app_name: Name of the application
-        file: File to upload
-        path: Target path within the application's file storage
-        service: App service instance
-        api_key: API key for authentication
+        request (Request): FastAPI request object.
+        app_name (str): Name of the application.
+        file (UploadFile): File to upload.
+        path (Optional[str]): Target path within the application's file storage.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Information about the uploaded file
+        JSONResponse: Information about the uploaded file.
 
     Raises:
-        400: Validation error
-        404: Application not found
-        500: Internal server error
+        ValidationException: If the app name is invalid.
+        NotFoundException: If the application is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
 
@@ -192,19 +201,19 @@ async def get_file(
     """Get a specific file.
 
     Args:
-        request: FastAPI request object
-        app_name: Name of the application
-        file_path: Path of the file to retrieve
-        service: App service instance
-        api_key: API key for authentication
+        request (Request): FastAPI request object.
+        app_name (str): Name of the application.
+        file_path (str): Path of the file to retrieve.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        The file content as a streaming response
+        StreamingResponse: The file content as a streaming response.
 
     Raises:
-        400: Validation error
-        404: File not found
-        500: Internal server error
+        ValidationException: If the app name or file path is invalid.
+        NotFoundException: If the file is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
 
@@ -298,19 +307,19 @@ async def delete_file(
     """Delete a specific file.
 
     Args:
-        request: FastAPI request object
-        app_name: Name of the application
-        file_path: Path of the file to delete
-        service: App service instance
-        api_key: API key for authentication
+        request (Request): FastAPI request object.
+        app_name (str): Name of the application.
+        file_path (str): Path of the file to delete.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Success confirmation
+        JSONResponse: Success confirmation.
 
     Raises:
-        400: Validation error
-        404: File not found
-        500: Internal server error
+        ValidationException: If the app name or file path is invalid.
+        NotFoundException: If the file is not found.
+        ServiceException: If there is an internal server error.
     """
     request_id = str(uuid.uuid4())
 

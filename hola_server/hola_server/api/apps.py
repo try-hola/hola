@@ -2,6 +2,20 @@
 
 This module provides REST API endpoints for managing applications including
 deployment, lifecycle operations, and status monitoring.
+
+Endpoints:
+- `create_app`: Create a new application without deploying it.
+- `deploy_app`: Deploy a new application.
+- `list_apps`: List all deployed applications.
+- `get_app`: Get details about a deployed application.
+- `upgrade_app`: Upgrade an application.
+- `delete_app`: Remove a deployed application.
+- `start_app`: Start an application.
+- `stop_app`: Stop an application.
+- `restart_app`: Restart an application.
+
+Dependencies:
+- `get_app_service`: Provides the app service instance with dependency injection.
 """
 
 from fastapi import APIRouter, Depends
@@ -47,16 +61,16 @@ async def create_app(
     This allows setting up application configuration before actual deployment.
 
     Args:
-        request: Application creation configuration
-        service: App service instance
-        api_key: API key for authentication
+        request (AppCreateRequest): Application creation configuration.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Creation response with app details
+        ApiResponse[AppCreateResponse]: Creation response with app details.
 
     Raises:
-        422: Validation error - app name already exists or invalid configuration
-        500: Internal server error - creation process failed
+        ValidationException: If the app name already exists or configuration is invalid.
+        Exception: If the creation process fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -123,16 +137,16 @@ async def deploy_app(
     and health monitoring.
 
     Args:
-        request: Application deployment configuration
-        service: App service instance
-        api_key: API key for authentication
+        request (AppDeployRequest): Application deployment configuration.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Deployment response with app details and deployment ID
+        ApiResponse[AppDeployResponse]: Deployment response with app details and deployment ID.
 
     Raises:
-        422: Validation error - app name already exists or invalid configuration
-        500: Internal server error - deployment process failed
+        ValidationException: If the app name already exists or configuration is invalid.
+        Exception: If the deployment process fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -193,14 +207,14 @@ async def list_apps(
     health information, and metadata.
 
     Args:
-        service: App service instance
-        api_key: API key for authentication
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        List of all applications with metadata
+        ApiResponse[AppListResponse]: List of all applications with metadata.
 
     Raises:
-        500: Internal server error - failed to retrieve applications
+        Exception: If the retrieval of applications fails.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -264,17 +278,17 @@ async def get_app(
     its configuration, current status, health metrics, and metadata.
 
     Args:
-        app_name: Name of the application to retrieve
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to retrieve.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Application details
+        ApiResponse[App]: Application details.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid app name
-        500: Internal server error
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid.
+        Exception: If the retrieval of app details fails.
     """
     request_id = str(uuid.uuid4())
     method = "GET"
@@ -357,18 +371,18 @@ async def upgrade_app(
     Optionally creates a backup before performing the upgrade.
 
     Args:
-        app_name: Name of the application to upgrade
-        request: Upgrade configuration
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to upgrade.
+        request (AppUpgradeRequest): Upgrade configuration.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Upgrade response with updated app details
+        ApiResponse[AppDeployResponse]: Upgrade response with updated app details.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid configuration
-        500: Internal server error - upgrade process failed
+        NotFoundException: If the application is not found.
+        ValidationException: If the configuration is invalid.
+        Exception: If the upgrade process fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -450,17 +464,17 @@ async def delete_app(
     and configuration. This operation cannot be undone.
 
     Args:
-        app_name: Name of the application to delete
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to delete.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Action response confirming deletion
+        ApiResponse[AppActionResponse]: Action response confirming deletion.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid app name
-        500: Internal server error - deletion failed
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid.
+        Exception: If the deletion process fails.
     """
     request_id = str(uuid.uuid4())
     method = "DELETE"
@@ -541,17 +555,17 @@ async def start_app(
     Starts a stopped application and monitors its health status.
 
     Args:
-        app_name: Name of the application to start
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to start.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Action response with status change information
+        ApiResponse[AppActionResponse]: Action response with status change information.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid app name or app cannot be started
-        500: Internal server error - start operation failed
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid or app cannot be started.
+        Exception: If the start operation fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -632,17 +646,17 @@ async def stop_app(
     Gracefully stops a running application.
 
     Args:
-        app_name: Name of the application to stop
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to stop.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Action response with status change information
+        ApiResponse[AppActionResponse]: Action response with status change information.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid app name or app cannot be stopped
-        500: Internal server error - stop operation failed
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid or app cannot be stopped.
+        Exception: If the stop operation fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
@@ -724,17 +738,17 @@ async def restart_app(
     changes or recovering from errors.
 
     Args:
-        app_name: Name of the application to restart
-        service: App service instance
-        api_key: API key for authentication
+        app_name (str): Name of the application to restart.
+        service (AppService): App service instance.
+        api_key (str): API key for authentication.
 
     Returns:
-        Action response with status change information
+        ApiResponse[AppActionResponse]: Action response with status change information.
 
     Raises:
-        404: Application not found
-        422: Validation error - invalid app name or app cannot be restarted
-        500: Internal server error - restart operation failed
+        NotFoundException: If the application is not found.
+        ValidationException: If the app name is invalid or app cannot be restarted.
+        Exception: If the restart operation fails.
     """
     request_id = str(uuid.uuid4())
     method = "POST"
