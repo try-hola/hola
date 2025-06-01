@@ -2,7 +2,13 @@
 Server context management for the Hola server.
 
 This module provides functions and classes for server context initialization,
-service resolution and dependency management.
+service resolution, and dependency management.
+
+Classes:
+    ServerContext: Manages application state and dependencies.
+
+Functions:
+    get_context: Retrieves a cached instance of the server application context.
 """
 
 from typing import Optional
@@ -14,8 +20,11 @@ class ServerContext:
     """
     Server context for managing application state and dependencies.
 
-    This provides a central location for accessing shared
-    resources and settings across the server application.
+    This provides a central location for accessing shared resources and settings
+    across the server application.
+
+    Attributes:
+        settings (Settings): Configuration settings for the server.
     """
 
     def __init__(self, settings: Optional[Settings] = None):
@@ -23,7 +32,7 @@ class ServerContext:
         Initialize the server context with optional configuration.
 
         Args:
-            settings: Optional settings to use, or load from environment if None
+            settings (Optional[Settings]): Optional settings to use, or load from environment if None.
         """
         self.settings = settings or get_settings()
         # Services are created lazily when accessed
@@ -36,12 +45,13 @@ class ServerContext:
         # Additional shared resources can be initialized here
 
     def get_config_service(self):
-        """Get the configuration service instance.
+        """
+        Get the configuration service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            ConfigService instance
+            ConfigService: Instance of the configuration service.
         """
         if self._config_service is None:
             from ..services.config_service import ConfigService
@@ -50,12 +60,13 @@ class ServerContext:
         return self._config_service
 
     def get_file_storage(self):
-        """Get the file storage service instance.
+        """
+        Get the file storage service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            FileStorage instance
+            FileStorage: Instance of the file storage service.
         """
         if self._file_storage is None:
             from ..services.file_storage import FileStorage
@@ -64,12 +75,13 @@ class ServerContext:
         return self._file_storage
 
     def get_server_service(self):
-        """Get the server service instance.
+        """
+        Get the server service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            ServerService instance
+            ServerService: Instance of the server service.
         """
         if self._server_service is None:
             from ..services.server_service import ServerService
@@ -78,12 +90,13 @@ class ServerContext:
         return self._server_service
 
     def get_backup_service(self):
-        """Get the backup service instance.
+        """
+        Get the backup service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            BackupService instance
+            BackupService: Instance of the backup service.
         """
         if self._backup_service is None:
             from ..services.backup_service import BackupService
@@ -92,12 +105,13 @@ class ServerContext:
         return self._backup_service
 
     def get_log_service(self):
-        """Get the log service instance.
+        """
+        Get the log service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            LogService instance
+            LogService: Instance of the log service.
         """
         if self._log_service is None:
             from ..services.log_service import LogService
@@ -106,12 +120,13 @@ class ServerContext:
         return self._log_service
 
     def get_metrics_service(self):
-        """Get the metrics service instance.
+        """
+        Get the metrics service instance.
 
         Creates the service on first access for lazy initialization.
 
         Returns:
-            MetricsService instance
+            MetricsService: Instance of the metrics service.
         """
         if self._metrics_service is None:
             from ..services.metrics_service import MetricsService
@@ -129,6 +144,6 @@ def get_context() -> ServerContext:
     with the latest settings, create a new ServerContext instance directly.
 
     Returns:
-        A cached ServerContext instance
+        ServerContext: A cached instance of the server application context.
     """
     return ServerContext()

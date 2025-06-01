@@ -9,6 +9,10 @@ It includes:
 - Context: Server context for dependency management
 - Environment: Environment variable utilities
 - Logger: Logging configuration
+
+Attributes:
+    Settings: Class for server configuration settings.
+    get_settings: Function to retrieve cached settings instance.
 """
 
 # Import only what's needed at package level, import the rest directly

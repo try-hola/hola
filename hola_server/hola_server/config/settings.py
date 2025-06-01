@@ -2,6 +2,12 @@
 
 This module handles loading and providing access to application settings
 from environment variables and .env files.
+
+Classes:
+    Settings: Represents server configuration settings.
+
+Functions:
+    get_settings: Retrieves a cached instance of the application settings.
 """
 
 from pydantic_settings import BaseSettings
@@ -12,7 +18,28 @@ from datetime import datetime  # Add datetime import
 
 
 class Settings(BaseSettings):
-    """Server configuration settings loaded from environment variables."""
+    """
+    Server configuration settings loaded from environment variables.
+
+    Attributes:
+        api_key (str): API key for authentication.
+        host (str): Host address for the server.
+        port (int): Port number for the server.
+        debug (bool): Debug mode flag.
+        APP_VERSION (str): Application version.
+        BUILD_ID (str): Build identifier.
+        GIT_COMMIT (str): Git commit hash.
+        BUILD_DATE (Optional[datetime]): Build date.
+        cors_origins (List[str]): Allowed CORS origins.
+        log_level (str): Logging level.
+        log_format (str): Logging format string.
+        data_dir (str): Directory for data storage.
+        HEALTH_CHECK_DISK_MIN_GB (float): Minimum disk space in GB for health checks.
+        HEALTH_CHECK_DISK_MIN_PERCENT (float): Minimum disk space percentage for health checks.
+        HEALTH_CHECK_MEM_MIN_GB (float): Minimum memory in GB for health checks.
+        HEALTH_CHECK_MEM_MIN_PERCENT (float): Minimum memory percentage for health checks.
+        docker_socket (Optional[str]): Path to Docker socket.
+    """
 
     # Core authentication
     api_key: str = ""
@@ -56,12 +83,22 @@ class Settings(BaseSettings):
 
     @property
     def data_path(self) -> str:
-        """Alias for data_dir to provide consistent access."""
+        """
+        Alias for data_dir to provide consistent access.
+
+        Returns:
+            str: Path to the data directory.
+        """
         return self.data_dir
 
     @data_path.setter
     def data_path(self, value: str):
-        """Setter for data_path to update data_dir."""
+        """
+        Setter for data_path to update data_dir.
+
+        Args:
+            value (str): New path for the data directory.
+        """
         self.data_dir = value
 
     @classmethod
@@ -71,29 +108,28 @@ class Settings(BaseSettings):
         """
         Direct access to an environment variable.
 
-        This provides a convenient way to access individual environment variables
-        without creating a full Settings instance, which is useful for simple
-        configuration needs or early initialization tasks.
+        Provides a convenient way to access individual environment variables
+        without creating a full Settings instance.
 
         Args:
-            key: The name of the environment variable (without the HOLA_ prefix)
-            default: Optional default value if the environment variable is not set
+            key (str): Name of the environment variable (without the HOLA_ prefix).
+            default (Optional[str]): Default value if the environment variable is not set.
 
         Returns:
-            The value of the environment variable, or the default if not set
+            Optional[str]: Value of the environment variable, or the default if not set.
         """
         return Environment.get(key, default)
 
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Return cached settings instance.
+    """
+    Return cached settings instance.
+
+    Uses lru_cache for performance optimization to avoid reading
+    environment variables repeatedly.
 
     Returns:
         Settings: A cached instance of the application settings.
-
-    Note:
-        Uses lru_cache for performance optimization to avoid reading
-        environment variables repeatedly.
     """
     return Settings()
