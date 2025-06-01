@@ -871,6 +871,7 @@ class FakeMetricsService:
             end_time=kwargs.get("end_time"),
             limit=kwargs.get("limit", 1000),
             aggregation_interval=kwargs.get("aggregation_interval"),
+            metric_type=kwargs.get("metric_type"),
         )
 
         # Use existing get_metrics method and extract the specific metric

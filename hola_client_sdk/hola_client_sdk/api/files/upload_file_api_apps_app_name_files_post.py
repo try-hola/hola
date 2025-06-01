@@ -6,7 +6,9 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.api_response_file_info import ApiResponseFileInfo
-from ...models.body_upload_file_api_apps_app_name_files_post import BodyUploadFileApiAppsAppNameFilesPost
+from ...models.body_upload_file_api_apps_app_name_files_post import (
+    BodyUploadFileApiAppsAppNameFilesPost,
+)
 from ...models.http_validation_error import HTTPValidationError
 from ...types import UNSET, Response, Unset
 

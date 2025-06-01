@@ -54,7 +54,7 @@ class LogService:
     handles the complete lifecycle of log entries including creation,
     persistence, querying with advanced filtering options, and lifecycle
     management such as log rotation and cleanup.
-    
+
     The service supports multiple log sources, severity levels, and
     contextual data to enable comprehensive application monitoring and
     debugging capabilities.
@@ -83,7 +83,7 @@ class LogService:
         """Query logs with filtering and pagination.
 
         Retrieves log entries that match the specified filter criteria including
-        time range, log level, source, and content filters. The results are 
+        time range, log level, source, and content filters. The results are
         paginated based on offset and limit parameters, with optional sorting
         and summary statistics.
 
@@ -95,7 +95,7 @@ class LogService:
         Returns:
             LogResponse: Matching log entries, pagination metadata, summary statistics,
                 and the original query parameters used.
-                
+
         Raises:
             ServiceException: If an error occurs during log retrieval or processing.
         """
@@ -407,7 +407,7 @@ class LogService:
         """Filter logs based on query parameters.
 
         Applies multiple filter criteria to the log entries including time range,
-        content filters (message text, levels, sources), and context filters 
+        content filters (message text, levels, sources), and context filters
         (request ID, session ID, user ID). All filters are combined with AND logic,
         meaning all conditions must be satisfied for a log entry to be included.
 

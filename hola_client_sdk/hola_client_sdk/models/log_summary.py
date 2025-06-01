@@ -89,11 +89,15 @@ class LogSummary:
 
         entries_by_level = LogSummaryEntriesByLevel.from_dict(d.pop("entries_by_level"))
 
-        entries_by_source = LogSummaryEntriesBySource.from_dict(d.pop("entries_by_source"))
+        entries_by_source = LogSummaryEntriesBySource.from_dict(
+            d.pop("entries_by_source")
+        )
 
         size_bytes = d.pop("size_bytes")
 
-        def _parse_earliest_entry(data: object) -> Union[None, Unset, datetime.datetime]:
+        def _parse_earliest_entry(
+            data: object,
+        ) -> Union[None, Unset, datetime.datetime]:
             if data is None:
                 return data
             if isinstance(data, Unset):

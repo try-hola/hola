@@ -4,8 +4,8 @@ This module provides business logic for collecting, storing, and querying
 application performance metrics and monitoring data. It supports time-series
 data collection with customizable metric types, units, and labels.
 
-The service handles metric recording, querying with filtering options, 
-statistical analysis of metric data, and maintenance operations such as 
+The service handles metric recording, querying with filtering options,
+statistical analysis of metric data, and maintenance operations such as
 data retention management.
 
 Attributes:
@@ -47,10 +47,10 @@ class MetricsService:
     """Service for managing application metrics.
 
     Provides business logic for metrics collection, storage, querying,
-    and monitoring with time-series data management. This service handles the 
-    complete lifecycle of metrics data including creation, storage, filtering, 
+    and monitoring with time-series data management. This service handles the
+    complete lifecycle of metrics data including creation, storage, filtering,
     analysis, and cleanup operations with comprehensive data validation.
-    
+
     The service supports different metric types (counter, gauge, histogram),
     units (bytes, milliseconds, count), and customizable labels for detailed
     categorization and filtering capabilities.
@@ -92,7 +92,7 @@ class MetricsService:
             app_name (str): Application name for the metric.
             request (MetricRecordRequest): Metric recording request with name, value,
                 type, unit, optional labels, and optional timestamp.
-                
+
         Raises:
             ServiceException: If the metric recording fails for any reason.
         """
@@ -345,7 +345,12 @@ class MetricsService:
                 service_name="metrics_service",
             )
 
-    async def clear_metrics(self, app_name: str, metric_name: Optional[str] = None, before_timestamp: Optional[datetime] = None) -> MetricsClearResponse:
+    async def clear_metrics(
+        self,
+        app_name: str,
+        metric_name: Optional[str] = None,
+        before_timestamp: Optional[datetime] = None,
+    ) -> MetricsClearResponse:
         """Clear metrics data with optional filtering.
 
         Args:
@@ -374,7 +379,9 @@ class MetricsService:
                 service_name="metrics_service",
             )
 
-    async def _clear_metrics_internal(self, request: MetricsClearRequest) -> MetricsClearResponse:
+    async def _clear_metrics_internal(
+        self, request: MetricsClearRequest
+    ) -> MetricsClearResponse:
         """Internal implementation of clear metrics.
 
         Args:
@@ -482,7 +489,7 @@ class MetricsService:
         Args:
             app_name (str): Application name.
             metric_name (str): Metric name.
-            params (MetricsQueryParams): Query parameters including time range, labels, 
+            params (MetricsQueryParams): Query parameters including time range, labels,
                 pagination settings, and other filters.
 
         Returns:
@@ -574,7 +581,7 @@ class MetricsService:
 
         Creates a comprehensive summary of all metrics for the specified application,
         including total count, commonly used metrics like CPU and memory usage, and
-        time range information. The summary provides an overview of application 
+        time range information. The summary provides an overview of application
         performance and resource utilization at a glance.
 
         Args:

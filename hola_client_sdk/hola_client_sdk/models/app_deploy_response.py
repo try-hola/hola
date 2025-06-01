@@ -70,7 +70,9 @@ class AppDeployResponse:
                 return data
             return cast(Union[None, Unset, int], data)
 
-        estimated_duration = _parse_estimated_duration(d.pop("estimated_duration", UNSET))
+        estimated_duration = _parse_estimated_duration(
+            d.pop("estimated_duration", UNSET)
+        )
 
         app_deploy_response = cls(
             app=app,

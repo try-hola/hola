@@ -7,7 +7,9 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.app_upgrade_request_environment_type_0 import AppUpgradeRequestEnvironmentType0
+    from ..models.app_upgrade_request_environment_type_0 import (
+        AppUpgradeRequestEnvironmentType0,
+    )
 
 
 T = TypeVar("T", bound="AppUpgradeRequest")
@@ -31,7 +33,9 @@ class AppUpgradeRequest:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.app_upgrade_request_environment_type_0 import AppUpgradeRequestEnvironmentType0
+        from ..models.app_upgrade_request_environment_type_0 import (
+            AppUpgradeRequestEnvironmentType0,
+        )
 
         image: Union[None, Unset, str]
         if isinstance(self.image, Unset):
@@ -71,7 +75,9 @@ class AppUpgradeRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.app_upgrade_request_environment_type_0 import AppUpgradeRequestEnvironmentType0
+        from ..models.app_upgrade_request_environment_type_0 import (
+            AppUpgradeRequestEnvironmentType0,
+        )
 
         d = dict(src_dict)
 
@@ -84,7 +90,9 @@ class AppUpgradeRequest:
 
         image = _parse_image(d.pop("image", UNSET))
 
-        def _parse_environment(data: object) -> Union["AppUpgradeRequestEnvironmentType0", None, Unset]:
+        def _parse_environment(
+            data: object,
+        ) -> Union["AppUpgradeRequestEnvironmentType0", None, Unset]:
             if data is None:
                 return data
             if isinstance(data, Unset):

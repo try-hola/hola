@@ -15,7 +15,9 @@ T = TypeVar("T", bound="HealthStatusChecks")
 class HealthStatusChecks:
     """Individual health check results"""
 
-    additional_properties: dict[str, "HealthCheckResult"] = _attrs_field(init=False, factory=dict)
+    additional_properties: dict[str, "HealthCheckResult"] = _attrs_field(
+        init=False, factory=dict
+    )
 
     def to_dict(self) -> dict[str, Any]:
         field_dict: dict[str, Any] = {}

@@ -30,7 +30,7 @@ from .server_service import ServerService
 __all__ = [
     "AppService",
     "BackupService",
-    "ConfigService", 
+    "ConfigService",
     "FileStorage",
     "LogService",
     "MetricsService",

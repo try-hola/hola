@@ -35,6 +35,7 @@ class FakeSystemMonitor(SystemMetrics):
         Returns:
             Any: Mock virtual memory statistics.
         """
+
         class MockSsvmem:
             percent = 50.0
             available = 4 * 1024**3  # 4GB
@@ -50,6 +51,7 @@ class FakeSystemMonitor(SystemMetrics):
         Returns:
             Any: Mock disk usage statistics.
         """
+
         class MockSdiskusage:
             percent = 60.0
             free = 40 * 1024**3  # 40GB
@@ -122,6 +124,7 @@ class FakeSystemMonitor(SystemMetrics):
             available_gb (float): Available memory in GB.
             total_gb (float): Total memory in GB.
         """
+
         class MockSsvmem:
             percent: float
             available: float  # Store as bytes
@@ -144,6 +147,7 @@ class FakeSystemMonitor(SystemMetrics):
             free_gb (float): Free disk space in GB.
             total_gb (float): Total disk space in GB.
         """
+
         class MockSdiskusage:
             percent: float
             free: float  # Store as bytes

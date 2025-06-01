@@ -2,7 +2,7 @@
 
 This module provides business logic for managing application files,
 including uploads, listings, downloads, and deletions. It handles file operations
-asynchronously to ensure non-blocking performance and provides comprehensive 
+asynchronously to ensure non-blocking performance and provides comprehensive
 error handling for file system operations.
 
 The service maintains an organized storage structure with application-specific
@@ -63,12 +63,12 @@ class FileStorage:
 
     def _get_app_path(self, app_name: str) -> str:
         """Get the base path for a specific application's files.
-        
+
         Creates a standardized path for application-specific file storage.
-        
+
         Args:
             app_name (str): Name of the application.
-            
+
         Returns:
             str: Absolute file system path to the application's file storage directory.
         """
@@ -168,7 +168,7 @@ class FileStorage:
 
         Stores a file in the application's storage area with proper directory creation
         and error handling. The operation is performed asynchronously to prevent blocking
-        the server. After uploading, the method collects and returns metadata about the 
+        the server. After uploading, the method collects and returns metadata about the
         stored file including size, modification time, and content type.
 
         Args:
@@ -178,7 +178,7 @@ class FileStorage:
             content_type: MIME type of the file (optional)
 
         Returns:
-            Information about the uploaded file including path, size, 
+            Information about the uploaded file including path, size,
             modification timestamp, and content type
 
         Raises:

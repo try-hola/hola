@@ -8,7 +8,9 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.api_error import ApiError
-    from ..models.api_response_dictstr_any_data_type_0 import ApiResponseDictstrAnyDataType0
+    from ..models.api_response_dictstr_any_data_type_0 import (
+        ApiResponseDictstrAnyDataType0,
+    )
 
 
 T = TypeVar("T", bound="ApiResponseDictstrAny")
@@ -30,7 +32,9 @@ class ApiResponseDictstrAny:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.api_error import ApiError
-        from ..models.api_response_dictstr_any_data_type_0 import ApiResponseDictstrAnyDataType0
+        from ..models.api_response_dictstr_any_data_type_0 import (
+            ApiResponseDictstrAnyDataType0,
+        )
 
         success = self.success
 
@@ -67,12 +71,16 @@ class ApiResponseDictstrAny:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.api_error import ApiError
-        from ..models.api_response_dictstr_any_data_type_0 import ApiResponseDictstrAnyDataType0
+        from ..models.api_response_dictstr_any_data_type_0 import (
+            ApiResponseDictstrAnyDataType0,
+        )
 
         d = dict(src_dict)
         success = d.pop("success")
 
-        def _parse_data(data: object) -> Union["ApiResponseDictstrAnyDataType0", None, Unset]:
+        def _parse_data(
+            data: object,
+        ) -> Union["ApiResponseDictstrAnyDataType0", None, Unset]:
             if data is None:
                 return data
             if isinstance(data, Unset):

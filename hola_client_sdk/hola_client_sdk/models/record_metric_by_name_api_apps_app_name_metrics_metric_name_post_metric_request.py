@@ -4,7 +4,9 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="RecordMetricByNameApiAppsAppNameMetricsMetricNamePostMetricRequest")
+T = TypeVar(
+    "T", bound="RecordMetricByNameApiAppsAppNameMetricsMetricNamePostMetricRequest"
+)
 
 
 @_attrs_define
@@ -22,9 +24,13 @@ class RecordMetricByNameApiAppsAppNameMetricsMetricNamePostMetricRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        record_metric_by_name_api_apps_app_name_metrics_metric_name_post_metric_request = cls()
+        record_metric_by_name_api_apps_app_name_metrics_metric_name_post_metric_request = (
+            cls()
+        )
 
-        record_metric_by_name_api_apps_app_name_metrics_metric_name_post_metric_request.additional_properties = d
+        record_metric_by_name_api_apps_app_name_metrics_metric_name_post_metric_request.additional_properties = (
+            d
+        )
         return record_metric_by_name_api_apps_app_name_metrics_metric_name_post_metric_request
 
     @property

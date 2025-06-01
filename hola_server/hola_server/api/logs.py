@@ -63,10 +63,10 @@ async def get_logs(
     api_key: str = Depends(get_api_key),
 ) -> JSONResponse:
     """Get logs for an application with filtering and pagination.
-    
+
     Retrieves application logs with optional filtering by level, source, time range,
     and other criteria. Results are paginated and can be searched by content.
-    
+
     Args:
         request (Request): FastAPI request object.
         app_name (str): Name of the application to retrieve logs for.
@@ -82,10 +82,10 @@ async def get_logs(
         user_id (Optional[str]): Filter logs by specific user ID.
         context (ServerContext): Server context with service dependencies.
         api_key (str): API key for authentication.
-        
+
     Returns:
         JSONResponse: Response containing filtered log entries and metadata.
-        
+
     Raises:
         ValidationException: If filter parameters are invalid.
         ServiceException: If there is an error retrieving logs.
@@ -173,11 +173,11 @@ async def stream_logs(
     api_key: str = Depends(get_api_key),
 ) -> StreamingResponse:
     """Stream real-time logs for an application.
-    
+
     Provides a streaming response of log entries as they are generated in real-time.
     The stream can be filtered by log level, source, and text content. Each log entry
     is delivered as a separate newline-delimited JSON object.
-    
+
     Args:
         request (Request): FastAPI request object.
         app_name (str): Name of the application to stream logs from.
@@ -186,12 +186,12 @@ async def stream_logs(
         search (Optional[str]): Filter logs containing this text in messages.
         context (ServerContext): Server context with service dependencies.
         api_key (str): API key for authentication.
-        
+
     Returns:
         StreamingResponse: A streaming response of newline-delimited JSON objects, each
                           representing a log entry with format:
                           {"timestamp": "ISO-8601", "level": "INFO", "message": "text", ...}
-                          
+
     Raises:
         ValidationException: If filter parameters are invalid.
         ServiceException: If there is an error setting up the log stream.
@@ -249,7 +249,7 @@ async def stream_logs(
 
         async def generate_logs():
             """Generate streaming log response.
-            
+
             Internal async generator function that yields log entries as they arrive.
             Each log entry is serialized to JSON and followed by a newline delimiter.
             """
@@ -289,11 +289,11 @@ async def add_log(
     api_key: str = Depends(get_api_key),
 ) -> Response:
     """Add a log entry for an application.
-    
+
     Creates a new log entry for the specified application. If the log request doesn't
     include a request_id, one will be automatically generated. Returns 204 No Content
     on success.
-    
+
     Args:
         request (Request): FastAPI request object.
         app_name (str): Name of the application to add a log entry for.
@@ -301,10 +301,10 @@ async def add_log(
                                         level, source, and optional metadata.
         context (ServerContext): Server context with service dependencies.
         api_key (str): API key for authentication.
-        
+
     Returns:
         Response: 204 No Content response indicating successful log creation.
-        
+
     Raises:
         ValidationException: If log parameters are invalid.
         ServiceException: If there is an error creating the log entry.
@@ -344,11 +344,11 @@ async def clear_logs(
     api_key: str = Depends(get_api_key),
 ) -> JSONResponse:
     """Clear logs for an application.
-    
+
     Deletes log entries for the specified application. If a 'before' timestamp
     is provided, only logs before that time will be removed. Returns the number
     of log entries that were deleted.
-    
+
     Args:
         request (Request): FastAPI request object.
         app_name (str): Name of the application to clear logs for.
@@ -356,10 +356,10 @@ async def clear_logs(
                                     If not provided, all logs will be cleared.
         context (ServerContext): Server context with service dependencies.
         api_key (str): API key for authentication.
-        
+
     Returns:
         JSONResponse: Response containing the number of cleared log entries.
-        
+
     Raises:
         ValidationException: If parameters are invalid.
         ServiceException: If there is an error clearing the logs.
@@ -407,25 +407,25 @@ async def get_log_summary(
     api_key: str = Depends(get_api_key),
 ) -> JSONResponse:
     """Get log summary statistics for an application.
-    
+
     Provides aggregated statistics about log entries for the specified application
     over the requested time period. Statistics include counts by log level, source,
     most frequent messages, and time-based distribution.
-    
+
     Args:
         request (Request): FastAPI request object.
         app_name (str): Name of the application to get log summary for.
         hours (int): Number of hours to include in the summary (1-168, default: 24).
         context (ServerContext): Server context with service dependencies.
         api_key (str): API key for authentication.
-        
+
     Returns:
         JSONResponse: Response containing log summary statistics including:
                      - counts by log level
                      - counts by source
                      - most frequent messages
                      - time-based distribution
-        
+
     Raises:
         ValidationException: If parameters are invalid.
         ServiceException: If there is an error generating the summary.
@@ -457,10 +457,10 @@ async def get_log_summary(
 
 def get_log_service(context: ServerContext) -> LogService:
     """Get the active log service instance with dependency injection.
-    
+
     Args:
         context (ServerContext): Server context containing configuration and dependencies.
-        
+
     Returns:
         LogService: Configured log service instance.
     """

@@ -126,7 +126,7 @@ class AppService:
 
         return AppCreateResponse(
             app=app,
-            message=f"Application '{request.name}' created successfully. Use 'deploy' to start it."
+            message=f"Application '{request.name}' created successfully. Use 'deploy' to start it.",
         )
 
     async def deploy_app(self, request: AppDeployRequest) -> AppDeployResponse:
@@ -148,15 +148,22 @@ class AppService:
 
         # Check if app already exists
         existing_app = self._apps.get(request.name)
-        
+
         if existing_app:
             # If app exists and is already deployed, reject
-            if existing_app.status not in [AppStatus.CREATED, AppStatus.STOPPED, AppStatus.ERROR]:
+            if existing_app.status not in [
+                AppStatus.CREATED,
+                AppStatus.STOPPED,
+                AppStatus.ERROR,
+            ]:
                 raise ValidationException(
                     message=f"Application '{request.name}' is already deployed with status '{existing_app.status}'",
-                    details={"app_name": request.name, "current_status": existing_app.status},
+                    details={
+                        "app_name": request.name,
+                        "current_status": existing_app.status,
+                    },
                 )
-            
+
             # Update existing app with new deployment configuration
             app = existing_app
             app.image = request.image
@@ -200,7 +207,7 @@ class AppService:
             # Mark as deploying
             app.status = AppStatus.DEPLOYING
             app.updated_at = datetime.now(timezone.utc)
-            
+
             # Here we would actually deploy to the container runtime
             # For now, just simulate by updating status
             app.status = AppStatus.RUNNING

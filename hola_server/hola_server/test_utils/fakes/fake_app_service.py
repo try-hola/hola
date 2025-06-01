@@ -132,7 +132,7 @@ class FakeAppService:
 
         return AppCreateResponse(
             app=app,
-            message=f"Application '{request.name}' created successfully. Use 'deploy' to start it."
+            message=f"Application '{request.name}' created successfully. Use 'deploy' to start it.",
         )
 
     async def deploy_app(self, request: AppDeployRequest) -> AppDeployResponse:
@@ -161,15 +161,22 @@ class FakeAppService:
 
         # Check if app already exists
         existing_app = self.apps.get(request.name)
-        
+
         if existing_app:
             # If app exists and is already deployed, reject
-            if existing_app.status not in [AppStatus.CREATED, AppStatus.STOPPED, AppStatus.ERROR]:
+            if existing_app.status not in [
+                AppStatus.CREATED,
+                AppStatus.STOPPED,
+                AppStatus.ERROR,
+            ]:
                 raise ValidationException(
                     message=f"Application '{request.name}' is already deployed with status '{existing_app.status}'",
-                    details={"app_name": request.name, "current_status": existing_app.status},
+                    details={
+                        "app_name": request.name,
+                        "current_status": existing_app.status,
+                    },
                 )
-            
+
             # Update existing app with new deployment configuration
             app = existing_app
             app.image = request.image
@@ -215,7 +222,7 @@ class FakeAppService:
     async def list_apps(self) -> AppListResponse:
         """
         List all applications.
-        
+
         Returns:
             AppListResponse: The response containing a list of all applications.
         """
@@ -229,13 +236,13 @@ class FakeAppService:
     async def get_app(self, app_name: str) -> App:
         """
         Get details of a specific application.
-        
+
         Args:
             app_name (str): The name of the application to retrieve.
-            
+
         Returns:
             App: The application details.
-            
+
         Raises:
             NotFoundException: If the application does not exist.
         """
@@ -257,14 +264,14 @@ class FakeAppService:
     ) -> AppDeployResponse:
         """
         Upgrade an existing application with new configuration.
-        
+
         Args:
             app_name (str): The name of the application to upgrade.
             request (AppUpgradeRequest): The request containing upgrade details.
-            
+
         Returns:
             AppDeployResponse: The response containing the upgraded app and deployment details.
-            
+
         Raises:
             ValidationException: If the upgrade fails due to validation issues.
             NotFoundException: If the application does not exist.
@@ -311,13 +318,13 @@ class FakeAppService:
     async def delete_app(self, app_name: str) -> AppActionResponse:
         """
         Delete an application.
-        
+
         Args:
             app_name (str): The name of the application to delete.
-            
+
         Returns:
             AppActionResponse: The response containing the result of the delete operation.
-            
+
         Raises:
             ValidationException: If the deletion fails due to validation issues.
             NotFoundException: If the application does not exist.
@@ -351,13 +358,13 @@ class FakeAppService:
     async def start_app(self, app_name: str) -> AppActionResponse:
         """
         Start an application.
-        
+
         Args:
             app_name (str): The name of the application to start.
-            
+
         Returns:
             AppActionResponse: The response containing the result of the start operation.
-            
+
         Raises:
             ValidationException: If the start operation fails due to validation issues.
             NotFoundException: If the application does not exist.
@@ -399,13 +406,13 @@ class FakeAppService:
     async def stop_app(self, app_name: str) -> AppActionResponse:
         """
         Stop a running application.
-        
+
         Args:
             app_name (str): The name of the application to stop.
-            
+
         Returns:
             AppActionResponse: The response containing the result of the stop operation.
-            
+
         Raises:
             ValidationException: If the stop operation fails due to validation issues.
             NotFoundException: If the application does not exist.
@@ -447,13 +454,13 @@ class FakeAppService:
     async def restart_app(self, app_name: str) -> AppActionResponse:
         """
         Restart an application.
-        
+
         Args:
             app_name (str): The name of the application to restart.
-            
+
         Returns:
             AppActionResponse: The response containing the result of the restart operation.
-            
+
         Raises:
             ValidationException: If the restart operation fails due to validation issues.
             NotFoundException: If the application does not exist.
@@ -577,14 +584,14 @@ class FakeAppService:
     async def get_app_file(self, app_name: str, file_path: str) -> BinaryIO:
         """
         Get the content of an application file.
-        
+
         Args:
             app_name (str): The name of the application.
             file_path (str): The path of the file to retrieve.
-            
+
         Returns:
             BinaryIO: The file content as a binary stream.
-            
+
         Raises:
             NotFoundException: If the application or file does not exist.
         """
@@ -613,11 +620,11 @@ class FakeAppService:
     async def delete_app_file(self, app_name: str, file_path: str) -> None:
         """
         Delete an application file.
-        
+
         Args:
             app_name (str): The name of the application.
             file_path (str): The path of the file to delete.
-            
+
         Raises:
             ValidationException: If the file deletion fails due to validation issues.
             NotFoundException: If the application or file does not exist.
@@ -657,13 +664,13 @@ class FakeAppService:
     async def get_app_config(self, app_name: str) -> ConfigResponse:
         """
         Get configuration for an application.
-        
+
         Args:
             app_name (str): The name of the application.
-            
+
         Returns:
             ConfigResponse: The response containing the application's configuration.
-            
+
         Raises:
             NotFoundException: If the application does not exist.
         """
@@ -679,13 +686,13 @@ class FakeAppService:
     async def list_config_entries(self, app_name: str) -> ConfigListResponse:
         """
         List configuration entries for an application.
-        
+
         Args:
             app_name (str): The name of the application.
-            
+
         Returns:
             ConfigListResponse: The response containing a list of configuration entries.
-            
+
         Raises:
             NotFoundException: If the application does not exist.
         """
@@ -701,14 +708,14 @@ class FakeAppService:
     async def get_config_entry(self, app_name: str, key: str) -> ConfigEntryResponse:
         """
         Get a specific configuration entry for an application.
-        
+
         Args:
             app_name (str): The name of the application.
             key (str): The key of the configuration entry.
-            
+
         Returns:
             ConfigEntryResponse: The response containing the configuration entry.
-            
+
         Raises:
             ValidationException: If the app name or key is invalid.
             NotFoundException: If the application or configuration entry does not exist.
@@ -728,14 +735,14 @@ class FakeAppService:
     ) -> ConfigEntryResponse:
         """
         Create a new configuration entry for an application.
-        
+
         Args:
             app_name (str): The name of the application.
             request (ConfigCreateRequest): The request containing configuration entry details.
-            
+
         Returns:
             ConfigEntryResponse: The response containing the created configuration entry.
-            
+
         Raises:
             ValidationException: If the app name or configuration details are invalid.
             NotFoundException: If the application does not exist.
@@ -755,15 +762,15 @@ class FakeAppService:
     ) -> ConfigEntryResponse:
         """
         Update an existing configuration entry for an application.
-        
+
         Args:
             app_name (str): The name of the application.
             key (str): The key of the configuration entry to update.
             request (ConfigUpdateRequest): The request containing updated configuration details.
-            
+
         Returns:
             ConfigEntryResponse: The response containing the updated configuration entry.
-            
+
         Raises:
             ValidationException: If the app name, key, or updated details are invalid.
             NotFoundException: If the application or configuration entry does not exist.
@@ -782,11 +789,11 @@ class FakeAppService:
     async def delete_config_entry(self, app_name: str, key: str) -> None:
         """
         Delete a configuration entry for an application.
-        
+
         Args:
             app_name (str): The name of the application.
             key (str): The key of the configuration entry to delete.
-            
+
         Raises:
             ValidationException: If the app name or key is invalid.
             NotFoundException: If the application or configuration entry does not exist.
@@ -804,10 +811,10 @@ class FakeAppService:
     async def delete_app_config(self, app_name: str) -> None:
         """
         Delete all configuration entries for an application.
-        
+
         Args:
             app_name (str): The name of the application.
-            
+
         Raises:
             ValidationException: If the app name is invalid.
             NotFoundException: If the application does not exist.

@@ -39,13 +39,13 @@ logger = get_logger(__name__)
 
 class ServerService:
     """Service for managing server status and health.
-    
+
     Provides business logic for server status monitoring, health checks,
     and resource usage tracking. This service coordinates multiple health checks
     including disk space, memory usage, configuration service, and file storage.
     It also provides aggregated server status information including version details,
     system resources, and server uptime.
-    
+
     This service is used by the API layer to expose server health endpoints and
     by administrative tools for monitoring server health.
     """
@@ -68,15 +68,15 @@ class ServerService:
 
     async def get_server_status(self) -> ServerStatus:
         """Get complete server status information.
-        
+
         Collects health check results, version information, and resource usage metrics
-        to create a comprehensive server status report. This method is the main entry 
+        to create a comprehensive server status report. This method is the main entry
         point for server monitoring and diagnostics.
 
         Returns:
             ServerStatus: Comprehensive status object containing health check results,
                 version details, resource utilization metrics, server state, and timestamps.
-                
+
         Raises:
             ServiceException: If any error occurs during status collection.
         """
@@ -108,16 +108,16 @@ class ServerService:
 
     async def get_health_check(self) -> HealthStatus:
         """Run health checks on server components.
-        
+
         Performs a series of health checks on critical system components including
         disk space, memory usage, configuration service, and file storage. Each check
         produces a detailed health result, and an aggregate health status is determined
         based on individual check results.
 
         Returns:
-            HealthStatus: Object containing overall status and individual component 
+            HealthStatus: Object containing overall status and individual component
                 health results with details on each system component.
-            
+
         Note:
             If an exception occurs during the health check process, an "UNHEALTHY" status
             will be returned rather than allowing the exception to propagate.
@@ -181,13 +181,13 @@ class ServerService:
         """Get server version information.
 
         Retrieves version information from application settings including version number,
-        build ID, build date, git commit hash, and Python version. This information 
+        build ID, build date, git commit hash, and Python version. This information
         is useful for debugging, support, and auditing purposes.
 
         Returns:
             VersionInfo: Version details including application version, build information,
                 git commit hash, and Python runtime version.
-                
+
         Raises:
             ServiceException: If version information cannot be retrieved.
         """
@@ -220,7 +220,7 @@ class ServerService:
 
     async def get_resource_usage(self) -> ResourceUsage:
         """Get server resource usage metrics.
-        
+
         Collects real-time system resource metrics including CPU usage, memory usage,
         disk space utilization, and system uptime. This information provides insight
         into the current operational state of the server and can be used for
@@ -229,7 +229,7 @@ class ServerService:
         Returns:
             ResourceUsage: Current resource metrics including CPU, memory, disk usage
                 percentages, absolute byte values, and system uptime.
-                
+
         Raises:
             ServiceException: If resource metrics cannot be retrieved.
         """
@@ -285,7 +285,7 @@ class ServerService:
         Returns:
             HealthCheckResult: Disk space health check result containing status,
                 diagnostic message, check duration, and timestamp.
-                
+
         Note:
             Returns UNHEALTHY status if free space is below configured thresholds
             or if an exception occurs during the check.
@@ -344,7 +344,7 @@ class ServerService:
         Returns:
             HealthCheckResult: Memory usage health check result containing status,
                 diagnostic message, check duration, and timestamp.
-                
+
         Note:
             Returns UNHEALTHY status if available memory is below configured thresholds
             or if an exception occurs during the check.
@@ -402,7 +402,7 @@ class ServerService:
         Returns:
             HealthCheckResult: Configuration service health check result containing
                 status, diagnostic message, check duration, and timestamp.
-                
+
         Note:
             Returns UNHEALTHY status if the configuration service is unreachable
             or returns an error.
@@ -445,7 +445,7 @@ class ServerService:
         Returns:
             HealthCheckResult: File storage service health check result containing
                 status, diagnostic message, check duration, and timestamp.
-                
+
         Note:
             Returns UNHEALTHY status if the storage directory is not accessible
             or if file writing operations fail.

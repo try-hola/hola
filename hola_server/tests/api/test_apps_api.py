@@ -82,9 +82,7 @@ class TestAppsAPI:
         assert data["error"]["code"] == "VALIDATION_ERROR"
         assert "already exists" in data["error"]["message"]
 
-    def test_create_app_invalid_data(
-        self, client_with_fake_app_service: TestClient
-    ):
+    def test_create_app_invalid_data(self, client_with_fake_app_service: TestClient):
         """Test app creation with invalid data."""
         # Missing required name field
         request_data = {"image": "nginx:latest"}
@@ -96,9 +94,7 @@ class TestAppsAPI:
         assert response.status_code == 422
 
     @pytest.mark.skip(reason="Authentication not implemented yet")
-    def test_create_app_unauthorized(
-        self, client_with_fake_app_service: TestClient
-    ):
+    def test_create_app_unauthorized(self, client_with_fake_app_service: TestClient):
         """Test app creation without API key."""
         request_data = {"name": "test-app", "image": "nginx:latest"}
 
@@ -159,13 +155,13 @@ class TestAppsAPI:
             "name": "test-app",
             "image": "nginx:latest",
             "port": 8080,
-            "description": "Test app"
+            "description": "Test app",
         }
         create_response = client_with_fake_app_service.post(
             "/api/apps", json=create_data, headers={"X-API-Key": "test-key"}
         )
         assert create_response.status_code == 200
-        
+
         # Verify app is in CREATED state
         app_data = create_response.json()["data"]["app"]
         assert app_data["status"] == AppStatus.CREATED
@@ -176,13 +172,13 @@ class TestAppsAPI:
             "name": "test-app",
             "image": "nginx:updated",  # Different image to test updates
             "port": 9090,  # Different port
-            "environment": {"ENV": "production"}
+            "environment": {"ENV": "production"},
         }
         deploy_response = client_with_fake_app_service.post(
             "/api/apps/deploy", json=deploy_data, headers={"X-API-Key": "test-key"}
         )
         assert deploy_response.status_code == 200
-        
+
         # Verify app is now deployed with updated config
         deploy_data_response = deploy_response.json()
         assert deploy_data_response["success"] is True

@@ -44,10 +44,10 @@ class TestFakeAppServiceCreate:
         assert response.app.files_count == 0
         assert response.app.files_total_size_bytes == 0
         assert "created successfully" in response.message
-        
+
         # Verify app is stored
         assert fake_app_service.has_app("test-app")
-        
+
         # Verify method was tracked
         assert fake_app_service.get_method_call_count("create_app") == 1
 
@@ -85,7 +85,7 @@ class TestFakeAppServiceCreate:
     async def test_create_app_forced_failure(self, fake_app_service):
         """Test forced failure when creating an app."""
         fake_app_service.set_failure_mode("create", True)
-        
+
         request = AppCreateRequest(name="test-app", image="nginx:latest")
 
         with pytest.raises(ValidationException) as excinfo:
@@ -118,10 +118,12 @@ class TestFakeAppServiceCreate:
     async def test_was_method_called_with_for_create(self, fake_app_service):
         """Test method call tracking for create_app."""
         request = AppCreateRequest(name="test-app", image="nginx:latest")
-        
+
         # Initially not called
-        assert not fake_app_service.was_method_called_with("create_app", request=request)
-        
+        assert not fake_app_service.was_method_called_with(
+            "create_app", request=request
+        )
+
         # After calling
         await fake_app_service.create_app(request)
         assert fake_app_service.was_method_called_with("create_app")
