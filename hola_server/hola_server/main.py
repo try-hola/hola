@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from hola_shared.errors import HolaException
 from hola_shared.logger import get_logger
 from .config.settings import get_settings
-from .utils.logging import setup_server_logging, setup_request_logging, log_api_error
+from .utils.api_logging import setup_server_logging, setup_request_logging, log_api_error
 from .api import hello, apps, app_files, app_config, server, backup, logs, metrics
 
 # Initialize logging first thing

@@ -35,7 +35,7 @@ from hola_shared.errors import ValidationException, NotFoundException, ServiceEx
 from hola_shared.logger import get_logger
 from ..auth import get_api_key
 from ..config.context import ServerContext, get_context
-from ..utils.logging import log_api_error
+from ..utils.api_logging import log_api_error
 from ..services.app_service import AppService
 
 logger = get_logger(__name__)

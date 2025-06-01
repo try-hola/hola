@@ -144,40 +144,30 @@ def test_request_logging_middleware():
     def health_endpoint():
         return {"status": "ok"}
 
-    # Create fake logging module
-    fake_logging_module = FakeLoggingModule()
-    fake_logger = fake_logging_module.get_logger("test.request")
+    # Import the module directly
+    import hola_server.utils.api_logging as api_logging
+    
+    # Create fake logger
+    fake_logger = FakeLogger("hola_server.api.requests")
     
     # Save original function
-    original_get_logger = setup_request_logging.__globals__['get_logger']
+    original_get_logger = api_logging.get_logger
     
     try:
-        # Replace with fake
-        setup_request_logging.__globals__['get_logger'] = fake_logging_module.get_logger
+        # Create a function that returns our fake logger regardless of name
+        def fake_get_logger(name):
+            return fake_logger
+            
+        # Replace the get_logger function
+        api_logging.get_logger = fake_get_logger
         
-        # Add the middleware
-        setup_request_logging(app)
+        # Now add the middleware with exclude_paths to match main.py behavior
+        setup_request_logging(app, exclude_paths=["/health"])
 
         # Create a test client
         client = TestClient(app)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-        setup_request_logging.__globals__['get_logger'] = original_get_logger        # Restore original function    finally:        assert len(fake_logger.messages) == 0  # No logs for excluded path        assert response.status_code == 200        response = client.get("/health")        # Test health endpoint which should be excluded        fake_logger.reset()        # Reset the fake logger        assert len(fake_logger.messages) >= 2  # Start and end logs        assert response.status_code == 200        response = client.get("/test")        # Test endpoint that should be logged        # Test endpoint that should be logged
+        
+        # Test endpoint that should be logged
         response = client.get("/test")
         assert response.status_code == 200
         assert len(fake_logger.messages) >= 2  # Start and end logs
@@ -191,4 +181,4 @@ def test_request_logging_middleware():
         assert len(fake_logger.messages) == 0  # No logs for excluded path
     finally:
         # Restore original function
-        setup_request_logging.__globals__['get_logger'] = original_get_logger
+        api_logging.get_logger = original_get_logger

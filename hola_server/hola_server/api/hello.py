@@ -15,7 +15,7 @@ import time
 from fastapi import APIRouter, Depends, Request
 from hola_shared.models.response import ApiResponse
 from hola_shared.logger import get_logger
-from ..utils.logging import log_api_error
+from ..utils.api_logging import log_api_error
 
 # from ..auth import get_api_key - Will be used in a later phase
 

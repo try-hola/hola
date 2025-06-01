@@ -28,7 +28,7 @@ from hola_shared.errors import ServiceException
 from ..auth import get_api_key
 from ..services.server_service import ServerService
 from ..config.context import get_context
-from ..utils.logging import log_api_error
+from ..utils.api_logging import log_api_error
 from hola_shared.logger import get_logger
 
 router = APIRouter(prefix="/api/server", tags=["server"])

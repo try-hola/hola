@@ -37,7 +37,7 @@ from hola_shared.errors import ValidationException, NotFoundException, ServiceEx
 from ..config.context import ServerContext, get_context
 from ..services.metrics_service import MetricsService
 from ..auth import get_api_key
-from ..utils.logging import log_api_error
+from ..utils.api_logging import log_api_error
 from hola_shared.logger import get_logger
 
 router = APIRouter()
