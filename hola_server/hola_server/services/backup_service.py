@@ -2,6 +2,15 @@
 
 This module provides business logic for creating, managing, and restoring
 application backups including configurations, files, and metadata.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    config_service (ConfigService): Service for managing application configurations.
+    file_storage (FileStorage): Service for managing application files.
+    backup_path (Path): Path to the backup storage directory.
+    _backups (Dict[str, BackupInfo]): In-memory registry of backups.
+    _restores (Dict[str, RestoreInfo]): In-memory registry of restore operations.
 """
 
 import json
@@ -35,6 +44,15 @@ class BackupService:
 
     Provides business logic for backup creation, restoration, and management
     of application data, configurations, and files.
+
+    Attributes:
+        context (ServerContext): Server context containing settings and dependencies.
+        settings (Settings): Application settings.
+        config_service (ConfigService): Service for managing application configurations.
+        file_storage (FileStorage): Service for managing application files.
+        backup_path (Path): Path to the backup storage directory.
+        _backups (Dict[str, BackupInfo]): In-memory registry of backups.
+        _restores (Dict[str, RestoreInfo]): In-memory registry of restore operations.
     """
 
     def __init__(self, context: ServerContext):

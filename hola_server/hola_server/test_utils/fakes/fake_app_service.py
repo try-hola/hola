@@ -1,4 +1,16 @@
-"""Fake implementation of AppService for testing."""
+"""Fake implementation of AppService for testing.
+
+This module provides in-memory app management with state tracking for test assertions.
+It simulates operations such as app creation, deployment, and file management.
+
+Attributes:
+    apps (Dict[str, App]): A dictionary to store applications.
+    method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+    deployment_counter (int): A counter for generating deployment IDs.
+    should_fail_* (bool): Flags to simulate failures for various operations.
+    file_storage (FakeFileStorage): An instance of FakeFileStorage for file operations.
+    _config_service (FakeConfigService): An instance of FakeConfigService for configuration operations.
+"""
 
 from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime, timezone
@@ -28,13 +40,25 @@ from .fake_file_storage import FakeFileStorage
 
 
 class FakeAppService:
-    """Fake implementation of AppService for testing.
+    """
+    Fake implementation of AppService for testing.
 
-    Provides in-memory app management with state tracking for test assertions.
+    This class provides in-memory app management with state tracking for test assertions.
+    It simulates operations such as app creation, deployment, and file management.
     """
 
     def __init__(self):
-        """Initialize the fake service."""
+        """
+        Initialize the fake service.
+
+        Attributes:
+            apps (Dict[str, App]): A dictionary to store applications.
+            method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+            deployment_counter (int): A counter for generating deployment IDs.
+            should_fail_* (bool): Flags to simulate failures for various operations.
+            file_storage (FakeFileStorage): An instance of FakeFileStorage for file operations.
+            _config_service (FakeConfigService): An instance of FakeConfigService for configuration operations.
+        """
         self.apps: Dict[str, App] = {}
         self.method_calls: List[Dict[str, Any]] = []
         self.deployment_counter = 1
@@ -57,7 +81,15 @@ class FakeAppService:
         self._config_service = FakeConfigService()
 
     async def create_app(self, request: AppCreateRequest) -> AppCreateResponse:
-        """Create a new application without deploying it."""
+        """
+        Create a new application without deploying it.
+
+        Args:
+            request (AppCreateRequest): The request containing app creation details.
+
+        Returns:
+            AppCreateResponse: The response containing the created app and a success message.
+        """
         self.method_calls.append(
             {
                 "method": "create_app",
@@ -104,7 +136,15 @@ class FakeAppService:
         )
 
     async def deploy_app(self, request: AppDeployRequest) -> AppDeployResponse:
-        """Deploy a new application or deploy an existing created application."""
+        """
+        Deploy a new application or deploy an existing created application.
+
+        Args:
+            request (AppDeployRequest): The request containing deployment details.
+
+        Returns:
+            AppDeployResponse: The response containing the deployed app and deployment details.
+        """
         self.method_calls.append(
             {
                 "method": "deploy_app",
@@ -173,7 +213,12 @@ class FakeAppService:
         )
 
     async def list_apps(self) -> AppListResponse:
-        """List all deployed applications."""
+        """
+        List all applications.
+        
+        Returns:
+            AppListResponse: The response containing a list of all applications.
+        """
         self.method_calls.append(
             {"method": "list_apps", "timestamp": datetime.now(timezone.utc)}
         )
@@ -182,7 +227,18 @@ class FakeAppService:
         return AppListResponse(apps=apps, total_count=len(apps))
 
     async def get_app(self, app_name: str) -> App:
-        """Get details about a specific application."""
+        """
+        Get details of a specific application.
+        
+        Args:
+            app_name (str): The name of the application to retrieve.
+            
+        Returns:
+            App: The application details.
+            
+        Raises:
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_app",
@@ -199,7 +255,20 @@ class FakeAppService:
     async def upgrade_app(
         self, app_name: str, request: AppUpgradeRequest
     ) -> AppDeployResponse:
-        """Upgrade an existing application."""
+        """
+        Upgrade an existing application with new configuration.
+        
+        Args:
+            app_name (str): The name of the application to upgrade.
+            request (AppUpgradeRequest): The request containing upgrade details.
+            
+        Returns:
+            AppDeployResponse: The response containing the upgraded app and deployment details.
+            
+        Raises:
+            ValidationException: If the upgrade fails due to validation issues.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "upgrade_app",
@@ -240,7 +309,19 @@ class FakeAppService:
         )
 
     async def delete_app(self, app_name: str) -> AppActionResponse:
-        """Remove a deployed application."""
+        """
+        Delete an application.
+        
+        Args:
+            app_name (str): The name of the application to delete.
+            
+        Returns:
+            AppActionResponse: The response containing the result of the delete operation.
+            
+        Raises:
+            ValidationException: If the deletion fails due to validation issues.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "delete_app",
@@ -268,7 +349,19 @@ class FakeAppService:
         )
 
     async def start_app(self, app_name: str) -> AppActionResponse:
-        """Start an application."""
+        """
+        Start an application.
+        
+        Args:
+            app_name (str): The name of the application to start.
+            
+        Returns:
+            AppActionResponse: The response containing the result of the start operation.
+            
+        Raises:
+            ValidationException: If the start operation fails due to validation issues.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "start_app",
@@ -304,7 +397,19 @@ class FakeAppService:
         )
 
     async def stop_app(self, app_name: str) -> AppActionResponse:
-        """Stop an application."""
+        """
+        Stop a running application.
+        
+        Args:
+            app_name (str): The name of the application to stop.
+            
+        Returns:
+            AppActionResponse: The response containing the result of the stop operation.
+            
+        Raises:
+            ValidationException: If the stop operation fails due to validation issues.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "stop_app",
@@ -340,7 +445,19 @@ class FakeAppService:
         )
 
     async def restart_app(self, app_name: str) -> AppActionResponse:
-        """Restart an application."""
+        """
+        Restart an application.
+        
+        Args:
+            app_name (str): The name of the application to restart.
+            
+        Returns:
+            AppActionResponse: The response containing the result of the restart operation.
+            
+        Raises:
+            ValidationException: If the restart operation fails due to validation issues.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "restart_app",
@@ -370,7 +487,15 @@ class FakeAppService:
         )
 
     async def list_app_files(self, app_name: str) -> FileListResponse:
-        """List files for an application."""
+        """
+        List files for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            FileListResponse: The response containing a list of files and their details.
+        """
         self.method_calls.append(
             {
                 "method": "list_app_files",
@@ -394,7 +519,17 @@ class FakeAppService:
     async def upload_app_file(
         self, app_name: str, file: UploadFile, path: Optional[str] = None
     ) -> FileInfo:
-        """Upload a file for an application."""
+        """
+        Upload a file for an application.
+
+        Args:
+            app_name (str): The name of the application.
+            file (UploadFile): The file to upload.
+            path (Optional[str]): The path to upload the file to.
+
+        Returns:
+            FileInfo: The details of the uploaded file.
+        """
         self.method_calls.append(
             {
                 "method": "upload_app_file",
@@ -440,7 +575,19 @@ class FakeAppService:
         return file_info
 
     async def get_app_file(self, app_name: str, file_path: str) -> BinaryIO:
-        """Get a file's contents."""
+        """
+        Get the content of an application file.
+        
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file to retrieve.
+            
+        Returns:
+            BinaryIO: The file content as a binary stream.
+            
+        Raises:
+            NotFoundException: If the application or file does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_app_file",
@@ -464,7 +611,17 @@ class FakeAppService:
         return file_content
 
     async def delete_app_file(self, app_name: str, file_path: str) -> None:
-        """Delete a file."""
+        """
+        Delete an application file.
+        
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file to delete.
+            
+        Raises:
+            ValidationException: If the file deletion fails due to validation issues.
+            NotFoundException: If the application or file does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "delete_app_file",
@@ -497,9 +654,19 @@ class FakeAppService:
         app.files_count = files.count
         app.files_total_size_bytes = files.total_size_bytes
 
-    # --- Configuration Delegation Methods ---
     async def get_app_config(self, app_name: str) -> ConfigResponse:
-        """Get app configuration via delegation to FakeConfigService."""
+        """
+        Get configuration for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            
+        Returns:
+            ConfigResponse: The response containing the application's configuration.
+            
+        Raises:
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_app_config",
@@ -510,7 +677,18 @@ class FakeAppService:
         return await self._config_service.get_app_config(app_name)
 
     async def list_config_entries(self, app_name: str) -> ConfigListResponse:
-        """List config entries via delegation to FakeConfigService."""
+        """
+        List configuration entries for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            
+        Returns:
+            ConfigListResponse: The response containing a list of configuration entries.
+            
+        Raises:
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "list_config_entries",
@@ -521,7 +699,20 @@ class FakeAppService:
         return await self._config_service.list_config_entries(app_name)
 
     async def get_config_entry(self, app_name: str, key: str) -> ConfigEntryResponse:
-        """Get config entry via delegation to FakeConfigService."""
+        """
+        Get a specific configuration entry for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            key (str): The key of the configuration entry.
+            
+        Returns:
+            ConfigEntryResponse: The response containing the configuration entry.
+            
+        Raises:
+            ValidationException: If the app name or key is invalid.
+            NotFoundException: If the application or configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_config_entry",
@@ -535,7 +726,20 @@ class FakeAppService:
     async def create_config_entry(
         self, app_name: str, request: ConfigCreateRequest
     ) -> ConfigEntryResponse:
-        """Create config entry via delegation to FakeConfigService."""
+        """
+        Create a new configuration entry for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            request (ConfigCreateRequest): The request containing configuration entry details.
+            
+        Returns:
+            ConfigEntryResponse: The response containing the created configuration entry.
+            
+        Raises:
+            ValidationException: If the app name or configuration details are invalid.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "create_config_entry",
@@ -549,7 +753,21 @@ class FakeAppService:
     async def update_config_entry(
         self, app_name: str, key: str, request: ConfigUpdateRequest
     ) -> ConfigEntryResponse:
-        """Update config entry via delegation to FakeConfigService."""
+        """
+        Update an existing configuration entry for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            key (str): The key of the configuration entry to update.
+            request (ConfigUpdateRequest): The request containing updated configuration details.
+            
+        Returns:
+            ConfigEntryResponse: The response containing the updated configuration entry.
+            
+        Raises:
+            ValidationException: If the app name, key, or updated details are invalid.
+            NotFoundException: If the application or configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "update_config_entry",
@@ -562,7 +780,17 @@ class FakeAppService:
         return await self._config_service.update_config_entry(app_name, key, request)
 
     async def delete_config_entry(self, app_name: str, key: str) -> None:
-        """Delete config entry via delegation to FakeConfigService."""
+        """
+        Delete a configuration entry for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            key (str): The key of the configuration entry to delete.
+            
+        Raises:
+            ValidationException: If the app name or key is invalid.
+            NotFoundException: If the application or configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "delete_config_entry",
@@ -574,7 +802,16 @@ class FakeAppService:
         return await self._config_service.delete_config_entry(app_name, key)
 
     async def delete_app_config(self, app_name: str) -> None:
-        """Delete app config via delegation to FakeConfigService."""
+        """
+        Delete all configuration entries for an application.
+        
+        Args:
+            app_name (str): The name of the application.
+            
+        Raises:
+            ValidationException: If the app name is invalid.
+            NotFoundException: If the application does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "delete_app_config",
@@ -586,21 +823,51 @@ class FakeAppService:
 
     # Helper methods for testing
     def has_app(self, app_name: str) -> bool:
-        """Check if an app exists."""
+        """
+        Check if an app exists.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            bool: True if the app exists, False otherwise.
+        """
         return app_name in self.apps
 
     def get_app_count(self) -> int:
-        """Get the number of apps."""
+        """
+        Get the number of apps.
+
+        Returns:
+            int: The total number of apps.
+        """
         return len(self.apps)
 
     def get_method_call_count(self, method_name: str) -> int:
-        """Get the number of times a method was called."""
+        """
+        Get the number of times a method was called.
+
+        Args:
+            method_name (str): The name of the method.
+
+        Returns:
+            int: The number of times the method was called.
+        """
         return len(
             [call for call in self.method_calls if call["method"] == method_name]
         )
 
     def was_method_called_with(self, method_name: str, **kwargs) -> bool:
-        """Check if a method was called with specific arguments."""
+        """
+        Check if a method was called with specific arguments.
+
+        Args:
+            method_name (str): The name of the method.
+            **kwargs: The arguments to check.
+
+        Returns:
+            bool: True if the method was called with the specified arguments, False otherwise.
+        """
         for call in self.method_calls:
             if call["method"] == method_name:
                 matches = True
@@ -613,7 +880,13 @@ class FakeAppService:
         return False
 
     def set_failure_mode(self, operation: str, should_fail: bool = True) -> None:
-        """Set failure mode for testing error conditions."""
+        """
+        Set a failure mode for a specific operation.
+
+        Args:
+            operation (str): The name of the operation.
+            should_fail (bool): Whether the operation should fail (default is True).
+        """
         failure_map = {
             "create": "should_fail_create",
             "deploy": "should_fail_deploy",
@@ -630,7 +903,11 @@ class FakeAppService:
             setattr(self, failure_map[operation], should_fail)
 
     def reset(self) -> None:
-        """Reset the fake service state."""
+        """
+        Reset the fake service state.
+
+        Clears all stored apps, method calls, and failure modes.
+        """
         self.apps.clear()
         self.method_calls.clear()
         self.deployment_counter = 1

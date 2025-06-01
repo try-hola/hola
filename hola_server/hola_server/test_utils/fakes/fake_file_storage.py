@@ -1,4 +1,10 @@
-"""Fake file storage implementation for testing."""
+"""Fake file storage implementation for testing.
+
+Attributes:
+    files (Dict[str, Dict[str, Dict[str, Any]]]): Stores file data for applications, organized by app name and file path.
+    method_calls (List[Dict[str, Any]]): Tracks method calls for assertions during testing.
+    _failure_modes (Dict[str, bool]): Simulates failures for specific methods during testing.
+"""
 
 from typing import Dict, List, Optional, BinaryIO, Any
 from datetime import datetime, timezone
@@ -10,20 +16,36 @@ from hola_shared.models.file import FileInfo, FileListResponse
 
 
 class FakeFileStorage:
-    """Fake implementation of file storage for testing.
+    """
+    Fake implementation of file storage for testing.
 
     Provides in-memory file storage with state tracking for test assertions.
     """
 
     def __init__(self):
-        """Initialize the fake file storage."""
+        """
+        Initialize the fake file storage.
+
+        Attributes:
+            files (Dict[str, Dict[str, Dict[str, Any]]]): A dictionary to store file data for applications.
+            method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+            _failure_modes (Dict[str, bool]): A dictionary to simulate failures for specific methods.
+        """
         # Structure: {app_name: {file_path: {"content": bytes, "modified_at": datetime, "content_type": str}}}
         self.files: Dict[str, Dict[str, Dict[str, Any]]] = {}
         self.method_calls: List[Dict[str, Any]] = []
         self._failure_modes: Dict[str, bool] = {}
 
     async def list_files(self, app_name: str) -> FileListResponse:
-        """List all files for an application."""
+        """
+        List all files for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            FileListResponse: The response containing a list of files and their details.
+        """
         self.method_calls.append(
             {
                 "method": "list_files",
@@ -60,7 +82,18 @@ class FakeFileStorage:
         content: bytes,
         content_type: Optional[str] = None,
     ) -> FileInfo:
-        """Upload a file for an application."""
+        """
+        Upload a file for an application.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file to upload.
+            content (bytes): The content of the file.
+            content_type (Optional[str]): The MIME type of the file.
+
+        Returns:
+            FileInfo: The details of the uploaded file.
+        """
         self.method_calls.append(
             {
                 "method": "upload_file",
@@ -95,7 +128,16 @@ class FakeFileStorage:
         )
 
     async def get_file(self, app_name: str, file_path: str) -> Optional[BinaryIO]:
-        """Get a file's contents."""
+        """
+        Get a file's contents.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file.
+
+        Returns:
+            Optional[BinaryIO]: The file's contents as a binary stream, or None if the file does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_file",
@@ -111,7 +153,19 @@ class FakeFileStorage:
         return BytesIO(self.files[app_name][file_path]["content"])
 
     async def get_file_info(self, app_name: str, file_path: str) -> FileInfo:
-        """Get file information without reading content."""
+        """
+        Get file information without reading content.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file.
+
+        Returns:
+            FileInfo: The details of the file.
+
+        Raises:
+            NotFoundException: If the file does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_file_info",
@@ -139,7 +193,16 @@ class FakeFileStorage:
         )
 
     async def delete_file(self, app_name: str, file_path: str) -> bool:
-        """Delete a file."""
+        """
+        Delete a file.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file.
+
+        Returns:
+            bool: True if the file was successfully deleted, False otherwise.
+        """
         self.method_calls.append(
             {
                 "method": "delete_file",
@@ -166,29 +229,72 @@ class FakeFileStorage:
 
     # Helper methods for testing
     def has_file(self, app_name: str, file_path: str) -> bool:
-        """Check if a file exists."""
+        """
+        Check if a file exists.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file.
+
+        Returns:
+            bool: True if the file exists, False otherwise.
+        """
         return app_name in self.files and file_path in self.files[app_name]
 
     def get_file_content(self, app_name: str, file_path: str) -> Optional[bytes]:
-        """Get the content of a file."""
+        """
+        Get the content of a file.
+
+        Args:
+            app_name (str): The name of the application.
+            file_path (str): The path of the file.
+
+        Returns:
+            Optional[bytes]: The content of the file, or None if the file does not exist.
+        """
         if self.has_file(app_name, file_path):
             return self.files[app_name][file_path]["content"]
         return None
 
     def get_file_count(self, app_name: str) -> int:
-        """Get the number of files for an app."""
+        """
+        Get the number of files for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            int: The number of files for the application.
+        """
         if app_name not in self.files:
             return 0
         return len(self.files[app_name])
 
     def get_method_call_count(self, method_name: str) -> int:
-        """Get the number of times a method was called."""
+        """
+        Get the number of times a method was called.
+
+        Args:
+            method_name (str): The name of the method.
+
+        Returns:
+            int: The number of times the method was called.
+        """
         return len(
             [call for call in self.method_calls if call["method"] == method_name]
         )
 
     def was_method_called_with(self, method_name: str, **kwargs) -> bool:
-        """Check if a method was called with specific arguments."""
+        """
+        Check if a method was called with specific arguments.
+
+        Args:
+            method_name (str): The name of the method.
+            **kwargs: The arguments to check.
+
+        Returns:
+            bool: True if the method was called with the specified arguments, False otherwise.
+        """
         for call in self.method_calls:
             if call["method"] == method_name:
                 matches = True
@@ -201,15 +307,33 @@ class FakeFileStorage:
         return False
 
     def reset(self) -> None:
-        """Reset the fake file storage state."""
+        """
+        Reset the fake file storage state.
+
+        Clears all stored files, method calls, and failure modes.
+        """
         self.files.clear()
         self.method_calls.clear()
         self._failure_modes.clear()
 
     def set_failure_mode(self, method_name: str, should_fail: bool):
-        """Set a method to fail for testing purposes."""
+        """
+        Set a method to fail for testing purposes.
+
+        Args:
+            method_name (str): The name of the method.
+            should_fail (bool): Whether the method should fail.
+        """
         self._failure_modes[method_name] = should_fail
 
     def _should_fail(self, method_name: str) -> bool:
-        """Check if a method should fail based on failure modes."""
+        """
+        Check if a method should fail based on failure modes.
+
+        Args:
+            method_name (str): The name of the method.
+
+        Returns:
+            bool: True if the method should fail, False otherwise.
+        """
         return self._failure_modes.get(method_name, False)

@@ -1,7 +1,20 @@
 """Application log management service.
 
 This module provides business logic for collecting, storing, and querying
-application logs with filtering and search capabilities.
+application logs with filtering and search capabilities. It supports comprehensive
+log management including storage, rotation, querying with advanced filters, and
+statistical analysis for monitoring and debugging.
+
+The service handles logs from various sources and severity levels, maintaining both
+in-memory access for quick retrieval and persistent storage for long-term archiving
+and analysis.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    logs_path (Path): Path to the log storage directory.
+    _logs (List[LogEntry]): In-memory storage for log entries.
+    _max_logs (int): Maximum number of logs to keep in memory.
 """
 
 import json
@@ -37,14 +50,21 @@ class LogService:
     """Service for managing application logs.
 
     Provides business logic for log collection, storage, querying,
-    and management with filtering and search capabilities.
+    and management with filtering and search capabilities. This service
+    handles the complete lifecycle of log entries including creation,
+    persistence, querying with advanced filtering options, and lifecycle
+    management such as log rotation and cleanup.
+    
+    The service supports multiple log sources, severity levels, and
+    contextual data to enable comprehensive application monitoring and
+    debugging capabilities.
     """
 
     def __init__(self, context: ServerContext):
         """Initialize the log service.
 
         Args:
-            context: Server context containing settings and dependencies
+            context (ServerContext): Server context containing settings and dependencies.
         """
         self.context = context
         self.settings = context.settings
@@ -62,11 +82,22 @@ class LogService:
     async def get_logs(self, params: LogQueryParams) -> LogResponse:
         """Query logs with filtering and pagination.
 
+        Retrieves log entries that match the specified filter criteria including
+        time range, log level, source, and content filters. The results are 
+        paginated based on offset and limit parameters, with optional sorting
+        and summary statistics.
+
         Args:
-            params: Query parameters for filtering logs
+            params (LogQueryParams): Query parameters for filtering logs including
+                time range, application name, log level, message content filters,
+                and pagination options.
 
         Returns:
-            LogResponse with matching log entries and metadata
+            LogResponse: Matching log entries, pagination metadata, summary statistics,
+                and the original query parameters used.
+                
+        Raises:
+            ServiceException: If an error occurs during log retrieval or processing.
         """
         start_time = log_service_operation_start(
             logger,
@@ -139,8 +170,8 @@ class LogService:
         """Add a new log entry.
 
         Args:
-            app_name: Application name for the log entry
-            request: Log creation request with log details or a LogEntry
+            app_name (str): Application name for the log entry.
+            request (LogCreateRequest | LogEntry): Log creation request with log details or a LogEntry.
         """
         request_id = getattr(request, "request_id", None)
         start_time = log_service_operation_start(
@@ -205,10 +236,10 @@ class LogService:
         """Clear logs with optional filtering.
 
         Args:
-            request: Log clearing request with filtering options
+            request (LogClearRequest): Log clearing request with filtering options.
 
         Returns:
-            LogClearResponse with number of cleared logs
+            LogClearResponse: Number of cleared logs.
         """
         start_time = log_service_operation_start(
             logger,
@@ -280,10 +311,10 @@ class LogService:
         """Stream logs in real-time.
 
         Args:
-            params: Query parameters for filtering logs
+            params (LogQueryParams): Query parameters for filtering logs.
 
         Yields:
-            LogEntry objects as they are added
+            LogEntry: Log entries as they are added.
         """
         try:
             logger.debug("Starting log stream")
@@ -307,10 +338,10 @@ class LogService:
         """Alias for get_log_stream with app_name filter for backward compatibility.
 
         Args:
-            app_name: Application name to filter logs by
+            app_name (str): Application name to filter logs by.
 
         Yields:
-            LogEntry objects for the specified app
+            LogEntry: Log entries for the specified app.
         """
         params = LogQueryParams(
             start_time=None,
@@ -330,11 +361,11 @@ class LogService:
         """Get log summary for an app within a time window.
 
         Args:
-            app_name: Application name to get logs for
-            hours: Number of hours to look back
+            app_name (str): Application name to get logs for.
+            hours (int, optional): Number of hours to look back. Defaults to 24.
 
         Returns:
-            LogSummary with statistics about the logs
+            LogSummary: Statistics about the logs.
         """
         try:
             logger.debug(f"Getting log summary for app {app_name} over {hours} hours")
@@ -375,11 +406,16 @@ class LogService:
     def _filter_logs(self, params: LogQueryParams) -> List[LogEntry]:
         """Filter logs based on query parameters.
 
+        Applies multiple filter criteria to the log entries including time range,
+        content filters (message text, levels, sources), and context filters 
+        (request ID, session ID, user ID). All filters are combined with AND logic,
+        meaning all conditions must be satisfied for a log entry to be included.
+
         Args:
-            params: Query parameters
+            params (LogQueryParams): Query parameters containing filter criteria.
 
         Returns:
-            List of filtered log entries
+            List[LogEntry]: Filtered log entries that match all specified criteria.
         """
         filtered_logs = []
 
@@ -424,10 +460,10 @@ class LogService:
         """Generate summary statistics for logs.
 
         Args:
-            logs: List of log entries
+            logs (List[LogEntry]): List of log entries.
 
         Returns:
-            LogSummary with statistics
+            LogSummary: Summary statistics.
         """
         if not logs:
             return LogSummary(
@@ -472,7 +508,7 @@ class LogService:
         """Persist log entry to storage.
 
         Args:
-            log_entry: Log entry to persist
+            log_entry (LogEntry): Log entry to persist.
         """
         try:
             # In a real implementation, this would write to a file or database

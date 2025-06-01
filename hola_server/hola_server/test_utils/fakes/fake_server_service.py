@@ -1,4 +1,16 @@
-"""Fake server service implementation for testing."""
+"""Fake server service implementation for testing.
+
+Attributes:
+    method_calls (List[Dict[str, Any]]): Tracks method calls for assertions during testing.
+    _failure_modes (Dict[str, bool]): Simulates failures for specific methods during testing.
+    system_monitor (Optional[SystemMetrics]): System monitor instance, though not actively used by fake logic.
+    _server_state (ServerState): Current state of the server.
+    _server_start_time (datetime): Start time of the server.
+    _server_status (Optional[ServerStatus]): Predefined server status response.
+    _health_check (Optional[HealthStatus]): Predefined health check response.
+    _version_info (Optional[VersionInfo]): Predefined version info response.
+    _resource_usage (Optional[ResourceUsage]): Predefined resource usage response.
+"""
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
@@ -43,8 +55,8 @@ class FakeServerService:
         """Configure a method to fail when called.
 
         Args:
-            method_name: Name of the method that should fail
-            should_fail: Whether the method should fail (default: True)
+            method_name (str): Name of the method that should fail.
+            should_fail (bool): Whether the method should fail (default: True).
         """
         self._failure_modes[method_name] = should_fail
 
@@ -52,7 +64,7 @@ class FakeServerService:
         """Set the server state for responses.
 
         Args:
-            state: Server state to return
+            state (ServerState): Server state to return.
         """
         self._server_state = state
 
@@ -60,7 +72,7 @@ class FakeServerService:
         """Set the server start time for responses.
 
         Args:
-            start_time: Server start time
+            start_time (datetime): Server start time.
         """
         self._server_start_time = start_time
 
@@ -68,7 +80,7 @@ class FakeServerService:
         """Register a predefined server status response.
 
         Args:
-            status: Server status to return
+            status (ServerStatus): Server status to return.
         """
         self._server_status = status
 
@@ -76,7 +88,7 @@ class FakeServerService:
         """Register a predefined health check response.
 
         Args:
-            health: Health status to return
+            health (HealthStatus): Health status to return.
         """
         self._health_check = health
 
@@ -84,7 +96,7 @@ class FakeServerService:
         """Register a predefined version info response.
 
         Args:
-            version: Version info to return
+            version (VersionInfo): Version info to return.
         """
         self._version_info = version
 
@@ -92,12 +104,15 @@ class FakeServerService:
         """Register a predefined resource usage response.
 
         Args:
-            resources: Resource usage to return
+            resources (ResourceUsage): Resource usage to return.
         """
         self._resource_usage = resources
 
     def reset(self):
-        """Reset the fake service state."""
+        """Reset the fake service state.
+
+        Clears all stored method calls, failure modes, and predefined responses.
+        """
         self.method_calls = []
         self._failure_modes = {}
         self._server_state = ServerState.RUNNING
@@ -108,7 +123,14 @@ class FakeServerService:
         self._resource_usage = None
 
     async def get_server_status(self) -> ServerStatus:
-        """Get server status information."""
+        """Get server status information.
+
+        Returns:
+            ServerStatus: Current server status.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {"method": "get_server_status", "timestamp": datetime.now(timezone.utc)}
         )
@@ -148,7 +170,14 @@ class FakeServerService:
         )
 
     async def get_health_check(self) -> HealthStatus:
-        """Run health checks on system components."""
+        """Run health checks on system components.
+
+        Returns:
+            HealthStatus: Health check results.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {"method": "get_health_check", "timestamp": datetime.now(timezone.utc)}
         )
@@ -195,7 +224,14 @@ class FakeServerService:
         )
 
     async def get_version(self) -> VersionInfo:
-        """Get server version information."""
+        """Get server version information.
+
+        Returns:
+            VersionInfo: Server version details.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {"method": "get_version", "timestamp": datetime.now(timezone.utc)}
         )
@@ -215,7 +251,14 @@ class FakeServerService:
         )
 
     async def get_resource_usage(self) -> ResourceUsage:
-        """Get server resource usage metrics."""
+        """Get server resource usage metrics.
+
+        Returns:
+            ResourceUsage: Resource usage details.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {"method": "get_resource_usage", "timestamp": datetime.now(timezone.utc)}
         )

@@ -2,6 +2,13 @@
 
 This module provides business logic for managing applications including
 deployment, lifecycle management, and status monitoring.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    file_storage (FileStorage): Service for managing application files.
+    _apps (Dict[str, App]): In-memory registry of applications.
+    _deployment_counter (int): Counter for tracking deployments.
 """
 
 from typing import List, Dict, Any, Optional, BinaryIO
@@ -40,6 +47,13 @@ class AppService:
     Provides business logic for application deployment, lifecycle management,
     and status monitoring. Handles validation, error handling, and coordination
     with container runtime providers.
+
+    Attributes:
+        context (ServerContext): Server context containing settings and dependencies.
+        settings (Settings): Application settings.
+        file_storage (FileStorage): Service for managing application files.
+        _apps (Dict[str, App]): In-memory registry of applications.
+        _deployment_counter (int): Counter for tracking deployments.
     """
 
     def __init__(self, context: ServerContext):

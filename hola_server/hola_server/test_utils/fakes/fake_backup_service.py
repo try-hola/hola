@@ -1,4 +1,21 @@
-"""Fake backup service implementation for testing."""
+"""Fake backup service implementation for testing.
+
+This module provides a fake implementation of a backup service for testing purposes.
+It includes in-memory backup and restore functionality, allowing simulation of various
+operations such as backup creation, listing, retrieval, deletion, and restoration.
+
+Attributes:
+    FakeBackupService (class): Provides methods to simulate backup and restore operations.
+    BackupInfo (class): Represents information about a backup.
+    RestoreInfo (class): Represents information about a restore operation.
+    BackupCreateRequest (class): Represents a request to create a backup.
+    BackupCreateResponse (class): Represents the response after creating a backup.
+    BackupListResponse (class): Represents the response containing a list of backups.
+    RestoreRequest (class): Represents a request to restore a backup.
+    RestoreResponse (class): Represents the response after restoring a backup.
+    BackupStatus (enum): Represents the status of a backup.
+    RestoreStatus (enum): Represents the status of a restore operation.
+"""
 
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime, timezone
@@ -20,13 +37,30 @@ from hola_shared.models.backup import (
 
 
 class FakeBackupService:
-    """Fake implementation of backup service for testing.
+    """
+    Fake implementation of backup service for testing.
 
-    Provides in-memory backup and restore functionality for testing.
+    This class provides in-memory backup and restore functionality for testing purposes.
+    It allows simulation of backup creation, listing, retrieval, deletion, and restoration.
+    Additionally, it supports failure mode configuration for testing error scenarios.
+
+    Attributes:
+        method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+        _failure_modes (Dict[str, bool]): A dictionary to simulate failures for specific methods.
+        backups (Dict[str, BackupInfo]): A dictionary to store backup information.
+        restores (Dict[str, RestoreInfo]): A dictionary to store restore information.
     """
 
     def __init__(self):
-        """Initialize the fake backup service."""
+        """
+        Initialize the fake backup service.
+
+        Attributes:
+            method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+            _failure_modes (Dict[str, bool]): A dictionary to simulate failures for specific methods.
+            backups (Dict[str, BackupInfo]): A dictionary to store backup information.
+            restores (Dict[str, RestoreInfo]): A dictionary to store restore information.
+        """
         self.method_calls: List[Dict[str, Any]] = []
         self._failure_modes: Dict[str, bool] = {}
 
@@ -37,32 +71,39 @@ class FakeBackupService:
         self.restores: Dict[str, RestoreInfo] = {}
 
     def set_failure_mode(self, method_name: str, should_fail: bool = True):
-        """Configure a method to fail when called.
+        """
+        Configure a method to fail when called.
 
         Args:
-            method_name: Name of the method that should fail
-            should_fail: Whether the method should fail (default: True)
+            method_name (str): Name of the method that should fail.
+            should_fail (bool): Whether the method should fail (default is True).
         """
         self._failure_modes[method_name] = should_fail
 
     def register_backup(self, backup: BackupInfo):
-        """Register a predefined backup in the system.
+        """
+        Register a predefined backup in the system.
 
         Args:
-            backup: Backup information to add
+            backup (BackupInfo): Backup information to add.
         """
         self.backups[backup.id] = backup
 
     def register_restore(self, restore: RestoreInfo):
-        """Register a predefined restore operation in the system.
+        """
+        Register a predefined restore operation in the system.
 
         Args:
-            restore: Restore information to add
+            restore (RestoreInfo): Restore information to add.
         """
         self.restores[restore.id] = restore
 
     def reset(self):
-        """Reset the fake service state."""
+        """
+        Reset the fake service state.
+
+        Clears all stored backups, restores, and method calls.
+        """
         self.method_calls = []
         self._failure_modes = {}
         self.backups = {}
@@ -71,7 +112,19 @@ class FakeBackupService:
     async def create_backup(
         self, app_name: str, request: BackupCreateRequest
     ) -> BackupCreateResponse:
-        """Create a new backup of an application."""
+        """
+        Create a new backup of an application.
+
+        Args:
+            app_name (str): The name of the application.
+            request (BackupCreateRequest): The request containing backup details.
+
+        Returns:
+            BackupCreateResponse: The response containing the created backup and a success message.
+
+        Raises:
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "create_backup",
@@ -111,7 +164,18 @@ class FakeBackupService:
         )
 
     async def list_backups(self, app_name: Optional[str] = None) -> BackupListResponse:
-        """List available backups, optionally filtered by app name."""
+        """
+        List available backups, optionally filtered by app name.
+
+        Args:
+            app_name (Optional[str]): The name of the application to filter backups (default is None).
+
+        Returns:
+            BackupListResponse: The response containing a list of backups and their details.
+
+        Raises:
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "list_backups",
@@ -137,7 +201,19 @@ class FakeBackupService:
         )
 
     async def get_backup_info(self, backup_id: str) -> BackupInfo:
-        """Get information about a specific backup."""
+        """
+        Get information about a specific backup.
+
+        Args:
+            backup_id (str): The unique identifier of the backup.
+
+        Returns:
+            BackupInfo: The backup information.
+
+        Raises:
+            NotFoundException: If the backup does not exist.
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "get_backup_info",
@@ -155,7 +231,16 @@ class FakeBackupService:
         return self.backups[backup_id]
 
     async def delete_backup(self, backup_id: str) -> None:
-        """Delete a backup."""
+        """
+        Delete a backup.
+
+        Args:
+            backup_id (str): The unique identifier of the backup.
+
+        Raises:
+            NotFoundException: If the backup does not exist.
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "delete_backup",
@@ -174,7 +259,20 @@ class FakeBackupService:
     async def restore_backup(
         self, backup_id: str, request: RestoreRequest
     ) -> RestoreResponse:
-        """Restore an application from a backup."""
+        """
+        Restore an application from a backup.
+
+        Args:
+            backup_id (str): The unique identifier of the backup.
+            request (RestoreRequest): The request containing restore details.
+
+        Returns:
+            RestoreResponse: The response containing the restore information and a success message.
+
+        Raises:
+            NotFoundException: If the backup does not exist.
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "restore_backup",
@@ -218,7 +316,19 @@ class FakeBackupService:
         )
 
     async def get_restore_info(self, restore_id: str) -> RestoreInfo:
-        """Get information about a specific restore operation."""
+        """
+        Get information about a specific restore operation.
+
+        Args:
+            restore_id (str): The unique identifier of the restore operation.
+
+        Returns:
+            RestoreInfo: The restore information.
+
+        Raises:
+            NotFoundException: If the restore operation does not exist.
+            Exception: If the failure mode for this method is enabled.
+        """
         self.method_calls.append(
             {
                 "method": "get_restore_info",
@@ -236,7 +346,16 @@ class FakeBackupService:
         return self.restores[restore_id]
 
     def has_backup(self, app_name: str, backup_id: str) -> bool:
-        """Check if backup exists for app."""
+        """
+        Check if a backup exists for an application.
+
+        Args:
+            app_name (str): The name of the application.
+            backup_id (str): The unique identifier of the backup.
+
+        Returns:
+            bool: True if the backup exists for the application, False otherwise.
+        """
         return (
             backup_id in self.backups and self.backups[backup_id].app_name == app_name
         )

@@ -1,4 +1,10 @@
-"""Fake log service implementation for testing."""
+"""Fake log service implementation for testing.
+
+Attributes:
+    method_calls (List[Dict[str, Any]]): Tracks method calls for assertions during testing.
+    _failure_modes (Dict[str, bool]): Simulates failures for specific methods during testing.
+    logs (Dict[str, LogEntry]): Stores log entries, organized by log ID.
+"""
 
 from typing import Dict, List, Optional, Any, AsyncGenerator
 from datetime import datetime, timezone
@@ -295,38 +301,6 @@ class FakeLogService:
 
     async def stream_logs(self, app_name: str) -> AsyncGenerator[LogEntry, None]:
         """Stream logs for a specific app.
-
-        Args:
-            app_name: Application name to filter logs by
-
-        Yields:
-            LogEntry objects for the specified app
-        """
-        self.method_calls.append(
-            {
-                "method": "stream_logs",
-                "app_name": app_name,
-                "timestamp": datetime.now(timezone.utc),
-            }
-        )
-
-        params = LogQueryParams(
-            start_time=None,
-            end_time=None,
-            level=None,
-            source=None,
-            app_name=app_name,
-            message_contains=None,
-            request_id=None,
-            session_id=None,
-            user_id=None,
-        )
-
-        async for entry in self.get_log_stream(params):
-            yield entry
-
-    async def stream_logs(self, app_name: str) -> AsyncGenerator[LogEntry, None]:
-        """Alias for get_log_stream with app_name filter for backward compatibility.
 
         Args:
             app_name: Application name to filter logs by

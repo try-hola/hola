@@ -2,6 +2,11 @@
 
 This module provides business logic for managing application configurations including
 CRUD operations for config entries and app-specific configuration management.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    _configs (Dict[str, AppConfig]): In-memory storage for application configurations.
 """
 
 from typing import Dict, Any, Optional, List
@@ -28,6 +33,11 @@ class ConfigService:
 
     Provides business logic for configuration management including CRUD operations
     for configuration entries and app-specific configuration handling.
+
+    Attributes:
+        context (ServerContext): Server context containing settings and dependencies.
+        settings (Settings): Application settings.
+        _configs (Dict[str, AppConfig]): In-memory storage for application configurations.
     """
 
     def __init__(self, context: ServerContext):
@@ -70,7 +80,7 @@ class ConfigService:
                 app_name=app_name, config={}, created_at=now, updated_at=now
             )
 
-        return ConfigResponse(config=self._configs[app_name])
+        return ConfigResponse(success=True, config=self._configs[app_name])
 
     async def list_config_entries(self, app_name: str) -> ConfigListResponse:
         """List all configuration entries for an application.
@@ -93,7 +103,7 @@ class ConfigService:
         config_response = await self.get_app_config(app_name)
         entries = list(config_response.config.config.values())
 
-        return ConfigListResponse(entries=entries, count=len(entries))
+        return ConfigListResponse(success=True, entries=entries, count=len(entries))
 
     async def get_config_entry(self, app_name: str, key: str) -> ConfigEntryResponse:
         """Get a specific configuration entry.
@@ -130,7 +140,7 @@ class ConfigService:
             )
 
         entry = config_response.config.config[key]
-        return ConfigEntryResponse(entry=entry)
+        return ConfigEntryResponse(success=True, entry=entry)
 
     async def create_config_entry(
         self, app_name: str, request: ConfigCreateRequest
@@ -184,7 +194,7 @@ class ConfigService:
         app_config.updated_at = now
 
         logger.debug(f"Created configuration entry {key} for app: {app_name}")
-        return ConfigEntryResponse(entry=entry)
+        return ConfigEntryResponse(success=True, entry=entry)
 
     async def update_config_entry(
         self, app_name: str, key: str, request: ConfigUpdateRequest
@@ -240,7 +250,7 @@ class ConfigService:
         app_config.updated_at = now
 
         logger.debug(f"Updated configuration entry {key} for app: {app_name}")
-        return ConfigEntryResponse(entry=updated_entry)
+        return ConfigEntryResponse(success=True, entry=updated_entry)
 
     async def delete_config_entry(self, app_name: str, key: str) -> None:
         """Delete a configuration entry.

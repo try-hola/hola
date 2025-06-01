@@ -1,4 +1,20 @@
-"""Fake configuration service implementation for testing."""
+"""Fake configuration service implementation for testing.
+
+This module provides a fake implementation of a configuration service for testing purposes.
+It includes in-memory configuration storage and state tracking for test assertions.
+
+Attributes:
+    FakeConfigService (class): Provides methods to simulate configuration operations.
+    ConfigEntry (class): Represents a single configuration entry.
+    ConfigUpdateRequest (class): Represents a request to update a configuration entry.
+    ConfigCreateRequest (class): Represents a request to create a new configuration entry.
+    AppConfig (class): Represents the configuration for an application.
+    ConfigResponse (class): Represents the response containing application configuration.
+    ConfigListResponse (class): Represents the response containing a list of configuration entries.
+    ConfigEntryResponse (class): Represents the response containing a single configuration entry.
+    ValidationException (exception): Raised for validation errors.
+    NotFoundException (exception): Raised when a requested resource is not found.
+"""
 
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
@@ -16,19 +32,37 @@ from hola_shared.errors import ValidationException, NotFoundException
 
 
 class FakeConfigService:
-    """Fake implementation of configuration service for testing.
+    """
+    Fake implementation of configuration service for testing.
 
     Provides in-memory configuration storage with state tracking for test assertions.
     """
 
     def __init__(self):
-        """Initialize the fake configuration service."""
+        """
+        Initialize the fake configuration service.
+
+        Attributes:
+            configs (Dict[str, AppConfig]): A dictionary to store application configurations.
+            method_calls (List[Dict[str, Any]]): A list to track method calls for assertions.
+        """
         # Structure: {app_name: AppConfig}
         self.configs: Dict[str, AppConfig] = {}
         self.method_calls: List[Dict[str, Any]] = []
 
     async def get_app_config(self, app_name: str) -> ConfigResponse:
-        """Get all configuration for an application."""
+        """
+        Get all configuration for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            ConfigResponse: The response containing the application's configuration.
+
+        Raises:
+            ValidationException: If the app name is empty or invalid.
+        """
         self.method_calls.append(
             {
                 "method": "get_app_config",
@@ -52,7 +86,18 @@ class FakeConfigService:
         return ConfigResponse(success=True, config=self.configs[app_name])
 
     async def list_config_entries(self, app_name: str) -> ConfigListResponse:
-        """List all configuration entries for an application."""
+        """
+        List all configuration entries for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            ConfigListResponse: The response containing a list of configuration entries.
+
+        Raises:
+            ValidationException: If the app name is empty or invalid.
+        """
         self.method_calls.append(
             {
                 "method": "list_config_entries",
@@ -72,7 +117,20 @@ class FakeConfigService:
         return ConfigListResponse(success=True, entries=entries, count=len(entries))
 
     async def get_config_entry(self, app_name: str, key: str) -> ConfigEntryResponse:
-        """Get a specific configuration entry."""
+        """
+        Get a specific configuration entry.
+
+        Args:
+            app_name (str): The name of the application.
+            key (str): The configuration key.
+
+        Returns:
+            ConfigEntryResponse: The response containing the configuration entry.
+
+        Raises:
+            ValidationException: If the app name or key is empty or invalid.
+            NotFoundException: If the configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "get_config_entry",
@@ -104,7 +162,19 @@ class FakeConfigService:
     async def create_config_entry(
         self, app_name: str, request: ConfigCreateRequest
     ) -> ConfigEntryResponse:
-        """Create a new configuration entry."""
+        """
+        Create a new configuration entry.
+
+        Args:
+            app_name (str): The name of the application.
+            request (ConfigCreateRequest): The request containing configuration entry details.
+
+        Returns:
+            ConfigEntryResponse: The response containing the created configuration entry.
+
+        Raises:
+            ValidationException: If the app name or key is empty or invalid, or if the entry already exists.
+        """
         self.method_calls.append(
             {
                 "method": "create_config_entry",
@@ -153,7 +223,21 @@ class FakeConfigService:
     async def update_config_entry(
         self, app_name: str, key: str, request: ConfigUpdateRequest
     ) -> ConfigEntryResponse:
-        """Update an existing configuration entry."""
+        """
+        Update an existing configuration entry.
+
+        Args:
+            app_name (str): The name of the application.
+            key (str): The configuration key.
+            request (ConfigUpdateRequest): The request containing updated configuration entry details.
+
+        Returns:
+            ConfigEntryResponse: The response containing the updated configuration entry.
+
+        Raises:
+            ValidationException: If the app name or key is empty or invalid.
+            NotFoundException: If the configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "update_config_entry",
@@ -201,7 +285,17 @@ class FakeConfigService:
         return ConfigEntryResponse(success=True, entry=updated_entry)
 
     async def delete_config_entry(self, app_name: str, key: str) -> None:
-        """Delete a configuration entry."""
+        """
+        Delete a configuration entry.
+
+        Args:
+            app_name (str): The name of the application.
+            key (str): The configuration key.
+
+        Raises:
+            ValidationException: If the app name or key is empty or invalid.
+            NotFoundException: If the configuration entry does not exist.
+        """
         self.method_calls.append(
             {
                 "method": "delete_config_entry",
@@ -230,7 +324,15 @@ class FakeConfigService:
         app_config.updated_at = datetime.now(timezone.utc)
 
     async def delete_app_config(self, app_name: str) -> None:
-        """Delete all configuration for an application."""
+        """
+        Delete all configuration for an application.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Raises:
+            ValidationException: If the app name is empty or invalid.
+        """
         self.method_calls.append(
             {
                 "method": "delete_app_config",
@@ -248,26 +350,60 @@ class FakeConfigService:
             del self.configs[app_name]
 
     def reset(self) -> None:
-        """Reset the fake service state."""
+        """
+        Reset the fake service state.
+
+        Clears all stored configurations and method calls.
+        """
         self.configs.clear()
         self.method_calls.clear()
 
     def has_config(self, app_name: str) -> bool:
-        """Check if an app has configuration."""
+        """
+        Check if an app has configuration.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            bool: True if the app has configuration, False otherwise.
+        """
         return app_name in self.configs
 
     def has_config_entry(self, app_name: str, key: str) -> bool:
-        """Check if a specific configuration entry exists."""
+        """
+        Check if a specific configuration entry exists.
+
+        Args:
+            app_name (str): The name of the application.
+            key (str): The configuration key.
+
+        Returns:
+            bool: True if the configuration entry exists, False otherwise.
+        """
         if app_name not in self.configs:
             return False
         return key in self.configs[app_name].config
 
     def get_method_calls(self) -> List[Dict[str, Any]]:
-        """Get all method calls for testing assertions."""
+        """
+        Get all method calls for testing assertions.
+
+        Returns:
+            List[Dict[str, Any]]: A list of method calls.
+        """
         return self.method_calls.copy()
 
     def get_config_count(self, app_name: str) -> int:
-        """Get the number of configuration entries for an app."""
+        """
+        Get the number of configuration entries for an app.
+
+        Args:
+            app_name (str): The name of the application.
+
+        Returns:
+            int: The number of configuration entries.
+        """
         if app_name not in self.configs:
             return 0
         return len(self.configs[app_name].config)

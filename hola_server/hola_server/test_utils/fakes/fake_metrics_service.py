@@ -1,4 +1,11 @@
-"""Fake metrics service implementation for testing."""
+"""Fake metrics service implementation for testing.
+
+Attributes:
+    method_calls (List[Dict[str, Any]]): Tracks method calls for assertions during testing.
+    _failure_modes (Dict[str, bool]): Simulates failures for specific methods during testing.
+    metrics (Dict[str, Dict[str, Dict[datetime, MetricPoint]]]): Stores metric data points, organized by app name and metric name.
+    metric_definitions (Dict[str, Dict[str, MetricDefinition]]): Stores metric definitions, organized by app name and metric name.
+"""
 
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
@@ -42,8 +49,8 @@ class FakeMetricsService:
         """Configure a method to fail when called.
 
         Args:
-            method_name: Name of the method that should fail
-            should_fail: Whether the method should fail (default: True)
+            method_name (str): Name of the method that should fail.
+            should_fail (bool): Whether the method should fail (default: True).
         """
         self._failure_modes[method_name] = should_fail
 
@@ -51,7 +58,7 @@ class FakeMetricsService:
         """Register a predefined metric definition.
 
         Args:
-            definition: Metric definition to register
+            definition (MetricDefinition): Metric definition to register.
         """
         if definition.app_name not in self.metric_definitions:
             self.metric_definitions[definition.app_name] = {}
@@ -62,7 +69,7 @@ class FakeMetricsService:
         """Register a predefined metric series with data points.
 
         Args:
-            series: Metric series to register
+            series (MetricSeries): Metric series to register.
         """
         app_name = series.app_name
         metric_name = series.name
@@ -98,7 +105,10 @@ class FakeMetricsService:
             self.metrics[app_name][metric_name][point.timestamp] = point
 
     def reset(self):
-        """Reset the fake service state."""
+        """Reset the fake service state.
+
+        Clears all stored metrics, metric definitions, and method calls.
+        """
         self.method_calls = []
         self._failure_modes = {}
         self.metrics = {}
@@ -107,7 +117,18 @@ class FakeMetricsService:
     async def record_metric(
         self, app_name: str, request: MetricRecordRequest
     ) -> MetricPoint:
-        """Record a new metric data point."""
+        """Record a new metric data point.
+
+        Args:
+            app_name (str): Application name.
+            request (MetricRecordRequest): Metric record request containing data point details.
+
+        Returns:
+            MetricPoint: The recorded metric data point.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "record_metric",
@@ -171,7 +192,18 @@ class FakeMetricsService:
     async def get_metrics(
         self, app_name: str, params: MetricsQueryParams
     ) -> MetricsListResponse:
-        """Get metrics for an application, optionally filtered by name and parameters."""
+        """Get metrics for an application, optionally filtered by name and parameters.
+
+        Args:
+            app_name (str): Application name.
+            params (MetricsQueryParams): Query parameters for filtering metrics.
+
+        Returns:
+            MetricsListResponse: Response containing filtered metrics and summary.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "get_metrics",
@@ -344,7 +376,17 @@ class FakeMetricsService:
     async def get_metric_definitions(
         self, app_name: Optional[str] = None
     ) -> MetricDefinitionsResponse:
-        """Get metric definitions, optionally filtered by app name."""
+        """Get metric definitions, optionally filtered by app name.
+
+        Args:
+            app_name (Optional[str]): Application name to filter definitions by.
+
+        Returns:
+            MetricDefinitionsResponse: Response containing metric definitions.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "get_metric_definitions",
@@ -372,7 +414,17 @@ class FakeMetricsService:
         )
 
     async def get_summary_metrics(self, app_name: str) -> Dict[str, Any]:
-        """Get summarized metrics for an application."""
+        """Get summarized metrics for an application.
+
+        Args:
+            app_name (str): Application name.
+
+        Returns:
+            Dict[str, Any]: Summary of metrics for the application.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "get_summary_metrics",
@@ -401,7 +453,17 @@ class FakeMetricsService:
         }
 
     async def get_metrics_summary(self, app_name: str) -> MetricsSummary:
-        """Get summary metrics for an application."""
+        """Get summary metrics for an application.
+
+        Args:
+            app_name (str): Application name.
+
+        Returns:
+            MetricsSummary: Summary of metrics for the application.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "get_metrics_summary",
@@ -486,10 +548,13 @@ class FakeMetricsService:
         """Get all metric names for an application.
 
         Args:
-            app_name: Application name
+            app_name (str): Application name.
 
         Returns:
-            List of metric names
+            List[str]: List of metric names.
+
+        Raises:
+            Exception: If the method is configured to fail.
         """
         self.method_calls.append(
             {
@@ -516,12 +581,15 @@ class FakeMetricsService:
         """Clear metrics with optional filtering.
 
         Args:
-            app_name: Application name
-            metric_name: Optional specific metric name to clear
-            before_timestamp: Optional timestamp to clear metrics before
+            app_name (str): Application name.
+            metric_name (Optional[str]): Specific metric name to clear.
+            before_timestamp (Optional[datetime]): Timestamp to clear metrics before.
 
         Returns:
-            MetricsClearResponse with cleared counts
+            MetricsClearResponse: Response with cleared counts.
+
+        Raises:
+            Exception: If the method is configured to fail.
         """
         # Create a request object for internal use
         request = MetricsClearRequest(
@@ -612,7 +680,19 @@ class FakeMetricsService:
     async def generate_test_metrics(
         self, app_name: str, metric_count: int = 5, points_per_metric: int = 100
     ) -> Dict[str, MetricSeries]:
-        """Generate test metrics for development and testing."""
+        """Generate test metrics for development and testing.
+
+        Args:
+            app_name (str): Application name.
+            metric_count (int): Number of metrics to generate (default: 5).
+            points_per_metric (int): Number of data points per metric (default: 100).
+
+        Returns:
+            Dict[str, MetricSeries]: Generated test metrics.
+
+        Raises:
+            Exception: If the method is configured to fail.
+        """
         self.method_calls.append(
             {
                 "method": "generate_test_metrics",
@@ -773,8 +853,16 @@ class FakeMetricsService:
     ) -> MetricSeries:
         """Get a single metric series (compatibility method for API).
 
-        This method provides compatibility with the API endpoint that expects
-        a get_metric method. It delegates to get_metric_series.
+        Args:
+            app_name (str): Application name.
+            metric_name (str): Metric name.
+            **kwargs: Additional arguments for compatibility.
+
+        Returns:
+            MetricSeries: The requested metric series.
+
+        Raises:
+            Exception: If the method is configured to fail.
         """
         # Convert kwargs to MetricsQueryParams if needed
         params = MetricsQueryParams(

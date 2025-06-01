@@ -1,7 +1,17 @@
 """File storage service for Hola applications.
 
 This module provides business logic for managing application files,
-including uploads, listings, downloads, and deletions.
+including uploads, listings, downloads, and deletions. It handles file operations
+asynchronously to ensure non-blocking performance and provides comprehensive 
+error handling for file system operations.
+
+The service maintains an organized storage structure with application-specific
+directories and preserves file metadata such as timestamps and content types.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    base_path (str): Base path for application files.
 """
 
 import os
@@ -26,7 +36,14 @@ class FileStorage:
     """Service for managing application files.
 
     Provides business logic for file management including uploads, listings,
-    downloads, and deletions.
+    downloads, and deletions. This service ensures file operations occur
+    asynchronously to maintain server responsiveness, handles appropriate error
+    conditions, and maintains file metadata accurately.
+
+    Attributes:
+        context (ServerContext): Server context containing settings and dependencies.
+        settings (Settings): Application settings.
+        base_path (str): Base path for application files.
     """
 
     def __init__(self, context: ServerContext):
@@ -45,7 +62,16 @@ class FileStorage:
         logger.debug(f"FileStorage initialized with base path: {self.base_path}")
 
     def _get_app_path(self, app_name: str) -> str:
-        """Get the base path for a specific application's files."""
+        """Get the base path for a specific application's files.
+        
+        Creates a standardized path for application-specific file storage.
+        
+        Args:
+            app_name (str): Name of the application.
+            
+        Returns:
+            str: Absolute file system path to the application's file storage directory.
+        """
         return os.path.join(self.base_path, app_name, "files")
 
     def _get_file_full_path(self, app_name: str, file_path: str) -> str:
@@ -140,6 +166,11 @@ class FileStorage:
     ) -> FileInfo:
         """Upload a file for an application.
 
+        Stores a file in the application's storage area with proper directory creation
+        and error handling. The operation is performed asynchronously to prevent blocking
+        the server. After uploading, the method collects and returns metadata about the 
+        stored file including size, modification time, and content type.
+
         Args:
             app_name: Name of the application
             file_path: Target path within app's file storage
@@ -147,10 +178,12 @@ class FileStorage:
             content_type: MIME type of the file (optional)
 
         Returns:
-            Information about the uploaded file
+            Information about the uploaded file including path, size, 
+            modification timestamp, and content type
 
         Raises:
             ValidationException: If the file path is invalid
+            ServiceException: If file system operations fail
         """
         logger.info(f"Uploading file for app '{app_name}': {file_path}")
 

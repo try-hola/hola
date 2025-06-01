@@ -1,7 +1,20 @@
 """Application metrics collection and monitoring service.
 
 This module provides business logic for collecting, storing, and querying
-application performance metrics and monitoring data.
+application performance metrics and monitoring data. It supports time-series
+data collection with customizable metric types, units, and labels.
+
+The service handles metric recording, querying with filtering options, 
+statistical analysis of metric data, and maintenance operations such as 
+data retention management.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    metrics_path (Path): Path to the metrics storage directory.
+    _metrics (Dict[str, Dict[str, List[MetricPoint]]]): In-memory storage for metrics data.
+    _metric_definitions (Dict[str, Dict[str, MetricDefinition]]): In-memory storage for metric definitions.
+    _max_points_per_metric (int): Maximum points per metric to keep in memory.
 """
 
 import uuid
@@ -34,14 +47,20 @@ class MetricsService:
     """Service for managing application metrics.
 
     Provides business logic for metrics collection, storage, querying,
-    and monitoring with time-series data management.
+    and monitoring with time-series data management. This service handles the 
+    complete lifecycle of metrics data including creation, storage, filtering, 
+    analysis, and cleanup operations with comprehensive data validation.
+    
+    The service supports different metric types (counter, gauge, histogram),
+    units (bytes, milliseconds, count), and customizable labels for detailed
+    categorization and filtering capabilities.
     """
 
     def __init__(self, context: ServerContext):
         """Initialize the metrics service.
 
         Args:
-            context: Server context containing settings and dependencies
+            context (ServerContext): Server context containing settings and dependencies.
         """
         self.context = context
         self.settings = context.settings
@@ -64,9 +83,18 @@ class MetricsService:
     async def record_metric(self, app_name: str, request: MetricRecordRequest) -> None:
         """Record a new metric data point.
 
+        Stores a new metric data point with the specified value, labels, and optional timestamp.
+        If this is the first occurrence of the metric, it also creates a metric definition.
+        Otherwise, it updates the existing definition with new information such as label keys
+        and totals. The service manages data point limits to prevent memory exhaustion.
+
         Args:
-            app_name: Application name for the metric
-            request: Metric recording request with metric details
+            app_name (str): Application name for the metric.
+            request (MetricRecordRequest): Metric recording request with name, value,
+                type, unit, optional labels, and optional timestamp.
+                
+        Raises:
+            ServiceException: If the metric recording fails for any reason.
         """
         try:
             logger.debug(
@@ -132,11 +160,11 @@ class MetricsService:
         """Get metrics data for an application.
 
         Args:
-            app_name: Application name
-            params: Query parameters for filtering metrics
+            app_name (str): Application name.
+            params (MetricsQueryParams): Query parameters for filtering metrics.
 
         Returns:
-            MetricsListResponse with metrics data and summary
+            MetricsListResponse: Metrics data and summary.
         """
         try:
             logger.debug(
@@ -182,12 +210,12 @@ class MetricsService:
         """Get a specific metric series.
 
         Args:
-            app_name: Application name
-            metric_name: Metric name
-            params: Query parameters
+            app_name (str): Application name.
+            metric_name (str): Metric name.
+            params (MetricsQueryParams): Query parameters.
 
         Returns:
-            MetricSeries with time-series data
+            MetricSeries: Time-series data.
         """
         try:
             logger.debug(f"Getting metric series {metric_name} for app {app_name}")
@@ -223,10 +251,10 @@ class MetricsService:
         """Get summarized metrics for an application.
 
         Args:
-            app_name: Application name
+            app_name (str): Application name.
 
         Returns:
-            Dictionary with summary metrics
+            Dict[str, Any]: Summary metrics.
         """
         try:
             logger.debug(f"Getting summary metrics for app {app_name}")
@@ -270,10 +298,10 @@ class MetricsService:
         """Get metric definitions for an application.
 
         Args:
-            app_name: Application name
+            app_name (str): Application name.
 
         Returns:
-            MetricDefinitionsResponse with metric definitions
+            MetricDefinitionsResponse: Metric definitions.
         """
         try:
             logger.debug(f"Getting metric definitions for app {app_name}")
@@ -297,10 +325,10 @@ class MetricsService:
         """Get all metric names for an application.
 
         Args:
-            app_name: Application name
+            app_name (str): Application name.
 
         Returns:
-            List of metric names
+            List[str]: Metric names.
         """
         try:
             logger.debug(f"Getting metric names for app {app_name}")
@@ -317,21 +345,16 @@ class MetricsService:
                 service_name="metrics_service",
             )
 
-    async def clear_metrics(
-        self,
-        app_name: str,
-        metric_name: Optional[str] = None,
-        before_timestamp: Optional[datetime] = None,
-    ) -> MetricsClearResponse:
+    async def clear_metrics(self, app_name: str, metric_name: Optional[str] = None, before_timestamp: Optional[datetime] = None) -> MetricsClearResponse:
         """Clear metrics data with optional filtering.
 
         Args:
-            app_name: Application name
-            metric_name: Optional specific metric name to clear
-            before_timestamp: Optional timestamp to clear metrics before
+            app_name (str): Application name.
+            metric_name (Optional[str], optional): Specific metric name to clear. Defaults to None.
+            before_timestamp (Optional[datetime], optional): Timestamp to clear metrics before. Defaults to None.
 
         Returns:
-            MetricsClearResponse with cleared counts
+            MetricsClearResponse: Cleared counts.
         """
         try:
             # Create a request object for internal use
@@ -351,16 +374,14 @@ class MetricsService:
                 service_name="metrics_service",
             )
 
-    async def _clear_metrics_internal(
-        self, request: MetricsClearRequest
-    ) -> MetricsClearResponse:
+    async def _clear_metrics_internal(self, request: MetricsClearRequest) -> MetricsClearResponse:
         """Internal implementation of clear metrics.
 
         Args:
-            request: Metrics clearing request
+            request (MetricsClearRequest): Metrics clearing request.
 
         Returns:
-            MetricsClearResponse with cleared counts
+            MetricsClearResponse: Cleared counts.
         """
         try:
             logger.info(f"Clearing metrics with filters: {request.model_dump()}")
@@ -454,13 +475,19 @@ class MetricsService:
     ) -> Optional[MetricSeries]:
         """Build a metric series from stored data points.
 
+        Creates a time-series data structure by filtering and processing stored metrics
+        based on provided query parameters. Handles time range filtering, label filtering,
+        pagination, and statistical calculations for the selected data points.
+
         Args:
-            app_name: Application name
-            metric_name: Metric name
-            params: Query parameters
+            app_name (str): Application name.
+            metric_name (str): Metric name.
+            params (MetricsQueryParams): Query parameters including time range, labels, 
+                pagination settings, and other filters.
 
         Returns:
-            MetricSeries or None if no data
+            Optional[MetricSeries]: Complete metric series with points and statistics,
+                or None if no data matches the provided filters.
         """
         if metric_name not in self._metrics[app_name]:
             return None
@@ -545,12 +572,18 @@ class MetricsService:
     ) -> MetricsSummary:
         """Generate metrics summary for an application.
 
+        Creates a comprehensive summary of all metrics for the specified application,
+        including total count, commonly used metrics like CPU and memory usage, and
+        time range information. The summary provides an overview of application 
+        performance and resource utilization at a glance.
+
         Args:
-            app_name: Application name
-            params: Query parameters
+            app_name (str): Application name.
+            params (MetricsQueryParams): Query parameters including time range and filters.
 
         Returns:
-            MetricsSummary with summary statistics
+            MetricsSummary: Summary statistics including metric counts, key performance
+                indicators, and time range information.
         """
         if app_name not in self._metrics:
             return self._generate_empty_summary(app_name, params)
@@ -605,14 +638,18 @@ class MetricsService:
     def _generate_empty_summary(
         self, app_name: str, params: MetricsQueryParams
     ) -> MetricsSummary:
-        """Generate empty metrics summary.
+        """Generate an empty metrics summary.
+
+        Creates a default metrics summary object with null values when no metrics
+        data is available for an application. This ensures consistent API responses
+        even when metrics data is absent.
 
         Args:
-            app_name: Application name
-            params: Query parameters
+            app_name (str): Application name.
+            params (MetricsQueryParams): Query parameters including time range settings.
 
         Returns:
-            Empty MetricsSummary
+            MetricsSummary: Empty summary statistics with default time range and null values.
         """
         return MetricsSummary(
             app_name=app_name,

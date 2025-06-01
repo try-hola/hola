@@ -1,7 +1,17 @@
 """Server status and health management service.
 
 This module provides business logic for server status monitoring, health checks,
-and resource usage tracking.
+and resource usage tracking. It performs system health assessments including disk space,
+memory usage, configuration service availability, and file storage accessibility.
+
+The service provides comprehensive information about server state, version details,
+and real-time resource utilization metrics that can be used for monitoring and alerting.
+
+Attributes:
+    context (ServerContext): Server context containing settings and dependencies.
+    settings (Settings): Application settings.
+    system_monitor (SystemMetrics): System metrics provider for monitoring.
+    _start_time (datetime): Server start time recorded at service initialization.
 """
 
 import platform
@@ -29,9 +39,15 @@ logger = get_logger(__name__)
 
 class ServerService:
     """Service for managing server status and health.
-
+    
     Provides business logic for server status monitoring, health checks,
-    and resource usage tracking.
+    and resource usage tracking. This service coordinates multiple health checks
+    including disk space, memory usage, configuration service, and file storage.
+    It also provides aggregated server status information including version details,
+    system resources, and server uptime.
+    
+    This service is used by the API layer to expose server health endpoints and
+    by administrative tools for monitoring server health.
     """
 
     def __init__(
@@ -40,8 +56,8 @@ class ServerService:
         """Initialize the server service.
 
         Args:
-            context: Server context containing settings and dependencies
-            system_monitor: Optional system metrics provider for dependency injection
+            context (ServerContext): Server context containing settings and dependencies.
+            system_monitor (SystemMetrics | None, optional): Optional system metrics provider for dependency injection. Defaults to None.
         """
         self.context = context
         self.settings = context.settings
@@ -52,9 +68,17 @@ class ServerService:
 
     async def get_server_status(self) -> ServerStatus:
         """Get complete server status information.
+        
+        Collects health check results, version information, and resource usage metrics
+        to create a comprehensive server status report. This method is the main entry 
+        point for server monitoring and diagnostics.
 
         Returns:
-            ServerStatus with health, version, and resource information
+            ServerStatus: Comprehensive status object containing health check results,
+                version details, resource utilization metrics, server state, and timestamps.
+                
+        Raises:
+            ServiceException: If any error occurs during status collection.
         """
         try:
             logger.debug("Getting server status")
@@ -84,9 +108,19 @@ class ServerService:
 
     async def get_health_check(self) -> HealthStatus:
         """Run health checks on server components.
+        
+        Performs a series of health checks on critical system components including
+        disk space, memory usage, configuration service, and file storage. Each check
+        produces a detailed health result, and an aggregate health status is determined
+        based on individual check results.
 
         Returns:
-            HealthStatus with individual component health results
+            HealthStatus: Object containing overall status and individual component 
+                health results with details on each system component.
+            
+        Note:
+            If an exception occurs during the health check process, an "UNHEALTHY" status
+            will be returned rather than allowing the exception to propagate.
         """
         try:
             logger.debug("Running server health checks")
@@ -136,6 +170,7 @@ class ServerService:
                         name="health_check",
                         status=HealthCheckStatus.UNHEALTHY,
                         message=f"Health check failed: {str(e)}",
+                        duration_ms=0.0,
                         checked_at=datetime.now(timezone.utc),
                     )
                 },
@@ -145,8 +180,16 @@ class ServerService:
     async def get_version(self) -> VersionInfo:
         """Get server version information.
 
+        Retrieves version information from application settings including version number,
+        build ID, build date, git commit hash, and Python version. This information 
+        is useful for debugging, support, and auditing purposes.
+
         Returns:
-            VersionInfo with version details
+            VersionInfo: Version details including application version, build information,
+                git commit hash, and Python runtime version.
+                
+        Raises:
+            ServiceException: If version information cannot be retrieved.
         """
         try:
             logger.debug("Getting server version information")
@@ -177,9 +220,18 @@ class ServerService:
 
     async def get_resource_usage(self) -> ResourceUsage:
         """Get server resource usage metrics.
+        
+        Collects real-time system resource metrics including CPU usage, memory usage,
+        disk space utilization, and system uptime. This information provides insight
+        into the current operational state of the server and can be used for
+        performance monitoring and capacity planning.
 
         Returns:
-            ResourceUsage with current resource metrics
+            ResourceUsage: Current resource metrics including CPU, memory, disk usage
+                percentages, absolute byte values, and system uptime.
+                
+        Raises:
+            ServiceException: If resource metrics cannot be retrieved.
         """
         try:
             logger.debug("Getting server resource usage")
@@ -224,7 +276,20 @@ class ServerService:
             )
 
     async def _check_disk_space(self) -> HealthCheckResult:
-        """Check disk space availability."""
+        """Check disk space availability.
+
+        Evaluates available disk space against configurable thresholds to determine
+        if the system has sufficient storage capacity. Uses settings-defined minimum
+        free space requirements in both percentage and absolute terms.
+
+        Returns:
+            HealthCheckResult: Disk space health check result containing status,
+                diagnostic message, check duration, and timestamp.
+                
+        Note:
+            Returns UNHEALTHY status if free space is below configured thresholds
+            or if an exception occurs during the check.
+        """
         try:
             start_time = datetime.now(timezone.utc)
 
@@ -265,11 +330,25 @@ class ServerService:
                 name="disk_space",
                 status=HealthCheckStatus.UNHEALTHY,
                 message=f"Disk check failed: {str(e)}",
+                duration_ms=0.0,
                 checked_at=datetime.now(timezone.utc),
             )
 
     async def _check_memory_usage(self) -> HealthCheckResult:
-        """Check memory usage."""
+        """Check memory usage.
+
+        Evaluates available system memory against configurable thresholds to determine
+        if sufficient memory is available for proper operation. Uses settings-defined
+        minimum memory thresholds in both percentage and absolute terms.
+
+        Returns:
+            HealthCheckResult: Memory usage health check result containing status,
+                diagnostic message, check duration, and timestamp.
+                
+        Note:
+            Returns UNHEALTHY status if available memory is below configured thresholds
+            or if an exception occurs during the check.
+        """
         try:
             start_time = datetime.now(timezone.utc)
 
@@ -308,11 +387,26 @@ class ServerService:
                 name="memory",
                 status=HealthCheckStatus.UNHEALTHY,
                 message=f"Memory check failed: {str(e)}",
+                duration_ms=0.0,
                 checked_at=datetime.now(timezone.utc),
             )
 
     async def _check_config_service(self) -> HealthCheckResult:
-        """Check configuration service health."""
+        """Check configuration service health.
+
+        Verifies that the configuration service is responsive and functioning
+        correctly by attempting to retrieve configuration data. This check
+        ensures that the application can access configuration settings required
+        for proper operation.
+
+        Returns:
+            HealthCheckResult: Configuration service health check result containing
+                status, diagnostic message, check duration, and timestamp.
+                
+        Note:
+            Returns UNHEALTHY status if the configuration service is unreachable
+            or returns an error.
+        """
         try:
             start_time = datetime.now(timezone.utc)
 
@@ -337,11 +431,25 @@ class ServerService:
                 name="config_service",
                 status=HealthCheckStatus.UNHEALTHY,
                 message=f"Configuration service failed: {str(e)}",
+                duration_ms=0.0,
                 checked_at=datetime.now(timezone.utc),
             )
 
     async def _check_file_storage(self) -> HealthCheckResult:
-        """Check file storage service health."""
+        """Check file storage service health.
+
+        Verifies that the file storage system is accessible and writable by
+        creating a test file. This check ensures that the application can
+        store and retrieve files, which is essential for many operations.
+
+        Returns:
+            HealthCheckResult: File storage service health check result containing
+                status, diagnostic message, check duration, and timestamp.
+                
+        Note:
+            Returns UNHEALTHY status if the storage directory is not accessible
+            or if file writing operations fail.
+        """
         try:
             start_time = datetime.now(timezone.utc)
 

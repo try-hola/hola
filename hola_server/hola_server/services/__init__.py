@@ -3,14 +3,20 @@
 This package contains service classes that implement the application's business logic
 and provide core functionality to the API layer.
 
+Services in this package follow these principles:
+1. Each service handles a specific domain area (apps, backups, configs, etc.)
+2. Services use dependency injection through the ServerContext
+3. Services implement business logic including validation and error handling
+4. Services are stateless except for in-memory caches
+
 Services:
-    AppService: Handles application management operations.
-    BackupService: Manages backup creation and restoration.
-    ConfigService: Provides configuration management capabilities.
-    FileStorage: Handles file storage operations.
-    LogService: Manages logging functionality.
-    MetricsService: Handles metrics collection and reporting.
-    ServerService: Manages server operations and status.
+    AppService: Handles application management including deployment, lifecycle, and status.
+    BackupService: Manages backup and restore operations for applications.
+    ConfigService: Provides configuration management services for applications.
+    FileStorage: Handles application file storage, retrieval, and management.
+    LogService: Manages logging functionality including storage, querying, and rotation.
+    MetricsService: Collects and reports metrics on application and system performance.
+    ServerService: Provides server maintenance and status monitoring.
 """
 
 from .app_service import AppService
