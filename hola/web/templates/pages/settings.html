@@ -1,0 +1,183 @@
+{% extends "base/base.html" %}
+
+{% block title %}Settings{% endblock %}
+{% block nav_settings %}btn-active{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-3xl font-bold">Settings</h1>
+        <p class="text-base-content/70 mt-1">Configure your Hola deployment platform</p>
+    </div>
+
+    <!-- Settings Tabs -->
+    <div class="tabs tabs-boxed">
+        <a class="tab tab-active" data-tab="general">General</a>
+        <a class="tab" data-tab="docker">Docker</a>
+        <a class="tab" data-tab="security">Security</a>
+        <a class="tab" data-tab="notifications">Notifications</a>
+    </div>
+
+    <!-- General Settings -->
+    <div id="general-tab" class="tab-content">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">General Settings</h2>
+                
+                <form class="space-y-6" hx-post="/api/settings/general" hx-target="#settings-result">
+                    <!-- Server Name -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Server Name</span>
+                        </label>
+                        <input type="text" 
+                               name="server_name" 
+                               value="Hola Server" 
+                               class="input input-bordered">
+                        <div class="label">
+                            <span class="label-text-alt">Display name for this Hola instance</span>
+                        </div>
+                    </div>
+
+                    <!-- Default Theme -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Default Theme</span>
+                        </label>
+                        <select name="theme" class="select select-bordered">
+                            <option value="light">Light</option>
+                            <option value="dark">Dark</option>
+                            <option value="auto">Auto (System)</option>
+                        </select>
+                    </div>
+
+                    <!-- Auto-refresh Interval -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Auto-refresh Interval</span>
+                        </label>
+                        <select name="refresh_interval" class="select select-bordered">
+                            <option value="10">10 seconds</option>
+                            <option value="30" selected>30 seconds</option>
+                            <option value="60">1 minute</option>
+                            <option value="300">5 minutes</option>
+                            <option value="0">Disabled</option>
+                        </select>
+                    </div>
+
+                    <div class="card-actions justify-end">
+                        <button type="submit" class="btn btn-primary">Save Changes</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Docker Settings (hidden by default) -->
+    <div id="docker-tab" class="tab-content hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Docker Configuration</h2>
+                
+                <div class="space-y-6">
+                    <!-- Docker Socket -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Docker Socket Path</span>
+                        </label>
+                        <input type="text" 
+                               value="/var/run/docker.sock" 
+                               class="input input-bordered"
+                               readonly>
+                        <div class="label">
+                            <span class="label-text-alt">Path to Docker daemon socket</span>
+                        </div>
+                    </div>
+
+                    <!-- Registry Settings -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Default Registry</span>
+                        </label>
+                        <input type="text" 
+                               placeholder="registry.example.com" 
+                               class="input input-bordered">
+                        <div class="label">
+                            <span class="label-text-alt">Default container registry for deployments</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Security Settings (hidden by default) -->
+    <div id="security-tab" class="tab-content hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Security Settings</h2>
+                
+                <div class="space-y-6">
+                    <!-- API Key -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">API Key</span>
+                        </label>
+                        <div class="join w-full">
+                            <input type="password" 
+                                   value="••••••••••••••••" 
+                                   class="input input-bordered join-item flex-grow"
+                                   readonly>
+                            <button class="btn btn-outline join-item">Regenerate</button>
+                        </div>
+                        <div class="label">
+                            <span class="label-text-alt">API key for programmatic access</span>
+                        </div>
+                    </div>
+
+                    <!-- Session Timeout -->
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text font-medium">Session Timeout</span>
+                        </label>
+                        <select class="select select-bordered">
+                            <option value="1800">30 minutes</option>
+                            <option value="3600" selected>1 hour</option>
+                            <option value="7200">2 hours</option>
+                            <option value="28800">8 hours</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Results Area -->
+    <div id="settings-result">
+        <!-- Results will be shown here -->
+    </div>
+</div>
+
+<script>
+// Simple tab switching
+document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', function() {
+        // Remove active class from all tabs
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('tab-active'));
+        
+        // Add active class to clicked tab
+        this.classList.add('tab-active');
+        
+        // Hide all tab contents
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.add('hidden');
+        });
+        
+        // Show selected tab content
+        const tabName = this.getAttribute('data-tab');
+        document.getElementById(tabName + '-tab').classList.remove('hidden');
+    });
+});
+</script>
+{% endblock %}

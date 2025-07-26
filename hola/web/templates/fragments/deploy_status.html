@@ -1,0 +1,63 @@
+<!-- Deployment Status Fragment -->
+<div class="card bg-base-100 shadow-xl">
+    <div class="card-body">
+        <h2 class="card-title">
+            Deployment Status
+            {% if status == 'success' %}
+            <div class="badge badge-success">Complete</div>
+            {% elif status == 'error' %}
+            <div class="badge badge-error">Failed</div>
+            {% elif status == 'in_progress' %}
+            <div class="badge badge-warning">In Progress</div>
+            {% endif %}
+        </h2>
+        
+        {% if status == 'in_progress' %}
+        <!-- Progress Bar -->
+        <div class="w-full bg-base-200 rounded-full h-2.5 mb-4">
+            <div class="bg-primary h-2.5 rounded-full transition-all duration-300" 
+                 style="width: {{ progress }}%"></div>
+        </div>
+        <p class="text-sm text-base-content/70">{{ progress }}% complete</p>
+        {% endif %}
+        
+        {% if message %}
+        <div class="alert {% if status == 'error' %}alert-error{% elif status == 'success' %}alert-success{% else %}alert-info{% endif %} mt-4">
+            <span>{{ message }}</span>
+        </div>
+        {% endif %}
+        
+        {% if status == 'success' %}
+        <div class="card-actions justify-end mt-4">
+            <button class="btn btn-primary" 
+                    hx-get="/apps/{{ app_name }}/manage" 
+                    hx-target="#main-content"
+                    hx-push-url="true">
+                Manage Application
+            </button>
+        </div>
+        {% elif status == 'error' %}
+        <div class="card-actions justify-end mt-4">
+            <button class="btn btn-outline" 
+                    hx-get="/apps/deploy" 
+                    hx-target="#main-content">
+                Try Again
+            </button>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if logs %}
+<!-- Deployment Logs -->
+<div class="card bg-base-100 shadow-xl mt-6">
+    <div class="card-body">
+        <h3 class="card-title text-lg">Deployment Logs</h3>
+        <div class="mockup-code max-h-64 overflow-y-auto">
+            {% for log in logs %}
+            <pre data-prefix="$"><code>{{ log }}</code></pre>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}

@@ -1,623 +1,373 @@
-# Comprehensive Technical Design Document
+# Hola: Application Deployment Platform - Technical Design
 
 ## 1. Architecture Overview
 
-The project consists of two main components:
-
-- **CLI Component**: A Python CLI application built with Typer that handles user commands, communicates with the server, and processes responses.
-- **Server-Side Component**: A Python FastAPI server that manages application deployments, configurations, and file storage. Handles long-running tasks with Server-Sent Events (SSE) for real-time updates.
+Hola is a self-contained application deployment platform built with Python FastAPI and featuring a modern web interface built with HTMX and DaisyUI. The platform provides a complete solution for deploying, managing, and monitoring containerized applications through an intuitive web interface.
 
-Both components are organized as a monorepo using Poetry workspaces with shared modules.
-
-### 1.1 CLI-Server Architecture
+### 1.1 Core Architecture
 
-The CLI component can manage multiple server instances of different types through the Provider Pattern:
-
-- **ServerProvider Interface**: Defined in the shared package, implemented by provider classes in the CLI
-- **Provider Registry**: The CLI maintains a registry of available provider types (Docker Desktop, OrbStack, etc.)
-- **Instance Manager**: Tracks and manages server instances across different providers
-- **Server Commands**: The CLI includes commands for creating, starting, stopping, and managing server instances
+The platform consists of a single deployable server component with two main interfaces:
 
-Each server instance is a standalone API server that can be run in different environments (Docker, OrbStack, etc.), while the CLI can connect to and manage multiple server instances. This architecture allows:
-
-1. **Flexibility**: Support for multiple execution environments based on user preference
-2. **Simplicity**: Each server focuses solely on API functionality without provider-specific code
-3. **Centralized Management**: The CLI provides a unified interface for managing multiple servers
-
-## 2. API Endpoints
+- **Web UI**: Modern, responsive interface built with HTMX and DaisyUI for interactive application management
+- **REST API**: Full-featured API for programmatic access and integration with external tools
 
-All API endpoints use the `/api` prefix.
+### 1.2 Technology Stack
 
-### Configuration Management
+- **Backend**: Python FastAPI with async/await patterns
+- **Frontend**: HTMX for dynamic interactions with DaisyUI (Tailwind CSS) for styling
+- **Containerization**: Docker for application deployment and management
+- **Storage**: File-based storage with configurable backend support
+- **Package Management**: ORAS (OCI Registry as Storage) for application package distribution
 
-| HTTP Method | Endpoint                              | Description                                       |
-| ----------- | ------------------------------------- | ------------------------------------------------- |
-| GET         | /api/config                           | Retrieve system-wide configuration                |
-| GET         | /api/config?key=name                  | Retrieve specific system config value             |
-| POST        | /api/config                           | Create or update multiple system config values    |
-| PUT         | /api/config/{key}                     | Create or update a specific system config value   |
-| DELETE      | /api/config/{key}                     | Remove a specific system config value             |
-| DELETE      | /api/config?keys=key1,key2            | Remove multiple system config values              |
-| GET         | /api/config/{appName}                 | Retrieve all configuration for an application     |
-| GET         | /api/config/{appName}?key=name        | Retrieve specific config value for an application |
-| POST        | /api/config/{appName}                 | Create or update multiple app config values       |
-| PUT         | /api/config/{appName}/{key}           | Create or update a specific app config value      |
-| DELETE      | /api/config/{appName}/{key}           | Remove a specific app config value                |
-| DELETE      | /api/config/{appName}?keys=k1,k2      | Remove multiple app config values                 |
-| GET         | /api/config/{appName}/encrypted       | Retrieve all encrypted values (masked by default) |
-| POST        | /api/config/{appName}/encrypted       | Create or update multiple encrypted values        |
-| PUT         | /api/config/{appName}/encrypted/{key} | Create or update a specific encrypted value       |
-| DELETE      | /api/config/{appName}/encrypted/{key} | Remove a specific encrypted value                 |
-
-### Application Deployment & Management
-
-| HTTP Method | Endpoint                    | Description                                              |
-| ----------- | --------------------------- | -------------------------------------------------------- |
-| POST        | /api/apps/deploy            | Deploy a new application.                                |
-| GET         | /api/apps                   | List all deployed applications.                          |
-| GET         | /api/apps/{appName}         | Get details about a deployed application.                |
-| POST        | /api/apps/{appName}/upgrade | Upgrade an application (with backup handled internally). |
-| DELETE      | /api/apps/{appName}         | Remove a deployed application.                           |
-| POST        | /api/apps/{appName}/start   | Start an application.                                    |
-| POST        | /api/apps/{appName}/stop    | Stop an application.                                     |
-| POST        | /api/apps/{appName}/restart | Restart an application.                                  |
-
-### File Management
-
-| HTTP Method | Endpoint                                | Description                                 |
-| ----------- | --------------------------------------- | ------------------------------------------- |
-| POST        | /api/apps/{appName}/files               | Upload additional files for an application. |
-| GET         | /api/apps/{appName}/files               | List uploaded files for an application.     |
-| GET         | /api/apps/{appName}/files/:filePath(\*) | Get a specific uploaded file.               |
-| DELETE      | /api/apps/{appName}/files/:filePath(\*) | Remove a specific uploaded file.            |
-
-### Backup & Restore
-
-| HTTP Method | Endpoint                               | Description                                 |
-| ----------- | -------------------------------------- | ------------------------------------------- |
-| POST        | /api/apps/{appName}/backup             | Trigger a backup for an application.        |
-| GET         | /api/apps/{appName}/backups            | List all backups for an application.        |
-| GET         | /api/apps/{appName}/backup/{backupId}  | Retrieve backup details for an application. |
-| POST        | /api/apps/{appName}/restore/{backupId} | Restore an application from a backup.       |
-
-### Logs & Monitoring
-
-| HTTP Method | Endpoint                    | Description                                 |
-| ----------- | --------------------------- | ------------------------------------------- |
-| GET         | /api/apps/{appName}/logs    | Retrieve logs for an application.           |
-| GET         | /api/apps/{appName}/metrics | Get performance metrics for an application. |
-| GET         | /api/apps/{appName}/health  | Check the health status of an application.  |
-
-### Real-Time Updates (Using SSE)
-
-| HTTP Method | Endpoint                   | Description                                                      |
-| ----------- | -------------------------- | ---------------------------------------------------------------- |
-| GET         | /api/apps/{appName}/events | Streams logs/status updates for deployment or upgrade processes. |
-
-## 2.1 Suggested CLI Structure
-
-The following CLI structure is designed to offer a cohesive, intuitive interface for end users while cleanly mapping to the underlying API features. All commands follow the pattern:
-
-```
-hola <command> <subcommand> [options]
-```
-
-### Client Settings Management (Local)
-
-```
-hola settings get [--key <key>]
-hola settings set <key>=<value>...
-hola settings delete <key>...
-```
-
-- These commands manage client-side settings stored in the local `~/.hola/config.json` file
-- Settings affect client behavior like output format, logging, and connection parameters
-
-### Server Configuration Management (Remote)
-
-```
-hola config get [--app <appName>] [--key <key>] [--secret]
-hola config set [--app <appName>] [--secret] <key>=<value>...
-hola config delete [--app <appName>] [--secret] <key>...
-```
-
-- `--app` targets an app-specific config; otherwise, system-wide is assumed.
-- `--secret` stores or retrieves values encrypted at rest (masked when retrieved).
-- These commands manage server-side configurations used by deployed applications
-
-### Application Lifecycle
-
-```
-hola app deploy <appName> [--package <package-ref>] [--env KEY=VALUE...] [--file <file>...]
-hola app list
-hola app info <appName>
-hola app upgrade <appName>
-hola app delete <appName>
-hola app start <appName>
-hola app stop <appName>
-hola app restart <appName>
-```
-
-### Server Management
-
-```
-hola servers providers                                      # List available server providers
-hola servers create <name> --provider <provider_type>       # Create a new server instance
-                    [--port <port>]                         # Port to expose the server on (default: 8000)
-                    [--image <image>]                       # Docker image to use (default: hola:latest)
-                    [--env KEY=VALUE...]                    # Environment variables for the server
-hola servers list                                           # List all server instances
-hola servers info <instance_id>                             # Get info about a server instance
-hola servers start <instance_id>                            # Start a server instance
-hola servers stop <instance_id>                             # Stop a server instance
-hola servers delete <instance_id>                           # Delete a server instance record
-```
-
-The CLI supports managing multiple server instances of different types (Docker Desktop, OrbStack, etc.) through the Provider Pattern. Each server instance runs one instance of the Hola API server in its specific environment.
-
-#### Server Management Architecture
-
-The server management functionality follows these principles:
-
-1. **Provider Abstraction**: The CLI implements the Provider Pattern through:
-   - `ServerProvider` Protocol defined in the shared library 
-   - Provider implementations in the CLI package (OrbStackProvider, DockerDesktopProvider)
-   - `ServerProviderRegistry` for managing available providers
-
-2. **Instance Management**: The `ServerInstanceManager` handles:
-   - Creating new server instances with specific providers
-   - Starting and stopping existing instances
-   - Tracking instance status and metadata
-   - Persisting instance information to disk (~/.hola/instances)
+### 1.3 Deployment Model
 
-3. **Environment Isolation**: Each server instance:
-   - Runs in its own isolated environment (container)
-   - Has its own API key and configuration
-   - Can be created, started, stopped independently of other instances
+The Hola server is designed to be deployed as a single Docker container that provides:
 
-4. **Connection Management**: The CLI stores connection information for each server:
-   - URL and port mapping to connect to the server
-   - API key for authentication
-   - Provider-specific connection context
+1. **Self-Contained Operation**: All functionality included in one deployable unit
+2. **Web-First Interface**: Primary interaction through modern web UI
+3. **API Access**: Full REST API for automation and integration
+4. **Container Orchestration**: Manages Docker containers on the host system
 
-### File Management
+## 2. Web Interface Design
 
-```
-hola file upload <appName> <path>...
-hola file list <appName>
-hola file delete <appName> <filePath>
-```
+The web interface is built using HTMX and DaisyUI to provide a modern, responsive experience without complex JavaScript frameworks.
 
-### Backup & Restore
+### 2.1 HTMX Integration
 
-```
-hola backup create <appName>
-hola backup list <appName>
-hola backup info <appName> <backupId>
-hola backup restore <appName> <backupId>
-```
+HTMX enables dynamic behavior through HTML attributes:
 
-### Logs & Monitoring
+- **hx-get/hx-post**: Fetch content and update page sections
+- **hx-trigger**: Define when interactions occur (click, change, etc.)
+- **hx-target**: Specify which elements to update
+- **hx-swap**: Control how content is replaced
+- **hx-indicator**: Show loading states during requests
 
-```
-hola logs <appName>
-hola metrics <appName>
-hola health <appName>
-```
+### 2.2 DaisyUI Components
 
-### Real-Time Updates
+The interface uses DaisyUI components for consistent styling:
 
-```
-hola watch <appName> [--events deploy|update|all]
-```
+- **Navigation**: Navbar with breadcrumbs and user controls
+- **Cards**: Application cards with status indicators
+- **Tables**: Data tables with sorting and filtering
+- **Forms**: Input forms with validation feedback
+- **Modals**: Dialog boxes for confirmations and detailed views
+- **Alerts**: Success/error notifications with auto-dismiss
 
-This CLI is designed to be clear, minimal, and consistent. Aliases like `cfg`, `ls`, or `rm` can be introduced as optional ergonomic shortcuts. Descriptive error messages and `--help` flags for every command/subcommand ensure a friendly developer experience.
+### 2.3 Page Structure
 
-## 2.2 Client Error Handling and Feedback
+#### Dashboard
+- Overview of all deployed applications
+- System status and resource usage
+- Recent activity feed
+- Quick action buttons
 
-The CLI client provides clear, actionable feedback for different error scenarios:
+#### Application Management
+- Application list with search and filtering
+- Individual application detail pages
+- Deployment wizard for new applications
+- Configuration editor with live preview
 
-### Error Categories and Responses
+#### System Configuration
+- Global settings management
+- Environment variable configuration
+- File upload interface
+- Backup management
 
-| Error Type     | Description              | Client Response                                      |
-| -------------- | ------------------------ | ---------------------------------------------------- |
-| Connection     | Server unreachable       | Clear error with network troubleshooting steps       |
-| Authentication | Invalid API key          | Instructions for validating credentials              |
-| Validation     | Invalid input parameters | Specific guidance on correcting the input            |
-| Resource       | Resource not found       | Suggestions for available resources                  |
-| Permission     | Insufficient permissions | Details about required permissions                   |
-| Server         | Internal server errors   | Error code and instructions to contact administrator |
+### 2.4 Real-Time Updates
 
-### User Feedback Mechanisms
+Using HTMX with Server-Sent Events (SSE):
 
-- **Progress Indicators**: Long-running operations display spinners or progress bars
-- **Color Coding**: Success (green), warnings (yellow), and errors (red)
-- **Verbose Mode**: `--verbose` flag for additional operational details
-- **Quiet Mode**: `--quiet` flag for machine-readable output (JSON)
-- **Debug Mode**: `--debug` flag for troubleshooting with detailed logs
+- **Deployment Progress**: Live updates during application deployment
+- **Log Streaming**: Real-time log viewing with auto-scroll
+- **Status Changes**: Automatic refresh of application status
+- **Notifications**: System alerts and status messages
 
-## 2.3 Client Configuration Options
+## 3. API Design Principles
 
-The CLI client can be customized through a local configuration file (`~/.hola/config.toml`) with the following options:
+The server provides both web interface routes and API endpoints, designed to work seamlessly with HTMX's dynamic behavior patterns.
 
-| Setting             | Default                 | Description                                          |
-| ------------------- | ----------------------- | ---------------------------------------------------- |
-| `server_url`        | `http://localhost:3000` | Server base URL                                      |
-| `api_key`           | -                       | Authentication key (encrypted at rest)               |
-| `timeout`           | `60`                    | Request timeout in seconds                           |
-| `output_format`     | `table`                 | Default output format (`table`, `json`, `yaml`)      |
-| `color`             | `auto`                  | Terminal color support (`auto`, `always`, `never`)   |
-| `log_level`         | `info`                  | Logging verbosity (`debug`, `info`, `warn`, `error`) |
-| `auto_update_check` | `true`                  | Check for CLI updates automatically                  |
+### 3.1 Endpoint Design Philosophy
 
-These settings can be overridden per command using equivalent command-line options:
-
-```bash
-hola app list --output-format json --timeout 30
-```
-
-## 2.4 Client Output Formatting
-
-The CLI supports multiple output formats to accommodate different use cases:
-
-### Output Formats
-
-- **Table** (default): Human-readable tabular format
-- **JSON**: Machine-readable JSON for scripting and automation
-- **YAML**: Human and machine-readable YAML format
-- **Tree**: Hierarchical tree view for nested data
-
-### Examples
-
-```bash
-# Default tabular output
-hola app list
-
-# JSON output for scripting
-hola app list --output json
-
-# YAML output
-hola app list --output yaml
-
-# Tree view for nested structures
-hola app info myapp --output tree
-```
-
-### Filter and Query Support
-
-The client supports JMESPath queries for filtering and transforming output:
-
-```bash
-# Get only running applications
-hola app list --query "[?status=='running']"
-
-# Extract just the names of all applications
-hola app list --query "[].name"
-```
-
-## 2.5 Client Offline Capabilities
-
-The CLI client is designed to provide meaningful functionality even with limited or no connectivity:
-
-- **Local Caching**: Recent query results are cached locally
-- **Documentation**: Help content is available offline with `hola help`
-- **Config Validation**: Local validation of configurations before attempting server operations
-- **Retry Logic**: Automatic retry with exponential backoff for transient network issues
-- **Draft Mode**: Create configurations offline with `--draft` flag and apply later
-- **Batch Operations**: Queue operations with `--batch` flag for later execution
-- **Sync Command**: Explicit `hola sync` command to synchronize offline changes
-
-## 2.6 CLI Command Implementation Details
-
-### Command Structure
-
-Each CLI command follows a consistent implementation pattern:
-
-1. **Command Definition**: Using Typer for command structure and option parsing
-2. **Input Validation**: Local validation before sending requests
-3. **API Request**: Communication with the server API
-4. **Response Processing**: Transforming the API response for display
-5. **Output Formatting**: Rendering the result in the selected format using the `format_output` utility
-6. **Error Handling**: Providing clear error messages and recovery steps
-
-### Typer Implementation
-
-The CLI leverages Typer with the following implementation strategies:
-
-1. **Type Hints**: Using Python type hints for argument validation and documentation
-2. **Modular Command Structure**: Organizing commands in a directory structure that mirrors the command hierarchy
-3. **Consistent Command Pattern**: Maintaining a predictable pattern for all commands to enhance maintainability
-
-Example command implementation structure:
+**HTMX-First Approach**: Endpoints are designed to serve both HTML fragments for HTMX requests and JSON for programmatic access:
 
 ```python
-# Example command registration using Typer
-import typer
-from rich.console import Console
-from typing import Optional
-from ..utils.formatting import format_output
-from ..utils.logging import log_command_start, log_command_success, log_command_error
-
-app_commands = typer.Typer(help="Application management commands")
-console = Console()
-
-@app_commands.command("list")
-def list_apps(
-    output: str = typer.Option("table", "--output", "-o", help="Output format (table, json)"),
-    server: Optional[str] = typer.Option(None, "--server", "-s", help="Target server"),
-):
-    """List all deployed applications."""
-    log_command_start(logger, "app.list", output=output, server=server)
+@router.get("/apps")
+async def apps_handler(request: Request):
+    apps = await get_applications()
     
+    # Return HTML fragment for HTMX requests
+    if "HX-Request" in request.headers:
+        return templates.TemplateResponse("fragments/app_list.html", {
+            "request": request, "apps": apps
+        })
+    
+    # Return JSON for API consumers
+    return {"success": True, "data": apps}
+```
+
+**Content Negotiation**: Endpoints automatically detect request type and respond appropriately:
+- HTMX requests receive HTML fragments
+- API requests receive JSON responses
+- Form submissions can return either based on context
+
+### 3.2 Core Endpoint Categories
+
+Rather than defining specific endpoints upfront, we'll implement them as needed within these categories:
+
+**Application Management**
+- Deploy, manage, and monitor applications
+- Handle both form submissions and API calls
+- Return appropriate HTML fragments or JSON responses
+
+**Configuration Management**
+- System and application-level configuration
+- Environment variables and secrets
+- File uploads and management
+
+**Real-time Features**
+- Server-Sent Events for live updates
+- Log streaming and status monitoring
+- Progress updates during operations
+
+**System Operations**
+- Health checks and system status
+- Backup and restore operations
+- User authentication and session management
+
+### 3.3 Response Patterns
+
+**HTML Fragments for HTMX**:
+```html
+<!-- App status card that can be swapped in -->
+<div id="app-status-{app_name}" class="card bg-base-100 shadow-xl">
+  <div class="card-body">
+    <h2 class="card-title">
+      {app_name}
+      <div class="badge badge-{status_color}">{status}</div>
+    </h2>
+  </div>
+</div>
+```
+
+**JSON for API Access**:
+```json
+{
+  "success": true,
+  "data": {
+    "name": "myapp",
+    "status": "running",
+    "created_at": "2025-01-01T00:00:00Z"
+  }
+}
+```
+
+### 3.4 Error Handling
+
+Errors are handled contextually based on request type:
+- **HTMX requests**: Return error HTML fragments with user-friendly messages
+- **API requests**: Return structured JSON error responses
+- **Form submissions**: Show inline validation errors or success messages
+
+## 4. Web Interface Implementation
+
+### 4.1 HTMX-Driven Development
+
+Rather than designing all features upfront, we'll implement them iteratively using HTMX patterns:
+
+**Progressive Enhancement**: Start with working HTML forms, then enhance with HTMX for dynamic behavior:
+
+```html
+<!-- Base form that works without JavaScript -->
+<form action="/apps/deploy" method="post">
+  <input name="app_name" required>
+  <button type="submit">Deploy</button>
+</form>
+
+<!-- Enhanced with HTMX for dynamic updates -->
+<form hx-post="/apps/deploy" hx-target="#result" hx-indicator="#spinner">
+  <input name="app_name" required>
+  <button type="submit">Deploy</button>
+  <div id="spinner" class="loading htmx-indicator"></div>
+</form>
+<div id="result"></div>
+```
+
+**Feature-Specific Endpoints**: Create endpoints as needed for each feature, optimized for HTMX:
+
+```python
+@router.post("/apps/deploy")
+async def deploy_app(request: Request, app_name: str = Form(...)):
     try:
-        # Command implementation logic
-        result = {"apps": [...]}
+        result = await deploy_application(app_name)
         
-        # Format and display the output
-        format_output(result, output_format=output)
-        log_command_success(logger, "app.list", result)
+        if "HX-Request" in request.headers:
+            return templates.TemplateResponse("fragments/deploy_success.html", {
+                "request": request, "app": result
+            })
+        
+        return {"success": True, "data": result}
+        
     except Exception as e:
-        log_command_error(logger, "app.list", e)
-        raise
+        if "HX-Request" in request.headers:
+            return templates.TemplateResponse("fragments/deploy_error.html", {
+                "request": request, "error": str(e)
+            }, status_code=400)
+        
+        return {"success": False, "error": str(e)}
 ```
 
-### Plugin Architecture
+### 4.2 Component-Based Templates
 
-The CLI supports extensibility through plugins:
+Build reusable HTML components that can be swapped in and out:
 
-- Custom commands can be registered via plugins
-- Plugins are discovered in `~/.hola/plugins/`
-- Uses Python's entry point system for plugin registration
-- Official and community plugins extend functionality without core changes
-- Plugins can add new commands, modify existing functionality, and provide integrations
-
-## 3. Communication Protocols
-
-- **REST APIs**: CLI sends requests and receives responses for standard operations.
-- **SSE (Server-Sent Events)**: Provides real-time updates from the server to the CLI for long-running tasks.
-
-## 3.1 Server Management & Contexts
-
-The CLI client supports managing multiple Hola server installations through a context-based approach, similar to how Docker and Kubernetes clients operate.
-
-### Server Contexts
-
-Server contexts allow users to define, manage, and switch between multiple Hola server instances:
-
-| Command                               | Description                              |
-| ------------------------------------- | ---------------------------------------- |
-| `hola server list`                    | List all configured server contexts      |
-| `hola server current`                 | Show the currently active server context |
-| `hola server switch <name>`           | Switch to a different server context     |
-| `hola server rename <old> <new>`      | Rename a server context                  |
-| `hola server remove <name>`           | Remove a server context                  |
-| `hola server update <name> [options]` | Update server context details            |
-
-Each context contains:
-
-- Server URL
-- Authentication settings
-- Docker context name
-- Custom timeout/retry settings
-- Context-specific configuration overrides
-
-### Server Configuration Structure
-
-Server contexts are stored in the user configuration file (`~/.hola/config.toml`), separate from regular client configuration:
-
-```toml
-[servers]
-current = "local"
-
-[servers.production]
-url = "https://hola.example.com"
-api_key = "prod-encrypted-key"
-docker_context = "production"
-timeout = 120000
-
-[servers.staging]
-url = "https://staging-hola.example.com"
-api_key = "staging-encrypted-key"
-docker_context = "staging"
-timeout = 60000
-
-[servers.local]
-url = "http://localhost:3000"
-api_key = "local-encrypted-key"
-docker_context = "default"
-timeout = 30000
+**Application Card Component**:
+```html
+<!-- templates/components/app_card.html -->
+<div id="app-{{ app.name }}" class="card bg-base-100 shadow-xl">
+  <div class="card-body">
+    <h2 class="card-title">
+      {{ app.name }}
+      <div class="badge badge-{{ app.status_color }}">{{ app.status }}</div>
+    </h2>
+    <div class="card-actions justify-end">
+      <button class="btn btn-primary" 
+              hx-get="/apps/{{ app.name }}/manage" 
+              hx-target="#main-content">
+        Manage
+      </button>
+    </div>
+  </div>
+</div>
 ```
 
-All CLI commands implicitly use the active context, but can target a specific server using the --server flag:
-
-```bash
-hola app list --server staging
+**Dynamic Lists**:
+```html
+<!-- templates/fragments/app_list.html -->
+<div id="app-list" hx-get="/apps/refresh" hx-trigger="every 30s">
+  {% for app in apps %}
+    {% include "components/app_card.html" %}
+  {% endfor %}
+</div>
 ```
 
-## 3.2 Server Bootstrapping
+### 4.3 Real-Time Features with Server-Sent Events
 
-The Hola client provides a server bootstrapping feature to deploy the Hola server container to a fresh Docker host.
+Implement live updates using HTMX's SSE support:
 
-### Bootstrap Wizard
-
-The bootstrap process uses an interactive wizard for collecting server deployment parameters:
-
-```bash
-hola server bootstrap [--name <context-name>] [--docker-context <docker-context>] [--non-interactive]
+```html
+<!-- Live deployment progress -->
+<div hx-sse="connect:/events/deploy/{{ deployment_id }}">
+  <div hx-sse="swap:progress" hx-swap="innerHTML">
+    <div class="progress w-56">
+      <div class="progress-bar" style="width: 0%"></div>
+    </div>
+  </div>
+  <div hx-sse="swap:logs" hx-swap="beforeend" id="deployment-logs">
+    <!-- Log entries appear here -->
+  </div>
+</div>
 ```
 
-When run interactively (default), the wizard:
+### 4.4 Form Handling and Validation
 
-1. Verifies the Docker client is installed and configured
-2. Prompts for Docker context selection or creation
-3. Validates connectivity to the Docker host
-4. Collects server configuration parameters:
-   - Server name
-   - Admin password
-   - Data storage location
-   - Host port mapping
-   - TLS configuration
-   - System resource limits
-5. Generates a secure API key
-6. Deploys the Hola server container to the selected Docker host
-7. Validates server connectivity
-8. Saves the new server context
+Create forms that provide immediate feedback:
 
-In non-interactive mode, all parameters must be provided through flags or a configuration file.
-
-### Docker Context Integration
-
-The bootstrapping process leverages Docker contexts for remote deployment:
-
-1. Lists available Docker contexts for selection
-2. Optionally creates a new Docker context for a remote host:
-
-```bash
-hola server bootstrap --create-docker-context remote --docker-host "ssh://user@remote-host"
+```html
+<!-- Configuration form with live validation -->
+<form hx-post="/config/app/{{ app_name }}" hx-target="#config-result">
+  <div class="form-control">
+    <label class="label">
+      <span class="label-text">Environment Variable</span>
+    </label>
+    <input type="text" name="key" placeholder="KEY_NAME" 
+           class="input input-bordered"
+           hx-trigger="blur"
+           hx-get="/config/validate"
+           hx-target="#key-validation">
+    <div id="key-validation"></div>
+  </div>
+  
+  <div class="form-control">
+    <label class="label">
+      <span class="label-text">Value</span>
+    </label>
+    <input type="text" name="value" placeholder="value" 
+           class="input input-bordered">
+  </div>
+  
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+<div id="config-result"></div>
 ```
 
-3. Connects to the Docker host using the selected context
-4. Deploys the Hola server container
-5. Associates the new Hola server with the Docker context
+The web interface provides comprehensive error handling and user feedback:
 
-### Docker Compose Template
+### 5.1 Error Categories and Responses
 
-The bootstrap process uses a Docker Compose template for deploying the Hola server, managed using Python's `docker` package:
+| Error Type     | Description              | Interface Response                                      |
+| -------------- | ------------------------ | ------------------------------------------------------ |
+| Connection     | Network connectivity issues | Toast notifications with retry options                |
+| Authentication | Invalid credentials       | Clear login prompts with instructions                 |
+| Validation     | Invalid input parameters  | Inline field validation with specific guidance       |
+| Resource       | Resource not found        | Contextual suggestions and navigation options        |
+| Permission     | Insufficient permissions  | Clear explanations with escalation paths            |
+| Server         | Internal server errors    | Friendly error pages with support contact information |
 
-```yaml
-version: "3.8"
-services:
-  hola-server:
-    image: hola/server:latest
-    restart: always
-    environment:
-      - HOLA_API_KEY=${HOLA_API_KEY}
-      - HOLA_ADMIN_PASSWORD=${HOLA_ADMIN_PASSWORD}
-      - HOLA_DATA_DIR=/data
-    ports:
-      - "${HOLA_PORT:-3000}:3000"
-    volumes:
-      - ${HOLA_DATA_DIR:-./data}:/data
-    deploy:
-      resources:
-        limits:
-          cpus: "${HOLA_CPU_LIMIT:-1}"
-          memory: ${HOLA_MEMORY_LIMIT:-1G}
-```
+### 5.2 User Feedback Mechanisms
 
-### Post-Bootstrap Configuration
+- **Toast Notifications**: Non-intrusive success/error messages with auto-dismiss
+- **Progress Indicators**: Loading spinners and progress bars for long operations
+- **Color Coding**: Visual status indicators (green for success, red for errors, yellow for warnings)
+- **Real-time Status**: Live updates of application and system status
+- **Form Validation**: Immediate feedback on form inputs with helpful error messages
+- **Contextual Help**: Tooltips and help text throughout the interface
 
-After successful bootstrap, the client:
+### 5.3 Accessibility Features
 
-1. Configures the new server context using the generated API key
-2. Switches to the new context automatically
-3. Performs initial system configuration
-4. Verifies server health
+- **Keyboard Navigation**: Full keyboard accessibility for all interface elements
+- **Screen Reader Support**: Proper ARIA labels and semantic HTML structure
+- **High Contrast**: Support for high contrast themes and color accessibility
+- **Focus Management**: Clear focus indicators and logical tab order
+- **Responsive Design**: Mobile-friendly interface that works on all devices
 
-## 3.3 CLI Command Context Awareness
+## 6. Security
 
-All CLI commands are context-aware, ensuring they interact with the intended Hola server.
+- **Authentication**: Web-based login with session management and API key support for programmatic access
+- **Authorization**: Role-based access control with configurable permissions
+- **Configuration Security**: Support for encrypting sensitive configuration values at rest
+- **Encrypted Values**: Masked in web interface and stored separately from regular configuration
+- **Session Security**: Secure session handling with CSRF protection and secure cookies
+- **Container Isolation**: Applications run in isolated Docker containers with resource limits
 
-### Context Resolution Order
+### 6.1 Web Authentication Flow
 
-When determining which server to target, the client follows this resolution order:
+The web interface uses a multi-layered authentication approach:
 
-1. Explicit server specified with `--server <name>` flag
-2. Environment variable: `HOLA_SERVER_CONTEXT`
-3. Currently active server context
-4. Default server context if none is active
+1. **Session-Based Authentication**:
+   - Web users authenticate through a login form
+   - Server maintains secure sessions with HTTP-only cookies
+   - Automatic session renewal for active users
+   - Secure logout with session cleanup
 
-### Command Structure with Context Support
+2. **API Key Authentication**:
+   - Programmatic access via API keys in Authorization headers
+   - Multiple API keys per user with different permissions
+   - Key rotation support through the web interface
+   - Automatic key expiration and renewal
 
-All commands support the `--server` flag to explicitly target a specific server:
+3. **Multi-Factor Authentication** (Optional):
+   - TOTP-based 2FA for enhanced security
+   - Backup codes for account recovery
+   - Configurable enforcement policies
 
-```bash
-# Target explicit server
-hola app deploy myapp --package example.com/myapp:1.0.0 --server production
+### 6.2 Access Control
 
-# Use current context
-hola app list
+- **Role-Based Permissions**: Admin, Developer, and Viewer roles with granular permissions
+- **Application-Level Access**: Users can be granted access to specific applications
+- **Resource Quotas**: Configurable limits on resources per user/application
+- **Audit Logging**: Comprehensive logging of all user actions and system changes
 
-# Temporarily override context
-HOLA_SERVER_CONTEXT=staging hola app list
-```
-
-### Bulk Operations Across Servers
-
-For operations that need to be performed across multiple servers:
-
-```bash
-# Execute a command on all configured servers
-hola app list --all-servers
-
-# Execute on specific servers
-hola app list --servers staging,production
-```
-
-### Context Information in Output
-
-Command outputs include the server context to avoid confusion:
-
-```bash
-$ hola app list
-SERVER: production
-+-------------+--------+----------+
-| Application | Status | Version  |
-+-------------+--------+----------+
-| website     | active | 1.2.0    |
-| api         | active | 0.9.1    |
-+-------------+--------+----------+
-```
-
-### Server Health Check
-
-The client performs a connectivity check before executing commands:
-
-```bash
-# Check if the server is accessible
-hola server ping [--server <name>]
-```
-
-## 4. Security
-
-- **Authentication**: Single API key defined on the server via environment variables.
-- **Configuration Security**: Support for encrypting sensitive configuration values at rest.
-- **Encrypted Values**: Masked in API responses and stored separately from regular configuration.
-
-## 4.1 Updated Client Authentication Flow
-
-The CLI client authenticates with the server using the following workflow:
-
-1. **Multi-Server API Key Storage**:
-
-   - API keys are stored securely by server context in `~/.hola/servers.json`
-   - The configuration file is created with restricted permissions (600)
-   - Each server has its own API key
-
-2. **Server Bootstrap Process**:
-
-   - During server bootstrapping, a secure API key is automatically generated
-   - The key is stored in the newly created server context
-   - The key is configured in the deployed Hola server container
-
-3. **Manual Setup Process**:
-
-   - Users can add existing servers using `hola server add <name> <url>`
-   - The API key can be provided manually or via interactive prompt
-   - The key is validated against the server before being stored
-
-4. **Authentication Process**:
-
-   - Each API request includes the context's API key in the `Authorization` header
-   - The server validates the key before processing any request
-   - Authentication failures receive a clear error message with troubleshooting steps
-
-5. **Key Rotation**:
-   - Support for key rotation with `hola server rotate-key <name>`
-   - For bootstrapped servers, the client can generate a new key and update the server
-   - For manually added servers, the user must provide the new key
-
-## 5. Storage Structure
+## 7. Storage Structure
 
 ### Consolidated Directory Structure
 
@@ -832,218 +582,127 @@ Service-specific Dockerfiles allow users to customize individual services:
 
 ```
 project-root/
-│
-├── hola_cli/                 # CLI client application
-│   ├── pyproject.toml        # Poetry project config
-│   ├── poetry.lock           # Lock file for dependencies
-│   ├── hola_cli/             # Python package directory
-│   │   ├── __init__.py
-│   │   ├── main.py           # CLI entry point
-│   │   ├── commands/         # Command implementations
-│   │   ├── config/           # Configuration management
-│   │   ├── services/         # Business logic
-│   │   └── utils/            # Utility functions
-│   └── tests/                # Test directory
-│       ├── commands/         # Command tests
-│       ├── services/         # Service tests
-│       ├── utils/            # Utility tests
-│       └── conftest.py       # Test fixtures
-│
-├── hola_server/              # API server application
-│   ├── pyproject.toml        # Poetry project config
-│   ├── poetry.lock           # Lock file for dependencies
-│   ├── hola_server/          # Python package directory
-│   │   ├── __init__.py
-│   │   ├── main.py           # FastAPI app entry point
-│   │   ├── api/              # API endpoint controllers
-│   │   ├── config/           # Server configuration
-│   │   ├── services/         # Business logic
-│   │   └── utils/            # Utility functions
-│   └── tests/                # Test directory
-│
-├── hola_shared/              # Shared modules and utilities
-│   ├── pyproject.toml        # Poetry project config
-│   ├── poetry.lock           # Lock file for dependencies
-│   ├── hola_shared/          # Python package directory
-│   │   ├── __init__.py
-│   │   ├── models/           # Shared Pydantic models
-│   │   ├── errors.py         # Error handling
-│   │   └── logger.py         # Logging utilities
-│   └── tests/                # Test directory
-│
-├── hola_client_sdk/          # Client SDK for API communication
-│   ├── pyproject.toml        # Poetry project config
-│   └── hola_client_sdk/      # Python package directory
-│
-├── docs/                     # Project documentation
-│   ├── DESIGN.md             # This comprehensive technical document
-│   └── ...                   # Other documentation files
-│
-├── integration_tests/        # End-to-end tests
-├── .gitignore                # Git ignore file
-├── pyproject.toml            # Root Poetry workspace config
-└── README.md                 # Project overview and setup instructions
+├── hola/                     # Main application package
+│   ├── __init__.py
+│   ├── main.py              # FastAPI app entry point
+│   ├── api/                 # API endpoint controllers
+│   ├── web/                 # Web interface (HTMX templates)
+│   │   ├── templates/       # Jinja2 templates
+│   │   ├── static/          # Static assets (CSS, JS, images)
+│   │   └── routes.py        # Web interface routes
+│   ├── services/            # Business logic services
+│   ├── models/              # Pydantic data models
+│   ├── config/              # Configuration management
+│   └── utils/               # Utility functions
+├── tests/                   # Test directory
+│   ├── api/                 # API endpoint tests
+│   ├── web/                 # Web interface tests
+│   ├── services/            # Service layer tests
+│   └── conftest.py          # Test fixtures
+├── docs/                    # Project documentation
+│   ├── DESIGN.md            # This technical design document
+│   ├── API.md               # API documentation
+│   └── DEPLOYMENT.md        # Deployment guide
+├── docker/                  # Docker configuration
+│   ├── Dockerfile          # Main application container
+│   ├── docker-compose.yml  # Development environment
+│   └── nginx.conf          # Reverse proxy configuration
+├── pyproject.toml           # Poetry project configuration
+├── poetry.lock              # Dependency lock file
+├── .gitignore               # Git ignore file
+└── README.md                # Project overview and setup instructions
 ```
 
 ## 12. Benefits
 
-- **Clean Separation**: Each component maintains its own space
-- **Reliable Upgrades**: Clear distinction between versions
-- **Easy Backups**: Well-organized structure for backing up state
-- **Flexible Configuration**: Multiple levels of configuration
-- **Safe Deployment**: Changes isolated until activation
-- **Rollback Support**: Previous state can be restored easily
-- **Modular Design**: Poetry workspaces for code sharing between packages
+- **Simplified Architecture**: Single module with clear separation of concerns
+- **Modern UI**: HTMX and DaisyUI provide responsive, interactive experience
+- **Unified Development**: All code in one place, easier to develop and maintain
+- **Clean Structure**: Well-organized directories for different concerns
+- **Reliable Deployments**: Structured approach to application management
+- **Easy Backups**: Comprehensive backup and restore functionality
+- **Flexible Configuration**: Multiple levels of configuration management
+- **Safe Operations**: Changes isolated until activation
+- **Container Security**: Applications run in isolated Docker environments
+- **Real-time Updates**: Live status updates and log streaming
 
 ## 13. Implementation Notes
 
-- Use symbolic links where possible to save space
-- Implement proper cleanup of old versions
-- Maintain careful permissions management
-- Consider filesystem performance for large deployments
-- Plan for disaster recovery scenarios
-- Follow Python best practices (PEP 8) for code style
-- Use type hints throughout the codebase
-- Use Pydantic models for data validation and serialization
-- Prefer async implementations in FastAPI endpoints
-- Implement proper error handling with standardized ApiResponse structure
+- **FastAPI Backend**: Async/await patterns for optimal performance
+- **HTMX Frontend**: Dynamic interactions without complex JavaScript frameworks
+- **DaisyUI Styling**: Consistent, accessible design system
+- **Container Management**: Docker API integration for application lifecycle
+- **File-based Storage**: Simple, reliable persistence layer
+- **Type Safety**: Pydantic models throughout the application
+- **Comprehensive Testing**: Unit, integration, and end-to-end test coverage
+- **Security First**: Authentication, authorization, and secure defaults
+- **Monitoring**: Built-in application and system monitoring
+- **Single Module**: All functionality in one cohesive Python package
 
-## 14. Open Questions and Future Considerations
+## 14. Technology Integration
 
-1. How should we handle dependencies between services in the configuration?
-2. Should we provide templates for common service configurations?
-3. How do we manage service-specific volumes and networks?
-4. Should we add service-level health checks?
-5. How do we handle configuration validation across multiple services?
+### 14.1 HTMX Implementation
+
+The web interface leverages HTMX for dynamic behavior:
+
+```html
+<!-- Example: Dynamic application list with real-time updates -->
+<div id="app-list" hx-get="/api/apps" hx-trigger="load, every 30s" hx-target="#app-list">
+  <!-- Application cards are loaded and updated automatically -->
+</div>
+
+<!-- Example: Deploy application form with progress updates -->
+<form hx-post="/api/apps/deploy" hx-target="#deploy-status" hx-indicator="#deploy-spinner">
+  <input name="app_name" placeholder="Application Name" required>
+  <button type="submit">Deploy</button>
+  <div id="deploy-spinner" class="loading loading-spinner htmx-indicator"></div>
+</form>
+```
+
+### 14.2 DaisyUI Components
+
+Utilizing DaisyUI's component library for consistent styling:
+
+```html
+<!-- Application status card -->
+<div class="card bg-base-100 shadow-xl">
+  <div class="card-body">
+    <h2 class="card-title">
+      My Application
+      <div class="badge badge-success">Running</div>
+    </h2>
+    <p>Application description and status information</p>
+    <div class="card-actions justify-end">
+      <button class="btn btn-primary">Manage</button>
+      <button class="btn btn-outline">Logs</button>
+    </div>
+  </div>
+</div>
+```
+
+### 14.3 Server-Sent Events Integration
+
+Real-time updates using SSE with HTMX:
+
+```html
+<!-- Live log streaming -->
+<div hx-sse="connect:/api/apps/myapp/events">
+  <div hx-sse="swap:logs" hx-swap="beforeend" id="log-container">
+    <!-- Log entries are appended here in real-time -->
+  </div>
+</div>
+```
 
 ## 15. Next Steps
 
-1. Complete implementation of package, configuration and deployment managers
-2. Add comprehensive test coverage using pytest
-3. Document the configuration management feature in the user guide
-4. Consider adding configuration validation based on application requirements
-5. Implement CLI tools for managing docker-compose.override.yml files
-6. Design CLI commands for service-level configuration management
-7. Implement service detection from docker-compose files
-8. Create examples of multi-service configuration scenarios
-9. Expand test coverage with integration tests between CLI and server
-10. Implement proper logging and error handling across all components
-## 16. Python Implementation Specifics
+1. Implement core FastAPI application structure
+2. Create HTMX templates for web interface
+3. Integrate DaisyUI styling and components
+4. Develop application deployment pipeline
+5. Add real-time monitoring and logging
+6. Implement user authentication and authorization
+7. Create comprehensive test suite
+8. Develop Docker deployment configuration
+9. Document API endpoints and web interface
+10. Optimize performance and security
 
-### Error Handling
-
-The Python implementation uses a standardized error handling approach across all components:
-
-```python
-# Base exception type in hola_shared
-class HolaError(Exception):
-    """Base exception for Hola applications."""
-    
-    def __init__(
-        self, 
-        message: str,
-        status_code: int = 400,
-        error_code: str = "bad_request",
-        details: Optional[Dict[str, Any]] = None
-    ):
-        self.message = message
-        self.status_code = status_code
-        self.error_code = error_code
-        self.details = details or {}
-        super().__init__(message)
-        
-    def to_api_error(self) -> ApiError:
-        """Convert to an API error object."""
-        return ApiError(
-            code=self.error_code,
-            message=self.message,
-            details=self.details
-        )
-        
-    def to_response(self) -> ApiResponse:
-        """Convert to an API response object."""
-        return ApiResponse(
-            success=False,
-            error=self.to_api_error()
-        )
-```
-
-### Response Format
-
-All API responses use a consistent format defined by the `ApiResponse` class:
-
-```python
-class ApiResponse(Generic[T]):
-    """Standard API response wrapper.
-    
-    A consistent response structure for all API endpoints that includes
-    a success flag, optional data payload, and optional error information.
-    
-    Attributes:
-        success: Boolean indicating if the request was successful.
-        data: Optional data payload for successful requests.
-        error: Optional error details for failed requests.
-    """
-    success: bool
-    data: Optional[T] = None
-    error: Optional[ApiError] = None
-```
-
-### Logging
-
-The Python implementation uses a layered approach to logging:
-
-1. **Base Layer**: Shared logging utilities in `hola_shared.logger`
-2. **Component Layer**: Component-specific extensions in both server and client
-3. **Usage Layer**: Consistent logging patterns across the codebase
-
-```python
-# Example CLI command logging pattern
-from ..utils.logging import log_command_start, log_command_success, log_command_error
-
-log_command_start(logger, "command.name", arg1="value1")
-try:
-    # Command execution
-    result = do_something()
-    log_command_success(logger, "command.name", result)
-except Exception as e:
-    log_command_error(logger, "command.name", e)
-    raise
-```
-
-### Output Formatting
-
-The CLI uses a consistent output formatting utility that supports multiple formats:
-
-```python
-def format_output(data: Any, format_type: str = "table") -> Any:
-    """
-    Format output based on format type.
-    
-    Args:
-        data: The data to format
-        format_type: The desired format ("json", "table", or "text")
-    
-    Returns:
-        Formatted output as a string
-    """
-    if format_type == "json":
-        return json.dumps(data, indent=2)
-    elif format_type == "table":
-        if isinstance(data, list) and data and isinstance(data[0], dict):
-            return create_table_from_list(data)
-        elif isinstance(data, dict):
-            return create_table_from_dict(data)
-    # Additional formats and default handling
-```
-
-### Testing Best Practices
-
-The Python implementation uses pytest for testing with the following best practices:
-
-1. **Isolated Tests**: Each test is independent and does not rely on state from other tests
-2. **Fixture Usage**: Shared setup code is in fixtures
-3. **Positive and Negative Tests**: Testing both success and failure paths
-4. **Test Focus**: Each test focuses on a single functionality
-5. **Clear Assertions**: Assertions clearly indicate what's being tested
-6. **Standard Utilities**: Using predefined test helpers for consistency

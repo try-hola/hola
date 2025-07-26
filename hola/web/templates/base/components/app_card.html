@@ -1,0 +1,63 @@
+<!-- Application Status Card Component -->
+<div id="app-{{ app.name }}" class="card bg-base-100 shadow-xl hover:shadow-2xl transition-shadow">
+    <div class="card-body">
+        <h2 class="card-title">
+            {{ app.name }}
+            <div class="badge {% if app.status == 'running' %}badge-success{% elif app.status == 'stopped' %}badge-error{% else %}badge-warning{% endif %}">
+                {{ app.status | title }}
+            </div>
+        </h2>
+        
+        {% if app.description %}
+        <p class="text-base-content/70">{{ app.description }}</p>
+        {% endif %}
+        
+        <div class="flex flex-wrap gap-2 mt-2">
+            {% if app.version %}
+            <div class="badge badge-outline">v{{ app.version }}</div>
+            {% endif %}
+            {% if app.port %}
+            <div class="badge badge-outline">Port {{ app.port }}</div>
+            {% endif %}
+        </div>
+        
+        <div class="card-actions justify-end mt-4">
+            {% if app.status == 'running' %}
+            <button class="btn btn-primary btn-sm" 
+                    hx-get="/apps/{{ app.name }}/manage" 
+                    hx-target="#main-content"
+                    hx-push-url="true">
+                Manage
+            </button>
+            <button class="btn btn-outline btn-sm" 
+                    hx-get="/apps/{{ app.name }}/logs" 
+                    hx-target="#main-content">
+                Logs
+            </button>
+            {% else %}
+            <button class="btn btn-success btn-sm" 
+                    hx-post="/api/apps/{{ app.name }}/start" 
+                    hx-target="#app-{{ app.name }}"
+                    hx-swap="outerHTML">
+                Start
+            </button>
+            {% endif %}
+            
+            <div class="dropdown dropdown-end">
+                <div tabindex="0" role="button" class="btn btn-ghost btn-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zM12 13a1 1 0 110-2 1 1 0 010 2zM12 20a1 1 0 110-2 1 1 0 010 2z"></path>
+                    </svg>
+                </div>
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+                    <li><a hx-get="/apps/{{ app.name }}/config" hx-target="#main-content">Configure</a></li>
+                    <li><a hx-get="/apps/{{ app.name }}/backup" hx-target="#main-content">Backup</a></li>
+                    <li><a hx-delete="/api/apps/{{ app.name }}" 
+                           hx-confirm="Are you sure you want to delete {{ app.name }}?"
+                           hx-target="#app-{{ app.name }}"
+                           hx-swap="outerHTML">Delete</a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>

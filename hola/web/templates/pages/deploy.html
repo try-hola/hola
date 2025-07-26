@@ -1,0 +1,158 @@
+{% extends "base/base.html" %}
+
+{% block title %}Deploy Application{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto space-y-6">
+    <!-- Page Header -->
+    <div class="text-center">
+        <h1 class="text-3xl font-bold mb-2">Deploy New Application</h1>
+        <p class="text-base-content/70">Deploy a new application from an ORAS package</p>
+    </div>
+
+    <!-- Deployment Form -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <form hx-post="/api/apps/deploy" 
+                  hx-target="#deploy-result" 
+                  hx-indicator="#deploy-spinner"
+                  class="space-y-6">
+                
+                <!-- Application Name -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Application Name</span>
+                        <span class="label-text-alt text-error">*</span>
+                    </label>
+                    <input type="text" 
+                           name="name" 
+                           placeholder="my-awesome-app" 
+                           class="input input-bordered"
+                           required
+                           hx-trigger="blur"
+                           hx-get="/api/apps/validate-name"
+                           hx-target="#name-validation">
+                    <div class="label">
+                        <span class="label-text-alt">Only letters, numbers, hyphens, and underscores allowed</span>
+                    </div>
+                    <div id="name-validation"></div>
+                </div>
+
+                <!-- Package Reference -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Package Reference</span>
+                        <span class="label-text-alt text-error">*</span>
+                    </label>
+                    <input type="text" 
+                           name="package_ref" 
+                           placeholder="registry.example.com/my-org/my-app:latest" 
+                           class="input input-bordered"
+                           required>
+                    <div class="label">
+                        <span class="label-text-alt">ORAS package reference (registry/namespace/name:tag)</span>
+                    </div>
+                </div>
+
+                <!-- Description -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Description</span>
+                    </label>
+                    <textarea name="description" 
+                              placeholder="Brief description of your application..." 
+                              class="textarea textarea-bordered h-24"
+                              maxlength="500"></textarea>
+                    <div class="label">
+                        <span class="label-text-alt">Optional description (max 500 characters)</span>
+                    </div>
+                </div>
+
+                <!-- Environment Variables -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-medium">Environment Variables</span>
+                    </label>
+                    <div id="env-vars" class="space-y-2">
+                        <div class="flex gap-2">
+                            <input type="text" 
+                                   name="env_key_0" 
+                                   placeholder="VARIABLE_NAME" 
+                                   class="input input-bordered flex-1">
+                            <input type="text" 
+                                   name="env_value_0" 
+                                   placeholder="value" 
+                                   class="input input-bordered flex-1">
+                            <button type="button" 
+                                    class="btn btn-ghost btn-square"
+                                    onclick="this.parentElement.remove()">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <button type="button" 
+                            class="btn btn-outline btn-sm mt-2"
+                            onclick="addEnvironmentVariable()">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                        </svg>
+                        Add Variable
+                    </button>
+                </div>
+
+                <!-- Submit Button -->
+                <div class="form-control">
+                    <button type="submit" class="btn btn-primary">
+                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
+                        </svg>
+                        Deploy Application
+                    </button>
+                </div>
+            </form>
+
+            <!-- Loading Indicator -->
+            <div id="deploy-spinner" class="htmx-indicator text-center py-4">
+                <div class="loading loading-spinner loading-lg text-primary"></div>
+                <p class="mt-2 text-base-content/70">Deploying application...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Deployment Result -->
+    <div id="deploy-result">
+        <!-- Results will be shown here -->
+    </div>
+</div>
+
+<script>
+let envVarCounter = 1;
+
+function addEnvironmentVariable() {
+    const container = document.getElementById('env-vars');
+    const newVar = document.createElement('div');
+    newVar.className = 'flex gap-2';
+    newVar.innerHTML = `
+        <input type="text" 
+               name="env_key_${envVarCounter}" 
+               placeholder="VARIABLE_NAME" 
+               class="input input-bordered flex-1">
+        <input type="text" 
+               name="env_value_${envVarCounter}" 
+               placeholder="value" 
+               class="input input-bordered flex-1">
+        <button type="button" 
+                class="btn btn-ghost btn-square"
+                onclick="this.parentElement.remove()">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+            </svg>
+        </button>
+    `;
+    container.appendChild(newVar);
+    envVarCounter++;
+}
+</script>
+{% endblock %}

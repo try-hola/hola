@@ -1,0 +1,97 @@
+<!-- Apps Content Fragment -->
+<div class="space-y-6">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold">Applications</h1>
+            <p class="text-base-content/70 mt-1">Manage your deployed applications</p>
+        </div>
+        <button class="btn btn-primary" 
+                hx-get="/apps/deploy" 
+                hx-target="#main-content"
+                hx-push-url="true">
+            <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+            </svg>
+            Deploy New App
+        </button>
+    </div>
+
+    <!-- Search and Filters -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <div class="flex flex-col lg:flex-row gap-4">
+                <div class="form-control flex-grow">
+                    <div class="input-group">
+                        <input type="text" 
+                               placeholder="Search applications..." 
+                               class="input input-bordered flex-grow"
+                               hx-get="/api/apps/search"
+                               hx-target="#app-list"
+                               hx-trigger="keyup changed delay:300ms"
+                               name="q">
+                        <button class="btn btn-square">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="form-control">
+                    <select class="select select-bordered"
+                            hx-get="/api/apps/filter"
+                            hx-target="#app-list"
+                            hx-trigger="change"
+                            name="status">
+                        <option value="">All Status</option>
+                        <option value="running">Running</option>
+                        <option value="stopped">Stopped</option>
+                        <option value="error">Error</option>
+                    </select>
+                </div>
+                
+                <div class="form-control">
+                    <select class="select select-bordered"
+                            hx-get="/api/apps/sort"
+                            hx-target="#app-list"
+                            hx-trigger="change"
+                            name="sort">
+                        <option value="name">Name</option>
+                        <option value="status">Status</option>
+                        <option value="created">Created</option>
+                        <option value="updated">Updated</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Applications Grid -->
+    <div id="app-list" 
+         hx-get="/api/apps/list" 
+         hx-target="#app-list" 
+         hx-trigger="load, every 30s">
+        <!-- Application cards will be loaded here -->
+        <div class="flex justify-center items-center py-12">
+            <div class="loading loading-spinner loading-lg"></div>
+        </div>
+    </div>
+
+    <!-- Empty State (shown when no apps) -->
+    <div id="empty-state" class="hidden text-center py-12">
+        <div class="max-w-md mx-auto">
+            <svg class="w-24 h-24 mx-auto text-base-content/20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+            </svg>
+            <h3 class="text-lg font-semibold mb-2">No Applications Found</h3>
+            <p class="text-base-content/70 mb-4">Get started by deploying your first application.</p>
+            <button class="btn btn-primary" 
+                    hx-get="/apps/deploy" 
+                    hx-target="#main-content"
+                    hx-push-url="true">
+                Deploy Your First App
+            </button>
+        </div>
+    </div>
+</div>

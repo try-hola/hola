@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 # Add project root to path so we can import modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from hola_server.main import app
+from hola.main import app
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def server_process():
 
     # Start server in debug mode
     process = subprocess.Popen(
-        ["python", "-m", "hola_server.main"],
+        ["python", "-m", "hola.main"],
         cwd=project_root,
         env=env,
     )
