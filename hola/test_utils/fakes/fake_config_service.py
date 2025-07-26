@@ -19,7 +19,7 @@ Attributes:
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 
-from hola.shared.models.config import (
+from hola.models.config import (
     ConfigEntry,
     ConfigUpdateRequest,
     ConfigCreateRequest,
@@ -28,7 +28,7 @@ from hola.shared.models.config import (
     ConfigListResponse,
     ConfigEntryResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.errors import ValidationException, NotFoundException
 
 
 class FakeConfigService:

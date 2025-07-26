@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import uuid
 
-from hola.shared.models import (
+from hola.models import (
     ApiResponse,
     ApiError,
     MetricPoint,
@@ -33,12 +33,12 @@ from hola.shared.models import (
     MetricsClearRequest,
     MetricType,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
 from ..config.context import ServerContext, get_context
 from ..services.metrics_service import MetricsService
 from ..auth import get_api_key
 from ..utils.api_logging import log_api_error
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -805,7 +805,7 @@ async def record_metric_by_name(
         metrics_service = context.get_metrics_service()
 
         # Parse the metric request into a proper object
-        from hola.shared.models.metrics import MetricRecordRequest
+        from hola.models.metrics import MetricRecordRequest
 
         record_request = MetricRecordRequest(name=metric_name, **metric_request)
 

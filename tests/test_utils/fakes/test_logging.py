@@ -1,5 +1,5 @@
 import pytest
-from hola.shared.test_utils.fakes.logging import FakeLogger, LogMessage
+from hola.test_utils.fakes.logging import FakeLogger, LogMessage
 import logging
 
 

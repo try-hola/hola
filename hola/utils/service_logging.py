@@ -10,7 +10,7 @@ import time
 from typing import Any, Optional, Dict
 from uuid import UUID
 
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 
 def log_service_operation_start(

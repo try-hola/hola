@@ -10,7 +10,7 @@ The module includes:
     - A cached utility for obtaining logger instances
 
 Usage:
-    from hola.shared.logger import get_logger, configure_logging
+    from hola.utils.logging import get_logger, configure_logging
 
     # Configure logging (typically done at application startup)
     configure_logging(level="DEBUG")

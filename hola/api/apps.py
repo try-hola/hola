@@ -22,8 +22,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse  # Added import
 from typing import List
 import uuid
-from hola.shared.models.response import ApiResponse, ApiError  # Added ApiError import
-from hola.shared.models.app import (
+from hola.models.response import ApiResponse, ApiError  # Added ApiError import
+from hola.models.app import (
     App,
     AppCreateRequest,
     AppCreateResponse,
@@ -33,12 +33,12 @@ from hola.shared.models.app import (
     AppListResponse,
     AppDeployResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
 from ..auth import get_api_key
 from ..services.app_service import AppService
 from ..config.context import get_context
 from ..utils.api_logging import log_api_error
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)

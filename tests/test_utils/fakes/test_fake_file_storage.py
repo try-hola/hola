@@ -3,8 +3,8 @@
 import pytest
 from datetime import datetime
 import io
-from hola.shared.models.file import FileInfo
-from hola.shared.errors import NotFoundException
+from hola.models.file import FileInfo
+from hola.models.errors import NotFoundException
 from hola.test_utils.fakes.fake_file_storage import FakeFileStorage
 
 

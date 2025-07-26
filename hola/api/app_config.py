@@ -23,16 +23,16 @@ from typing import Any
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import JSONResponse
 
-from hola.shared.models.response import ApiResponse, ApiError
-from hola.shared.models.config import (
+from hola.models.response import ApiResponse, ApiError
+from hola.models.config import (
     ConfigCreateRequest,
     ConfigUpdateRequest,
     ConfigResponse,
     ConfigListResponse,
     ConfigEntryResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
+from hola.utils.logging import get_logger
 from ..auth import get_api_key
 from ..config.context import ServerContext, get_context
 from ..utils.api_logging import log_api_error

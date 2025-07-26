@@ -21,9 +21,9 @@ from typing import Dict, List, Optional, Any, Union
 from datetime import datetime, timezone
 import uuid
 
-from hola.shared.errors import NotFoundException
+from hola.models.errors import NotFoundException
 
-from hola.shared.models.backup import (
+from hola.models.backup import (
     BackupInfo,
     BackupStatus,
     BackupCreateRequest,

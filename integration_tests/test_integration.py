@@ -23,7 +23,7 @@ from hola.main import app
 # CLI removed - focusing on server only
 # from hola_cli.config.settings import CliSettings, ServerConnection
 # from hola_cli.main import app as cli_app
-from hola.shared.models.response import ApiResponse
+from hola.models.response import ApiResponse
 
 # Test constants
 TEST_SERVER_PORT = 8787

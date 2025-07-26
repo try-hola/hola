@@ -5,13 +5,7 @@ throughout the Hola application.
 """
 
 from typing import Optional, Any, Dict
-from pydantic import BaseModel, Field
-
-class ApiError(BaseModel):
-    """API error model."""
-    code: str = Field(..., description="Error code")
-    message: str = Field(..., description="Error message")
-    details: Optional[Any] = Field(None, description="Additional error details")
+from .response import ApiError, ApiResponse
 
 class HolaException(Exception):
     """Base exception for Hola applications."""
@@ -29,13 +23,24 @@ class HolaException(Exception):
         self.status_code = status_code
         super().__init__(message)
     
-    def to_response(self) -> ApiError:
-        """Convert exception to API error response."""
-        return ApiError(
-            code=self.code,
-            message=self.message,
-            details=self.details
-        )
+    def to_api_error(self) -> ApiError:
+        """Convert to an API error object.
+
+        Returns:
+            An ApiError instance populated with this exception's properties
+        """
+        return ApiError(code=self.code, message=self.message, details=self.details)
+
+    def to_response(self) -> ApiResponse:
+        """Convert to an API response object.
+
+        Creates a complete API response with success=False and this exception's
+        information as the error property.
+
+        Returns:
+            An ApiResponse instance representing a failed operation
+        """
+        return ApiResponse(success=False, error=self.to_api_error())
 
 class ValidationException(HolaException):
     """Exception raised when input validation fails."""
@@ -90,3 +95,33 @@ class ConfigurationException(HolaException):
             details=details,
             status_code=500
         )
+
+
+def format_exception(exception: Exception) -> ApiError:
+    """Convert any exception to a structured API error.
+
+    This utility function helps maintain consistent error handling by
+    converting standard Python exceptions to the ApiError format.
+
+    Args:
+        exception: Any Python exception
+
+    Returns:
+        An ApiError with appropriate code and message
+
+    Examples:
+        try:
+            # Some operation that might fail
+            result = perform_operation()
+        except Exception as e:
+            error = format_exception(e)
+            return ApiResponse(success=False, error=error)
+    """
+    if isinstance(exception, HolaException):
+        return exception.to_api_error()
+
+    return ApiError(
+        code="UNEXPECTED_ERROR",
+        message=str(exception),
+        details={"type": type(exception).__name__},
+    )

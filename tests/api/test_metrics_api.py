@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 from hola.main import app
 from hola.config.context import get_context, ServerContext
-from hola.shared.models.metrics import (
+from hola.models.metrics import (
     MetricPoint,
     MetricSeries,
     MetricType,

@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any, AsyncGenerator
 from datetime import datetime, timezone, timedelta
-from hola.shared.models.logs import (
+from hola.models.logs import (
     LogEntry,
     LogLevel,
     LogSource,
@@ -33,8 +33,8 @@ from hola.shared.models.logs import (
     LogClearRequest,
     LogClearResponse,
 )
-from hola.shared.errors import ValidationException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.errors import ValidationException, ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import ServerContext
 from ..utils.service_logging import (
     log_service_operation_start,

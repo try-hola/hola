@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 import uuid
 import math
 
-from hola.shared.models.metrics import (
+from hola.models.metrics import (
     MetricPoint,
     MetricSeries,
     MetricType,

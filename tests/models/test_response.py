@@ -17,7 +17,7 @@ and define the contract for all API communications in the system.
 
 import pytest
 
-from hola.shared.models.response import ApiResponse, ApiError
+from hola.models.response import ApiResponse, ApiError
 
 
 class TestApiError:

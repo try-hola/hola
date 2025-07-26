@@ -6,13 +6,13 @@ from unittest.mock import patch
 
 from hola.services.app_service import AppService
 from hola.config.context import ServerContext
-from hola.shared.models.app import (
+from hola.models.app import (
     AppDeployRequest,
     AppUpgradeRequest,
     AppStatus,
     AppHealth,
 )
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.errors import ValidationException, NotFoundException
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import pytest
 import os
 from pathlib import Path
 from unittest.mock import patch, mock_open
-from hola.shared.environment import (
+from hola.utils.environment import (
     load_env_file,
     validate_required_env,
     Environment,

@@ -3,8 +3,8 @@
 import pytest
 from datetime import datetime, timezone
 
-from hola.shared.models.config import ConfigCreateRequest, ConfigUpdateRequest
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.config import ConfigCreateRequest, ConfigUpdateRequest
+from hola.models.errors import ValidationException, NotFoundException
 from hola.test_utils.fakes.fake_config_service import FakeConfigService
 
 

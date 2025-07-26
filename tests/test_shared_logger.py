@@ -6,7 +6,7 @@ import pytest
 import logging
 import sys
 from unittest.mock import patch
-from hola.shared.logger import configure_logging, get_logger
+from hola.utils.logging import configure_logging, get_logger
 from typing import Protocol
 
 

@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 
-from hola.shared.models.config import (
+from hola.models.config import (
     ConfigCreateRequest,
     ConfigUpdateRequest,
     ConfigResponse,
@@ -12,7 +12,7 @@ from hola.shared.models.config import (
     ConfigEntry,
     AppConfig,
 )
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.errors import ValidationException, NotFoundException
 from hola.services.config_service import ConfigService
 from hola.config.context import ServerContext
 from hola.config.settings import Settings

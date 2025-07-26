@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import uuid
 import re
 
-from hola.shared.models.logs import (
+from hola.models.logs import (
     LogEntry,
     LogLevel,
     LogSource,

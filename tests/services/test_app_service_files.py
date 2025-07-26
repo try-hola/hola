@@ -11,9 +11,9 @@ from pathlib import Path
 
 from hola.services.app_service import AppService
 from hola.config.context import ServerContext
-from hola.shared.models.app import App, AppStatus, AppHealth
-from hola.shared.models.file import FileInfo, FileListResponse
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.app import App, AppStatus, AppHealth
+from hola.models.file import FileInfo, FileListResponse
+from hola.models.errors import ValidationException, NotFoundException
 
 
 class FakeUploadFile(UploadFile):

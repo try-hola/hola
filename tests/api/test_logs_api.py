@@ -7,7 +7,7 @@ import uuid
 
 from hola.main import app
 from hola.config.context import get_context, ServerContext
-from hola.shared.models.logs import (
+from hola.models.logs import (
     LogEntry,
     LogLevel,
     LogSource,

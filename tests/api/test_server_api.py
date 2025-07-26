@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 
 from hola.main import app
-from hola.shared.models.server import (
+from hola.models.server import (
     ServerStatus,
     ServerState,
     HealthStatus,

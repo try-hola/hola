@@ -15,7 +15,7 @@ Attributes:
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
-from hola.shared.models.server import (
+from hola.models.server import (
     ServerStatus,
     ServerState,
     HealthStatus,

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 from hola.main import app
-from hola.shared.models.config import (
+from hola.models.config import (
     ConfigCreateRequest,
     ConfigUpdateRequest,
     ConfigEntry,

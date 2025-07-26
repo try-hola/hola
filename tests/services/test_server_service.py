@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from typing import Generator
 
-from hola.shared.models import (
+from hola.models import (
     ServerStatus,
     ServerState,
     HealthStatus,

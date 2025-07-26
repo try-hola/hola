@@ -11,8 +11,8 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp  # Import ASGIApp
-from hola.shared.logger import get_logger, configure_logging
-from hola.shared.errors import HolaException
+from hola.utils.logging import get_logger, configure_logging
+from hola.models.errors import HolaException
 from ..config.settings import get_settings
 
 # Default log format for server

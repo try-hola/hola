@@ -7,15 +7,15 @@ import io
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from hola.shared.models.file import FileInfo, FileListResponse
-from hola.shared.errors import NotFoundException
+from hola.models.file import FileInfo, FileListResponse
+from hola.models.errors import NotFoundException
 from hola.test_utils.fakes.fake_app_service import FakeAppService
 
 
 @pytest.fixture
 def fake_app_service_with_app():
     """Setup a fake app service with a test app."""
-    from hola.shared.models.app import App, AppStatus, AppHealth
+    from hola.models.app import App, AppStatus, AppHealth
 
     service = FakeAppService()
 

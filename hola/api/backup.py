@@ -19,8 +19,8 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 import uuid
 import time
-from hola.shared.models.response import ApiResponse, ApiError
-from hola.shared.models.backup import (
+from hola.models.response import ApiResponse, ApiError
+from hola.models.backup import (
     BackupInfo,
     BackupCreateRequest,
     BackupCreateResponse,
@@ -28,12 +28,12 @@ from hola.shared.models.backup import (
     RestoreRequest,
     RestoreResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
 from ..auth import get_api_key
 from ..services.backup_service import BackupService
 from ..config.context import get_context
 from ..utils.api_logging import log_api_error
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 router = APIRouter(prefix="/api/apps", tags=["backup"])
 logger = get_logger(__name__)

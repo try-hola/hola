@@ -15,7 +15,7 @@ Attributes:
 from typing import List, Dict, Any, Optional, BinaryIO
 from datetime import datetime, timezone
 from fastapi import UploadFile
-from hola.shared.models.app import (
+from hola.models.app import (
     App,
     AppStatus,
     AppHealth,
@@ -27,15 +27,15 @@ from hola.shared.models.app import (
     AppDeployResponse,
     AppListResponse,
 )
-from hola.shared.models.file import FileInfo, FileListResponse
-from hola.shared.models.config import (
+from hola.models.file import FileInfo, FileListResponse
+from hola.models.config import (
     ConfigCreateRequest,
     ConfigUpdateRequest,
     ConfigResponse,
     ConfigListResponse,
     ConfigEntryResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException
+from hola.models.errors import ValidationException, NotFoundException
 from .fake_file_storage import FakeFileStorage
 
 

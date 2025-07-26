@@ -6,8 +6,8 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-from hola.shared.models import BackupInfo, BackupCreateRequest, RestoreRequest
-from hola.shared.errors import NotFoundException, ValidationException, ServiceException
+from hola.models import BackupInfo, BackupCreateRequest, RestoreRequest
+from hola.models.errors import NotFoundException, ValidationException, ServiceException
 from hola.services.backup_service import BackupService
 from hola.test_utils.fakes.fake_backup_service import FakeBackupService
 
@@ -31,7 +31,7 @@ class TestBackupService:
 
         # Create a fake app service and register test apps
         from hola.test_utils.fakes.fake_app_service import FakeAppService
-        from hola.shared.models.app import App, AppStatus, AppHealth
+        from hola.models.app import App, AppStatus, AppHealth
         from datetime import datetime, timezone
 
         fake_app_service = FakeAppService()

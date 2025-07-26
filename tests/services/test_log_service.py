@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from hola.shared.models.logs import (
+from hola.models.logs import (
     LogEntry,
     LogQueryParams,
     LogLevel,
@@ -73,7 +73,7 @@ class TestLogService:
         """Test adding a log entry."""
         app_name = "test-app"
         # Create a LogCreateRequest instead of LogEntry
-        from hola.shared.models.logs import LogCreateRequest
+        from hola.models.logs import LogCreateRequest
 
         log_request = LogCreateRequest(
             level=LogLevel.INFO,
@@ -283,7 +283,7 @@ class TestLogService:
         app_name = "test-app"
         now = datetime.now(timezone.utc)
 
-        from hola.shared.models.logs import LogCreateRequest
+        from hola.models.logs import LogCreateRequest
 
         # Create two log entries directly
         old_log = LogEntry(

@@ -21,7 +21,7 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from datetime import datetime
 import json
 
-from hola.shared.models import (
+from hola.models import (
     ApiResponse,
     LogEntry,
     LogQueryParams,
@@ -31,8 +31,8 @@ from hola.shared.models import (
     LogLevel,
     LogSource,
 )
-from hola.shared.models.response import ApiError
-from hola.shared.logger import get_logger
+from hola.models.response import ApiError
+from hola.utils.logging import get_logger
 from ..auth import get_api_key
 from ..config.context import ServerContext, get_context
 from ..services.log_service import LogService

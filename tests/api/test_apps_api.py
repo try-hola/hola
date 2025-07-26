@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hola.test_utils.fakes.fake_app_service import FakeAppService
-from hola.shared.models.app import AppStatus
+from hola.models.app import AppStatus
 
 
 class TestAppsAPI:

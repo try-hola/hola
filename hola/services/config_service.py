@@ -12,7 +12,7 @@ Attributes:
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 
-from hola.shared.models.config import (
+from hola.models.config import (
     ConfigEntry,
     ConfigUpdateRequest,
     ConfigCreateRequest,
@@ -21,8 +21,8 @@ from hola.shared.models.config import (
     ConfigListResponse,
     ConfigEntryResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import ServerContext
 
 logger = get_logger(__name__)

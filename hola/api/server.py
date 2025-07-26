@@ -17,19 +17,19 @@ import uuid
 import time
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from hola.shared.models.response import ApiResponse, ApiError
-from hola.shared.models.server import (
+from hola.models.response import ApiResponse, ApiError
+from hola.models.server import (
     ServerStatus,
     HealthStatus,
     VersionInfo,
     ResourceUsage,
 )
-from hola.shared.errors import ServiceException
+from hola.models.errors import ServiceException
 from ..auth import get_api_key
 from ..services.server_service import ServerService
 from ..config.context import get_context
 from ..utils.api_logging import log_api_error
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 router = APIRouter(prefix="/api/server", tags=["server"])
 logger = get_logger(__name__)

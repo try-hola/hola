@@ -19,13 +19,13 @@ import time
 from fastapi import APIRouter, Depends, File, UploadFile, Path, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import List, Optional
-from hola.shared.models.response import ApiResponse, ApiError
-from hola.shared.models.file import FileInfo, FileListResponse
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
+from hola.models.response import ApiResponse, ApiError
+from hola.models.file import FileInfo, FileListResponse
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
 from ..auth import get_api_key
 from ..services.app_service import AppService
 from ..config.context import get_context
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)

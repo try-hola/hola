@@ -12,7 +12,7 @@ from io import BytesIO
 import mimetypes
 import os.path
 
-from hola.shared.models.file import FileInfo, FileListResponse
+from hola.models.file import FileInfo, FileListResponse
 
 
 class FakeFileStorage:
@@ -176,7 +176,7 @@ class FakeFileStorage:
         )
 
         if app_name not in self.files or file_path not in self.files[app_name]:
-            from hola.shared.errors import NotFoundException
+            from hola.models.errors import NotFoundException
 
             raise NotFoundException(
                 resource_type="file",
@@ -215,7 +215,7 @@ class FakeFileStorage:
         if self._should_fail(
             "file_delete"
         ):  # Check for forced failure (key is "file_delete" in test)
-            from hola.shared.errors import ValidationException  # Add import
+            from hola.models.errors import ValidationException  # Add import
 
             raise ValidationException(
                 "Forced file deletion failure in fake for testing"

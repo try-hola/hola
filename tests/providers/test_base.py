@@ -5,7 +5,7 @@ This module tests the ServerProvider protocol definition.
 
 import pytest
 from typing import Dict, Any, Protocol
-from hola.shared.providers.base import ServerProvider
+from hola.utils.providers.base import ServerProvider
 
 
 class FakeServerProvider:

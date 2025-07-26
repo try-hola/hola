@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
-from hola.shared.models.backup import (
+from hola.models.backup import (
     BackupInfo,
     BackupStatus,
     BackupCreateRequest,
@@ -31,9 +31,9 @@ from hola.shared.models.backup import (
     RestoreInfo,
     RestoreStatus,
 )
-from hola.shared.models.app import App
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.app import App
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import ServerContext
 
 logger = get_logger(__name__)

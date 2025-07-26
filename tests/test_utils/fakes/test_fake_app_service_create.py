@@ -3,8 +3,8 @@
 import pytest
 from datetime import datetime, timezone
 
-from hola.shared.models.app import App, AppStatus, AppHealth, AppCreateRequest
-from hola.shared.errors import ValidationException
+from hola.models.app import App, AppStatus, AppHealth, AppCreateRequest
+from hola.models.errors import ValidationException
 from hola.test_utils.fakes.fake_app_service import FakeAppService
 
 

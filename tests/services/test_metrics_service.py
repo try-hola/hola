@@ -7,7 +7,7 @@ from pathlib import Path
 import tempfile
 import shutil
 
-from hola.shared.models import MetricPoint, MetricsQueryParams, MetricRecordRequest
+from hola.models import MetricPoint, MetricsQueryParams, MetricRecordRequest
 from hola.services.metrics_service import MetricsService
 from hola.test_utils.fakes.fake_metrics_service import FakeMetricsService
 

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
-from hola.shared.models.metrics import (
+from hola.models.metrics import (
     MetricPoint,
     MetricSeries,
     MetricType,
@@ -36,8 +36,8 @@ from hola.shared.models.metrics import (
     MetricsClearRequest,
     MetricsClearResponse,
 )
-from hola.shared.errors import ValidationException, NotFoundException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.errors import ValidationException, NotFoundException, ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import ServerContext
 
 logger = get_logger(__name__)

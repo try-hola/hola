@@ -9,7 +9,7 @@ but the actual implementation will be added in a later phase.
 
 from fastapi import Security, HTTPException, status
 from fastapi.security import APIKeyHeader
-from hola.shared.errors import AuthenticationException
+from hola.models.errors import AuthenticationException
 from .config.settings import get_settings
 
 # Define the API key header security scheme

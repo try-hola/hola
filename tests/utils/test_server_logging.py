@@ -15,8 +15,8 @@ from hola.utils.api_logging import (
     log_request_end,
     RequestLoggingMiddleware,
 )
-from hola.shared.errors import HolaException
-from hola.shared.test_utils.fakes.logging import FakeLogger
+from hola.models.errors import HolaException
+from hola.test_utils.fakes.logging import FakeLogger
 
 
 # Fake for settings provider

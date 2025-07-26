@@ -13,8 +13,8 @@ Dependencies:
 import uuid
 import time
 from fastapi import APIRouter, Depends, Request
-from hola.shared.models.response import ApiResponse
-from hola.shared.logger import get_logger
+from hola.models.response import ApiResponse
+from hola.utils.logging import get_logger
 from ..utils.api_logging import log_api_error
 
 # from ..auth import get_api_key - Will be used in a later phase

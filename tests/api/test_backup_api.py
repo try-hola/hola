@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import uuid
 
 from hola.main import app
-from hola.shared.models.backup import (
+from hola.models.backup import (
     BackupInfo,
     BackupStatus,
     BackupCreateRequest,

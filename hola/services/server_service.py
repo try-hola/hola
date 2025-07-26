@@ -20,7 +20,7 @@ import psutil
 from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime, timezone
-from hola.shared.models.server import (
+from hola.models.server import (
     ServerStatus,
     ServerState,
     HealthStatus,
@@ -29,8 +29,8 @@ from hola.shared.models.server import (
     VersionInfo,
     ResourceUsage,
 )
-from hola.shared.errors import ServiceException
-from hola.shared.logger import get_logger
+from hola.models.errors import ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import ServerContext
 from ..utils.system_monitor import SystemMetrics, PsutilSystemMonitor
 

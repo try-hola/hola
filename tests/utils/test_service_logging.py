@@ -7,7 +7,7 @@ import uuid
 from typing import Any, Dict
 
 import pytest
-from hola.shared.test_utils.fakes.logging import FakeLogger
+from hola.test_utils.fakes.logging import FakeLogger
 from hola.utils.service_logging import (
     log_service_operation_start,
     log_service_operation_end,

@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 import io
 from fastapi import UploadFile
 
-from hola.shared.errors import ValidationException, NotFoundException
-from hola.shared.models.app import App, AppStatus, AppHealth
-from hola.shared.models.file import FileInfo, FileListResponse
+from hola.models.errors import ValidationException, NotFoundException
+from hola.models.app import App, AppStatus, AppHealth
+from hola.models.file import FileInfo, FileListResponse
 from hola.test_utils.fakes.fake_app_service import FakeAppService
 
 

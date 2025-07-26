@@ -1,6 +1,6 @@
 import pytest
 import os
-from hola.shared.test_utils.fakes.environment import FakeEnvironment
+from hola.test_utils.fakes.environment import FakeEnvironment
 
 
 def test_fake_environment_initialization_empty():

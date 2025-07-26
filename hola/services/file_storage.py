@@ -22,9 +22,9 @@ from datetime import datetime, timezone
 from io import BytesIO
 import mimetypes
 
-from hola.shared.models.file import FileInfo, FileListResponse
-from hola.shared.errors import NotFoundException, ValidationException, ServiceException
-from hola.shared.logger import get_logger
+from hola.models.file import FileInfo, FileListResponse
+from hola.models.errors import NotFoundException, ValidationException, ServiceException
+from hola.utils.logging import get_logger
 from ..config.context import (
     ServerContext,
 )  # This import will be a circular dependency if FileStorage is initialized in ServerContext directly. Will need to fix later.

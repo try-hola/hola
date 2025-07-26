@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from hola.models.errors import HolaException
-from hola.shared.logger import get_logger
+from hola.utils.logging import get_logger
 from .config.settings import get_settings
 from .utils.api_logging import setup_server_logging, setup_request_logging, log_api_error
 from .api import hello, apps, app_files, app_config, server, backup, logs, metrics

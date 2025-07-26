@@ -5,7 +5,7 @@ This file tests functionality that requires isolation from other environment var
 
 import pytest
 import os
-from hola.shared.environment import Environment
+from hola.utils.environment import Environment
 from hola.config.settings import Settings
 
 

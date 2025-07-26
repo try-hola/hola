@@ -13,7 +13,7 @@ Functions:
 from pydantic_settings import BaseSettings
 from typing import List, Optional
 from functools import lru_cache
-from hola.shared.environment import Environment
+from hola.utils.environment import Environment
 from datetime import datetime  # Add datetime import
 
 
