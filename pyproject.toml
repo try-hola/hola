@@ -35,7 +35,7 @@ black = "^25.1.0"
 isort = "^6.0.1"
 requests = "^2.32.3"
 [tool.poetry.scripts]
-hola = "hola.main:app"
+hola = "hola.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "integration_tests"]
