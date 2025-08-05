@@ -1,35 +1,16 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-	"name": "node-ts-base",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "ghcr.io/get2knowio/devcontainer-base",
-
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
-
-	// Use 'postCreateCommand' to run commands after the container is created.
-
-	// Configure tool-specific properties.
-	"customizations": {
-		"vscode": {
-      		"extensions": [
-      		],
-			"settings": {
-        		"terminal.integrated.defaultProfile.linux": "zsh",
-      			"terminal.integrated.profiles.linux": {
-        			"zsh": {
-          				"path": "/usr/bin/zsh"
-        			}
-      			}
-			}
-        }
-	}
-	
-
-	// Uncomment to connect as root instead. More info: https://aka.ms/dev-containers-non-root.
-	// "remoteUser": "root"
+  "name": "TypeScript Dev Container",
+  "image": "ghcr.io/get2knowio/devcontainer-typescript-base:latest",
+  "remoteUser": "vscode",
+  "features": {},
+//   "postCreateCommand": "npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+      ]
+    }
+  }
 }
