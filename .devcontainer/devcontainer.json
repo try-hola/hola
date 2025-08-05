@@ -1,9 +1,9 @@
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the
 // README at: https://github.com/devcontainers/templates/tree/main/src/ubuntu
 {
-	"name": "g2k-python-base",
+	"name": "node-ts-base",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "ghcr.io/get2knowio/devcontainer-python-base",
+	"image": "ghcr.io/get2knowio/devcontainer-base",
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
 	// "features": {},
@@ -12,13 +12,11 @@
 	// "forwardPorts": [],
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	"postCreateCommand": "poetry install",
 
 	// Configure tool-specific properties.
 	"customizations": {
 		"vscode": {
       		"extensions": [
-        		"ms-python.python"
       		],
 			"settings": {
         		"terminal.integrated.defaultProfile.linux": "zsh",
