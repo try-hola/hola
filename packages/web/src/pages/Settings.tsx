@@ -21,8 +21,11 @@ import type {
   SystemEnvVar,
   GetSettingsResponse,
   PatchSettingsRequest,
+  GetBackupSettingsResponse,
+  PatchBackupSettingsRequest,
   SystemStatus
 } from '@hola/shared';
+// import { API } from '@hola/shared'; // Used in commented API calls
 
 export const Settings: React.FC = () => {
   const [theme, setTheme] = useState('dark');
@@ -46,8 +49,10 @@ export const Settings: React.FC = () => {
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [settings, setSettings] = useState<GetSettingsResponse | null>(null);
+  const [backupSettings, setBackupSettings] = useState<GetBackupSettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingBackup, setSavingBackup] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Load settings and system status
@@ -56,16 +61,19 @@ export const Settings: React.FC = () => {
       setLoading(true);
       setError(null);
       
-      // TODO: Replace with actual API calls
-      // const [settingsResponse, statusResponse] = await Promise.all([
+      // TODO: Replace with actual API calls when ready
+      // const [settingsResponse, backupSettingsResponse, statusResponse] = await Promise.all([
       //   fetch(API.settings.base),
+      //   fetch(API.settings.backup),
       //   fetch(API.system.status)
       // ]);
       // 
       // if (!settingsResponse.ok) throw new Error('Failed to load settings');
+      // if (!backupSettingsResponse.ok) throw new Error('Failed to load backup settings');
       // if (!statusResponse.ok) throw new Error('Failed to load system status');
       // 
       // const settingsData: GetSettingsResponse = await settingsResponse.json();
+      // const backupSettingsData: GetBackupSettingsResponse = await backupSettingsResponse.json();
       // const statusData: GetSystemStatusResponse = await statusResponse.json();
       
       // For now, use mock data
@@ -79,6 +87,12 @@ export const Settings: React.FC = () => {
           smtpPassword: '[REDACTED]' // Password is redacted in GET responses
         }
       };
+
+      const mockBackupSettings: GetBackupSettingsResponse = {
+        scheduleEnabled: true,
+        scheduleTime: '02:00',
+        retentionDays: 30
+      };
       
       const mockStatus: SystemStatus = {
         docker: { ok: true, version: '24.0.7' },
@@ -89,6 +103,7 @@ export const Settings: React.FC = () => {
       };
       
       setSettings(mockSettings);
+      setBackupSettings(mockBackupSettings);
       setSystemStatus(mockStatus);
       setSystemEnvVars(mockSettings.systemEnv);
     } catch (err) {
@@ -112,7 +127,7 @@ export const Settings: React.FC = () => {
         // Only include changed fields in the patch
       };
       
-      // TODO: Replace with actual API call
+      // TODO: Replace with actual API call when ready
       // const response = await fetch(API.settings.base, {
       //   method: 'PATCH',
       //   headers: { 'Content-Type': 'application/json' },
@@ -135,6 +150,43 @@ export const Settings: React.FC = () => {
     }
   }, [settings, systemEnvVars]);
 
+  // Save backup settings
+  const saveBackupSettings = useCallback(async () => {
+    if (!backupSettings) return;
+    
+    try {
+      setSavingBackup(true);
+      setError(null);
+      
+      const updateRequest: PatchBackupSettingsRequest = {
+        scheduleEnabled: backupSettings.scheduleEnabled,
+        scheduleTime: backupSettings.scheduleTime,
+        retentionDays: backupSettings.retentionDays
+      };
+      
+      // TODO: Replace with actual API call when ready
+      // const response = await fetch(API.settings.backup, {
+      //   method: 'PATCH',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(updateRequest)
+      // });
+      // 
+      // if (!response.ok) throw new Error('Failed to save backup settings');
+      // const updatedBackupSettings: GetBackupSettingsResponse = await response.json();
+      
+      // For now, just update local state
+      console.log('Saving backup settings:', updateRequest);
+      
+      // Show success feedback
+      setError(null);
+    } catch (err) {
+      console.error('Failed to save backup settings:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save backup settings');
+    } finally {
+      setSavingBackup(false);
+    }
+  }, [backupSettings]);
+
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
@@ -155,6 +207,11 @@ export const Settings: React.FC = () => {
 
   const toggleSecretVisibility = (key: string) => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const updateBackupSettings = (field: keyof GetBackupSettingsResponse, value: boolean | string | number) => {
+    if (!backupSettings) return;
+    setBackupSettings({ ...backupSettings, [field]: value });
   };
 
   return (
@@ -297,6 +354,116 @@ export const Settings: React.FC = () => {
             </label>
           </div>
         </div>
+      </div>
+
+      {/* Backup Settings */}
+      <div className="bg-surface-1 rounded-lg border border-border p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center space-x-3">
+            <Server className="w-5 h-5 text-primary" />
+            <div>
+              <h2 className="text-lg font-medium">Backup Settings</h2>
+              <p className="text-sm text-text-muted">Configure automated backup schedules and retention</p>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="animate-pulse space-y-4">
+            <div className="h-4 bg-surface-2 rounded w-1/3"></div>
+            <div className="h-10 bg-surface-2 rounded w-full"></div>
+            <div className="h-4 bg-surface-2 rounded w-1/4"></div>
+            <div className="h-10 bg-surface-2 rounded w-1/2"></div>
+          </div>
+        ) : backupSettings ? (
+          <div className="space-y-6">
+            {/* Schedule Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm font-medium">Automated Backups</label>
+                <p className="text-xs text-text-muted mt-1">Enable scheduled automatic backups</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={backupSettings.scheduleEnabled}
+                onChange={(e) => updateBackupSettings('scheduleEnabled', e.target.checked)}
+                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
+              />
+            </div>
+
+            {/* Schedule Time */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Backup Time</label>
+              <div className="flex items-center space-x-3">
+                <input
+                  type="time"
+                  value={backupSettings.scheduleTime}
+                  onChange={(e) => updateBackupSettings('scheduleTime', e.target.value)}
+                  disabled={!backupSettings.scheduleEnabled}
+                  className="px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <span className="text-sm text-text-muted">Daily backup time (server timezone)</span>
+              </div>
+            </div>
+
+            {/* Retention Period */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">Retention Period</label>
+              <div className="flex items-center space-x-3">
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={backupSettings.retentionDays}
+                  onChange={(e) => updateBackupSettings('retentionDays', parseInt(e.target.value))}
+                  className="w-24 px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                />
+                <span className="text-sm text-text-muted">days (1-365)</span>
+              </div>
+              <p className="text-xs text-text-muted">
+                Backups older than this will be automatically deleted
+              </p>
+            </div>
+
+            {/* Save Button */}
+            <div className="flex justify-end space-x-3 pt-4 border-t border-border">
+              {error && (
+                <div className="flex items-center space-x-2 text-danger text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  <span>{error}</span>
+                </div>
+              )}
+              <button 
+                onClick={saveBackupSettings}
+                disabled={savingBackup}
+                className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                {savingBackup ? (
+                  <Activity className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                <span>{savingBackup ? 'Saving...' : 'Save Backup Settings'}</span>
+              </button>
+            </div>
+
+            {/* Info Notice */}
+            <div className="bg-info/10 border border-info/20 rounded-lg p-4">
+              <div className="flex items-start space-x-3">
+                <Info className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <div className="font-medium text-info">Backup Schedule</div>
+                  <div className="text-text-muted mt-1 space-y-1">
+                    <div>• Automated backups run daily at the specified time</div>
+                    <div>• Manual backups can be created anytime from the Backups page</div>
+                    <div>• Backups include all deployment data and configurations</div>
+                    <div>• Older backups are automatically cleaned up based on retention settings</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {/* System Environment Variables */}
