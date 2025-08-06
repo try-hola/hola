@@ -18,7 +18,13 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    
+    /* Workspace path mapping to mirror packages/server */
+    "baseUrl": ".",
+    "paths": {
+      "@hola/shared": ["../shared/src/index.ts"]
+    }
   },
   "include": ["src"]
 }

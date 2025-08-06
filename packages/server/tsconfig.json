@@ -1,9 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "composite": false,
     "outDir": "dist",
-    "rootDir": "src",
     "module": "esnext",
     "target": "es2022",
     "moduleResolution": "bundler",
