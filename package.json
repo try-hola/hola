@@ -1,0 +1,19 @@
+{
+  "name": "hola",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter './packages/*' build",
+    "typecheck": "bun run --filter './packages/*' typecheck",
+    "lint": "bun run --filter './packages/*' lint",
+    "dev:web": "bun --cwd packages/web dev",
+    "dev:server": "bun --cwd packages/server dev",
+    "dev": "bunx --bun concurrently -n server,web -c blue,green \"bun --cwd packages/server dev\" \"bun --cwd packages/web dev\"",
+    "clean": "git clean -fdX && git reset --hard"
+  },
+  "packageManager": "bun@1.1.34"
+}

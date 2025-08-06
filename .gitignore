@@ -1,49 +1,43 @@
-# OS files
-.DS_Store
+# Dependencies
+node_modules/
+bun.lockb
 
-# Build and distribution
-dist
+# Build outputs
+dist/
 build/
-*.egg-info/
-*.egg
+.out/
+.next/
+.vite/
+.cache/
+coverage/
 
-# Python cache files
-__pycache__
-*.py[cod]
-*$py.class
-*.so
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+logs/
+*.log
 
-# Python virtual environments
-.env
-.venv
-env/
-venv/
-ENV/
-.python-version
-
-# Testing and coverage
-coverage
-.coverage
-.coverage.*
-htmlcov/
-.pytest_cache/
-.tox/
-.nox/
-.hypothesis/
-
-# IDE and editor files
-.idea/
-.vscode/
+# Editor/OS
+.DS_Store
 *.swp
 *.swo
-.vim/
-*.sublime-workspace
-*.sublime-project
+.idea/
+.vscode/*
+!.vscode/extensions.json
 
-# Poetry
-.poetry/
+# Env
+.env
+.env.*
+!.env.example
 
-# Project specific
-data
-.mypy_cache/
-.ruff_cache/
+# Monorepo packages
+packages/*/dist
+packages/*/.vite
+packages/*/node_modules
+packages/*/coverage
+
+# Misc
+*.local
