@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download } from 'lucide-react';
-import type { 
-  AppEnvVar, 
-  SystemEnvVar, 
+import type {
+  AppEnvVar,
+  SystemEnvVar,
   DraftDefaults,
   CreateDraftRequest,
   CreateDraftResponse,
@@ -13,6 +13,7 @@ import type {
   FinalizeDraftResponse
 } from '@hola/shared';
 import { API } from '@hola/shared';
+import { ensureOk } from '../utils/error';
 
 const steps = [
   { id: 'env', name: 'Environment Variables', description: 'Configure application settings' },
@@ -75,11 +76,7 @@ export const InstallWizard: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(request)
         });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to create draft: ${response.statusText}`);
-        }
-        
+        await ensureOk(response);
         const result: CreateDraftResponse = await response.json();
         
         // Update state with draft data
@@ -110,11 +107,7 @@ export const InstallWizard: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updates)
       });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to update draft: ${response.statusText}`);
-      }
-      
+      await ensureOk(response);
     } catch (err) {
       console.error('Failed to update draft:', err);
       setError(err instanceof Error ? err.message : 'Failed to update draft');
@@ -128,11 +121,7 @@ export const InstallWizard: React.FC = () => {
     setIsLoading(true);
     try {
       const response = await fetch(API.drafts.validate(draftId));
-      
-      if (!response.ok) {
-        throw new Error(`Failed to validate draft: ${response.statusText}`);
-      }
-      
+      await ensureOk(response);
       const result: ValidateDraftResponse = await response.json();
       setValidationResult(result);
       return result.ok;
@@ -153,11 +142,7 @@ export const InstallWizard: React.FC = () => {
     setIsLoading(true);
     try {
       const response = await fetch(API.drafts.preflight(draftId));
-      
-      if (!response.ok) {
-        throw new Error(`Failed to run preflight: ${response.statusText}`);
-      }
-      
+      await ensureOk(response);
       const result: PreflightResponse = await response.json();
       setPreflightResult(result);
       return result.ok;
@@ -180,11 +165,7 @@ export const InstallWizard: React.FC = () => {
       const response = await fetch(API.drafts.finalize(draftId), {
         method: 'POST'
       });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to finalize draft: ${response.statusText}`);
-      }
-      
+      await ensureOk(response);
       const result: FinalizeDraftResponse = await response.json();
       console.log('Draft finalized:', result);
       return true;

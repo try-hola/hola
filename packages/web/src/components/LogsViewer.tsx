@@ -13,10 +13,10 @@ import {
   XCircle,
   Clock
 } from 'lucide-react';
-import type { 
-  LogEntry, 
-  LogLevel, 
-  Job, 
+import type {
+  LogEntry,
+  LogLevel,
+  Job,
   JobStatus
 } from '@hola/shared';
 
@@ -173,7 +173,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
       
       // TODO: Replace with actual API call
       // const response = await fetch(url);
-      // if (!response.ok) throw new Error('Failed to load logs');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetLogsResponse = await response.json();
       
       // For now, use mock data
@@ -196,7 +196,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
       
       // TODO: Replace with actual API call
       // const response = await fetch(API.jobs.byId(jobId));
-      // if (!response.ok) throw new Error('Failed to load job');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetJobResponse = await response.json();
       
       // For now, use mock data

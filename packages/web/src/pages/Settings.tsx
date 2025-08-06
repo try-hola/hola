@@ -67,11 +67,11 @@ export const Settings: React.FC = () => {
       //   fetch(API.settings.backup),
       //   fetch(API.system.status)
       // ]);
-      // 
-      // if (!settingsResponse.ok) throw new Error('Failed to load settings');
-      // if (!backupSettingsResponse.ok) throw new Error('Failed to load backup settings');
-      // if (!statusResponse.ok) throw new Error('Failed to load system status');
-      // 
+      // await Promise.all([
+      //   ensureOk(settingsResponse),     // from ../utils/error
+      //   ensureOk(backupSettingsResponse),
+      //   ensureOk(statusResponse),
+      // ]);
       // const settingsData: GetSettingsResponse = await settingsResponse.json();
       // const backupSettingsData: GetBackupSettingsResponse = await backupSettingsResponse.json();
       // const statusData: GetSystemStatusResponse = await statusResponse.json();
@@ -133,8 +133,7 @@ export const Settings: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(updateRequest)
       // });
-      // 
-      // if (!response.ok) throw new Error('Failed to save settings');
+      // await ensureOk(response); // from ../utils/error
       // const updatedSettings: GetSettingsResponse = await response.json();
       
       // For now, just update local state
@@ -170,8 +169,7 @@ export const Settings: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(updateRequest)
       // });
-      // 
-      // if (!response.ok) throw new Error('Failed to save backup settings');
+      // await ensureOk(response); // from ../utils/error
       // const updatedBackupSettings: GetBackupSettingsResponse = await response.json();
       
       // For now, just update local state

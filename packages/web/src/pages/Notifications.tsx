@@ -139,7 +139,7 @@ export const Notifications: React.FC = () => {
 
       // In a real implementation, this would be an actual API call
       // const response = await fetch(`${API.notifications.base}?${params}`);
-      // if (!response.ok) throw new Error('Failed to fetch notifications');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetNotificationsResponse = await response.json();
       
       // For now, simulate API call with filtered mock data
@@ -185,7 +185,7 @@ export const Notifications: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to mark notification as read');
+      // await ensureOk(response); // from ../utils/error
       
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -216,7 +216,7 @@ export const Notifications: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to dismiss notification');
+      // await ensureOk(response); // from ../utils/error
       
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -249,7 +249,7 @@ export const Notifications: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to mark all notifications as read');
+      // await ensureOk(response); // from ../utils/error
       
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -279,7 +279,7 @@ export const Notifications: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to dismiss all notifications');
+      // await ensureOk(response); // from ../utils/error
       
       // Simulate API call
       await new Promise(resolve => setTimeout(resolve, 500));

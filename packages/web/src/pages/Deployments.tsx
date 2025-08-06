@@ -21,15 +21,15 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { API } from '@hola/shared';
-import type { 
-  DeploymentListItem, 
-  DeploymentStatus, 
+import type {
+  DeploymentListItem,
+  DeploymentStatus,
   PostDeploymentActionRequest,
   PostDeploymentActionResponse,
   GetDeploymentsRequest,
-  GetDeploymentsResponse,
-  ErrorResponse
+  GetDeploymentsResponse
 } from '@hola/shared';
+import { ensureOk } from '../utils/error';
 
 
 
@@ -173,17 +173,16 @@ export const Deployments: React.FC = () => {
       if (request.status) params.append('status', request.status);
 
       const response = await fetch(`${API.deployments.base}?${params.toString()}`);
-      
-      if (!response.ok) {
-        const errorData: ErrorResponse = await response.json();
-        throw new Error(errorData.error.message);
-      }
-      
+      await ensureOk(response);
       const data: GetDeploymentsResponse = await response.json();
       setDeployments(data.items);
       setTotalDeployments(data.total);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load deployments');
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Failed to load deployments');
+      }
       // Fallback to mock data for development
       setDeployments([...mockDeployments]);
       setTotalDeployments(mockDeployments.length);
@@ -204,12 +203,7 @@ export const Deployments: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(request)
       });
-      
-      if (!response.ok) {
-        const errorData: ErrorResponse = await response.json();
-        throw new Error(errorData.error.message);
-      }
-      
+      await ensureOk(response);
       const result: PostDeploymentActionResponse = await response.json();
       
       // If a job was created, track it
@@ -222,7 +216,11 @@ export const Deployments: React.FC = () => {
       await loadDeployments();
     } catch (error) {
       console.error(`Error performing ${action}:`, error);
-      setError(error instanceof Error ? error.message : `Failed to ${action} deployment`);
+      if (error instanceof Error) {
+        setError(error.message);
+      } else {
+        setError(`Failed to ${action} deployment`);
+      }
     }
   };
 

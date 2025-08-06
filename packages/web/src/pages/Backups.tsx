@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Shield, Clock, Download, RotateCcw, Play, Calendar, ChevronLeft, ChevronRight, Trash2, AlertCircle } from 'lucide-react';
-import type { 
-  BackupStatus, 
+import type {
+  BackupStatus,
   GetBackupsResponse
 } from '@hola/shared';
 
@@ -123,7 +123,7 @@ export const Backups: React.FC = () => {
 
       // In a real implementation, this would be an actual API call
       // const response = await fetch(`${API.backups.base}?${params}`);
-      // if (!response.ok) throw new Error('Failed to fetch backups');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetBackupsResponse = await response.json();
       
       // For now, simulate API call with filtered mock data
@@ -167,7 +167,7 @@ export const Backups: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to create backup');
+      // await ensureOk(response); // from ../utils/error
       // const result: CreateBackupResponse = await response.json();
       
       // Simulate API call
@@ -196,7 +196,7 @@ export const Backups: React.FC = () => {
       //   headers: { 'Content-Type': 'application/json' },
       //   body: JSON.stringify(request)
       // });
-      // if (!response.ok) throw new Error('Failed to restore backup');
+      // await ensureOk(response); // from ../utils/error
       // const result: RestoreBackupResponse = await response.json();
       
       // Simulate API call
@@ -220,7 +220,7 @@ export const Backups: React.FC = () => {
       // const response = await fetch(API.backups.byId(backupId), {
       //   method: 'DELETE'
       // });
-      // if (!response.ok) throw new Error('Failed to delete backup');
+      // await ensureOk(response); // from ../utils/error
       // const result: DeleteBackupResponse = await response.json();
       
       // Simulate API call
@@ -244,7 +244,7 @@ export const Backups: React.FC = () => {
     try {
       // In a real implementation:
       // const response = await fetch(API.backups.byId(backupId));
-      // if (!response.ok) throw new Error('Failed to download backup');
+      // await ensureOk(response); // from ../utils/error
       // const blob = await response.blob();
       // const url = window.URL.createObjectURL(blob);
       // const a = document.createElement('a');

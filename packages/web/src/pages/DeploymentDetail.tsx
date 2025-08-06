@@ -25,18 +25,18 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { API } from '@hola/shared';
-import type { 
-  DeploymentDetail as DeploymentDetailType, 
-  AppEnvVar, 
+import type {
+  DeploymentDetail as DeploymentDetailType,
+  AppEnvVar,
   SystemEnvVar,
-  PostDeploymentActionRequest, 
+  PostDeploymentActionRequest,
   PatchDeploymentRequest,
   GetDeploymentResponse,
   GetDeploymentHistoryResponse,
   DeploymentHistoryItem,
-  JobStatus,
-  ErrorResponse
+  JobStatus
 } from '@hola/shared';
+import { ensureOk } from '../utils/error';
 
 // Helper functions for history tab
 const getJobStatusColor = (status: JobStatus): string => {
@@ -202,12 +202,7 @@ export const DeploymentDetail: React.FC = () => {
     
     try {
       const response = await fetch(API.deployments.byId(deploymentId));
-      
-      if (!response.ok) {
-        const errorData: ErrorResponse = await response.json();
-        throw new Error(errorData.error.message);
-      }
-      
+      await ensureOk(response);
       const data: GetDeploymentResponse = await response.json();
       setDeployment(data);
     } catch (err) {
@@ -228,12 +223,7 @@ export const DeploymentDetail: React.FC = () => {
     try {
       const params = new URLSearchParams({ page: page.toString(), limit: '10' });
       const response = await fetch(`${API.deployments.history(deploymentId)}?${params.toString()}`);
-      
-      if (!response.ok) {
-        const errorData: ErrorResponse = await response.json();
-        throw new Error(errorData.error.message);
-      }
-      
+      await ensureOk(response);
       const data: GetDeploymentHistoryResponse = await response.json();
       setHistory(data.items);
       setHistoryTotal(data.total);
@@ -351,10 +341,7 @@ export const DeploymentDetail: React.FC = () => {
         body: JSON.stringify(request)
       });
       
-      if (!response.ok) {
-        throw new Error(`Failed to ${action} deployment`);
-      }
-      
+      await ensureOk(response);
       // TODO: Handle response, update UI state, show success message
     } catch (error) {
       console.error(`Error performing ${action}:`, error);
@@ -375,10 +362,7 @@ export const DeploymentDetail: React.FC = () => {
         body: JSON.stringify(request)
       });
       
-      if (!response.ok) {
-        throw new Error('Failed to save configuration');
-      }
-      
+      await ensureOk(response);
       setIsEditing(false);
       // TODO: Show success message
     } catch (error) {

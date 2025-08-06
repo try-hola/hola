@@ -101,7 +101,7 @@ export const Dashboard: React.FC = () => {
       
       // TODO: Replace with actual API call
       // const response = await fetch(API.summary);
-      // if (!response.ok) throw new Error('Failed to load summary');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetSummaryResponse = await response.json();
       
       // For now, use mock data
@@ -124,7 +124,7 @@ export const Dashboard: React.FC = () => {
     try {
       // TODO: Replace with actual API call
       // const response = await fetch(API.system.status);
-      // if (!response.ok) throw new Error('Failed to load system status');
+      // await ensureOk(response); // from ../utils/error
       // const data: GetSystemStatusResponse = await response.json();
       
       // For now, use mock data
