@@ -1,267 +1,144 @@
 # Hola
 
-Hola is a modern application deployment platform built with Python. It provides a self-contained server with an intuitive web interface for managing containerized applications, featuring real-time monitoring, configuration management, and streamlined deployment workflows.
+A modern home lab app deployment platform. Hola helps enthusiasts discover, install, and manage self‑hosted applications on their personal servers with a guided UX, safe customization, and lifecycle management—all from a web dashboard.
 
-## Project Overview
+This repository is a TypeScript-first monorepo powered by Bun workspaces containing:
+- Web UI: Vite + React + TypeScript
+- Server API: Bun + TypeScript
+- Shared: TypeScript configs and shared types
 
-Hola is designed as a single deployable server that provides:
+More docs:
+- Monorepo guide: [`docs/monorepo.declaration()`](docs/monorepo.md)
+- Server plan: [`docs/SERVER_ARCHITECTURE.declaration()`](docs/SERVER_ARCHITECTURE.md)
+- Product overview (PRD): [`docs/PRD.declaration()`](docs/PRD.md)
+- High-level architecture: [`docs/ARCHITECTURE.declaration()`](docs/ARCHITECTURE.md)
 
-- **Web Interface**: Modern, responsive interface built with HTMX and DaisyUI for interactive application management
-- **REST API**: Complete API for programmatic access and automation
-- **Container Management**: Docker integration for application deployment and lifecycle management
-- **Real-time Updates**: Live status updates and log streaming through Server-Sent Events
+## What Hola Does
 
-## Features
+Hola streamlines self‑hosted app deployments for home lab hobbyists, tinkerers, and power users. The dashboard provides:
+- App catalog browsing with search and details
+- A guided install wizard with:
+  - Environment variables editing
+  - Optional Docker Compose override upload
+  - Additional file uploads for config/secrets
+  - Advanced options (ports, volumes)
+- Deployment lifecycle controls: start/stop/restart/update/uninstall
+- Health, logs, and status views
+- Notifications for updates/errors/backups
+- Backups and restores
 
-- **Application Lifecycle Management**: Deploy, monitor, start, stop, and delete containerized applications
-- **Web-First Interface**: Intuitive web interface with dynamic updates and responsive design
-- **File Management**: Upload, organize, and manage application configuration files
-- **Backup & Restore**: Automated backup creation and point-in-time restoration
-- **Real-Time Monitoring**: Live log streaming, metrics, and application health monitoring
-- **Configuration Management**: Environment variables, secrets, and application-specific settings
-- **ORAS Package Support**: Deploy applications from OCI Registry packages
+Non-goals (see full PRD for details):
+- Not a hosted SaaS; focuses on local/self-hosted environments
+- Not targeting enterprise or multi-tenant use cases
 
-## Project Structure
+## Monorepo Structure
 
 ```
-project-root/
-├── hola/                        # Main application package
-│   ├── api/                     # REST API endpoints
-│   ├── web/                     # Web interface (HTMX/DaisyUI)
-│   │   ├── templates/           # Jinja2 templates
-│   │   └── static/              # CSS, JS, and assets
-│   ├── services/                # Business logic
-│   ├── models/                  # Pydantic data models
-│   ├── config/                  # Configuration management
-│   └── utils/                   # Utility functions
-├── tests/                       # Test suite
-├── docs/                        # Project documentation
-├── docker/                      # Docker configuration
-├── pyproject.toml              # Poetry configuration
-└── README.md                   # Project overview
+.
+├── packages/
+│   ├── web/       # Vite + React + TS frontend
+│   ├── server/    # Bun + TS server (API)
+│   └── shared/    # Shared TS configs/types
+├── docs/          # Architecture, server plan, product docs
+├── .bun-version   # Bun version pin
+├── package.json   # Bun workspaces root
+└── tsconfig.json  # TS project references
 ```
 
-## Technical Stack
+Key entry points:
+- Web entry: [`packages/web/src/main.declaration()`](packages/web/src/main.tsx)
+- Web app shell: [`packages/web/src/App.declaration()`](packages/web/src/App.tsx)
+- Server entry: [`packages/server/src/server.declaration()`](packages/server/src/server.ts)
+- Shared types: [`packages/shared/src/index.declaration()`](packages/shared/src/index.ts)
 
-- **Language**: Python 3.10+
-- **Backend Framework**: FastAPI with async/await patterns
-- **Frontend**: HTMX for dynamic behavior, DaisyUI for styling
-- **Templates**: Jinja2 templating engine
-- **Package Management**: Poetry with workspaces
-- **Testing Framework**: pytest
-- **Type Validation**: Pydantic models throughout
-- **Container Platform**: Docker for application deployment
-- **Real-time Features**: Server-Sent Events (SSE) for live updates
+## Tech Stack
+
+- Runtime/tooling: Bun 1.x (see `.bun-version`)
+- Language: TypeScript 5.x
+- Frontend: Vite, React, TailwindCSS, React Router
+- Server: Bun-native HTTP
+- Linting: ESLint (flat config)
+- CI: GitHub Actions with oven-sh/setup-bun
+
+## Environment and Configuration
+
+Web (Vite):
+- Dev server: http://localhost:5173
+- Proxy: `/api` -> `http://localhost:3001` (config in [`packages/web/vite.config.declaration()`](packages/web/vite.config.ts))
+- Override API base (optional): `VITE_API_BASE_URL`
+
+Server (Bun):
+- Default port: 3001
+- Base path: `/api`
 
 ## Getting Started
 
-### Prerequisites
+Prerequisites
+- Bun installed matching `.bun-version`
+  - Linux/macOS: `curl -fsSL https://bun.sh/install | bash`
+  - Windows (PowerShell): `powershell -c "irm bun.com/install.ps1 | iex"`
 
-- Python 3.10+
-- Poetry (package manager)
-- Docker (for application deployment)
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/try-hola/hola.git
-   cd hola
-   ```
-2. Install dependencies:
-   ```bash
-   poetry install
-   ```
-3. Set up environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit the .env file with your configuration
-   ```
-
-## Environment Variables
-
-### Server Configuration
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `HOLA_HOST` | Server host address | `0.0.0.0` |
-| `HOLA_PORT` | Server port | `8000` |
-| `HOLA_DEBUG` | Enable debug mode | `false` |
-| `HOLA_API_KEY` | API authentication key | (required) |
-| `HOLA_CORS_ORIGINS` | Allowed CORS origins (comma-separated) | `*` |
-| `HOLA_LOG_LEVEL` | Logging level | `INFO` |
-| `HOLA_DATA_DIR` | Data storage directory | `./data` |
-| `HOLA_DOCKER_SOCKET` | Docker socket path | (auto-detected) |
-| `HOLA_SESSION_SECRET` | Session encryption key | (auto-generated) |
-| `HOLA_ADMIN_PASSWORD` | Initial admin password | (required) |
-
-## Quick Start
-
-### Running the Server
-
-1. **Development Mode**:
-   ```bash
-   poetry run uvicorn hola.main:app --reload
-   ```
-
-2. **Production Mode**:
-   ```bash
-   HOLA_API_KEY=your-secure-key poetry run uvicorn hola.main:app --host 0.0.0.0 --port 8000
-   ```
-
-3. **Using Docker**:
-   ```bash
-   docker build -t hola-server .
-   docker run -p 8000:8000 -v ./data:/data hola-server
-   ```
-
-### Accessing the Interface
-
-- **Web Interface**: http://localhost:8000
-- **API Documentation**: http://localhost:8000/docs
-- **Health Check**: http://localhost:8000/health
-
-## Development
-
-### Starting the Development Server
-
+Install all workspace deps:
 ```bash
-# Run the FastAPI server with auto-reload
-poetry run uvicorn hola.main:app --reload --host 0.0.0.0 --port 8000
+bun install
 ```
 
-### Building the Project
-
+Run both dev servers (root scripts orchestrate workspaces):
 ```bash
-# Build the distribution package
-poetry build
+bun run dev
+# web:    http://localhost:5173
+# server: http://localhost:3001 (base path /api)
 ```
 
-## Web Interface
-
-The web interface provides a complete application management experience:
-
-### Key Features
-
-- **Dashboard**: Overview of all deployed applications with status indicators
-- **Application Management**: Deploy, configure, start, stop, and monitor applications
-- **File Management**: Upload and manage configuration files and assets
-- **Real-time Monitoring**: Live log streaming and metrics display
-- **Configuration Editor**: Environment variables and settings management
-- **Backup Management**: Create and restore application backups
-
-### Usage Examples
-
-1. **Deploy an Application**:
-   - Navigate to "Deploy New App"
-   - Enter application name and ORAS package reference
-   - Configure environment variables and upload files
-   - Click "Deploy" and monitor progress
-
-2. **Monitor Applications**:
-   - View application status on the dashboard
-   - Click on an application for detailed monitoring
-   - Stream logs in real-time
-   - View metrics and health status
-
-3. **Manage Configuration**:
-   - Edit environment variables through the web interface
-   - Upload configuration files with drag-and-drop
-   - Manage encrypted secrets securely
-
-## Testing
-
-The project uses pytest for comprehensive testing of both API endpoints and web interface functionality.
-
-### Running Tests
-
+Run individually:
 ```bash
-# Run all tests
-poetry run pytest
+# Web
+bun --cwd packages/web run dev
 
-# Run specific test categories
-poetry run pytest tests/api/         # API endpoint tests
-poetry run pytest tests/web/         # Web interface tests  
-poetry run pytest tests/services/    # Service layer tests
-
-# Run specific test files
-poetry run pytest tests/api/test_apps.py
-
-# Run tests with coverage
-poetry run pytest --cov=hola
-
-# Run tests in watch mode during development
-poetry run pytest-watch tests/
+# Server
+bun --cwd packages/server run dev
 ```
 
-### Test Structure
-
-Tests are organized by feature area:
-
-```
-tests/
-├── api/                    # API endpoint tests
-├── web/                    # Web interface tests  
-├── services/               # Business logic tests
-└── conftest.py            # Test fixtures
-```
-hola_server/tests/
-├── api/                    # API endpoint tests
-├── web/                    # Web interface tests  
-├── services/               # Business logic tests
-└── conftest.py            # Test fixtures
+Type-check and lint all packages:
+```bash
+bun run typecheck
+bun run lint
 ```
 
-### Test Best Practices
-
-Tests follow a consistent structure:
-
-1. Use fakes instead of mocks for better test reliability
-2. Organize tests by feature area (API, web interface, services)
-3. Write both positive and negative test cases
-4. Include integration tests for end-to-end functionality
-
-Example test structure:
-
-```python
-# Import fakes first
-from hola.test_utils.fakes.app_service import FakeAppService
-
-# Import module under test
-from hola.services.app_service import AppService
-
-@pytest.fixture
-def fake_app_service():
-    service = FakeAppService()
-    service.reset()
-    return service
-
-def test_deploy_app_successfully(fake_app_service):
-    # Test implementation with clear assertions
-    result = fake_app_service.deploy("test-app")
-    assert result.success is True
-    assert len(fake_app_service.deployed_apps) == 1
+Build:
+```bash
+bun run build
+# or per package:
+bun --cwd packages/web run build
 ```
 
-## Architecture
+## Scripts Overview
 
-The application uses a layered architecture:
+Root workspace scripts orchestrate common flows:
+- dev: run web and server in watch mode
+- build: build all
+- typecheck: tsc --noEmit across packages
+- lint: eslint across packages
 
-- **Web Layer**: HTMX templates and static assets for the user interface
-- **API Layer**: FastAPI endpoints for programmatic access
-- **Service Layer**: Business logic for application management
-- **Storage Layer**: File-based persistence with Docker integration
+See per-package scripts:
+- Web: [`packages/web/package.declaration()`](packages/web/package.json)
+- Server: [`packages/server/package.declaration()`](packages/server/package.json)
+- Shared: [`packages/shared/package.declaration()`](packages/shared/package.json)
 
-Communication flows through well-defined interfaces:
-- Web interface uses HTMX for dynamic updates
-- API endpoints serve both web interface and external consumers
-- Services handle all business logic and Docker operations
-- Models ensure consistency across layers
+
+## Development Notes
+
+- TypeScript uses bundler module resolution where appropriate for Vite/Bun compatibility.
+- Prefer shared types in `@hola/shared` to keep API contracts consistent between web and server.
+- When changing server endpoints, update shared DTOs and regenerate types if applicable.
+- Align server evolution to the Hono/OpenAPI plan; expose `/openapi.json` and add contract tests in CI as the API grows.
 
 ## Contributing
 
-Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed information on how to contribute to this project, including our development workflow, testing guidelines, and documentation standards.
+Read [`CONTRIBUTING.declaration()`](CONTRIBUTING.md) for workflow, linting, and commit conventions.
 
 ## License
 
-This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
+See [`LICENSE.declaration()`](LICENSE).
+
+---
