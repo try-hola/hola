@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Filter, Grid, List, Star, Download, ExternalLink } from 'lucide-react';
+import type { 
+  CatalogApp, 
+  GetCatalogAppsResponse,
+  GetCatalogAppsRequest 
+} from '@hola/shared';
 
-const apps = [
+const apps: CatalogApp[] = [
   {
     id: 'nextcloud',
     name: 'Nextcloud',

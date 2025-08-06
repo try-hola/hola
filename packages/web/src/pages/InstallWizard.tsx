@@ -1,6 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download } from 'lucide-react';
+import type { 
+  AppEnvVar, 
+  SystemEnvVar, 
+  DraftDefaults,
+  CreateDraftRequest,
+  CreateDraftResponse,
+  PatchDraftRequest,
+  ValidateDraftResponse,
+  PreflightResponse,
+  FinalizeDraftResponse
+} from '@hola/shared';
+import { API } from '@hola/shared';
 
 const steps = [
   { id: 'env', name: 'Environment Variables', description: 'Configure application settings' },
@@ -16,36 +28,31 @@ export const InstallWizard: React.FC = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   
-  // System-wide environment variables (would come from API/context in real app)
-  const systemEnvVars = [
-    { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain for all services' },
-    { key: 'TIMEZONE', value: 'UTC', isSecret: false, description: 'System timezone' },
-    { key: 'BACKUP_RETENTION_DAYS', value: '30', isSecret: false, description: 'Default backup retention period' },
-    { key: 'SMTP_HOST', value: '', isSecret: false, description: 'SMTP server for notifications' },
-    { key: 'SMTP_USER', value: '', isSecret: false, description: 'SMTP username' },
-    { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-    { key: 'SSL_EMAIL', value: '', isSecret: false, description: 'Email for SSL certificates' },
-  ];
+  // Draft workflow state
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [validationResult, setValidationResult] = useState<ValidateDraftResponse | null>(null);
+  const [preflightResult, setPreflightResult] = useState<PreflightResponse | null>(null);
+  
+  // System-wide environment variables (loaded from draft creation)
+  const [systemEnvVars, setSystemEnvVars] = useState<SystemEnvVar[]>([]);
   
   // System variable overrides for this deployment
   const [systemOverrides, setSystemOverrides] = useState<{[key: string]: string}>({});
   
-  // Application-specific environment variables
-  const [envVars, setEnvVars] = useState([
-    { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-    { key: 'POSTGRES_USER', value: 'nextcloud', isSecret: false, description: 'Database user' },
-    { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-  ]);
+  // Application-specific environment variables (loaded from draft creation)
+  const [envVars, setEnvVars] = useState<AppEnvVar[]>([]);
   
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
-  const [ports, setPorts] = useState([{ host: 8080, container: 80, protocol: 'tcp' }]);
-  const [volumes, setVolumes] = useState([{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }]);
+  const [ports, setPorts] = useState<DraftDefaults['ports']>([]);
+  const [volumes, setVolumes] = useState<DraftDefaults['volumes']>([]);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [composeOverride, setComposeOverride] = useState('');
   const [editMode, setEditMode] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // Mock app data
+  // Mock app data (would be loaded from catalog in real implementation)
   const app = {
     id: appId,
     name: 'Nextcloud',
@@ -53,20 +60,175 @@ export const InstallWizard: React.FC = () => {
     description: 'Self-hosted productivity platform with file sync, calendar, and collaboration tools',
   };
 
-  const canProceed = () => {
-    switch (currentStep) {
-      case 0: // Environment Variables
-        // Allow proceeding even with empty values for demo purposes
-        return true;
-      case 4: // Validate & Preflight
-        return true; // Always allow proceeding from validate step
-      default:
-        return true;
+  // Create draft when component mounts
+  useEffect(() => {
+    if (!appId) return;
+    
+    const createDraft = async () => {
+      setIsLoading(true);
+      setError(null);
+      
+      try {
+        const request: CreateDraftRequest = { appId };
+        const response = await fetch(API.drafts.create, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request)
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to create draft: ${response.statusText}`);
+        }
+        
+        const result: CreateDraftResponse = await response.json();
+        
+        // Update state with draft data
+        setDraftId(result.draftId);
+        setSystemEnvVars(result.systemEnv);
+        setEnvVars(result.appEnv);
+        setPorts(result.defaults.ports);
+        setVolumes(result.defaults.volumes);
+        
+      } catch (err) {
+        console.error('Failed to create draft:', err);
+        setError(err instanceof Error ? err.message : 'Failed to create draft');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    createDraft();
+  }, [appId]);
+
+  // Update draft whenever relevant state changes
+  const updateDraft = async (updates: PatchDraftRequest) => {
+    if (!draftId) return;
+    
+    try {
+      const response = await fetch(API.drafts.byId(draftId), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to update draft: ${response.statusText}`);
+      }
+      
+    } catch (err) {
+      console.error('Failed to update draft:', err);
+      setError(err instanceof Error ? err.message : 'Failed to update draft');
     }
   };
 
-  const handleNext = () => {
+  // Validate draft configuration
+  const validateDraft = async (): Promise<boolean> => {
+    if (!draftId) return false;
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch(API.drafts.validate(draftId));
+      
+      if (!response.ok) {
+        throw new Error(`Failed to validate draft: ${response.statusText}`);
+      }
+      
+      const result: ValidateDraftResponse = await response.json();
+      setValidationResult(result);
+      return result.ok;
+      
+    } catch (err) {
+      console.error('Failed to validate draft:', err);
+      setError(err instanceof Error ? err.message : 'Failed to validate draft');
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Run preflight checks
+  const runPreflight = async (): Promise<boolean> => {
+    if (!draftId) return false;
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch(API.drafts.preflight(draftId));
+      
+      if (!response.ok) {
+        throw new Error(`Failed to run preflight: ${response.statusText}`);
+      }
+      
+      const result: PreflightResponse = await response.json();
+      setPreflightResult(result);
+      return result.ok;
+      
+    } catch (err) {
+      console.error('Failed to run preflight:', err);
+      setError(err instanceof Error ? err.message : 'Failed to run preflight');
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Finalize draft and create deployment
+  const finalizeDraft = async (): Promise<boolean> => {
+    if (!draftId) return false;
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch(API.drafts.finalize(draftId), {
+        method: 'POST'
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to finalize draft: ${response.statusText}`);
+      }
+      
+      const result: FinalizeDraftResponse = await response.json();
+      console.log('Draft finalized:', result);
+      return true;
+      
+    } catch (err) {
+      console.error('Failed to finalize draft:', err);
+      setError(err instanceof Error ? err.message : 'Failed to finalize draft');
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const canProceed = () => {
+    switch (currentStep) {
+      case 0: // Environment Variables
+        return !isLoading && envVars.every(env => env.key && (env.value || !env.isSecret));
+      case 4: // Validate & Preflight
+        return !isLoading && validationResult?.ok && preflightResult?.ok;
+      default:
+        return !isLoading;
+    }
+  };
+
+  const handleNext = async () => {
     if (currentStep < steps.length - 1) {
+      // Update draft with current state before proceeding
+      if (draftId) {
+        await updateDraft({
+          systemOverrides,
+          appEnv: envVars,
+          ports,
+          composeOverride: composeOverride || undefined
+        });
+      }
+      
+      // Run validation and preflight on validate step
+      if (currentStep === 4) {
+        const isValid = await validateDraft();
+        if (isValid) {
+          await runPreflight();
+        }
+      }
+      
       setCurrentStep(currentStep + 1);
     }
   };
@@ -77,56 +239,135 @@ export const InstallWizard: React.FC = () => {
     }
   };
 
-  const handleInstall = () => {
-    // Mock installation process
-    navigate('/deployments');
-  };
-
-  const addEnvVar = () => {
-    setEnvVars([...envVars, { key: '', value: '', isSecret: false, description: '' }]);
-  };
-
-  const updateEnvVar = (index: number, field: string, value: any) => {
-    const updated = [...envVars];
-    updated[index] = { ...updated[index], [field]: value };
-    setEnvVars(updated);
-  };
-
-  const removeEnvVar = (index: number) => {
-    setEnvVars(envVars.filter((_, i) => i !== index));
-  };
-
-  const addPort = () => {
-    setPorts([...ports, { host: 0, container: 0, protocol: 'tcp' }]);
-  };
-
-  const updatePort = (index: number, field: string, value: any) => {
-    const updated = [...ports];
-    updated[index] = { ...updated[index], [field]: value };
-    setPorts(updated);
-  };
-
-  const removePort = (index: number) => {
-    setPorts(ports.filter((_, i) => i !== index));
-  };
-
-  const updateSystemOverride = (key: string, value: string) => {
-    const systemDefault = systemEnvVars.find(v => v.key === key)?.value || '';
-    if (value === systemDefault) {
-      // If value matches system default, remove override
-      const newOverrides = { ...systemOverrides };
-      delete newOverrides[key];
-      setSystemOverrides(newOverrides);
-    } else {
-      // Set override
-      setSystemOverrides({ ...systemOverrides, [key]: value });
+  const handleInstall = async () => {
+    const success = await finalizeDraft();
+    if (success) {
+      navigate('/deployments');
     }
   };
 
-  const resetSystemOverride = (key: string) => {
+  const addEnvVar = async () => {
+    const updated = [...envVars, { key: '', value: '', isSecret: false, description: '' }];
+    setEnvVars(updated);
+    
+    // Update draft with new environment variables
+    if (draftId) {
+      await updateDraft({ appEnv: updated });
+    }
+  };
+
+  const updateEnvVar = async (index: number, field: keyof AppEnvVar, value: string | boolean) => {
+    const updated = [...envVars];
+    updated[index] = { ...updated[index], [field]: value };
+    setEnvVars(updated);
+    
+    // Update draft with new environment variables
+    if (draftId) {
+      await updateDraft({ appEnv: updated });
+    }
+  };
+
+  const removeEnvVar = async (index: number) => {
+    const updated = envVars.filter((_, i) => i !== index);
+    setEnvVars(updated);
+    
+    // Update draft with new environment variables
+    if (draftId) {
+      await updateDraft({ appEnv: updated });
+    }
+  };
+
+  const addPort = async () => {
+    const updated = [...ports, { host: 0, container: 0, protocol: 'tcp' as const }];
+    setPorts(updated);
+    
+    // Update draft with new ports configuration
+    if (draftId) {
+      await updateDraft({ ports: updated });
+    }
+  };
+
+  const updatePort = async (index: number, field: keyof DraftDefaults['ports'][0], value: string | number) => {
+    const updated = [...ports];
+    updated[index] = { ...updated[index], [field]: value };
+    setPorts(updated);
+    
+    // Update draft with new ports configuration
+    if (draftId) {
+      await updateDraft({ ports: updated });
+    }
+  };
+
+  const removePort = async (index: number) => {
+    const updated = ports.filter((_, i) => i !== index);
+    setPorts(updated);
+    
+    // Update draft with new ports configuration
+    if (draftId) {
+      await updateDraft({ ports: updated });
+    }
+  };
+
+  const updateSystemOverride = async (key: string, value: string) => {
+    const systemDefault = systemEnvVars.find(v => v.key === key)?.value || '';
+    const newOverrides = { ...systemOverrides };
+    
+    if (value === systemDefault) {
+      // If value matches system default, remove override
+      delete newOverrides[key];
+    } else {
+      // Set override
+      newOverrides[key] = value;
+    }
+    
+    setSystemOverrides(newOverrides);
+    
+    // Update draft with new system overrides
+    if (draftId) {
+      await updateDraft({ systemOverrides: newOverrides });
+    }
+  };
+
+  const resetSystemOverride = async (key: string) => {
     const newOverrides = { ...systemOverrides };
     delete newOverrides[key];
     setSystemOverrides(newOverrides);
+    
+    // Update draft with new system overrides
+    if (draftId) {
+      await updateDraft({ systemOverrides: newOverrides });
+    }
+  };
+
+  const addVolume = async () => {
+    const updated = [...volumes, { hostPath: '', containerPath: '', readOnly: false }];
+    setVolumes(updated);
+    
+    // Update draft with new volumes configuration
+    if (draftId) {
+      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+    }
+  };
+
+  const updateVolume = async (index: number, field: keyof DraftDefaults['volumes'][0], value: string | boolean) => {
+    const updated = [...volumes];
+    updated[index] = { ...updated[index], [field]: value };
+    setVolumes(updated);
+    
+    // Update draft with new volumes configuration (volumes aren't currently in PatchDraftRequest)
+    if (draftId) {
+      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+    }
+  };
+
+  const removeVolume = async (index: number) => {
+    const updated = volumes.filter((_, i) => i !== index);
+    setVolumes(updated);
+    
+    // Update draft with new volumes configuration
+    if (draftId) {
+      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+    }
   };
 
   const toggleSecretVisibility = (key: string) => {
@@ -226,7 +467,7 @@ services:
               
               <div className="space-y-3">
                 {systemEnvVars.map((envVar) => {
-                  const isOverridden = systemOverrides.hasOwnProperty(envVar.key);
+                  const isOverridden = envVar.key in systemOverrides;
                   const currentValue = isOverridden ? systemOverrides[envVar.key] : envVar.value;
                   const showValue = envVar.isSecret && !showSecrets[envVar.key];
                   
@@ -614,6 +855,61 @@ services:
                 </button>
               </div>
             </div>
+
+            {/* Volumes */}
+            <div>
+              <h4 className="font-medium mb-3">Volume Mounts</h4>
+              <div className="space-y-3">
+                {volumes.map((volume, index) => (
+                  <div key={index} className="grid grid-cols-8 gap-4 items-center p-4 bg-surface-1 rounded-lg border border-border">
+                    <div className="col-span-3">
+                      <input
+                        type="text"
+                        placeholder="Host Path (optional)"
+                        value={volume.hostPath || ''}
+                        onChange={(e) => updateVolume(index, 'hostPath', e.target.value)}
+                        className="w-full px-3 py-2 bg-surface-0 border border-border rounded text-sm"
+                      />
+                    </div>
+                    <div className="col-span-3">
+                      <input
+                        type="text"
+                        placeholder="Container Path"
+                        value={volume.containerPath}
+                        onChange={(e) => updateVolume(index, 'containerPath', e.target.value)}
+                        className="w-full px-3 py-2 bg-surface-0 border border-border rounded text-sm"
+                      />
+                    </div>
+                    <div className="col-span-1 text-center">
+                      <label className="flex items-center justify-center space-x-1">
+                        <input
+                          type="checkbox"
+                          checked={volume.readOnly || false}
+                          onChange={(e) => updateVolume(index, 'readOnly', e.target.checked)}
+                          className="rounded"
+                        />
+                        <span className="text-xs">RO</span>
+                      </label>
+                    </div>
+                    <div className="col-span-1 text-center">
+                      <button
+                        onClick={() => removeVolume(index)}
+                        className="p-1 text-text-muted hover:text-danger transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  onClick={addVolume}
+                  className="flex items-center space-x-2 px-4 py-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Volume</span>
+                </button>
+              </div>
+            </div>
           </div>
         );
 
@@ -625,63 +921,113 @@ services:
               <p className="text-text-muted text-sm">Verify configuration and check system compatibility.</p>
             </div>
 
-            <div className="space-y-4">
-              <div className="flex items-center justify-between p-4 bg-surface-1 rounded-lg border border-border">
-                <div className="flex items-center space-x-3">
-                  <Check className="w-5 h-5 text-success" />
-                  <div>
-                    <div className="font-medium">Environment Variables</div>
-                    <div className="text-sm text-text-muted">All required variables configured</div>
-                  </div>
-                </div>
-                <span className="text-success text-sm font-medium">PASS</span>
+            {isLoading && (
+              <div className="flex items-center justify-center p-8">
+                <RotateCw className="w-6 h-6 animate-spin text-primary" />
+                <span className="ml-2">Running validation and preflight checks...</span>
               </div>
+            )}
 
-              <div className="flex items-center justify-between p-4 bg-surface-1 rounded-lg border border-border">
-                <div className="flex items-center space-x-3">
-                  <Check className="w-5 h-5 text-success" />
+            {error && (
+              <div className="bg-error/10 border border-error/20 rounded-lg p-4">
+                <div className="flex items-start space-x-3">
+                  <AlertTriangle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
                   <div>
-                    <div className="font-medium">Port Availability</div>
-                    <div className="text-sm text-text-muted">No port conflicts detected</div>
+                    <div className="font-medium text-error">Validation Error</div>
+                    <div className="text-sm text-text-muted mt-1">{error}</div>
                   </div>
                 </div>
-                <span className="text-success text-sm font-medium">PASS</span>
               </div>
+            )}
 
-              <div className="flex items-center justify-between p-4 bg-surface-1 rounded-lg border border-border">
-                <div className="flex items-center space-x-3">
-                  <AlertTriangle className="w-5 h-5 text-warning" />
-                  <div>
-                    <div className="font-medium">Disk Space</div>
-                    <div className="text-sm text-text-muted">Low disk space warning</div>
+            {!isLoading && validationResult && (
+              <div className="space-y-4">
+                <h4 className="font-medium">Configuration Validation</h4>
+                
+                {validationResult.errors.length > 0 && (
+                  <div className="space-y-2">
+                    {validationResult.errors.map((error, index) => (
+                      <div key={index} className="flex items-center justify-between p-4 bg-error/10 rounded-lg border border-error/20">
+                        <div className="flex items-center space-x-3">
+                          <X className="w-5 h-5 text-error" />
+                          <div>
+                            <div className="font-medium">{error.field}</div>
+                            <div className="text-sm text-text-muted">{error.message}</div>
+                          </div>
+                        </div>
+                        <span className="text-error text-sm font-medium">FAIL</span>
+                      </div>
+                    ))}
                   </div>
-                </div>
-                <span className="text-warning text-sm font-medium">WARN</span>
-              </div>
+                )}
 
-              <div className="flex items-center justify-between p-4 bg-surface-1 rounded-lg border border-border">
-                <div className="flex items-center space-x-3">
-                  <Check className="w-5 h-5 text-success" />
-                  <div>
-                    <div className="font-medium">Docker Connectivity</div>
-                    <div className="text-sm text-text-muted">Docker daemon accessible</div>
+                {validationResult.warnings.length > 0 && (
+                  <div className="space-y-2">
+                    {validationResult.warnings.map((warning, index) => (
+                      <div key={index} className="flex items-center justify-between p-4 bg-warning/10 rounded-lg border border-warning/20">
+                        <div className="flex items-center space-x-3">
+                          <AlertTriangle className="w-5 h-5 text-warning" />
+                          <div>
+                            <div className="font-medium">{warning.field || 'Warning'}</div>
+                            <div className="text-sm text-text-muted">{warning.message}</div>
+                          </div>
+                        </div>
+                        <span className="text-warning text-sm font-medium">WARN</span>
+                      </div>
+                    ))}
                   </div>
-                </div>
-                <span className="text-success text-sm font-medium">PASS</span>
-              </div>
-            </div>
+                )}
 
-            <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
-              <div className="flex items-start space-x-3">
-                <AlertTriangle className="w-5 h-5 text-warning flex-shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-medium text-warning">Low Disk Space Warning</div>
-                  <div className="text-sm text-text-muted mt-1">
-                    Available disk space is below 10GB. Consider freeing up space before installation.
+                {validationResult.ok && validationResult.errors.length === 0 && (
+                  <div className="flex items-center justify-between p-4 bg-success/10 rounded-lg border border-success/20">
+                    <div className="flex items-center space-x-3">
+                      <Check className="w-5 h-5 text-success" />
+                      <div>
+                        <div className="font-medium">Configuration Valid</div>
+                        <div className="text-sm text-text-muted">All configuration checks passed</div>
+                      </div>
+                    </div>
+                    <span className="text-success text-sm font-medium">PASS</span>
                   </div>
+                )}
+              </div>
+            )}
+
+            {!isLoading && preflightResult && (
+              <div className="space-y-4">
+                <h4 className="font-medium">System Preflight Checks</h4>
+                
+                <div className="space-y-2">
+                  {preflightResult.checks.map((check, index) => {
+                    const statusColor = check.status === 'pass' ? 'success' : check.status === 'warn' ? 'warning' : 'error';
+                    const StatusIcon = check.status === 'pass' ? Check : check.status === 'warn' ? AlertTriangle : X;
+                    
+                    return (
+                      <div key={index} className={`flex items-center justify-between p-4 bg-${statusColor}/10 rounded-lg border border-${statusColor}/20`}>
+                        <div className="flex items-center space-x-3">
+                          <StatusIcon className={`w-5 h-5 text-${statusColor}`} />
+                          <div>
+                            <div className="font-medium">{check.name}</div>
+                            {check.detail && (
+                              <div className="text-sm text-text-muted">{check.detail}</div>
+                            )}
+                          </div>
+                        </div>
+                        <span className={`text-${statusColor} text-sm font-medium`}>
+                          {check.status.toUpperCase()}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-            </div>
+            )}
+
+            {!validationResult && !preflightResult && !isLoading && !error && (
+              <div className="text-center py-8">
+                <div className="text-text-muted mb-4">Click "Next" to run validation and preflight checks</div>
+              </div>
+            )}
           </div>
         );
 
@@ -735,6 +1081,28 @@ services:
                       <span className="text-text-muted uppercase">{port.protocol}</span>
                     </div>
                   ))}
+                  {ports.filter(port => port.host && port.container).length === 0 && (
+                    <div className="text-sm text-text-muted">No port mappings configured</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-surface-1 rounded-lg border border-border p-4">
+                <h4 className="font-medium mb-3">Volume Mounts</h4>
+                <div className="space-y-2">
+                  {volumes.filter(volume => volume.containerPath).map((volume, index) => (
+                    <div key={index} className="flex items-center justify-between text-sm">
+                      <span className="font-mono">
+                        {volume.hostPath || '<auto>'}:{volume.containerPath}
+                      </span>
+                      <span className="text-text-muted">
+                        {volume.readOnly ? 'READ-ONLY' : 'READ-WRITE'}
+                      </span>
+                    </div>
+                  ))}
+                  {volumes.filter(volume => volume.containerPath).length === 0 && (
+                    <div className="text-sm text-text-muted">No volume mounts configured</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -780,11 +1148,35 @@ services:
         </div>
       </div>
 
-      {/* Progress Stepper */}
-      <div className="bg-surface-1 rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between overflow-x-auto">
-          {steps.map((step, index) => (
-            <div key={step.id} className="flex items-center space-x-2 flex-shrink-0">
+      {/* Loading State */}
+      {isLoading && !draftId && (
+        <div className="flex items-center justify-center p-8 bg-surface-1 rounded-lg border border-border">
+          <RotateCw className="w-6 h-6 animate-spin text-primary mr-2" />
+          <span>Creating installation draft...</span>
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && (
+        <div className="bg-error/10 border border-error/20 rounded-lg p-4">
+          <div className="flex items-start space-x-3">
+            <AlertTriangle className="w-5 h-5 text-error flex-shrink-0 mt-0.5" />
+            <div>
+              <div className="font-medium text-error">Error</div>
+              <div className="text-sm text-text-muted mt-1">{error}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Wizard Content - only show when draft is ready */}
+      {draftId && (
+        <>
+          {/* Progress Stepper */}
+          <div className="bg-surface-1 rounded-lg border border-border p-6">
+            <div className="flex items-center justify-between overflow-x-auto">
+              {steps.map((step, index) => (
+                <div key={step.id} className="flex items-center space-x-2 flex-shrink-0">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
                 index < currentStep 
                   ? 'bg-success text-primary-contrast'
@@ -817,35 +1209,45 @@ services:
         {renderStepContent()}
       </div>
 
-      {/* Navigation */}
-      <div className="flex items-center justify-between">
-        <button
-          onClick={handleBack}
-          disabled={currentStep === 0}
-          className="flex items-center space-x-2 px-4 py-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          <span>Back</span>
-        </button>
+          {/* Navigation */}
+          <div className="flex items-center justify-between">
+            <button
+              onClick={handleBack}
+              disabled={currentStep === 0}
+              className="flex items-center space-x-2 px-4 py-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back</span>
+            </button>
 
-        {currentStep === steps.length - 1 ? (
-          <button
-            onClick={handleInstall}
-            className="flex items-center space-x-2 px-6 py-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors font-medium"
-          >
-            <span>Confirm & Install</span>
-          </button>
-        ) : (
-          <button
-            onClick={handleNext}
-            disabled={!canProceed()}
-            className="flex items-center space-x-2 px-4 py-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <span>Next</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        )}
-      </div>
+            {currentStep === steps.length - 1 ? (
+              <button
+                onClick={handleInstall}
+                disabled={isLoading}
+                className="flex items-center space-x-2 px-6 py-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isLoading ? (
+                  <>
+                    <RotateCw className="w-4 h-4 animate-spin" />
+                    <span>Installing...</span>
+                  </>
+                ) : (
+                  <span>Confirm & Install</span>
+                )}
+              </button>
+            ) : (
+              <button
+                onClick={handleNext}
+                disabled={!canProceed()}
+                className="flex items-center space-x-2 px-4 py-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <span>Next</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 };

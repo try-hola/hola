@@ -1,19 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   User, 
   Shield, 
   Palette, 
   Bell, 
   Server, 
-  HardDrive,
   Activity,
   Globe,
   Info,
   Plus,
   X,
   Eye,
-  EyeOff
+  EyeOff,
+  Save,
+  Wifi,
+  WifiOff,
+  AlertTriangle
 } from 'lucide-react';
+import type { 
+  SystemEnvVar,
+  GetSettingsResponse,
+  PatchSettingsRequest,
+  SystemStatus
+} from '@hola/shared';
 
 export const Settings: React.FC = () => {
   const [theme, setTheme] = useState('dark');
@@ -25,7 +34,7 @@ export const Settings: React.FC = () => {
     errors: true,
   });
   const [analytics, setAnalytics] = useState(false);
-  const [systemEnvVars, setSystemEnvVars] = useState([
+  const [systemEnvVars, setSystemEnvVars] = useState<SystemEnvVar[]>([
     { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain for all services' },
     { key: 'TIMEZONE', value: 'UTC', isSecret: false, description: 'System timezone' },
     { key: 'BACKUP_RETENTION_DAYS', value: '30', isSecret: false, description: 'Default backup retention period' },
@@ -35,12 +44,106 @@ export const Settings: React.FC = () => {
     { key: 'SSL_EMAIL', value: '', isSecret: false, description: 'Email for SSL certificates' },
   ]);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [settings, setSettings] = useState<GetSettingsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load settings and system status
+  const loadSettings = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // TODO: Replace with actual API calls
+      // const [settingsResponse, statusResponse] = await Promise.all([
+      //   fetch(API.settings.base),
+      //   fetch(API.system.status)
+      // ]);
+      // 
+      // if (!settingsResponse.ok) throw new Error('Failed to load settings');
+      // if (!statusResponse.ok) throw new Error('Failed to load system status');
+      // 
+      // const settingsData: GetSettingsResponse = await settingsResponse.json();
+      // const statusData: GetSystemStatusResponse = await statusResponse.json();
+      
+      // For now, use mock data
+      const mockSettings: GetSettingsResponse = {
+        systemEnv: systemEnvVars,
+        docker: { host: 'unix:///var/run/docker.sock' },
+        tls: { email: 'admin@localhost' },
+        notifications: { 
+          smtpHost: 'smtp.localhost', 
+          smtpUser: 'admin@localhost',
+          smtpPassword: '[REDACTED]' // Password is redacted in GET responses
+        }
+      };
+      
+      const mockStatus: SystemStatus = {
+        docker: { ok: true, version: '24.0.7' },
+        disk: { freeBytes: 50 * 1024 * 1024 * 1024, totalBytes: 100 * 1024 * 1024 * 1024 },
+        version: { hola: '1.0.0', compose: '2.23.3' },
+        oras: { ok: true, version: '1.1.0' },
+        authentik: { ok: true },
+      };
+      
+      setSettings(mockSettings);
+      setSystemStatus(mockStatus);
+      setSystemEnvVars(mockSettings.systemEnv);
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load settings');
+    } finally {
+      setLoading(false);
+    }
+  }, [systemEnvVars]);
+
+  // Save settings
+  const saveSettings = useCallback(async () => {
+    if (!settings) return;
+    
+    try {
+      setSaving(true);
+      setError(null);
+      
+      const updateRequest: PatchSettingsRequest = {
+        systemEnv: systemEnvVars,
+        // Only include changed fields in the patch
+      };
+      
+      // TODO: Replace with actual API call
+      // const response = await fetch(API.settings.base, {
+      //   method: 'PATCH',
+      //   headers: { 'Content-Type': 'application/json' },
+      //   body: JSON.stringify(updateRequest)
+      // });
+      // 
+      // if (!response.ok) throw new Error('Failed to save settings');
+      // const updatedSettings: GetSettingsResponse = await response.json();
+      
+      // For now, just update local state
+      console.log('Saving settings:', updateRequest);
+      
+      // Show success feedback
+      setError(null);
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  }, [settings, systemEnvVars]);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   const addSystemEnvVar = () => {
     setSystemEnvVars([...systemEnvVars, { key: '', value: '', isSecret: false, description: '' }]);
   };
 
-  const updateSystemEnvVar = (index: number, field: string, value: any) => {
+  const updateSystemEnvVar = (index: number, field: keyof SystemEnvVar, value: string | boolean) => {
     const updated = [...systemEnvVars];
     updated[index] = { ...updated[index], [field]: value };
     setSystemEnvVars(updated);
@@ -282,9 +385,24 @@ export const Settings: React.FC = () => {
           ))}
         </div>
 
-        <div className="mt-4 flex justify-end">
-          <button className="bg-success text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-success/90 transition-colors">
-            Save System Variables
+        <div className="mt-4 flex justify-end space-x-3">
+          {error && (
+            <div className="flex items-center space-x-2 text-danger text-sm">
+              <AlertTriangle className="w-4 h-4" />
+              <span>{error}</span>
+            </div>
+          )}
+          <button 
+            onClick={saveSettings}
+            disabled={saving}
+            className="bg-success text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            {saving ? (
+              <Activity className="w-4 h-4 animate-spin" />
+            ) : (
+              <Save className="w-4 h-4" />
+            )}
+            <span>{saving ? 'Saving...' : 'Save System Variables'}</span>
           </button>
         </div>
 
@@ -301,78 +419,157 @@ export const Settings: React.FC = () => {
         </div>
       </div>
 
-      {/* System Information */}
-      <div className="bg-surface-1 rounded-lg border border-border p-6">
-        <div className="flex items-center space-x-3 mb-4">
-          <Server className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-medium">System Information</h2>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div>
-            <div className="text-sm text-text-muted mb-1">Hola Version</div>
-            <div className="font-medium">v1.0.0</div>
+      {/* System Status & Information */}
+      {loading ? (
+        <div className="bg-surface-1 rounded-lg border border-border p-6">
+          <div className="flex items-center space-x-3 mb-4">
+            <Server className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-medium">System Status</h2>
           </div>
-          
-          <div>
-            <div className="text-sm text-text-muted mb-1">Docker Engine</div>
-            <div className="font-medium">v24.0.7</div>
-          </div>
-          
-          <div>
-            <div className="text-sm text-text-muted mb-1">Docker Compose</div>
-            <div className="font-medium">v2.23.0</div>
-          </div>
-          
-          <div>
-            <div className="text-sm text-text-muted mb-1">Platform</div>
-            <div className="font-medium">OrbStack</div>
+          <div className="animate-pulse">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i}>
+                  <div className="h-4 bg-surface-2 rounded w-1/2 mb-2"></div>
+                  <div className="h-6 bg-surface-2 rounded w-3/4"></div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      ) : systemStatus ? (
+        <div className="bg-surface-1 rounded-lg border border-border p-6">
+          <div className="flex items-center space-x-3 mb-4">
+            <Server className="w-5 h-5 text-primary" />
+            <h2 className="text-lg font-medium">System Status</h2>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
+            <div>
+              <div className="text-sm text-text-muted mb-1">Hola Platform</div>
+              <div className="font-medium">v{systemStatus.version.hola}</div>
+            </div>
+            
+            <div>
+              <div className="text-sm text-text-muted mb-1">Docker Engine</div>
+              <div className="font-medium flex items-center space-x-2">
+                <span>v{systemStatus.docker.version || 'Unknown'}</span>
+                {systemStatus.docker.ok ? 
+                  <Wifi className="w-4 h-4 text-success" /> : 
+                  <WifiOff className="w-4 h-4 text-danger" />
+                }
+              </div>
+            </div>
+            
+            <div>
+              <div className="text-sm text-text-muted mb-1">Docker Compose</div>
+              <div className="font-medium">v{systemStatus.version.compose}</div>
+            </div>
+            
+            <div>
+              <div className="text-sm text-text-muted mb-1">Disk Usage</div>
+              <div className="font-medium">
+                {Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}% used
+              </div>
+            </div>
+          </div>
 
-      {/* Integration Status */}
-      <div className="bg-surface-1 rounded-lg border border-border p-6">
-        <div className="flex items-center space-x-3 mb-4">
-          <Globe className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-medium">Integration Status</h2>
+          {/* Integration Status */}
+          <div className="border-t border-border pt-6">
+            <h3 className="text-lg font-medium mb-4">Integration Status</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <div className={`w-2 h-2 rounded-full ${systemStatus.docker.ok ? 'bg-success' : 'bg-danger'}`}></div>
+                  <div>
+                    <div className="font-medium">Docker Engine</div>
+                    <div className="text-sm text-text-muted">Container runtime</div>
+                  </div>
+                </div>
+                <span className={`text-sm ${systemStatus.docker.ok ? 'text-success' : 'text-danger'}`}>
+                  {systemStatus.docker.ok ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+
+              {systemStatus.oras && (
+                <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    <div className={`w-2 h-2 rounded-full ${systemStatus.oras.ok ? 'bg-success' : 'bg-danger'}`}></div>
+                    <div>
+                      <div className="font-medium">ORAS Registry</div>
+                      <div className="text-sm text-text-muted">OCI artifact storage</div>
+                    </div>
+                  </div>
+                  <span className={`text-sm ${systemStatus.oras.ok ? 'text-success' : 'text-danger'}`}>
+                    {systemStatus.oras.ok ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+              )}
+
+              {systemStatus.authentik && (
+                <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    <div className={`w-2 h-2 rounded-full ${systemStatus.authentik.ok ? 'bg-success' : 'bg-danger'}`}></div>
+                    <div>
+                      <div className="font-medium">Authentik</div>
+                      <div className="text-sm text-text-muted">Identity and access management</div>
+                    </div>
+                  </div>
+                  <span className={`text-sm ${systemStatus.authentik.ok ? 'text-success' : 'text-danger'}`}>
+                    {systemStatus.authentik.ok ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <div className="w-2 h-2 rounded-full bg-success"></div>
+                  <div>
+                    <div className="font-medium">Traefik Proxy</div>
+                    <div className="text-sm text-text-muted">Reverse proxy and SSL termination</div>
+                  </div>
+                </div>
+                <span className="text-sm text-success">Connected</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Disk Usage Details */}
+          <div className="border-t border-border pt-6 mt-6">
+            <h3 className="text-lg font-medium mb-4">Storage Information</h3>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-text-muted">Total Disk Space:</span>
+                <span className="font-medium">{(systemStatus.disk.totalBytes / (1024 ** 3)).toFixed(1)} GB</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-text-muted">Free Space:</span>
+                <span className="font-medium">{(systemStatus.disk.freeBytes / (1024 ** 3)).toFixed(1)} GB</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-text-muted">Used Space:</span>
+                <span className="font-medium">{((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / (1024 ** 3)).toFixed(1)} GB</span>
+              </div>
+              <div className="mt-2">
+                <div className="flex justify-between text-xs text-text-muted mb-1">
+                  <span>Disk Usage</span>
+                  <span>{Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}%</span>
+                </div>
+                <div className="w-full bg-surface-0 rounded-full h-2">
+                  <div 
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100) > 80 
+                        ? 'bg-danger' 
+                        : 'bg-success'
+                    }`}
+                    style={{ width: `${Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        
-        <div className="space-y-4">
-          <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-            <div className="flex items-center space-x-3">
-              <div className="w-2 h-2 bg-success rounded-full"></div>
-              <div>
-                <div className="font-medium">Traefik Proxy</div>
-                <div className="text-sm text-text-muted">Reverse proxy and SSL termination</div>
-              </div>
-            </div>
-            <span className="text-sm text-success">Connected</span>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-            <div className="flex items-center space-x-3">
-              <div className="w-2 h-2 bg-success rounded-full"></div>
-              <div>
-                <div className="font-medium">Authentik</div>
-                <div className="text-sm text-text-muted">Identity and access management</div>
-              </div>
-            </div>
-            <span className="text-sm text-success">Connected</span>
-          </div>
-          
-          <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-            <div className="flex items-center space-x-3">
-              <div className="w-2 h-2 bg-success rounded-full"></div>
-              <div>
-                <div className="font-medium">Docker Engine</div>
-                <div className="text-sm text-text-muted">Container runtime</div>
-              </div>
-            </div>
-            <span className="text-sm text-success">Connected</span>
-          </div>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 };

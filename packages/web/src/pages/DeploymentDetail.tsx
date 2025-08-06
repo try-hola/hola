@@ -1,12 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
-import { 
-  ArrowLeft, 
-  Play, 
-  Square, 
-  RotateCcw, 
-  Trash2, 
+import { JobTracker } from '../components/JobTracker';
+import {
+  ArrowLeft,
+  Play,
+  Square,
+  RotateCcw,
+  Trash2,
   ExternalLink,
   Settings,
   Activity,
@@ -19,8 +20,78 @@ import {
   Plus,
   X,
   RotateCw,
-  AlertTriangle
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
+import { API } from '@hola/shared';
+import type { 
+  DeploymentDetail as DeploymentDetailType, 
+  AppEnvVar, 
+  SystemEnvVar,
+  PostDeploymentActionRequest, 
+  PatchDeploymentRequest,
+  GetDeploymentResponse,
+  GetDeploymentHistoryResponse,
+  DeploymentHistoryItem,
+  JobStatus,
+  ErrorResponse
+} from '@hola/shared';
+
+// Helper functions for history tab
+const getJobStatusColor = (status: JobStatus): string => {
+  switch (status) {
+    case 'completed':
+      return 'bg-success';
+    case 'running':
+      return 'bg-info animate-pulse';
+    case 'failed':
+      return 'bg-danger';
+    case 'queued':
+      return 'bg-warning';
+    default:
+      return 'bg-text-muted';
+  }
+};
+
+const getJobStatusStyle = (status: JobStatus): string => {
+  switch (status) {
+    case 'completed':
+      return 'text-success bg-success/10 border-success/20';
+    case 'running':
+      return 'text-info bg-info/10 border-info/20';
+    case 'failed':
+      return 'text-danger bg-danger/10 border-danger/20';
+    case 'queued':
+      return 'text-warning bg-warning/10 border-warning/20';
+    default:
+      return 'text-text-muted bg-surface-2 border-border';
+  }
+};
+
+const formatDateTime = (dateString: string): string => {
+  const date = new Date(dateString);
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+};
+
+const getDuration = (startedAt: string, finishedAt: string): string => {
+  const start = new Date(startedAt);
+  const end = new Date(finishedAt);
+  const diffMs = end.getTime() - start.getTime();
+  const diffSecs = Math.round(diffMs / 1000);
+  
+  if (diffSecs < 60) {
+    return `${diffSecs}s`;
+  } else if (diffSecs < 3600) {
+    const mins = Math.floor(diffSecs / 60);
+    const secs = diffSecs % 60;
+    return `${mins}m ${secs}s`;
+  } else {
+    const hours = Math.floor(diffSecs / 3600);
+    const mins = Math.floor((diffSecs % 3600) / 60);
+    return `${hours}h ${mins}m`;
+  }
+};
 
 const tabs = [
   { id: 'overview', name: 'Overview', icon: Activity },
@@ -33,11 +104,26 @@ const tabs = [
 
 export const DeploymentDetail: React.FC = () => {
   const { deploymentId } = useParams();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
   
+  // Deployment data state
+  const [deployment, setDeployment] = useState<DeploymentDetailType | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // History state
+  const [history, setHistory] = useState<DeploymentHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  
+    // Form state
+  const [isEditing, setIsEditing] = useState(false);
+  const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
+
   // System-wide environment variables (would come from API/context)
-  const systemEnvVars = [
+  const systemEnvVars: SystemEnvVar[] = [
     { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain for all services' },
     { key: 'TIMEZONE', value: 'UTC', isSecret: false, description: 'System timezone' },
     { key: 'BACKUP_RETENTION_DAYS', value: '30', isSecret: false, description: 'Default backup retention period' },
@@ -53,7 +139,7 @@ export const DeploymentDetail: React.FC = () => {
   });
 
   // Deployment-specific environment variables
-  const [deploymentEnvVars, setDeploymentEnvVars] = useState([
+  const [deploymentEnvVars, setDeploymentEnvVars] = useState<AppEnvVar[]>([
     { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
     { key: 'POSTGRES_USER', value: 'nextcloud', isSecret: false, description: 'Database user' },
     { key: 'POSTGRES_PASSWORD', value: 'secure_password_123', isSecret: true, description: 'Database password' },
@@ -61,12 +147,9 @@ export const DeploymentDetail: React.FC = () => {
     { key: 'NEXTCLOUD_ADMIN_PASSWORD', value: 'admin_password_456', isSecret: true, description: 'Admin password' },
   ]);
 
-  const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
-  const [isEditing, setIsEditing] = useState(false);
-
-  // Mock deployment data
-  const deployment = {
-    id: deploymentId,
+  // Mock data - memoized to avoid recreating on every render
+  const mockDeployment = useMemo<DeploymentDetailType>(() => ({
+    id: deploymentId || '',
     name: 'Nextcloud',
     app: 'nextcloud',
     icon: '☁️',
@@ -77,13 +160,157 @@ export const DeploymentDetail: React.FC = () => {
     resources: { cpu: '12%', memory: '256MB', disk: '2.4GB' },
     ports: ['8080:80', '8443:443'],
     lastUpdated: '2 days ago',
-  };
+  }), [deploymentId]);
+
+  const mockHistory = useMemo<DeploymentHistoryItem[]>(() => [
+    {
+      id: 'job-001',
+      type: 'restart',
+      status: 'completed',
+      startedAt: '2024-08-06T10:30:00Z',
+      finishedAt: '2024-08-06T10:31:15Z'
+    },
+    {
+      id: 'job-002',
+      type: 'update',
+      status: 'completed',
+      startedAt: '2024-08-05T14:20:00Z',
+      finishedAt: '2024-08-05T14:25:30Z'
+    },
+    {
+      id: 'job-003',
+      type: 'backup',
+      status: 'completed',
+      startedAt: '2024-08-04T02:00:00Z',
+      finishedAt: '2024-08-04T02:05:45Z'
+    },
+    {
+      id: 'job-004',
+      type: 'start',
+      status: 'failed',
+      startedAt: '2024-08-03T16:45:00Z',
+      finishedAt: '2024-08-03T16:45:30Z'
+    }
+  ], []);
+
+  // Load deployment data from API
+  const loadDeployment = useCallback(async () => {
+    if (!deploymentId) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      const response = await fetch(API.deployments.byId(deploymentId));
+      
+      if (!response.ok) {
+        const errorData: ErrorResponse = await response.json();
+        throw new Error(errorData.error.message);
+      }
+      
+      const data: GetDeploymentResponse = await response.json();
+      setDeployment(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load deployment');
+      // Fallback to mock data for development
+      setDeployment(mockDeployment);
+    } finally {
+      setLoading(false);
+    }
+  }, [deploymentId, mockDeployment]);
+
+  // Load deployment history from API
+  const loadHistory = useCallback(async (page = 1) => {
+    if (!deploymentId) return;
+    
+    setHistoryLoading(true);
+    
+    try {
+      const params = new URLSearchParams({ page: page.toString(), limit: '10' });
+      const response = await fetch(`${API.deployments.history(deploymentId)}?${params.toString()}`);
+      
+      if (!response.ok) {
+        const errorData: ErrorResponse = await response.json();
+        throw new Error(errorData.error.message);
+      }
+      
+      const data: GetDeploymentHistoryResponse = await response.json();
+      setHistory(data.items);
+      setHistoryTotal(data.total);
+      setHistoryPage(page);
+    } catch (err) {
+      console.error('Failed to load deployment history:', err);
+      // Fallback to mock data for development
+      setHistory(mockHistory);
+      setHistoryTotal(mockHistory.length);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [deploymentId, mockHistory]);
+
+  // Load data on component mount
+  useEffect(() => {
+    loadDeployment();
+    if (activeTab === 'history') {
+      loadHistory();
+    }
+  }, [loadDeployment, loadHistory, activeTab]);
+
+  // Handle tab changes
+  // Note: handleTabChange was unused; tabs update via inline onClick handlers above.
+
+  // Early return for loading/error states
+  if (loading && !deployment) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-text-muted">Loading deployment details...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !deployment) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center">
+          <AlertTriangle className="w-12 h-12 text-danger mx-auto mb-4" />
+          <h3 className="text-lg font-medium mb-2">Failed to load deployment</h3>
+          <p className="text-text-muted mb-4">{error}</p>
+          <button
+            onClick={() => loadDeployment()}
+            className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!deployment) {
+    return (
+      <div className="flex items-center justify-center min-h-96">
+        <div className="text-center">
+          <h3 className="text-lg font-medium mb-2">Deployment not found</h3>
+          <p className="text-text-muted mb-4">The requested deployment could not be found.</p>
+          <Link
+            to="/deployments"
+            className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            Back to Deployments
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const addDeploymentEnvVar = () => {
     setDeploymentEnvVars([...deploymentEnvVars, { key: '', value: '', isSecret: false, description: '' }]);
   };
 
-  const updateDeploymentEnvVar = (index: number, field: string, value: any) => {
+  const updateDeploymentEnvVar = <K extends keyof AppEnvVar>(index: number, field: K, value: AppEnvVar[K]) => {
     const updated = [...deploymentEnvVars];
     updated[index] = { ...updated[index], [field]: value };
     setDeploymentEnvVars(updated);
@@ -115,6 +342,51 @@ export const DeploymentDetail: React.FC = () => {
     setDeploymentOverrides(newOverrides);
   };
 
+  const handleAction = async (action: 'start' | 'stop' | 'restart' | 'delete') => {
+    try {
+      const request: PostDeploymentActionRequest = { action };
+      const response = await fetch(API.deployments.actions(deployment.id), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Failed to ${action} deployment`);
+      }
+      
+      // TODO: Handle response, update UI state, show success message
+    } catch (error) {
+      console.error(`Error performing ${action}:`, error);
+      // TODO: Show error message to user
+    }
+  };
+
+  const saveConfiguration = async () => {
+    try {
+      const request: PatchDeploymentRequest = {
+        env: deploymentEnvVars,
+        systemOverrides: deploymentOverrides
+      };
+      
+      const response = await fetch(API.deployments.byId(deployment.id), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to save configuration');
+      }
+      
+      setIsEditing(false);
+      // TODO: Show success message
+    } catch (error) {
+      console.error('Error saving configuration:', error);
+      // TODO: Show error message to user
+    }
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -129,14 +401,16 @@ export const DeploymentDetail: React.FC = () => {
                     <div className="font-medium">Web Interface</div>
                     <div className="text-sm text-text-muted">{deployment.url}</div>
                   </div>
-                  <a
-                    href={deployment.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
+                  {deployment.url && (
+                    <a
+                      href={deployment.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
                 </div>
               </div>
             </div>
@@ -191,17 +465,33 @@ export const DeploymentDetail: React.FC = () => {
                 <div className="font-medium mt-1">{deployment.lastUpdated}</div>
               </div>
             </div>
+
+            {/* Recent Jobs */}
+            <JobTracker 
+              deploymentId={deployment.id}
+              maxJobs={3}
+              autoRefresh={true}
+              onJobClick={(job) => {
+                // Switch to logs tab and show job logs if available
+                setActiveTab('logs');
+                setSearchParams({ tab: 'logs', jobId: job.id });
+              }}
+            />
           </div>
         );
 
-      case 'logs':
+      case 'logs': {
+        const jobId = searchParams.get('jobId');
         return (
           <LogsViewer 
             deploymentId={deployment.id}
-            title="Application Logs"
+            jobId={jobId || undefined}
+            title={jobId ? `Job ${jobId} Logs` : "Application Logs"}
             maxHeight="max-h-[600px]"
+            showJobStatus={!!jobId}
           />
         );
+      }
 
       case 'configuration':
         return (
@@ -209,7 +499,13 @@ export const DeploymentDetail: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-medium">Current Configuration</h3>
               <button 
-                onClick={() => setIsEditing(!isEditing)}
+                onClick={() => {
+                  if (isEditing) {
+                    saveConfiguration();
+                  } else {
+                    setIsEditing(true);
+                  }
+                }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2 ${
                   isEditing 
                     ? 'bg-success text-primary-contrast hover:bg-success/90' 
@@ -342,7 +638,7 @@ export const DeploymentDetail: React.FC = () => {
               
               <div className="space-y-3">
                 {systemEnvVars.map((envVar) => {
-                  const isOverridden = deploymentOverrides.hasOwnProperty(envVar.key);
+                  const isOverridden = Object.prototype.hasOwnProperty.call(deploymentOverrides, envVar.key);
                   const currentValue = isOverridden ? deploymentOverrides[envVar.key] : envVar.value;
                   const showValue = envVar.isSecret && !showSecrets[envVar.key];
                   
@@ -450,6 +746,103 @@ export const DeploymentDetail: React.FC = () => {
           </div>
         );
 
+      case 'history':
+        return (
+          <div className="space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-medium">Deployment History</h3>
+              <button 
+                onClick={() => loadHistory(1)}
+                className="px-4 py-2 bg-primary text-primary-contrast rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex items-center space-x-2"
+              >
+                <RotateCw className="w-4 h-4" />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {historyLoading ? (
+              <div className="text-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+                <p className="text-text-muted">Loading history...</p>
+              </div>
+            ) : (
+              <div className="bg-surface-1 rounded-lg border border-border overflow-hidden">
+                <div className="divide-y divide-border">
+                  {history.map((item) => (
+                    <div key={item.id} className="p-4 hover:bg-surface-2 transition-colors">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-2 h-2 rounded-full ${getJobStatusColor(item.status)}`} />
+                          <div>
+                            <div className="font-medium capitalize">
+                              {item.type} {item.status === 'failed' ? 'failed' : 'completed'}
+                            </div>
+                            <div className="text-sm text-text-muted">
+                              Started: {formatDateTime(item.startedAt)}
+                              {item.finishedAt && (
+                                <span> • Finished: {formatDateTime(item.finishedAt)}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                          <span className={`px-2 py-1 text-xs rounded border capitalize ${getJobStatusStyle(item.status)}`}>
+                            {item.status}
+                          </span>
+                          {item.finishedAt && (
+                            <span className="text-xs text-text-muted">
+                              {getDuration(item.startedAt, item.finishedAt)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {history.length === 0 && !historyLoading && (
+                  <div className="text-center py-12">
+                    <Clock className="w-12 h-12 text-text-muted mx-auto mb-4" />
+                    <h3 className="text-lg font-medium mb-2">No history found</h3>
+                    <p className="text-text-muted">No deployment activities have been recorded yet.</p>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {historyTotal > 10 && (
+                  <div className="px-4 py-3 bg-surface-2 border-t border-border flex items-center justify-between">
+                    <div className="text-sm text-text-muted">
+                      Showing {((historyPage - 1) * 10) + 1} to {Math.min(historyPage * 10, historyTotal)} of {historyTotal} activities
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => loadHistory(historyPage - 1)}
+                        disabled={historyPage <= 1}
+                        className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      
+                      <span className="px-3 py-1 text-sm">
+                        Page {historyPage} of {Math.ceil(historyTotal / 10)}
+                      </span>
+                      
+                      <button
+                        onClick={() => loadHistory(historyPage + 1)}
+                        disabled={historyPage >= Math.ceil(historyTotal / 10)}
+                        className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+
       default:
         return (
           <div className="text-center py-12">
@@ -480,16 +873,32 @@ export const DeploymentDetail: React.FC = () => {
 
         {/* Actions */}
         <div className="flex space-x-2">
-          <button className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" title="Start">
+          <button 
+            onClick={() => handleAction('start')}
+            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
+            title="Start"
+          >
             <Play className="w-4 h-4" />
           </button>
-          <button className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" title="Stop">
+          <button 
+            onClick={() => handleAction('stop')}
+            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
+            title="Stop"
+          >
             <Square className="w-4 h-4" />
           </button>
-          <button className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" title="Restart">
+          <button 
+            onClick={() => handleAction('restart')}
+            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
+            title="Restart"
+          >
             <RotateCcw className="w-4 h-4" />
           </button>
-          <button className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors text-danger" title="Delete">
+          <button 
+            onClick={() => handleAction('delete')}
+            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors text-danger" 
+            title="Delete"
+          >
             <Trash2 className="w-4 h-4" />
           </button>
         </div>

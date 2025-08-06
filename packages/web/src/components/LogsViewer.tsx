@@ -1,22 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, 
   Pause, 
   Download, 
   Search, 
-  Filter, 
   Maximize2, 
   Copy,
   RefreshCw,
-  X
+  X,
+  Activity,
+  CheckCircle,
+  XCircle,
+  Clock
 } from 'lucide-react';
-
-interface LogEntry {
-  timestamp: string;
-  service: string;
-  level: 'info' | 'warn' | 'error' | 'debug';
-  message: string;
-}
+import type { 
+  LogEntry, 
+  LogLevel, 
+  Job, 
+  JobStatus
+} from '@hola/shared';
 
 interface LogsViewerProps {
   deploymentId?: string;
@@ -24,6 +26,7 @@ interface LogsViewerProps {
   title?: string;
   className?: string;
   maxHeight?: string;
+  showJobStatus?: boolean;
 }
 
 const mockLogs: LogEntry[] = [
@@ -77,7 +80,7 @@ const mockLogs: LogEntry[] = [
   },
 ];
 
-const getLevelColor = (level: string) => {
+const getLevelColor = (level: LogLevel) => {
   switch (level) {
     case 'error':
       return 'text-danger';
@@ -97,9 +100,38 @@ const formatTimestamp = (timestamp: string) => {
     hour12: false,
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
-    fractionalSecondDigits: 3
-  });
+    second: '2-digit'
+  }) + '.' + new Date(timestamp).getMilliseconds().toString().padStart(3, '0');
+};
+
+const getJobStatusIcon = (status: JobStatus) => {
+  switch (status) {
+    case 'running':
+      return <Activity className="w-4 h-4 text-info animate-pulse" />;
+    case 'completed':
+      return <CheckCircle className="w-4 h-4 text-success" />;
+    case 'failed':
+      return <XCircle className="w-4 h-4 text-danger" />;
+    case 'queued':
+      return <Clock className="w-4 h-4 text-text-muted" />;
+    default:
+      return <Clock className="w-4 h-4 text-text-muted" />;
+  }
+};
+
+const getJobStatusColor = (status: JobStatus) => {
+  switch (status) {
+    case 'running':
+      return 'text-info';
+    case 'completed':
+      return 'text-success';
+    case 'failed':
+      return 'text-danger';
+    case 'queued':
+      return 'text-text-muted';
+    default:
+      return 'text-text-muted';
+  }
 };
 
 export const LogsViewer: React.FC<LogsViewerProps> = ({
@@ -107,16 +139,87 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   jobId,
   title = 'Logs',
   className = '',
-  maxHeight = 'max-h-96'
+  maxHeight = 'max-h-96',
+  showJobStatus = false
 }) => {
   const [logs, setLogs] = useState<LogEntry[]>(mockLogs);
+  const [job, setJob] = useState<Job | null>(null);
   const [isStreaming, setIsStreaming] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedService, setSelectedService] = useState('all');
   const [selectedLevel, setSelectedLevel] = useState('all');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
+
+  // API functions
+  const loadLogs = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Determine the API endpoint to use
+      if (jobId) {
+        // API endpoint: API.jobs.logs(jobId)
+        console.log('Loading logs for job:', jobId);
+      } else if (deploymentId) {
+        // API endpoint: API.deployments.logs(deploymentId)
+        console.log('Loading logs for deployment:', deploymentId);
+      } else {
+        return;
+      }
+      
+      // TODO: Replace with actual API call
+      // const response = await fetch(url);
+      // if (!response.ok) throw new Error('Failed to load logs');
+      // const data: GetLogsResponse = await response.json();
+      
+      // For now, use mock data
+      setLogs(mockLogs);
+    } catch (err) {
+      console.error('Failed to load logs:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load logs');
+      // Fallback to mock data for development
+      setLogs(mockLogs);
+    } finally {
+      setLoading(false);
+    }
+  }, [jobId, deploymentId]);
+
+  const loadJob = useCallback(async () => {
+    if (!jobId) return;
+    
+    try {
+      setError(null);
+      
+      // TODO: Replace with actual API call
+      // const response = await fetch(API.jobs.byId(jobId));
+      // if (!response.ok) throw new Error('Failed to load job');
+      // const data: GetJobResponse = await response.json();
+      
+      // For now, use mock data
+      const mockJob: Job = {
+        id: jobId,
+        type: 'install',
+        status: 'running',
+        startedAt: new Date(Date.now() - 300000).toISOString(), // 5 minutes ago
+        progress: 65,
+        deploymentId: deploymentId
+      };
+      setJob(mockJob);
+    } catch (err) {
+      console.error('Failed to load job:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load job details');
+    }
+  }, [jobId, deploymentId]);
+
+  // Load initial data
+  useEffect(() => {
+    loadLogs();
+    loadJob();
+  }, [loadLogs, loadJob]);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -151,7 +254,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   }, [isStreaming]);
 
   const services = Array.from(new Set(logs.map(log => log.service)));
-  const levels = ['info', 'warn', 'error', 'debug'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
 
   const filteredLogs = logs.filter(log => {
     const matchesSearch = searchTerm === '' || 
@@ -198,6 +301,19 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
             <h3 className="font-medium">{title}</h3>
+            {showJobStatus && job && (
+              <div className="flex items-center space-x-2">
+                {getJobStatusIcon(job.status)}
+                <span className={`text-sm font-medium ${getJobStatusColor(job.status)}`}>
+                  {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
+                </span>
+                {job.progress !== undefined && (
+                  <span className="text-sm text-text-muted">
+                    ({job.progress}%)
+                  </span>
+                )}
+              </div>
+            )}
             <div className="flex items-center space-x-2">
               <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-success animate-pulse' : 'bg-text-muted'}`}></div>
               <span className="text-sm text-text-muted">
@@ -251,6 +367,29 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
           </div>
         </div>
 
+        {/* Error Display */}
+        {error && (
+          <div className="mb-4 p-3 bg-danger/10 border border-danger/20 rounded text-danger text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Job Progress Bar */}
+        {showJobStatus && job && job.status === 'running' && job.progress !== undefined && (
+          <div className="mb-4 p-3 bg-surface-2 rounded">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="font-medium">Job Progress</span>
+              <span className="text-text-muted">{job.progress}%</span>
+            </div>
+            <div className="w-full bg-surface-0 rounded-full h-2">
+              <div 
+                className="bg-info h-2 rounded-full transition-all duration-300"
+                style={{ width: `${job.progress}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+
         {/* Filters */}
         <div className="flex flex-wrap gap-3">
           <div className="relative">
@@ -296,7 +435,12 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
         className={`font-mono text-sm bg-surface-0 overflow-y-auto ${isFullscreen ? 'h-[calc(100vh-200px)]' : maxHeight}`}
       >
         <div className="p-4 space-y-1">
-          {filteredLogs.length === 0 ? (
+          {loading ? (
+            <div className="text-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto"></div>
+              <p className="text-text-muted mt-2">Loading logs...</p>
+            </div>
+          ) : filteredLogs.length === 0 ? (
             <div className="text-center py-8 text-text-muted">
               {searchTerm || selectedService !== 'all' || selectedLevel !== 'all' 
                 ? 'No logs match the current filters'
