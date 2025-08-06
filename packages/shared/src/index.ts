@@ -1,0 +1,421 @@
+// Shared types and utilities for web and server
+
+// ------------------------------------------------------
+// API route constants to prevent drift between client/server
+// ------------------------------------------------------
+export const API = {
+  base: '/api',
+  health: '/api/health',
+  hello: '/api/hello',
+  echo: '/api/echo',
+
+  me: '/api/me',
+  summary: '/api/summary',
+
+  catalog: {
+    apps: '/api/catalog/apps', // list, query via ?query=&category=&page=&limit=
+    appById: (appId: string) => `/api/catalog/apps/${appId}`,
+    versions: (appId: string) => `/api/catalog/apps/${appId}/versions`,
+    versionDetail: (appId: string, version: string) =>
+      `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`
+  },
+
+  drafts: {
+    create: '/api/drafts',
+    byId: (draftId: string) => `/api/drafts/${draftId}`,
+    uploads: (draftId: string) => `/api/drafts/${draftId}/uploads`,
+    uploadById: (draftId: string, uploadId: string) => `/api/drafts/${draftId}/uploads/${uploadId}`,
+    validate: (draftId: string) => `/api/drafts/${draftId}/validate`,
+    preflight: (draftId: string) => `/api/drafts/${draftId}/preflight`,
+    finalize: (draftId: string) => `/api/drafts/${draftId}/finalize`
+  },
+
+  deployments: {
+    base: '/api/deployments', // list and POST create-from-draft at /api/deployments
+    byId: (deploymentId: string) => `/api/deployments/${deploymentId}`,
+    history: (deploymentId: string) => `/api/deployments/${deploymentId}/history`,
+    logs: (deploymentId: string) => `/api/deployments/${deploymentId}/logs`,
+    actions: (deploymentId: string) => `/api/deployments/${deploymentId}/actions`,
+  },
+
+  jobs: {
+    byId: (jobId: string) => `/api/jobs/${jobId}`,
+    logs: (jobId: string) => `/api/jobs/${jobId}/logs`,
+  },
+
+  backups: {
+    base: '/api/backups',
+    byId: (backupId: string) => `/api/backups/${backupId}`,
+    restore: (backupId: string) => `/api/backups/${backupId}/restore`,
+  },
+
+  notifications: {
+    base: '/api/notifications',
+    byId: (id: string) => `/api/notifications/${id}`,
+    actions: '/api/notifications/actions',
+  },
+
+  settings: {
+    base: '/api/settings',
+    backup: '/api/settings/backup',
+  },
+
+  system: {
+    status: '/api/system/status',
+  },
+} as const;
+
+// ------------------------------------------------------
+// Common helpers
+// ------------------------------------------------------
+export type PageRequest = {
+  page?: number;
+  limit?: number;
+  q?: string;
+};
+
+export type PageResponse<T> = {
+  items: T[];
+  page: number;
+  limit: number;
+  total: number;
+};
+
+export type ErrorResponse = {
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+};
+
+// ------------------------------------------------------
+// Health / Hello (existing)
+// ------------------------------------------------------
+export type HealthResponse = {
+  ok: boolean;
+  ts: string; // ISO timestamp
+};
+
+export type HelloResponse = {
+  message: string;
+};
+
+// ------------------------------------------------------
+// Identity
+// ------------------------------------------------------
+export type Identity = {
+  id: string;
+  name: string;
+  email: string;
+  roles: string[];
+};
+
+// GET /api/me
+export type GetMeResponse = Identity;
+
+// ------------------------------------------------------
+// Dashboard Summary
+// ------------------------------------------------------
+export type JobType = 'install' | 'update' | 'backup' | 'restore' | 'start' | 'stop' | 'restart';
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export type SummaryJob = {
+  id: string;
+  deploymentId: string;
+  type: JobType;
+  app: string;
+  status: JobStatus;
+  progress?: number;
+  timestamp: string; // human or ISO, UI can render either
+};
+
+export type SystemStatus = {
+  docker: { ok: boolean; version?: string };
+  disk: { freeBytes: number; totalBytes: number };
+  version: { hola: string; compose: string };
+  oras?: { ok: boolean; version?: string };
+  authentik?: { ok: boolean };
+};
+
+export type GetSummaryResponse = {
+  deploymentsCount: number;
+  activeJobsCount: number;
+  alertsCount: number;
+  recentJobs: SummaryJob[];
+  system: SystemStatus;
+};
+
+// ------------------------------------------------------
+// Catalog
+// ------------------------------------------------------
+export type CatalogApp = {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  category: string;
+  rating: number;
+  downloads: string | number;
+  tags: string[];
+  featured: boolean;
+};
+
+export type GetCatalogAppsRequest = PageRequest & {
+  query?: string;
+  category?: string;
+};
+
+export type GetCatalogAppsResponse = PageResponse<CatalogApp>;
+
+export type GetCatalogAppResponse = CatalogApp & {
+  versions: string[];
+};
+
+export type CatalogAppVersion = {
+  version: string;
+  createdAt: string;
+};
+
+export type GetCatalogAppVersionsResponse = {
+  items: CatalogAppVersion[];
+  total: number;
+};
+
+export type AppEnvVar = {
+  key: string;
+  value: string;
+  isSecret: boolean;
+  description?: string;
+};
+
+export type DraftDefaults = {
+  ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
+  volumes: Array<{ hostPath?: string; containerPath: string; readOnly?: boolean }>;
+};
+
+export type GetCatalogAppVersionDetailResponse = {
+  defaultEnv: AppEnvVar[];
+  defaults: DraftDefaults;
+};
+
+// ------------------------------------------------------
+// Drafts (Install Wizard)
+// ------------------------------------------------------
+export type Draft = {
+  draftId: string;
+  appId: string;
+  version?: string;
+  systemOverrides: Record<string, string>;
+  appEnv: AppEnvVar[];
+  ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
+  composeOverride?: string;
+  files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' }>;
+};
+
+export type CreateDraftRequest = { appId: string; version?: string };
+export type CreateDraftResponse = {
+  draftId: string;
+  app: { id: string; name: string; icon: string };
+  systemEnv: AppEnvVar[];
+  appEnv: AppEnvVar[];
+  defaults: DraftDefaults;
+};
+
+export type GetDraftResponse = Draft;
+
+export type PatchDraftRequest = Partial<Pick<Draft, 'systemOverrides' | 'appEnv' | 'ports' | 'composeOverride'>>;
+export type PatchDraftResponse = { ok: true; draft: Draft };
+
+export type UploadDraftFileResponse = { uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' };
+export type DeleteDraftFileResponse = { ok: true };
+
+export type ValidateDraftResponse = {
+  ok: boolean;
+  errors: Array<{ field: string; message: string }>;
+  warnings: Array<{ field?: string; message: string }>;
+};
+
+export type PreflightCheck = { name: string; status: 'pass' | 'warn' | 'fail'; detail?: string };
+export type PreflightResponse = { ok: boolean; checks: PreflightCheck[] };
+
+export type FinalizeDraftResponse = { spec: unknown; checksum: string };
+
+// ------------------------------------------------------
+// Deployments
+// ------------------------------------------------------
+export type DeploymentStatus = 'running' | 'stopped' | 'installing' | 'updating' | 'error';
+
+export type DeploymentListItem = {
+  id: string;
+  name: string;
+  app: string;
+  icon: string;
+  status: DeploymentStatus;
+  uptime?: string;
+  version?: string;
+  resources?: { cpu: string; memory: string };
+  ports: string[];
+  lastUpdated: string;
+  url?: string;
+};
+
+export type GetDeploymentsRequest = PageRequest & {
+  status?: DeploymentStatus | 'all';
+};
+export type GetDeploymentsResponse = PageResponse<DeploymentListItem>;
+
+export type DeploymentDetail = {
+  id: string;
+  name: string;
+  app: string;
+  icon: string;
+  status: DeploymentStatus;
+  uptime?: string;
+  version?: string;
+  url?: string;
+  resources: { cpu: string; memory: string; disk?: string };
+  ports: string[];
+  lastUpdated: string;
+};
+
+export type GetDeploymentResponse = DeploymentDetail;
+
+export type PatchDeploymentRequest = {
+  env?: AppEnvVar[];
+  systemOverrides?: Record<string, string>;
+};
+export type PatchDeploymentResponse = { ok: true };
+
+export type DeploymentHistoryItem = {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  startedAt: string;
+  finishedAt?: string;
+};
+export type GetDeploymentHistoryResponse = PageResponse<DeploymentHistoryItem>;
+
+export type PostDeploymentActionRequest = { action: 'start' | 'stop' | 'restart' | 'delete' };
+export type PostDeploymentActionResponse = { ok?: boolean; jobId?: string };
+
+// ------------------------------------------------------
+// Jobs
+// ------------------------------------------------------
+export type Job = {
+  id: string;
+  type: JobType;
+  status: JobStatus;
+  startedAt: string;
+  finishedAt?: string;
+  progress?: number;
+  deploymentId?: string;
+};
+export type GetJobResponse = Job;
+
+// ------------------------------------------------------
+// Logs (SSE or polling fallback)
+// ------------------------------------------------------
+export type LogLevel = 'info' | 'warn' | 'error' | 'debug';
+
+export type LogEntry = {
+  timestamp: string; // ISO
+  service: string;
+  level: LogLevel;
+  message: string;
+};
+
+// Polling fallback
+export type GetLogsResponse = {
+  items: LogEntry[];
+  nextSince?: string;
+};
+
+// ------------------------------------------------------
+// Backups
+// ------------------------------------------------------
+export type BackupStatus = 'completed' | 'failed' | 'running';
+export type BackupType = 'automatic' | 'manual';
+
+export type BackupItem = {
+  id: string;
+  app: string;
+  appId?: string;
+  icon?: string;
+  timestamp: string;
+  sizeBytes: number;
+  status: BackupStatus;
+  type: BackupType;
+};
+
+export type GetBackupsRequest = PageRequest & { appId?: string; status?: BackupStatus };
+export type GetBackupsResponse = PageResponse<BackupItem>;
+
+export type CreateBackupRequest = { appId?: string };
+export type CreateBackupResponse = { jobId: string; backupId?: string };
+
+export type GetBackupResponse = BackupItem & {
+  files?: Array<{ path: string; sizeBytes: number }>;
+};
+
+export type RestoreBackupRequest = { targetDeploymentId?: string };
+export type RestoreBackupResponse = { jobId: string };
+
+export type DeleteBackupResponse = { ok: true };
+
+// ------------------------------------------------------
+// Notifications
+// ------------------------------------------------------
+export type NotificationType = 'error' | 'success' | 'warning' | 'info' | 'update';
+export type NotificationPriority = 'low' | 'medium' | 'high';
+
+export type NotificationItem = {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  timestamp: string;
+  read: boolean;
+  priority: NotificationPriority;
+};
+
+export type GetNotificationsRequest = PageRequest & {
+  filter?: 'all' | 'unread' | `type:${NotificationType}`;
+};
+export type GetNotificationsResponse = PageResponse<NotificationItem> & { unreadCount: number };
+
+export type PatchNotificationRequest = { read?: boolean; dismiss?: true };
+export type PatchNotificationResponse = { id: string; read: boolean };
+
+export type PostNotificationsActionRequest = { action: 'markAllRead' | 'dismissAll' };
+export type PostNotificationsActionResponse = { ok: true };
+
+// ------------------------------------------------------
+// Settings
+// ------------------------------------------------------
+export type SystemEnvVar = AppEnvVar;
+
+export type GetSettingsResponse = {
+  systemEnv: SystemEnvVar[];
+  docker?: { host?: string };
+  tls?: { email?: string };
+  notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string }; // password redacted in GET
+};
+
+export type PatchSettingsRequest = Partial<GetSettingsResponse>;
+export type PatchSettingsResponse = GetSettingsResponse;
+
+// Backup schedule
+export type GetBackupSettingsResponse = {
+  scheduleEnabled: boolean;
+  scheduleTime: string; // "HH:mm"
+  retentionDays: number;
+};
+
+export type PatchBackupSettingsRequest = Partial<GetBackupSettingsResponse>;
+export type PatchBackupSettingsResponse = GetBackupSettingsResponse;
+
+// ------------------------------------------------------
+// System status
+// ------------------------------------------------------
+export type GetSystemStatusResponse = SystemStatus;

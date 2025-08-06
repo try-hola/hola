@@ -1,0 +1,563 @@
+import {
+  API,
+  type HealthResponse,
+  type HelloResponse,
+  type GetMeResponse,
+  type GetSummaryResponse,
+  type GetCatalogAppsResponse,
+  type GetCatalogAppResponse,
+  type GetCatalogAppVersionsResponse,
+  type GetCatalogAppVersionDetailResponse,
+  type CreateDraftRequest,
+  type CreateDraftResponse,
+  type GetDraftResponse,
+  type PatchDraftRequest,
+  type PatchDraftResponse,
+  type UploadDraftFileResponse,
+  type DeleteDraftFileResponse,
+  type ValidateDraftResponse,
+  type PreflightResponse,
+  type FinalizeDraftResponse,
+  type GetDeploymentsResponse,
+  type GetDeploymentResponse,
+  type GetDeploymentHistoryResponse,
+  type PatchDeploymentRequest,
+  type PatchDeploymentResponse,
+  type PostDeploymentActionRequest,
+  type PostDeploymentActionResponse,
+  type GetLogsResponse,
+  type GetJobResponse,
+  type GetBackupsResponse,
+  type CreateBackupRequest,
+  type CreateBackupResponse,
+  type GetBackupResponse,
+  type RestoreBackupRequest,
+  type RestoreBackupResponse,
+  type DeleteBackupResponse,
+  type GetNotificationsResponse,
+  type PatchNotificationRequest,
+  type PatchNotificationResponse,
+  type PostNotificationsActionRequest,
+  type PostNotificationsActionResponse,
+  type GetSettingsResponse,
+  type PatchSettingsRequest,
+  type PatchSettingsResponse,
+  type GetBackupSettingsResponse,
+  type PatchBackupSettingsRequest,
+  type PatchBackupSettingsResponse,
+  type GetSystemStatusResponse,
+} from '@hola/shared';
+
+const PORT = Number(Bun.env.PORT || 3001);
+
+function json(data: unknown, init?: ResponseInit) {
+  return new Response(JSON.stringify(data), {
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      ...init?.headers,
+    },
+    status: init?.status ?? 200,
+    statusText: init?.statusText,
+  });
+}
+
+function text(body: string, init?: ResponseInit) {
+  return new Response(body, {
+    headers: {
+      'content-type': 'text/plain; charset=utf-8',
+      'cache-control': 'no-store',
+      ...init?.headers,
+    },
+    status: init?.status ?? 200,
+    statusText: init?.statusText,
+  });
+}
+
+function notFound() {
+  return json({ error: { code: 'NOT_FOUND', message: 'Not Found' } }, { status: 404 });
+}
+
+function withCors(res: Response) {
+  const headers = new Headers(res.headers);
+  headers.set('access-control-allow-origin', '*');
+  headers.set('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+  headers.set('access-control-allow-headers', 'content-type,authorization');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+function handlePreflight(req: Request) {
+  if (req.method === 'OPTIONS') {
+    return withCors(new Response(null, { status: 204 }));
+  }
+  return null;
+}
+
+// Simple header-derived identity mock
+function getIdentity(req: Request): GetMeResponse | null {
+  const id = req.headers.get('x-user-id') || 'demo-user';
+  const email = req.headers.get('x-user-email') || 'demo@example.com';
+  const name = req.headers.get('x-user-name') || 'Demo User';
+  if (!id) return null;
+  return { id, email, name, roles: ['user'] };
+}
+
+// SSE helper
+function sse(headers?: HeadersInit) {
+  const h = new Headers(headers);
+  h.set('content-type', 'text/event-stream');
+  h.set('cache-control', 'no-cache');
+  h.set('connection', 'keep-alive');
+  return h;
+}
+
+// Router
+async function route(url: URL, req: Request): Promise<Response> {
+  const { pathname, searchParams } = url;
+
+  // Health
+  if (pathname === API.health && req.method === 'GET') {
+    const payload: HealthResponse = { ok: true, ts: new Date().toISOString() };
+    return json(payload);
+  }
+
+  // Hello
+  if (pathname === API.hello && req.method === 'GET') {
+    const payload: HelloResponse = { message: 'Hello from Bun server' };
+    return json(payload);
+  }
+
+  // Echo (dev)
+  if (pathname === API.echo && req.method === 'POST') {
+    try {
+      const body = await req.json();
+      return json({ received: body });
+    } catch {
+      return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
+    }
+  }
+
+  // Identity
+  if (pathname === API.me && req.method === 'GET') {
+    const me = getIdentity(req);
+    if (!me) return json({ error: { code: 'UNAUTHENTICATED', message: 'No identity' } }, { status: 401 });
+    return json(me);
+  }
+
+  // Summary
+  if (pathname === API.summary && req.method === 'GET') {
+    const payload: GetSummaryResponse = {
+      deploymentsCount: 5,
+      activeJobsCount: 2,
+      alertsCount: 1,
+      recentJobs: [
+        { id: '1', deploymentId: 'nextcloud-prod', type: 'install', app: 'Nextcloud', status: 'running', progress: 65, timestamp: new Date().toISOString() },
+        { id: '2', deploymentId: 'homeassistant-main', type: 'update', app: 'Home Assistant', status: 'completed', progress: 100, timestamp: new Date(Date.now()-15*60*1e3).toISOString() },
+      ],
+      system: {
+        docker: { ok: true, version: '25.0.0' },
+        disk: { freeBytes: 100n as unknown as number, totalBytes: 500n as unknown as number },
+        version: { hola: '0.1.0', compose: 'v2.27.0' },
+      },
+    };
+    return json(payload);
+  }
+
+  // Catalog
+  if (pathname === API.catalog.apps && req.method === 'GET') {
+    const items: GetCatalogAppsResponse['items'] = [
+      { id: 'nextcloud', name: 'Nextcloud', description: 'Self-hosted productivity', icon: '☁️', category: 'Productivity', rating: 4.8, downloads: '12.5k', tags: ['File Storage', 'Collaboration'], featured: true },
+      { id: 'homeassistant', name: 'Home Assistant', description: 'Home automation', icon: '🏠', category: 'Home Automation', rating: 4.9, downloads: '45.2k', tags: ['IoT', 'Automation'], featured: true },
+    ];
+    const payload: GetCatalogAppsResponse = { items, page: Number(searchParams.get('page')||1), limit: Number(searchParams.get('limit')||items.length), total: items.length };
+    return json(payload);
+  }
+
+  const catalogAppMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)$/);
+  if (catalogAppMatch && req.method === 'GET') {
+    const appId = decodeURIComponent(catalogAppMatch[1]);
+    const payload: GetCatalogAppResponse = {
+      id: appId,
+      name: appId === 'nextcloud' ? 'Nextcloud' : 'App',
+      description: 'App description',
+      icon: '📦',
+      category: 'General',
+      rating: 4.5,
+      downloads: '10k',
+      tags: ['tag1', 'tag2'],
+      featured: false,
+      versions: ['1.0.0', '1.1.0'],
+    };
+    return json(payload);
+  }
+
+  const catalogVersionsMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions$/);
+  if (catalogVersionsMatch && req.method === 'GET') {
+    const payload: GetCatalogAppVersionsResponse = {
+      items: [
+        { version: '1.1.0', createdAt: new Date().toISOString() },
+        { version: '1.0.0', createdAt: new Date(Date.now()-86400e3).toISOString() },
+      ],
+      total: 2,
+    };
+    return json(payload);
+  }
+
+  const catalogVersionDetailMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions\/(.+)$/);
+  if (catalogVersionDetailMatch && req.method === 'GET') {
+    const payload: GetCatalogAppVersionDetailResponse = {
+      defaultEnv: [
+        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+      ],
+      defaults: {
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
+      },
+    };
+    return json(payload);
+  }
+
+  // Drafts
+  if (pathname === API.drafts.create && req.method === 'POST') {
+    const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+    const payload: CreateDraftResponse = {
+      draftId: crypto.randomUUID(),
+      app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
+      systemEnv: [
+        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+      ],
+      appEnv: [
+        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+      ],
+      defaults: {
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
+      },
+    };
+    return json(payload);
+  }
+
+  const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+  if (draftMatch && req.method === 'GET') {
+    const draftId = draftMatch[1];
+    const payload: GetDraftResponse = {
+      draftId,
+      appId: 'nextcloud',
+      version: '1.0.0',
+      systemOverrides: {},
+      appEnv: [
+        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+      ],
+      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+      composeOverride: '',
+      files: [],
+    };
+    return json(payload);
+  }
+
+  if (draftMatch && req.method === 'PATCH') {
+    const payload: PatchDraftResponse = {
+      ok: true,
+      draft: {
+        draftId: draftMatch[1],
+        appId: 'nextcloud',
+        version: '1.0.0',
+        systemOverrides: {},
+        appEnv: [],
+        ports: [],
+        composeOverride: '',
+        files: [],
+      },
+    };
+    return json(payload);
+  }
+
+  const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+  if (draftUploadsMatch && req.method === 'POST') {
+    const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
+    return json(payload);
+  }
+
+  const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+  if (draftUploadByIdMatch && req.method === 'DELETE') {
+    const payload: DeleteDraftFileResponse = { ok: true };
+    return json(payload);
+  }
+
+  const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
+  if (draftValidateMatch && req.method === 'POST') {
+    const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
+    return json(payload);
+  }
+
+  const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+  if (draftPreflightMatch && req.method === 'POST') {
+    const payload: PreflightResponse = {
+      ok: true,
+      checks: [
+        { name: 'env', status: 'pass' },
+        { name: 'docker', status: 'pass' },
+        { name: 'disk', status: 'warn', detail: 'Low disk space' },
+      ],
+    };
+    return json(payload);
+  }
+
+  const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
+  if (draftFinalizeMatch && req.method === 'POST') {
+    const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
+    return json(payload);
+  }
+
+  // Deployments
+  if (pathname === API.deployments.base && req.method === 'GET') {
+    const items: GetDeploymentsResponse['items'] = [
+      { id: 'nextcloud-prod', name: 'Nextcloud', app: 'nextcloud', icon: '☁️', status: 'running', uptime: '15 days', version: '28.0.2', resources: { cpu: '12%', memory: '256MB' }, ports: ['8080:80', '8443:443'], lastUpdated: '2 days ago', url: 'https://nextcloud.local' },
+      { id: 'grafana-monitoring', name: 'Grafana', app: 'grafana', icon: '📊', status: 'stopped', uptime: '0 days', version: '10.3.1', resources: { cpu: '0%', memory: '0MB' }, ports: ['3000:3000'], lastUpdated: '1 hour ago', url: 'https://grafana.local' },
+    ];
+    const payload: GetDeploymentsResponse = { items, page: 1, limit: items.length, total: items.length };
+    return json(payload);
+  }
+
+  if (pathname === API.deployments.base && req.method === 'POST') {
+    // create from draft
+    const payload: PostDeploymentActionResponse = { jobId: crypto.randomUUID(), ok: true };
+    return json(payload);
+  }
+
+  const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
+  if (deploymentMatch && req.method === 'GET') {
+    const id = deploymentMatch[1];
+    const payload: GetDeploymentResponse = {
+      id,
+      name: 'Nextcloud',
+      app: 'nextcloud',
+      icon: '☁️',
+      status: 'running',
+      uptime: '15 days',
+      version: '28.0.2',
+      url: 'https://nextcloud.local',
+      resources: { cpu: '12%', memory: '256MB', disk: '2.4GB' },
+      ports: ['8080:80', '8443:443'],
+      lastUpdated: '2 days ago',
+    };
+    return json(payload);
+  }
+
+  if (deploymentMatch && req.method === 'PATCH') {
+    const _body = (await req.json().catch(() => ({}))) as PatchDeploymentRequest;
+    const payload: PatchDeploymentResponse = { ok: true };
+    return json(payload);
+  }
+
+  const deploymentActionsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/actions$/);
+  if (deploymentActionsMatch && req.method === 'POST') {
+    const body = (await req.json().catch(() => ({}))) as Partial<PostDeploymentActionRequest>;
+    const payload: PostDeploymentActionResponse = { ok: true, jobId: ['delete'].includes(String(body.action)) ? undefined : crypto.randomUUID() };
+    return json(payload);
+  }
+
+  const deploymentHistoryMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/history$/);
+  if (deploymentHistoryMatch && req.method === 'GET') {
+    const payload: GetDeploymentHistoryResponse = {
+      items: [
+        { id: 'h1', type: 'install', status: 'completed', startedAt: new Date(Date.now()-3600e3).toISOString(), finishedAt: new Date(Date.now()-3500e3).toISOString() },
+        { id: 'h2', type: 'restart', status: 'completed', startedAt: new Date(Date.now()-1800e3).toISOString(), finishedAt: new Date(Date.now()-1750e3).toISOString() },
+      ],
+      page: 1, limit: 2, total: 2,
+    };
+    return json(payload);
+  }
+
+  // Logs SSE (deployment)
+  const deploymentLogsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs$/);
+  if (deploymentLogsMatch && req.method === 'GET') {
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0;
+        const timer = setInterval(() => {
+          i++;
+          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: ['nextcloud','postgres','redis'][i%3], level: ['info','warn','error','debug'][i%4], message: 'Log line ' + i })}\n\n`;
+          controller.enqueue(new TextEncoder().encode(evt));
+          if (i % 8 === 0) {
+            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }
+          // keep alive
+        }, 1000);
+        // Close after 60s in stub
+        setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
+      }
+    });
+    return new Response(stream, { headers: sse() });
+  }
+
+  // Jobs + logs SSE
+  const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
+  if (jobMatch && req.method === 'GET') {
+    const payload: GetJobResponse = {
+      id: jobMatch[1],
+      type: 'install',
+      status: 'running',
+      startedAt: new Date().toISOString(),
+      progress: 50,
+      deploymentId: 'nextcloud-prod',
+    };
+    return json(payload);
+  }
+
+  const jobLogsMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs$/);
+  if (jobLogsMatch && req.method === 'GET') {
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0;
+        const timer = setInterval(() => {
+          i++;
+          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: 'job', level: ['info','warn','error','debug'][i%4], message: 'Job log ' + i })}\n\n`;
+          controller.enqueue(new TextEncoder().encode(evt));
+          if (i % 8 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+        }, 1000);
+        setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
+      }
+    });
+    return new Response(stream, { headers: sse() });
+  }
+
+  // Backups
+  if (pathname === API.backups.base && req.method === 'GET') {
+    const payload: GetBackupsResponse = {
+      items: [
+        { id: '1', app: 'Nextcloud', icon: '☁️', timestamp: new Date().toISOString(), sizeBytes: 2_400_000_000, status: 'completed', type: 'automatic' },
+        { id: '2', app: 'Home Assistant', icon: '🏠', timestamp: new Date(Date.now()-12*3600e3).toISOString(), sizeBytes: 145_000_000, status: 'completed', type: 'automatic' },
+      ],
+      page: 1, limit: 2, total: 2,
+    };
+    return json(payload);
+  }
+
+  if (pathname === API.backups.base && req.method === 'POST') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<CreateBackupRequest>;
+    const payload: CreateBackupResponse = { jobId: crypto.randomUUID(), backupId: crypto.randomUUID() };
+    return json(payload);
+  }
+
+  const backupByIdMatch = pathname.match(/^\/api\/backups\/([^/]+)$/);
+  if (backupByIdMatch && req.method === 'GET') {
+    const payload: GetBackupResponse = {
+      id: backupByIdMatch[1],
+      app: 'Nextcloud',
+      appId: 'nextcloud',
+      icon: '☁️',
+      timestamp: new Date().toISOString(),
+      sizeBytes: 2_400_000_000,
+      status: 'completed',
+      type: 'automatic',
+      files: [{ path: 'backup.tar.gz', sizeBytes: 2_400_000_000 }],
+    };
+    return json(payload);
+  }
+
+  const backupRestoreMatch = pathname.match(/^\/api\/backups\/([^/]+)\/restore$/);
+  if (backupRestoreMatch && req.method === 'POST') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<RestoreBackupRequest>;
+    const payload: RestoreBackupResponse = { jobId: crypto.randomUUID() };
+    return json(payload);
+  }
+
+  if (backupByIdMatch && req.method === 'DELETE') {
+    const payload: DeleteBackupResponse = { ok: true };
+    return json(payload);
+  }
+
+  // Notifications
+  if (pathname === API.notifications.base && req.method === 'GET') {
+    const payload: GetNotificationsResponse = {
+      items: [
+        { id: '1', type: 'update', title: 'Update Available: Nextcloud 28.0.3', message: 'Security improvements.', timestamp: '2 hours ago', read: false, priority: 'medium' },
+        { id: '2', type: 'error', title: 'Backup Failed: Plex', message: 'Insufficient disk space.', timestamp: '4 hours ago', read: false, priority: 'high' },
+      ],
+      page: 1, limit: 2, total: 2, unreadCount: 2,
+    };
+    return json(payload);
+  }
+
+  const notificationByIdMatch = pathname.match(/^\/api\/notifications\/([^/]+)$/);
+  if (notificationByIdMatch && req.method === 'PATCH') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<PatchNotificationRequest>;
+    const payload: PatchNotificationResponse = { id: notificationByIdMatch[1], read: true };
+    return json(payload);
+  }
+
+  if (pathname === API.notifications.actions && req.method === 'POST') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<PostNotificationsActionRequest>;
+    const payload: PostNotificationsActionResponse = { ok: true };
+    return json(payload);
+  }
+
+  // Settings
+  if (pathname === API.settings.base && req.method === 'GET') {
+    const payload: GetSettingsResponse = {
+      systemEnv: [
+        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+      ],
+      docker: { host: '/var/run/docker.sock' },
+      tls: { email: '' },
+      notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+    };
+    return json(payload);
+  }
+
+  if (pathname === API.settings.base && req.method === 'PATCH') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<PatchSettingsRequest>;
+    const payload: PatchSettingsResponse = {
+      systemEnv: [],
+      docker: {},
+      tls: {},
+      notifications: {},
+    };
+    return json(payload);
+  }
+
+  if (pathname === API.settings.backup && req.method === 'GET') {
+    const payload: GetBackupSettingsResponse = { scheduleEnabled: true, scheduleTime: '02:00', retentionDays: 7 };
+    return json(payload);
+  }
+
+  if (pathname === API.settings.backup && req.method === 'PATCH') {
+    const _body = (await req.json().catch(() => ({}))) as Partial<PatchBackupSettingsRequest>;
+    const payload: PatchBackupSettingsResponse = { scheduleEnabled: true, scheduleTime: '02:00', retentionDays: 7 };
+    return json(payload);
+  }
+
+  // System status
+  if (pathname === API.system.status && req.method === 'GET') {
+    const payload: GetSystemStatusResponse = {
+      docker: { ok: true, version: '25.0.0' },
+      disk: { freeBytes: 100n as unknown as number, totalBytes: 500n as unknown as number },
+      version: { hola: '0.1.0', compose: 'v2.27.0' },
+      oras: { ok: true, version: '1.2.3' },
+      authentik: { ok: true },
+    };
+    return json(payload);
+  }
+
+  return notFound();
+}
+
+const server = Bun.serve({
+  port: PORT,
+  async fetch(req) {
+    const pre = handlePreflight(req);
+    if (pre) return pre;
+
+    const url = new URL(req.url);
+    const res = await route(url, req);
+    return withCors(res);
+  },
+});
+
+console.log(`[server] listening on http://localhost:${server.port}${API.base}`);

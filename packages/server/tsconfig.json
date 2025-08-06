@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "esnext",
+    "target": "es2022",
+    "moduleResolution": "bundler",
+    "types": ["bun"],
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@hola/shared": ["../shared/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
