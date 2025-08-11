@@ -48,6 +48,47 @@ import {
   type GetSystemStatusResponse,
 } from '@hola/shared';
 
+// Import enhanced mock data
+import {
+  // Deployments
+  getDeployments,
+  getDeploymentById,
+  getDeploymentHistory,
+  executeDeploymentAction,
+  createDeploymentFromDraft,
+  // Catalog
+  getCatalogApps,
+  getCatalogAppById,
+  getCatalogAppVersions,
+  getCatalogAppVersionDetail,
+  // Jobs
+  getJobById,
+  getActiveJobs,
+  // System
+  getSummary,
+  getSystemStatus,
+  updateSystemHealth,
+  // Notifications
+  getNotifications,
+  updateNotification,
+  executeNotificationAction,
+  generateJobNotifications,
+  // Backups
+  getBackups,
+  getBackupById,
+  createBackup,
+  restoreBackup,
+  deleteBackup,
+  scheduleAutomaticBackups,
+  // Settings
+  getSettings,
+  updateSettings,
+  getBackupSettings,
+  updateBackupSettings,
+  // Configuration
+  config,
+} from './mock-data';
+
 const PORT = Number(Bun.env.PORT || 3001);
 
 function json(data: unknown, init?: ResponseInit) {
@@ -146,75 +187,49 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // Summary
   if (pathname === API.summary && req.method === 'GET') {
-    const payload: GetSummaryResponse = {
-      deploymentsCount: 5,
-      activeJobsCount: 2,
-      alertsCount: 1,
-      recentJobs: [
-        { id: '1', deploymentId: 'nextcloud-prod', type: 'install', app: 'Nextcloud', status: 'running', progress: 65, timestamp: new Date().toISOString() },
-        { id: '2', deploymentId: 'homeassistant-main', type: 'update', app: 'Home Assistant', status: 'completed', progress: 100, timestamp: new Date(Date.now()-15*60*1e3).toISOString() },
-      ],
-      system: {
-        docker: { ok: true, version: '25.0.0' },
-        disk: { freeBytes: 100n as unknown as number, totalBytes: 500n as unknown as number },
-        version: { hola: '0.1.0', compose: 'v2.27.0' },
-      },
-    };
+    const payload: GetSummaryResponse = getSummary();
     return json(payload);
   }
 
   // Catalog
   if (pathname === API.catalog.apps && req.method === 'GET') {
-    const items: GetCatalogAppsResponse['items'] = [
-      { id: 'nextcloud', name: 'Nextcloud', description: 'Self-hosted productivity', icon: '☁️', category: 'Productivity', rating: 4.8, downloads: '12.5k', tags: ['File Storage', 'Collaboration'], featured: true },
-      { id: 'homeassistant', name: 'Home Assistant', description: 'Home automation', icon: '🏠', category: 'Home Automation', rating: 4.9, downloads: '45.2k', tags: ['IoT', 'Automation'], featured: true },
-    ];
-    const payload: GetCatalogAppsResponse = { items, page: Number(searchParams.get('page')||1), limit: Number(searchParams.get('limit')||items.length), total: items.length };
+    const page = Number(searchParams.get('page')) || 1;
+    const limit = Number(searchParams.get('limit')) || 12;
+    const query = searchParams.get('query') || undefined;
+    const category = searchParams.get('category') || undefined;
+    
+    const payload: GetCatalogAppsResponse = getCatalogApps({ page, limit, query, category });
     return json(payload);
   }
 
   const catalogAppMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)$/);
   if (catalogAppMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogAppMatch[1]);
-    const payload: GetCatalogAppResponse = {
-      id: appId,
-      name: appId === 'nextcloud' ? 'Nextcloud' : 'App',
-      description: 'App description',
-      icon: '📦',
-      category: 'General',
-      rating: 4.5,
-      downloads: '10k',
-      tags: ['tag1', 'tag2'],
-      featured: false,
-      versions: ['1.0.0', '1.1.0'],
-    };
+    const payload = getCatalogAppById(appId);
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
   const catalogVersionsMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions$/);
   if (catalogVersionsMatch && req.method === 'GET') {
-    const payload: GetCatalogAppVersionsResponse = {
-      items: [
-        { version: '1.1.0', createdAt: new Date().toISOString() },
-        { version: '1.0.0', createdAt: new Date(Date.now()-86400e3).toISOString() },
-      ],
-      total: 2,
-    };
+    const appId = decodeURIComponent(catalogVersionsMatch[1]);
+    const payload = getCatalogAppVersions(appId);
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
   const catalogVersionDetailMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions\/(.+)$/);
   if (catalogVersionDetailMatch && req.method === 'GET') {
-    const payload: GetCatalogAppVersionDetailResponse = {
-      defaultEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      defaults: {
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
-      },
-    };
+    const appId = decodeURIComponent(catalogVersionDetailMatch[1]);
+    const version = decodeURIComponent(catalogVersionDetailMatch[2]);
+    const payload = getCatalogAppVersionDetail(appId, version);
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
@@ -315,36 +330,35 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // Deployments
   if (pathname === API.deployments.base && req.method === 'GET') {
-    const items: GetDeploymentsResponse['items'] = [
-      { id: 'nextcloud-prod', name: 'Nextcloud', app: 'nextcloud', icon: '☁️', status: 'running', uptime: '15 days', version: '28.0.2', resources: { cpu: '12%', memory: '256MB' }, ports: ['8080:80', '8443:443'], lastUpdated: '2 days ago', url: 'https://nextcloud.local' },
-      { id: 'grafana-monitoring', name: 'Grafana', app: 'grafana', icon: '📊', status: 'stopped', uptime: '0 days', version: '10.3.1', resources: { cpu: '0%', memory: '0MB' }, ports: ['3000:3000'], lastUpdated: '1 hour ago', url: 'https://grafana.local' },
-    ];
-    const payload: GetDeploymentsResponse = { items, page: 1, limit: items.length, total: items.length };
+    const page = Number(searchParams.get('page')) || 1;
+    const limit = Number(searchParams.get('limit')) || 12;
+    const q = searchParams.get('q') || undefined;
+    const statusParam = searchParams.get('status') || 'all';
+    
+    const payload: GetDeploymentsResponse = getDeployments({ 
+      page, 
+      limit, 
+      q, 
+      status: statusParam === 'all' ? 'all' : statusParam as 'running' | 'stopped' | 'installing' | 'updating' | 'error'
+    });
     return json(payload);
   }
 
   if (pathname === API.deployments.base && req.method === 'POST') {
     // create from draft
-    const payload: PostDeploymentActionResponse = { jobId: crypto.randomUUID(), ok: true };
+    const body = await req.json().catch(() => ({}));
+    const draftId = body.draftId || crypto.randomUUID();
+    const payload: PostDeploymentActionResponse = createDeploymentFromDraft(draftId);
     return json(payload);
   }
 
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
-    const payload: GetDeploymentResponse = {
-      id,
-      name: 'Nextcloud',
-      app: 'nextcloud',
-      icon: '☁️',
-      status: 'running',
-      uptime: '15 days',
-      version: '28.0.2',
-      url: 'https://nextcloud.local',
-      resources: { cpu: '12%', memory: '256MB', disk: '2.4GB' },
-      ports: ['8080:80', '8443:443'],
-      lastUpdated: '2 days ago',
-    };
+    const payload = getDeploymentById(id);
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
@@ -356,20 +370,28 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   const deploymentActionsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/actions$/);
   if (deploymentActionsMatch && req.method === 'POST') {
+    const deploymentId = deploymentActionsMatch[1];
     const body = (await req.json().catch(() => ({}))) as Partial<PostDeploymentActionRequest>;
-    const payload: PostDeploymentActionResponse = { ok: true, jobId: ['delete'].includes(String(body.action)) ? undefined : crypto.randomUUID() };
+    const action = body.action;
+    
+    if (!action || !['start', 'stop', 'restart', 'delete'].includes(action)) {
+      return json({ error: { code: 'INVALID_ACTION', message: 'Invalid action' } }, { status: 400 });
+    }
+    
+    const payload: PostDeploymentActionResponse = executeDeploymentAction(deploymentId, action);
     return json(payload);
   }
 
   const deploymentHistoryMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/history$/);
   if (deploymentHistoryMatch && req.method === 'GET') {
-    const payload: GetDeploymentHistoryResponse = {
-      items: [
-        { id: 'h1', type: 'install', status: 'completed', startedAt: new Date(Date.now()-3600e3).toISOString(), finishedAt: new Date(Date.now()-3500e3).toISOString() },
-        { id: 'h2', type: 'restart', status: 'completed', startedAt: new Date(Date.now()-1800e3).toISOString(), finishedAt: new Date(Date.now()-1750e3).toISOString() },
-      ],
-      page: 1, limit: 2, total: 2,
-    };
+    const deploymentId = deploymentHistoryMatch[1];
+    const page = Number(searchParams.get('page')) || 1;
+    const limit = Number(searchParams.get('limit')) || 10;
+    
+    const payload = getDeploymentHistory(deploymentId, { page, limit });
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
@@ -398,14 +420,11 @@ async function route(url: URL, req: Request): Promise<Response> {
   // Jobs + logs SSE
   const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (jobMatch && req.method === 'GET') {
-    const payload: GetJobResponse = {
-      id: jobMatch[1],
-      type: 'install',
-      status: 'running',
-      startedAt: new Date().toISOString(),
-      progress: 50,
-      deploymentId: 'nextcloud-prod',
-    };
+    const jobId = jobMatch[1];
+    const payload = getJobById(jobId);
+    if (!payload) {
+      return notFound();
+    }
     return json(payload);
   }
 
@@ -535,13 +554,7 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // System status
   if (pathname === API.system.status && req.method === 'GET') {
-    const payload: GetSystemStatusResponse = {
-      docker: { ok: true, version: '25.0.0' },
-      disk: { freeBytes: 100n as unknown as number, totalBytes: 500n as unknown as number },
-      version: { hola: '0.1.0', compose: 'v2.27.0' },
-      oras: { ok: true, version: '1.2.3' },
-      authentik: { ok: true },
-    };
+    const payload: GetSystemStatusResponse = getSystemStatus();
     return json(payload);
   }
 
@@ -561,3 +574,25 @@ const server = Bun.serve({
 });
 
 console.log(`[server] listening on http://localhost:${server.port}${API.base}`);
+
+// Initialize periodic tasks for mock data enhancement
+if (config.USE_MOCK_DATA) {
+  console.log('[server] Starting mock data enhancement tasks...');
+  
+  // Update system health occasionally
+  setInterval(() => {
+    updateSystemHealth();
+  }, 30000); // Every 30 seconds
+  
+  // Generate notifications for job events
+  setInterval(() => {
+    generateJobNotifications();
+  }, 10000); // Every 10 seconds
+  
+  // Schedule automatic backups occasionally
+  setInterval(() => {
+    scheduleAutomaticBackups();
+  }, 60000); // Every minute
+  
+  console.log('[server] Mock data enhancement tasks started');
+}
