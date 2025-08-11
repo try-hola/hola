@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { 
   Search, 
@@ -14,153 +14,12 @@ import {
   AlertCircle 
 } from 'lucide-react';
 import type { 
-  CatalogApp, 
-  CatalogAppVersion,
-  // These types will be used when implementing real API calls:
-  // GetCatalogAppsResponse,
-  // GetCatalogAppsRequest,
-  // GetCatalogAppResponse,
-  // GetCatalogAppVersionsResponse,
-  // GetCatalogAppVersionDetailResponse,
-  // PageResponse,
-  // ErrorResponse
+  CatalogApp,
+  GetCatalogAppsRequest,
 } from '@hola/shared';
-// API constants will be used for real API calls:
-// import { API } from '@hola/shared';
+import { useCatalogAppsApi, useCatalogAppVersionsApi } from '../hooks/useCatalogApi';
 
-// Enhanced mock data with version information
-const apps: CatalogApp[] = [
-  {
-    id: 'nextcloud',
-    name: 'Nextcloud',
-    description: 'Self-hosted productivity platform with file sync, calendar, and collaboration tools',
-    icon: '☁️',
-    category: 'Productivity',
-    rating: 4.8,
-    downloads: '12.5k',
-    tags: ['File Storage', 'Collaboration', 'Calendar'],
-    featured: true,
-  },
-  {
-    id: 'homeassistant',
-    name: 'Home Assistant',
-    description: 'Open source home automation platform with focus on privacy and local control',
-    icon: '🏠',
-    category: 'Home Automation',
-    rating: 4.9,
-    downloads: '45.2k',
-    tags: ['IoT', 'Automation', 'Smart Home'],
-    featured: true,
-  },
-  {
-    id: 'plex',
-    name: 'Plex Media Server',
-    description: 'Stream movies, TV shows, music, and photos to any device, anywhere',
-    icon: '🎬',
-    category: 'Media',
-    rating: 4.6,
-    downloads: '89.1k',
-    tags: ['Streaming', 'Media', 'Entertainment'],
-    featured: false,
-  },
-  {
-    id: 'grafana',
-    name: 'Grafana',
-    description: 'Analytics and interactive visualization web application for monitoring',
-    icon: '📊',
-    category: 'Monitoring',
-    rating: 4.7,
-    downloads: '32.8k',
-    tags: ['Analytics', 'Monitoring', 'Dashboards'],
-    featured: false,
-  },
-  {
-    id: 'bitwarden',
-    name: 'Bitwarden',
-    description: 'Self-hosted password manager with end-to-end encryption',
-    icon: '🔐',
-    category: 'Security',
-    rating: 4.9,
-    downloads: '67.3k',
-    tags: ['Password Manager', 'Security', 'Encryption'],
-    featured: true,
-  },
-  {
-    id: 'jellyfin',
-    name: 'Jellyfin',
-    description: 'Free software media system that puts you in control of your media',
-    icon: '🎭',
-    category: 'Media',
-    rating: 4.5,
-    downloads: '28.9k',
-    tags: ['Streaming', 'Media', 'Open Source'],
-    featured: false,
-  },
-  {
-    id: 'postgres',
-    name: 'PostgreSQL',
-    description: 'Advanced open source relational database',
-    icon: '🐘',
-    category: 'Database',
-    rating: 4.8,
-    downloads: '156.3k',
-    tags: ['Database', 'SQL', 'Relational'],
-    featured: false,
-  },
-  {
-    id: 'redis',
-    name: 'Redis',
-    description: 'In-memory data structure store, used as database, cache, and message broker',
-    icon: '📦',
-    category: 'Database',
-    rating: 4.7,
-    downloads: '98.7k',
-    tags: ['Cache', 'Database', 'Memory'],
-    featured: false,
-  },
-];
-
-// Mock app versions data
-const appVersionsData: Record<string, CatalogAppVersion[]> = {
-  nextcloud: [
-    { version: '28.0.2', createdAt: '2024-01-15T10:30:00Z' },
-    { version: '28.0.1', createdAt: '2024-01-10T08:15:00Z' },
-    { version: '27.1.5', createdAt: '2023-12-20T14:45:00Z' },
-  ],
-  homeassistant: [
-    { version: '2024.1.5', createdAt: '2024-01-18T16:20:00Z' },
-    { version: '2024.1.4', createdAt: '2024-01-12T11:30:00Z' },
-    { version: '2023.12.4', createdAt: '2023-12-28T09:10:00Z' },
-  ],
-  plex: [
-    { version: '1.40.0.7998', createdAt: '2024-01-20T12:00:00Z' },
-    { version: '1.39.0.7920', createdAt: '2024-01-05T14:30:00Z' },
-  ],
-  grafana: [
-    { version: '10.3.1', createdAt: '2024-01-22T13:45:00Z' },
-    { version: '10.3.0', createdAt: '2024-01-15T10:20:00Z' },
-    { version: '10.2.3', createdAt: '2023-12-18T16:15:00Z' },
-  ],
-  bitwarden: [
-    { version: '2024.1.2', createdAt: '2024-01-25T09:30:00Z' },
-    { version: '2024.1.1', createdAt: '2024-01-18T11:15:00Z' },
-  ],
-  jellyfin: [
-    { version: '10.8.13', createdAt: '2024-01-19T15:45:00Z' },
-    { version: '10.8.12', createdAt: '2024-01-10T12:30:00Z' },
-  ],
-  postgres: [
-    { version: '16.1', createdAt: '2024-01-20T10:00:00Z' },
-    { version: '15.5', createdAt: '2024-01-15T14:30:00Z' },
-    { version: '14.10', createdAt: '2024-01-10T16:45:00Z' },
-  ],
-  redis: [
-    { version: '7.2.4', createdAt: '2024-01-18T11:20:00Z' },
-    { version: '7.2.3', createdAt: '2024-01-08T13:15:00Z' },
-  ],
-};
-
-const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database'];
+const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database', 'Infrastructure', 'Networking'];
 
 type AppDetailModalProps = {
   app: CatalogApp;
@@ -170,37 +29,19 @@ type AppDetailModalProps = {
 
 const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose }) => {
   const [selectedVersion, setSelectedVersion] = useState<string>('');
-  const [versions, setVersions] = useState<CatalogAppVersion[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  
+  // Use API hook for loading versions
+  const { data: versionsData, loading, error } = useCatalogAppVersionsApi(app?.id || '');
+  
+  // Memoize versions to prevent unnecessary re-renders
+  const versions = useMemo(() => versionsData?.items || [], [versionsData?.items]);
 
-  // Load app versions when modal opens
-  const loadVersions = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      // Simulate API call - in production, this would be:
-      // const response = await fetch(API.catalog.versions(app.id));
-      // const data: GetCatalogAppVersionsResponse = await response.json();
-      
-      await new Promise(resolve => setTimeout(resolve, 500)); // Simulate API delay
-      const mockVersions = appVersionsData[app.id] || [];
-      setVersions(mockVersions);
-      setSelectedVersion(mockVersions[0]?.version || '');
-    } catch (error) {
-      setError('Failed to load app versions');
-      console.error('Error loading versions:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [app.id]);
-
+  // Set selected version when versions load
   useEffect(() => {
-    if (isOpen && app) {
-      loadVersions();
+    if (versions.length > 0 && !selectedVersion) {
+      setSelectedVersion(versions[0].version);
     }
-  }, [isOpen, app, loadVersions]);
+  }, [versions, selectedVersion]);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
@@ -338,10 +179,40 @@ export const Catalog: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState(searchParams.get('category') || 'All');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [appsPerPage] = useState(12);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  // Build API request parameters
+  const apiParams = useMemo(() => {
+    const params: GetCatalogAppsRequest = {
+      page: currentPage,
+      limit: appsPerPage,
+    };
+    
+    if (searchTerm) params.query = searchTerm;
+    if (selectedCategory !== 'All') params.category = selectedCategory;
+    
+    return params;
+  }, [searchTerm, selectedCategory, currentPage, appsPerPage]);
+
+  // Use API hook for catalog apps
+  const { data: appsData, loading, error } = useCatalogAppsApi(apiParams);
+  
+  // Extract data from API response
+  const apps = useMemo(() => appsData?.items || [], [appsData?.items]);
+  const totalPages = useMemo(() => {
+    if (!appsData?.total) return 1;
+    return Math.ceil(appsData.total / appsPerPage);
+  }, [appsData?.total, appsPerPage]);
+  
+  // Calculate featured apps
+  const featuredApps = useMemo(() => apps.filter(app => app.featured), [apps]);
+  
+  // Find selected app for modal
+  const selectedApp = useMemo(() => 
+    selectedAppId ? apps.find(app => app.id === selectedAppId) || null : null, 
+    [selectedAppId, apps]
+  );
 
   // Update URL params when filters change
   useEffect(() => {
@@ -352,59 +223,6 @@ export const Catalog: React.FC = () => {
     
     setSearchParams(params, { replace: true });
   }, [searchTerm, selectedCategory, currentPage, setSearchParams]);
-
-  // Simulated API call for catalog apps
-  const loadApps = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      // Simulate API call - in production, this would be:
-      // const params: GetCatalogAppsRequest = {
-      //   page: currentPage,
-      //   limit: appsPerPage,
-      //   query: searchTerm || undefined,
-      //   category: selectedCategory !== 'All' ? selectedCategory : undefined,
-      // };
-      // const response = await fetch(`${API.catalog.apps}?${new URLSearchParams(params)}`);
-      // const data: GetCatalogAppsResponse = await response.json();
-      
-      await new Promise(resolve => setTimeout(resolve, 300)); // Simulate API delay
-      
-      // For now, return mock data (this will be replaced with real API calls)
-      console.log('Mock API call:', { searchTerm, selectedCategory, currentPage });
-    } catch (error) {
-      setError('Failed to load applications');
-      console.error('Error loading apps:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [searchTerm, selectedCategory, currentPage]);
-
-  // Load apps when filters change
-  useEffect(() => {
-    loadApps();
-  }, [loadApps]);
-
-  // Filter and paginate apps (this simulates what the API would do)
-  const filteredApps = useMemo(() => {
-    return apps.filter(app => {
-      const matchesSearch = !searchTerm || 
-        app.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        app.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        app.tags.some(tag => tag.toLowerCase().includes(searchTerm.toLowerCase()));
-      const matchesCategory = selectedCategory === 'All' || app.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    });
-  }, [searchTerm, selectedCategory]);
-
-  const paginatedApps = useMemo(() => {
-    const startIndex = (currentPage - 1) * appsPerPage;
-    return filteredApps.slice(startIndex, startIndex + appsPerPage);
-  }, [filteredApps, currentPage, appsPerPage]);
-
-  const totalPages = Math.ceil(filteredApps.length / appsPerPage);
-  const featuredApps = filteredApps.filter(app => app.featured);
 
   const handleSearch = (value: string) => {
     setSearchTerm(value);
@@ -420,8 +238,6 @@ export const Catalog: React.FC = () => {
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-
-  const selectedApp = selectedAppId ? apps.find(app => app.id === selectedAppId) : null;
 
   return (
     <div className="space-y-6">
@@ -504,7 +320,7 @@ export const Catalog: React.FC = () => {
         <div>
           <h2 className="text-lg font-medium mb-4">Featured Applications</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            {featuredApps.slice(0, 3).map(app => (
+            {featuredApps.slice(0, 3).map((app: CatalogApp) => (
               <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-6 hover:border-primary/50 transition-colors group">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-center space-x-3">
@@ -565,13 +381,13 @@ export const Catalog: React.FC = () => {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-medium">
               {selectedCategory === 'All' ? 'All Applications' : selectedCategory} 
-              <span className="text-text-muted font-normal ml-2">({filteredApps.length})</span>
+              <span className="text-text-muted font-normal ml-2">({appsData?.total || 0})</span>
             </h2>
           </div>
 
           {viewMode === 'grid' ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {paginatedApps.map(app => (
+              {apps.map((app: CatalogApp) => (
                 <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-4 hover:border-primary/50 transition-colors group">
                   <div className="flex items-center space-x-3 mb-3">
                     <div className="text-xl">{app.icon}</div>
@@ -611,7 +427,7 @@ export const Catalog: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-2">
-              {paginatedApps.map(app => (
+              {apps.map((app: CatalogApp) => (
                 <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-4 hover:border-primary/50 transition-colors group">
                   <div className="flex items-center space-x-4">
                     <div className="text-xl">{app.icon}</div>
@@ -633,7 +449,7 @@ export const Catalog: React.FC = () => {
                           <span>{app.downloads}</span>
                         </span>
                         <div className="flex space-x-1">
-                          {app.tags.slice(0, 3).map(tag => (
+                          {app.tags.slice(0, 3).map((tag: string) => (
                             <span key={tag} className="bg-surface-2 px-2 py-0.5 rounded text-xs">{tag}</span>
                           ))}
                         </div>
@@ -665,7 +481,7 @@ export const Catalog: React.FC = () => {
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
               <div className="text-sm text-text-muted">
-                Showing {(currentPage - 1) * appsPerPage + 1}-{Math.min(currentPage * appsPerPage, filteredApps.length)} of {filteredApps.length} applications
+                Showing {(currentPage - 1) * appsPerPage + 1}-{Math.min(currentPage * appsPerPage, appsData?.total || 0)} of {appsData?.total || 0} applications
               </div>
               
               <div className="flex items-center space-x-2">
@@ -718,7 +534,7 @@ export const Catalog: React.FC = () => {
       )}
 
       {/* No Results */}
-      {!loading && !error && filteredApps.length === 0 && (
+      {!loading && !error && apps.length === 0 && (
         <div className="text-center py-12">
           <Package className="w-12 h-12 text-text-muted mx-auto mb-4" />
           <h3 className="text-lg font-medium mb-2">No applications found</h3>
