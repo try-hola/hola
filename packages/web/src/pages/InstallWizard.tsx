@@ -5,15 +5,12 @@ import type {
   AppEnvVar,
   SystemEnvVar,
   DraftDefaults,
-  CreateDraftRequest,
-  CreateDraftResponse,
   PatchDraftRequest,
-  ValidateDraftResponse,
-  PreflightResponse,
-  FinalizeDraftResponse
 } from '@hola/shared';
-import { API } from '@hola/shared';
-import { ensureOk } from '../utils/error';
+import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
+import { useDraftValidation } from '../hooks/useDraftValidation';
+import { useDraftUpload } from '../hooks/useDraftUpload';
+import { useDraftFinalization } from '../hooks/useDraftFinalization';
 
 const steps = [
   { id: 'env', name: 'Environment Variables', description: 'Configure application settings' },
@@ -29,12 +26,27 @@ export const InstallWizard: React.FC = () => {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(0);
   
-  // Draft workflow state
-  const [draftId, setDraftId] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [validationResult, setValidationResult] = useState<ValidateDraftResponse | null>(null);
-  const [preflightResult, setPreflightResult] = useState<PreflightResponse | null>(null);
+  // Draft API hooks
+  const createDraftHook = useCreateDraft();
+  const draftApi = useDraftApi(createDraftHook.data?.draftId || null);
+  const draftValidation = useDraftValidation();
+  const draftUpload = useDraftUpload();
+  const draftFinalization = useDraftFinalization();
+  
+  // Combined loading state from all API operations
+  const isLoading = createDraftHook.loading || draftApi.loading || 
+                   draftValidation.validation.loading || draftValidation.preflight.loading ||
+                   draftUpload.loading || draftFinalization.loading;
+  
+  // Combined error state from all API operations
+  const error = createDraftHook.error || draftApi.error || 
+               draftValidation.validation.error || draftValidation.preflight.error ||
+               draftUpload.error || draftFinalization.error;
+  
+  // Draft data from the API
+  const draftId = createDraftHook.data?.draftId || null;
+  const validationResult = draftValidation.validation.data;
+  const preflightResult = draftValidation.preflight.data;
   
   // System-wide environment variables (loaded from draft creation)
   const [systemEnvVars, setSystemEnvVars] = useState<SystemEnvVar[]>([]);
@@ -63,24 +75,13 @@ export const InstallWizard: React.FC = () => {
 
   // Create draft when component mounts
   useEffect(() => {
-    if (!appId) return;
+    if (!appId || createDraftHook.data) return; // Don't create if already exists
     
-    const createDraft = async () => {
-      setIsLoading(true);
-      setError(null);
-      
+    const initializeDraft = async () => {
       try {
-        const request: CreateDraftRequest = { appId };
-        const response = await fetch(API.drafts.create, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(request)
-        });
-        await ensureOk(response);
-        const result: CreateDraftResponse = await response.json();
+        const result = await createDraftHook.createDraft({ appId });
         
         // Update state with draft data
-        setDraftId(result.draftId);
         setSystemEnvVars(result.systemEnv);
         setEnvVars(result.appEnv);
         setPorts(result.defaults.ports);
@@ -88,50 +89,33 @@ export const InstallWizard: React.FC = () => {
         
       } catch (err) {
         console.error('Failed to create draft:', err);
-        setError(err instanceof Error ? err.message : 'Failed to create draft');
-      } finally {
-        setIsLoading(false);
       }
     };
     
-    createDraft();
-  }, [appId]);
+    initializeDraft();
+  }, [appId, createDraftHook]); // Include the whole hook object
 
-  // Update draft whenever relevant state changes
-  const updateDraft = async (updates: PatchDraftRequest) => {
-    if (!draftId) return;
+  // Update draft data helper function
+  const updateDraftData = React.useCallback(async (updates: PatchDraftRequest) => {
+    if (!draftId || !draftApi.updateDraft) return;
     
     try {
-      const response = await fetch(API.drafts.byId(draftId), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
-      });
-      await ensureOk(response);
+      await draftApi.updateDraft(updates);
     } catch (err) {
       console.error('Failed to update draft:', err);
-      setError(err instanceof Error ? err.message : 'Failed to update draft');
     }
-  };
+  }, [draftId, draftApi]); // Include the whole draftApi object
 
   // Validate draft configuration
   const validateDraft = async (): Promise<boolean> => {
     if (!draftId) return false;
     
-    setIsLoading(true);
     try {
-      const response = await fetch(API.drafts.validate(draftId));
-      await ensureOk(response);
-      const result: ValidateDraftResponse = await response.json();
-      setValidationResult(result);
+      const result = await draftValidation.validateDraft(draftId);
       return result.ok;
-      
     } catch (err) {
       console.error('Failed to validate draft:', err);
-      setError(err instanceof Error ? err.message : 'Failed to validate draft');
       return false;
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -139,20 +123,12 @@ export const InstallWizard: React.FC = () => {
   const runPreflight = async (): Promise<boolean> => {
     if (!draftId) return false;
     
-    setIsLoading(true);
     try {
-      const response = await fetch(API.drafts.preflight(draftId));
-      await ensureOk(response);
-      const result: PreflightResponse = await response.json();
-      setPreflightResult(result);
+      const result = await draftValidation.runPreflight(draftId);
       return result.ok;
-      
     } catch (err) {
       console.error('Failed to run preflight:', err);
-      setError(err instanceof Error ? err.message : 'Failed to run preflight');
       return false;
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -160,22 +136,12 @@ export const InstallWizard: React.FC = () => {
   const finalizeDraft = async (): Promise<boolean> => {
     if (!draftId) return false;
     
-    setIsLoading(true);
     try {
-      const response = await fetch(API.drafts.finalize(draftId), {
-        method: 'POST'
-      });
-      await ensureOk(response);
-      const result: FinalizeDraftResponse = await response.json();
-      console.log('Draft finalized:', result);
+      await draftFinalization.finalizeDraft(draftId);
       return true;
-      
     } catch (err) {
       console.error('Failed to finalize draft:', err);
-      setError(err instanceof Error ? err.message : 'Failed to finalize draft');
       return false;
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -184,7 +150,8 @@ export const InstallWizard: React.FC = () => {
       case 0: // Environment Variables
         return !isLoading && envVars.every(env => env.key && (env.value || !env.isSecret));
       case 4: // Validate & Preflight
-        return !isLoading && validationResult?.ok && preflightResult?.ok;
+        // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
+        return !isLoading && (!validationResult || (validationResult?.ok && preflightResult?.ok));
       default:
         return !isLoading;
     }
@@ -194,7 +161,7 @@ export const InstallWizard: React.FC = () => {
     if (currentStep < steps.length - 1) {
       // Update draft with current state before proceeding
       if (draftId) {
-        await updateDraft({
+        await updateDraftData({
           systemOverrides,
           appEnv: envVars,
           ports,
@@ -233,7 +200,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new environment variables
     if (draftId) {
-      await updateDraft({ appEnv: updated });
+      await updateDraftData({ appEnv: updated });
     }
   };
 
@@ -244,7 +211,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new environment variables
     if (draftId) {
-      await updateDraft({ appEnv: updated });
+      await updateDraftData({ appEnv: updated });
     }
   };
 
@@ -254,7 +221,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new environment variables
     if (draftId) {
-      await updateDraft({ appEnv: updated });
+      await updateDraftData({ appEnv: updated });
     }
   };
 
@@ -264,7 +231,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new ports configuration
     if (draftId) {
-      await updateDraft({ ports: updated });
+      await updateDraftData({ ports: updated });
     }
   };
 
@@ -275,7 +242,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new ports configuration
     if (draftId) {
-      await updateDraft({ ports: updated });
+      await updateDraftData({ ports: updated });
     }
   };
 
@@ -285,7 +252,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new ports configuration
     if (draftId) {
-      await updateDraft({ ports: updated });
+      await updateDraftData({ ports: updated });
     }
   };
 
@@ -305,7 +272,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new system overrides
     if (draftId) {
-      await updateDraft({ systemOverrides: newOverrides });
+      await updateDraftData({ systemOverrides: newOverrides });
     }
   };
 
@@ -316,7 +283,7 @@ export const InstallWizard: React.FC = () => {
     
     // Update draft with new system overrides
     if (draftId) {
-      await updateDraft({ systemOverrides: newOverrides });
+      await updateDraftData({ systemOverrides: newOverrides });
     }
   };
 
@@ -324,9 +291,9 @@ export const InstallWizard: React.FC = () => {
     const updated = [...volumes, { hostPath: '', containerPath: '', readOnly: false }];
     setVolumes(updated);
     
-    // Update draft with new volumes configuration
+    // Update draft with current state (volumes aren't directly supported in PatchDraftRequest yet)
     if (draftId) {
-      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+      await updateDraftData({ ports, systemOverrides, appEnv: envVars });
     }
   };
 
@@ -335,9 +302,9 @@ export const InstallWizard: React.FC = () => {
     updated[index] = { ...updated[index], [field]: value };
     setVolumes(updated);
     
-    // Update draft with new volumes configuration (volumes aren't currently in PatchDraftRequest)
+    // Update draft with current state (volumes aren't directly supported in PatchDraftRequest yet)
     if (draftId) {
-      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+      await updateDraftData({ ports, systemOverrides, appEnv: envVars });
     }
   };
 
@@ -345,9 +312,9 @@ export const InstallWizard: React.FC = () => {
     const updated = volumes.filter((_, i) => i !== index);
     setVolumes(updated);
     
-    // Update draft with new volumes configuration
+    // Update draft with current state
     if (draftId) {
-      await updateDraft({ ports, systemOverrides, appEnv: envVars });
+      await updateDraftData({ ports, systemOverrides, appEnv: envVars });
     }
   };
 
@@ -355,18 +322,51 @@ export const InstallWizard: React.FC = () => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const handleFileUpload = (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !draftId) return;
     
     const file = files[0];
     if (file.name.includes('docker-compose') && (file.name.endsWith('.yml') || file.name.endsWith('.yaml'))) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const content = e.target?.result as string;
-        setComposeOverride(content);
-        setEditMode(true);
-      };
-      reader.readAsText(file);
+      try {
+        // Upload compose override file to draft
+        const uploadResult = await draftUpload.uploadFile(draftId, file, 'composeOverride');
+        
+        // Read content for local editing
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const content = e.target?.result as string;
+          setComposeOverride(content);
+          setEditMode(true);
+        };
+        reader.readAsText(file);
+        
+        // Add to uploaded files list
+        setUploadedFiles(prev => [...prev, uploadResult.name]);
+        
+      } catch (err) {
+        console.error('Failed to upload compose file:', err);
+      }
+    } else {
+      try {
+        // Upload other files as additional files
+        const uploadResult = await draftUpload.uploadFile(draftId, file, 'additionalFile');
+        setUploadedFiles(prev => [...prev, uploadResult.name]);
+      } catch (err) {
+        console.error('Failed to upload file:', err);
+      }
+    }
+  };
+
+  const handleComposeOverrideChange = async (content: string) => {
+    setComposeOverride(content);
+    
+    // Upload compose override content to draft
+    if (draftId && content.trim()) {
+      try {
+        await draftUpload.uploadComposeOverride(draftId, content);
+      } catch (err) {
+        console.error('Failed to upload compose override:', err);
+      }
     }
   };
 
@@ -649,7 +649,7 @@ services:
                     <span className="text-text-muted">or</span>
                     <button
                       onClick={() => {
-                        setComposeOverride(getDefaultComposeOverride());
+                        handleComposeOverrideChange(getDefaultComposeOverride());
                         setEditMode(true);
                       }}
                       className="bg-surface-2 text-text-strong px-4 py-2 rounded-lg text-sm font-medium hover:bg-surface-1 transition-colors flex items-center space-x-2"
@@ -715,7 +715,7 @@ services:
                   </div>
                   <textarea
                     value={composeOverride}
-                    onChange={(e) => setComposeOverride(e.target.value)}
+                    onChange={(e) => handleComposeOverrideChange(e.target.value)}
                     className="w-full h-96 p-4 bg-surface-0 text-text-strong font-mono text-sm resize-none focus:outline-none"
                     placeholder="Enter your Docker Compose override configuration..."
                     spellCheck={false}
