@@ -240,6 +240,11 @@ export const api = {
 
   // Jobs
   jobs: {
+    list: (params?: { deploymentId?: string; status?: string; page?: number; limit?: number }) => {
+      const query = apiClient.buildQuery(params || {});
+      return apiClient.get(`${API.jobs.base}${query}`);
+    },
+    
     byId: (jobId: string) => apiClient.get(API.jobs.byId(jobId)),
     
     logs: (jobId: string, params?: { since?: string; lines?: number }) => {

@@ -39,6 +39,7 @@ export const API = {
   },
 
   jobs: {
+    base: '/api/jobs', // list jobs with ?deploymentId=&status=&page=&limit=
     byId: (jobId: string) => `/api/jobs/${jobId}`,
     logs: (jobId: string) => `/api/jobs/${jobId}/logs`,
   },
@@ -311,6 +312,14 @@ export type Job = {
   progress?: number;
   deploymentId?: string;
 };
+
+export type GetJobsRequest = PageRequest & {
+  deploymentId?: string;
+  status?: JobStatus;
+};
+
+export type GetJobsResponse = PageResponse<Job>;
+
 export type GetJobResponse = Job;
 
 // ------------------------------------------------------

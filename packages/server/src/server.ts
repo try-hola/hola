@@ -26,6 +26,8 @@ import {
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
   type GetLogsResponse,
+  type GetJobsRequest,
+  type GetJobsResponse,
   type GetJobResponse,
   type GetBackupsResponse,
   type CreateBackupRequest,
@@ -46,6 +48,8 @@ import {
   type PatchBackupSettingsRequest,
   type PatchBackupSettingsResponse,
   type GetSystemStatusResponse,
+  type Job,
+  type JobStatus,
 } from '@hola/shared';
 
 // Import enhanced mock data
@@ -63,6 +67,8 @@ import {
   getCatalogAppVersionDetail,
   // Jobs
   getJobById,
+  getAllJobs,
+  getJobsByDeployment,
   getActiveJobs,
   // System
   getSummary,
@@ -418,6 +424,41 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   // Jobs + logs SSE
+  // List jobs
+  if (pathname === API.jobs.base && req.method === 'GET') {
+    const url = new URL(req.url);
+    const deploymentId = url.searchParams.get('deploymentId');
+    const status = url.searchParams.get('status') as JobStatus | null;
+    const page = parseInt(url.searchParams.get('page') ?? '1', 10);
+    const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
+
+    let jobs: Job[];
+    if (deploymentId) {
+      jobs = getJobsByDeployment(deploymentId);
+    } else {
+      jobs = getAllJobs();
+    }
+
+    // Filter by status if provided
+    if (status && status !== 'all') {
+      jobs = jobs.filter(job => job.status === status);
+    }
+
+    // Apply pagination
+    const total = jobs.length;
+    const startIndex = (page - 1) * limit;
+    const paginatedJobs = jobs.slice(startIndex, startIndex + limit);
+
+    const payload: GetJobsResponse = {
+      items: paginatedJobs,
+      page,
+      limit,
+      total,
+    };
+    return json(payload);
+  }
+
+  // Get job by ID
   const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (jobMatch && req.method === 'GET') {
     const jobId = jobMatch[1];
