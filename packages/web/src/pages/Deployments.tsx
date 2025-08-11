@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
@@ -20,16 +20,14 @@ import {
   ChevronRight,
   AlertTriangle
 } from 'lucide-react';
-import { API } from '@hola/shared';
 import type {
-  DeploymentListItem,
   DeploymentStatus,
   PostDeploymentActionRequest,
   PostDeploymentActionResponse,
-  GetDeploymentsRequest,
-  GetDeploymentsResponse
+  GetDeploymentsRequest
 } from '@hola/shared';
-import { ensureOk } from '../utils/error';
+import { api } from '../utils/api';
+import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 
 
 
@@ -75,167 +73,47 @@ export const Deployments: React.FC = () => {
   // Pagination state
   const [page, setPage] = useState(1);
   const [limit] = useState(12); // Number of deployments per page
-  const [deployments, setDeployments] = useState<DeploymentListItem[]>([]);
-  const [totalDeployments, setTotalDeployments] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   
-  // Job tracking state
-  // TODO: Add job tracking functionality in future iterations
+  // Load deployments from API with search and filters using working StrictMode-compatible hook
+  const params: GetDeploymentsRequest = {
+    page,
+    limit,
+    q: searchTerm || undefined,
+    status: statusFilter === 'all' ? undefined : statusFilter
+  };
+  
+  const {
+    data: deploymentsResponse,
+    loading,
+    error,
+    refetch
+  } = useDeploymentsApi(params);
 
-  // Mock data fallback (to be removed when API is fully implemented)
-  const mockDeployments = useMemo<DeploymentListItem[]>(() => [
-    {
-      id: 'nextcloud-prod',
-      name: 'Nextcloud',
-      app: 'nextcloud',
-      icon: '☁️',
-      status: 'running',
-      uptime: '15 days',
-      version: '28.0.2',
-      resources: { cpu: '12%', memory: '256MB' },
-      ports: ['8080:80', '8443:443'],
-      lastUpdated: '2 days ago',
-      url: 'https://nextcloud.local',
-    },
-    {
-      id: 'homeassistant-main',
-      name: 'Home Assistant',
-      app: 'homeassistant',
-      icon: '🏠',
-      status: 'running',
-      uptime: '32 days',
-      version: '2024.1.5',
-      resources: { cpu: '8%', memory: '180MB' },
-      ports: ['8123:8123'],
-      lastUpdated: '5 days ago',
-      url: 'https://hass.local',
-    },
-    {
-      id: 'plex-media',
-      name: 'Plex Media Server',
-      app: 'plex',
-      icon: '🎬',
-      status: 'installing',
-      uptime: '8 days',
-      version: '1.40.1',
-      resources: { cpu: '25%', memory: '512MB' },
-      ports: ['32400:32400'],
-      lastUpdated: 'Now',
-      url: 'https://plex.local',
-    },
-    {
-      id: 'grafana-monitoring',
-      name: 'Grafana',
-      app: 'grafana',
-      icon: '📊',
-      status: 'stopped',
-      uptime: '0 days',
-      version: '10.3.1',
-      resources: { cpu: '0%', memory: '0MB' },
-      ports: ['3000:3000'],
-      lastUpdated: '1 hour ago',
-      url: 'https://grafana.local',
-    },
-    {
-      id: 'bitwarden-vault',
-      name: 'Bitwarden',
-      app: 'bitwarden',
-      icon: '🔐',
-      status: 'running',
-      uptime: '45 days',
-      version: '1.30.1',
-      resources: { cpu: '3%', memory: '128MB' },
-      ports: ['8000:80'],
-      lastUpdated: '1 week ago',
-      url: 'https://vault.local',
-    },
-  ], []);
+  const deployments = deploymentsResponse?.items || [];
+  const totalDeployments = deploymentsResponse?.total || 0;
 
-  // Load deployments from API
-  const loadDeployments = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const request: GetDeploymentsRequest = {
-        page,
-        limit,
-        q: searchTerm || undefined,
-        status: statusFilter === 'all' ? undefined : statusFilter
-      };
-
-      // Build query string
-      const params = new URLSearchParams();
-      if (request.page) params.append('page', request.page.toString());
-      if (request.limit) params.append('limit', request.limit.toString());
-      if (request.q) params.append('q', request.q);
-      if (request.status) params.append('status', request.status);
-
-      const response = await fetch(`${API.deployments.base}?${params.toString()}`);
-      await ensureOk(response);
-      const data: GetDeploymentsResponse = await response.json();
-      setDeployments(data.items);
-      setTotalDeployments(data.total);
-    } catch (err) {
-      if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError('Failed to load deployments');
-      }
-      // Fallback to mock data for development
-      setDeployments([...mockDeployments]);
-      setTotalDeployments(mockDeployments.length);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, limit, searchTerm, statusFilter, mockDeployments]);
-
-  useEffect(() => {
-    loadDeployments();
-  }, [loadDeployments]);
-
-  const handleAction = async (deploymentId: string, action: 'start' | 'stop' | 'restart' | 'delete') => {
+  const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart' | 'delete') => {
     try {
       const request: PostDeploymentActionRequest = { action };
-      const response = await fetch(API.deployments.actions(deploymentId), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request)
-      });
-      await ensureOk(response);
-      const result: PostDeploymentActionResponse = await response.json();
+      const result = await api.deployments.action(deploymentId, request) as PostDeploymentActionResponse;
       
       // If a job was created, track it
       if (result.jobId) {
-        // In a real app, you'd poll the job status
         console.log(`Job ${result.jobId} started for ${action} on ${deploymentId}`);
       }
       
       // Refresh deployments list
-      await loadDeployments();
+      await refetch();
     } catch (error) {
       console.error(`Error performing ${action}:`, error);
-      if (error instanceof Error) {
-        setError(error.message);
-      } else {
-        setError(`Failed to ${action} deployment`);
-      }
+      // In a real app, you'd show a toast notification here
     }
-  };
+  }, [refetch]);
 
   // Calculate pagination info
   const totalPages = Math.ceil(totalDeployments / limit);
   const hasNextPage = page < totalPages;
   const hasPrevPage = page > 1;
-
-  const filteredDeployments = searchTerm || statusFilter !== 'all' 
-    ? deployments.filter(deployment => {
-        const matchesSearch = deployment.name.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesStatus = statusFilter === 'all' || deployment.status === statusFilter;
-        return matchesSearch && matchesStatus;
-      })
-    : deployments;
 
   return (
     <div className="space-y-6">
@@ -261,14 +139,20 @@ export const Deployments: React.FC = () => {
             type="text"
             placeholder="Search deployments..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setPage(1); // Reset to first page when searching
+            }}
             className="w-full pl-10 pr-4 py-2 bg-surface-1 border border-border rounded-lg text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
           />
         </div>
 
         <select
           value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value as DeploymentStatus | 'all')}
+          onChange={(e) => {
+            setStatusFilter(e.target.value as DeploymentStatus | 'all');
+            setPage(1); // Reset to first page when filtering
+          }}
           className="px-3 py-2 bg-surface-1 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
         >
           <option value="all">All Status</option>
@@ -301,11 +185,17 @@ export const Deployments: React.FC = () => {
             <span className="font-medium">Error loading deployments</span>
           </div>
           <p className="text-sm mt-1">{error}</p>
+          <button
+            onClick={refetch}
+            className="mt-2 px-3 py-1 bg-danger text-white rounded text-sm hover:bg-danger/90 transition-colors"
+          >
+            Retry
+          </button>
         </div>
       )}
 
       {/* Loading state */}
-      {loading && (
+      {loading && deployments.length === 0 && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-text-muted">Loading deployments...</p>
@@ -313,9 +203,9 @@ export const Deployments: React.FC = () => {
       )}
 
       {/* Deployments Grid */}
-      {!loading && (
+      {!loading && deployments.length > 0 && (
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredDeployments.map(deployment => (
+        {deployments.map(deployment => (
           <div key={deployment.id} className="bg-surface-1 rounded-lg border border-border overflow-hidden hover:border-primary/50 transition-colors">
             {/* Header */}
             <div className="p-4 border-b border-border">
@@ -558,11 +448,17 @@ export const Deployments: React.FC = () => {
         </div>
       )}
 
-      {filteredDeployments.length === 0 && (
+      {/* Empty state */}
+      {!loading && deployments.length === 0 && (
         <div className="text-center py-12">
           <Server className="w-12 h-12 text-text-muted mx-auto mb-4" />
           <h3 className="text-lg font-medium mb-2">No deployments found</h3>
-          <p className="text-text-muted mb-4">Try adjusting your search criteria or deploy your first app</p>
+          <p className="text-text-muted mb-4">
+            {searchTerm || statusFilter !== 'all' 
+              ? 'Try adjusting your search criteria' 
+              : 'Deploy your first app to get started'
+            }
+          </p>
           <Link
             to="/catalog"
             className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors inline-flex items-center space-x-2"

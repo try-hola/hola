@@ -184,14 +184,124 @@ bun typecheck             # Type check all packages
 bun lint                  # Lint all packages
 ```
 
+**Development Server**:
+```bash
+# IMPORTANT: When testing API integration, always start server in background
+cd packages/server && bun run dev &    # Start server in background with &
+curl http://localhost:3001/api/health  # Test server is running
+kill %1                                # Stop background server when done
+
+# Alternative: Use the isBackground parameter in run_in_terminal tool
+# run_in_terminal with isBackground: true for long-running processes
+```
+
 **Development Flow**:
 1. Define types in `packages/shared/src/index.ts`
 2. Implement API endpoints in `packages/server/`
-3. Build UI components in `packages/web/`
-4. Test integration between frontend and backend
-5. Ensure type safety across the entire stack
+3. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
+4. Build UI components in `packages/web/` using the API hooks
+5. Test integration between frontend and backend
+6. Ensure type safety across the entire stack
+
+**Testing API Integration**:
+- Always start the server in background mode when testing API calls
+- Use `cd packages/server && bun run dev &` or `isBackground: true` in terminal tools
+- Test endpoints with curl before running frontend tests
+- Remember to stop background processes when done (`kill %1` or similar)
 
 ## Architecture Patterns
+
+### StrictMode-Compatible API Hooks
+React 18 StrictMode causes double-execution of effects, which breaks traditional API hooks. Use this proven pattern:
+
+**Working Pattern for API Hooks**:
+```typescript
+import React from 'react';
+import { api } from '../utils/api';
+import { globalCache } from '../utils/cache';
+import type { ApiResponseType } from '@hola/shared';
+
+export function useStrictModeCompatibleApi() {
+  const [state, setState] = React.useState<{
+    data: ApiResponseType | null;
+    loading: boolean;
+    error: string | null;
+  }>({
+    data: null,
+    loading: false,
+    error: null,
+  });
+
+  // CRITICAL: Empty dependency array prevents infinite loops in StrictMode
+  const fetchData = React.useCallback(async () => {
+    const cacheKey = 'unique-cache-key';
+    const cached = globalCache.get(cacheKey);
+    const now = Date.now();
+    
+    // Check cache first
+    if (cached && (now - cached.timestamp) < 30000) {
+      setState({
+        data: cached.data as ApiResponseType,
+        loading: false,
+        error: null,
+      });
+      return;
+    }
+    
+    setState(prev => ({ ...prev, loading: true, error: null }));
+    
+    try {
+      const result = await api.someEndpoint();
+      globalCache.set(cacheKey, { data: result, timestamp: now });
+      setState({ data: result, loading: false, error: null });
+    } catch (error) {
+      setState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }, []); // CRITICAL: Empty array - no function parameters in dependencies
+
+  React.useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  return { ...state, refetch: fetchData };
+}
+```
+
+**For Parameterized API Hooks** (search, filters, pagination):
+```typescript
+export function useParameterizedApi(params: RequestParams) {
+  // Use useMemo for stable cache key based on params
+  const cacheKey = React.useMemo(() => {
+    return `api-${JSON.stringify(params)}`;
+  }, [params]);
+
+  const fetchData = React.useCallback(async () => {
+    // Same pattern but include params in API call
+    const result = await api.endpoint(params);
+    // ... rest of implementation
+  }, [cacheKey, params]); // Include params to refetch when they change
+  
+  // ... rest follows same pattern
+}
+```
+
+**Key Rules for StrictMode Compatibility**:
+- ✅ **Never** put function parameters in `useCallback` dependency arrays
+- ✅ **Always** use empty `[]` dependencies for basic fetch functions  
+- ✅ **Use global cache** (`globalCache`) for stability across re-renders
+- ✅ **Use `useMemo`** for cache keys when parameters are involved
+- ✅ **Include primitive params** in dependencies only when they should trigger refetch
+- ❌ **Avoid** complex fetcher function parameters
+- ❌ **Don't** put unstable references in dependency arrays
+
+**Proven Working Examples**:
+- `packages/web/src/hooks/useWorkingApi.ts` - Basic API hook
+- `packages/web/src/hooks/useDeploymentsApi.ts` - Parameterized hook
+- `packages/web/src/hooks/useSummaryApi.ts` - Reference implementation
 
 ### State Management
 - React state for component-level data

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { JobTracker } from '../components/JobTracker';
 import { 
@@ -12,63 +12,10 @@ import {
   WifiOff
 } from 'lucide-react';
 import type { 
-  GetSummaryResponse, 
   SummaryJob, 
-  Job,
-  SystemStatus
+  Job
 } from '@hola/shared';
-
-// Mock data following shared types - will be replaced with API calls
-const mockSummaryResponse: GetSummaryResponse = {
-  deploymentsCount: 5,
-  activeJobsCount: 2,
-  alertsCount: 1,
-  recentJobs: [
-    {
-      id: '1',
-      deploymentId: 'nextcloud-prod',
-      type: 'install',
-      app: 'Nextcloud',
-      status: 'running',
-      progress: 65,
-      timestamp: '2 minutes ago',
-    },
-    {
-      id: '2',
-      deploymentId: 'homeassistant-main',
-      type: 'update',
-      app: 'Home Assistant',
-      status: 'completed',
-      progress: 100,
-      timestamp: '15 minutes ago',
-    },
-    {
-      id: '3',
-      deploymentId: 'plex-media',
-      type: 'backup',
-      app: 'Plex Media Server',
-      status: 'failed',
-      progress: 0,
-      timestamp: '1 hour ago',
-    },
-    {
-      id: '4',
-      deploymentId: 'grafana-monitoring',
-      type: 'install',
-      app: 'Grafana',
-      status: 'completed',
-      progress: 100,
-      timestamp: '2 hours ago',
-    },
-  ],
-  system: {
-    docker: { ok: true, version: '24.0.7' },
-    disk: { freeBytes: 50 * 1024 * 1024 * 1024, totalBytes: 100 * 1024 * 1024 * 1024 }, // 50GB free of 100GB
-    version: { hola: '1.0.0', compose: '2.23.3' },
-    oras: { ok: true, version: '1.1.0' },
-    authentik: { ok: true },
-  },
-};
+import { useWorkingApi } from '../hooks/useWorkingApi';
 
 // Helper functions for formatting and display
 const formatBytes = (bytes: number): string => {
@@ -88,64 +35,18 @@ const getSystemStatusIcon = (isHealthy: boolean) => {
 
 export const Dashboard: React.FC = () => {
   const navigate = useNavigate();
-  const [summary, setSummary] = useState<GetSummaryResponse | null>(null);
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // Load summary data
-  const loadSummary = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      // TODO: Replace with actual API call
-      // const response = await fetch(API.summary);
-      // await ensureOk(response); // from ../utils/error
-      // const data: GetSummaryResponse = await response.json();
-      
-      // For now, use mock data
-      const data = mockSummaryResponse;
-      setSummary(data);
-      setSystemStatus(data.system);
-    } catch (err) {
-      console.error('Failed to load summary:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
-      // Fallback to mock data for development
-      setSummary(mockSummaryResponse);
-      setSystemStatus(mockSummaryResponse.system);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  // Load dashboard summary data using working StrictMode-compatible hook
+  const {
+    data: summary,
+    loading: summaryLoading,
+    error: summaryError,
+    refetch: refetchSummary
+  } = useWorkingApi();
 
-  // Load system status separately (more frequent updates)
-  const loadSystemStatus = useCallback(async () => {
-    try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(API.system.status);
-      // await ensureOk(response); // from ../utils/error
-      // const data: GetSystemStatusResponse = await response.json();
-      
-      // For now, use mock data
-      const data = mockSummaryResponse.system;
-      setSystemStatus(data);
-    } catch (err) {
-      console.error('Failed to load system status:', err);
-      // Continue with existing data on error
-    }
-  }, []);
-
-  useEffect(() => {
-    loadSummary();
-    
-    // Set up polling for system status (every 30 seconds)
-    const statusInterval = setInterval(loadSystemStatus, 30000);
-    
-    return () => {
-      clearInterval(statusInterval);
-    };
-  }, [loadSummary, loadSystemStatus]);
+  // TODO: Add system status back with working hook pattern
+  const systemStatus = null;
+  const statusError = null;
 
   const handleJobClick = (job: SummaryJob | Job) => {
     // Navigate to deployment detail page with logs tab active
@@ -154,9 +55,12 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // Use systemStatus from live updates, fallback to summary system data
+  const currentSystemStatus = systemStatus || summary?.system;
+
   // Calculate disk usage percentage
-  const diskUsagePercent = systemStatus 
-    ? Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)
+  const diskUsagePercent = currentSystemStatus 
+    ? Math.round(((currentSystemStatus.disk.totalBytes - currentSystemStatus.disk.freeBytes) / currentSystemStatus.disk.totalBytes) * 100)
     : 0;
 
   // Generate KPI cards from summary data
@@ -183,6 +87,9 @@ export const Dashboard: React.FC = () => {
       color: summary.alertsCount > 0 ? 'text-warning' : 'text-success',
     },
   ] : [];
+
+  const loading = summaryLoading;
+  const error = summaryError || statusError;
 
   if (loading && !summary) {
     return (
@@ -217,7 +124,7 @@ export const Dashboard: React.FC = () => {
             <h3 className="text-lg font-medium mb-2">Failed to load dashboard</h3>
             <p className="text-text-muted mb-4">{error}</p>
             <button 
-              onClick={loadSummary}
+              onClick={refetchSummary}
               className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
             >
               Retry
@@ -256,7 +163,7 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* System Status */}
-      {systemStatus && (
+      {currentSystemStatus && (
         <div className="bg-surface-1 rounded-lg border border-border">
           <div className="p-6 border-b border-border">
             <h2 className="text-lg font-medium">System Status</h2>
@@ -268,13 +175,13 @@ export const Dashboard: React.FC = () => {
               {/* Docker Status */}
               <div className="flex items-center space-x-3">
                 <div className="flex-shrink-0">
-                  {getSystemStatusIcon(systemStatus.docker.ok)}
+                  {getSystemStatusIcon(currentSystemStatus.docker.ok)}
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Docker</p>
                   <p className="text-xs text-text-muted truncate">
-                    {systemStatus.docker.ok ? 
-                      `v${systemStatus.docker.version || 'Unknown'}` : 
+                    {currentSystemStatus.docker.ok ? 
+                      `v${currentSystemStatus.docker.version || 'Unknown'}` : 
                       'Unavailable'
                     }
                   </p>
@@ -289,22 +196,22 @@ export const Dashboard: React.FC = () => {
                 <div className="min-w-0">
                   <p className="text-sm font-medium">Disk Usage</p>
                   <p className="text-xs text-text-muted">
-                    {formatBytes(systemStatus.disk.totalBytes - systemStatus.disk.freeBytes)} / {formatBytes(systemStatus.disk.totalBytes)} ({diskUsagePercent}%)
+                    {formatBytes(currentSystemStatus.disk.totalBytes - currentSystemStatus.disk.freeBytes)} / {formatBytes(currentSystemStatus.disk.totalBytes)} ({diskUsagePercent}%)
                   </p>
                 </div>
               </div>
 
               {/* ORAS Status */}
-              {systemStatus.oras && (
+              {currentSystemStatus.oras && (
                 <div className="flex items-center space-x-3">
                   <div className="flex-shrink-0">
-                    {getSystemStatusIcon(systemStatus.oras.ok)}
+                    {getSystemStatusIcon(currentSystemStatus.oras.ok)}
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium">ORAS</p>
                     <p className="text-xs text-text-muted truncate">
-                      {systemStatus.oras.ok ? 
-                        `v${systemStatus.oras.version || 'Unknown'}` : 
+                      {currentSystemStatus.oras.ok ? 
+                        `v${currentSystemStatus.oras.version || 'Unknown'}` : 
                         'Unavailable'
                       }
                     </p>
@@ -313,15 +220,15 @@ export const Dashboard: React.FC = () => {
               )}
 
               {/* Authentik Status */}
-              {systemStatus.authentik && (
+              {currentSystemStatus.authentik && (
                 <div className="flex items-center space-x-3">
                   <div className="flex-shrink-0">
-                    {getSystemStatusIcon(systemStatus.authentik.ok)}
+                    {getSystemStatusIcon(currentSystemStatus.authentik.ok)}
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium">Authentik</p>
                     <p className="text-xs text-text-muted">
-                      {systemStatus.authentik.ok ? 'Running' : 'Unavailable'}
+                      {currentSystemStatus.authentik.ok ? 'Running' : 'Unavailable'}
                     </p>
                   </div>
                 </div>
@@ -331,8 +238,8 @@ export const Dashboard: React.FC = () => {
             {/* Version Info */}
             <div className="mt-4 pt-4 border-t border-border">
               <div className="flex items-center justify-between text-xs text-text-muted">
-                <span>Hola Platform v{systemStatus.version.hola}</span>
-                <span>Docker Compose v{systemStatus.version.compose}</span>
+                <span>Hola Platform v{currentSystemStatus.version.hola}</span>
+                <span>Docker Compose v{currentSystemStatus.version.compose}</span>
               </div>
             </div>
           </div>

@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { Dashboard } from './pages/Dashboard';
+import { VerySimpleStrictTest } from './pages/VerySimpleStrictTest';
 import { Catalog } from './pages/Catalog';
 import { Deployments } from './pages/Deployments';
 import { DeploymentDetail } from './pages/DeploymentDetail';
@@ -18,6 +19,7 @@ function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/very-simple-strict" element={<VerySimpleStrictTest />} />
             <Route path="/catalog" element={<Catalog />} />
             <Route path="/catalog/:appId/install" element={<InstallWizard />} />
             <Route path="/deployments" element={<Deployments />} />
