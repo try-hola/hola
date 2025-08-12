@@ -75,12 +75,12 @@ export const Deployments: React.FC = () => {
   const [limit] = useState(12); // Number of deployments per page
   
   // Load deployments from API with search and filters using working StrictMode-compatible hook
-  const params: GetDeploymentsRequest = {
+  const params: GetDeploymentsRequest = React.useMemo(() => ({
     page,
     limit,
     q: searchTerm || undefined,
     status: statusFilter === 'all' ? undefined : statusFilter
-  };
+  }), [page, limit, searchTerm, statusFilter]);
   
   const {
     data: deploymentsResponse,

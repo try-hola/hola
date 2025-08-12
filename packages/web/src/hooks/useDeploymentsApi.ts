@@ -20,7 +20,7 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
     return `deployments-${JSON.stringify(params)}`;
   }, [params]);
 
-  // EXACTLY the same fetchData pattern that works, but for deployments
+  // StrictMode-compatible fetchData pattern
   const fetchData = React.useCallback(async () => {
     const cached = globalCache.get(cacheKey);
     const now = Date.now();
@@ -38,6 +38,7 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
+      // Use the current params directly from closure
       const result = await api.deployments.list(params) as GetDeploymentsResponse;
       
       // Cache the result
@@ -55,7 +56,8 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  }, [cacheKey, params]); // Include params in dependency to refetch when they change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]); // Only include cacheKey to avoid infinite loops, params is accessed via closure
 
   // EXACTLY the same useEffect pattern
   React.useEffect(() => {

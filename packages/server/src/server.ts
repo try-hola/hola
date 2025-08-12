@@ -423,6 +423,58 @@ async function route(url: URL, req: Request): Promise<Response> {
     return new Response(stream, { headers: sse() });
   }
 
+  // Logs SSE Stream (deployment) - new endpoint for real-time logs
+  const deploymentLogsStreamMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs\/stream$/);
+  if (deploymentLogsStreamMatch && req.method === 'GET') {
+    const deploymentId = deploymentLogsStreamMatch[1];
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0;
+        const timer = setInterval(() => {
+          i++;
+          
+          // Send log events
+          const logEvent = {
+            type: 'log',
+            data: {
+              timestamp: new Date().toISOString(),
+              service: ['nextcloud', 'postgres', 'redis'][i % 3],
+              level: ['info', 'warn', 'error', 'debug'][i % 4],
+              message: `Deployment ${deploymentId} log entry ${i}: ${['Starting service', 'Processing request', 'Cache operation', 'Database query'][i % 4]}`
+            }
+          };
+          
+          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
+          controller.enqueue(new TextEncoder().encode(evt));
+          
+          // Occasional deployment status updates
+          if (i % 15 === 0) {
+            const deploymentUpdate = {
+              type: 'deployment_update',
+              data: {
+                deploymentId,
+                status: 'running',
+                uptime: `${Math.floor(i / 60)}m ${i % 60}s`,
+                lastUpdated: new Date().toISOString()
+              }
+            };
+            const deploymentEvt = `id: ${i}-dep\nevent: message\ndata: ${JSON.stringify(deploymentUpdate)}\n\n`;
+            controller.enqueue(new TextEncoder().encode(deploymentEvt));
+          }
+          
+          // Heartbeat
+          if (i % 30 === 0) {
+            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }
+        }, 2000);
+        
+        // Close after 300s in development
+        setTimeout(() => { clearInterval(timer); controller.close(); }, 300000);
+      }
+    });
+    return new Response(stream, { headers: sse() });
+  }
+
   // Jobs + logs SSE
   // List jobs
   if (pathname === API.jobs.base && req.method === 'GET') {
@@ -481,6 +533,75 @@ async function route(url: URL, req: Request): Promise<Response> {
           if (i % 8 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
         }, 1000);
         setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
+      }
+    });
+    return new Response(stream, { headers: sse() });
+  }
+
+  // Job Logs SSE Stream - new endpoint for real-time job logs and updates
+  const jobLogsStreamMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs\/stream$/);
+  if (jobLogsStreamMatch && req.method === 'GET') {
+    const jobId = jobLogsStreamMatch[1];
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0;
+        let progress = 0;
+        const timer = setInterval(() => {
+          i++;
+          progress = Math.min(progress + Math.random() * 5, 100);
+          
+          // Send log events
+          const logEvent = {
+            type: 'log',
+            data: {
+              timestamp: new Date().toISOString(),
+              service: 'job-runner',
+              level: ['info', 'warn', 'debug'][i % 3],
+              message: `Job ${jobId} step ${i}: ${[
+                'Initializing task',
+                'Downloading container image',
+                'Setting up volumes',
+                'Starting services',
+                'Running health checks',
+                'Finalizing installation'
+              ][i % 6]}`
+            }
+          };
+          
+          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
+          controller.enqueue(new TextEncoder().encode(evt));
+          
+          // Job progress updates
+          if (i % 5 === 0) {
+            const jobUpdate = {
+              type: 'job_update',
+              data: {
+                jobId,
+                status: progress >= 100 ? 'completed' : 'running',
+                progress: Math.floor(progress),
+                ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {})
+              }
+            };
+            const jobEvt = `id: ${i}-job\nevent: message\ndata: ${JSON.stringify(jobUpdate)}\n\n`;
+            controller.enqueue(new TextEncoder().encode(jobEvt));
+            
+            // Complete job after 100% progress
+            if (progress >= 100) {
+              setTimeout(() => {
+                clearInterval(timer);
+                controller.close();
+              }, 5000);
+            }
+          }
+          
+          // Heartbeat
+          if (i % 20 === 0) {
+            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }
+        }, 1500);
+        
+        // Timeout after 200s
+        setTimeout(() => { clearInterval(timer); controller.close(); }, 200000);
       }
     });
     return new Response(stream, { headers: sse() });
@@ -597,6 +718,58 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.system.status && req.method === 'GET') {
     const payload: GetSystemStatusResponse = getSystemStatus();
     return json(payload);
+  }
+
+  // System Status SSE Stream - new endpoint for real-time system updates
+  if (pathname === '/api/system/status/stream' && req.method === 'GET') {
+    const stream = new ReadableStream({
+      start(controller) {
+        let i = 0;
+        const timer = setInterval(() => {
+          i++;
+          
+          // Occasionally send system updates
+          if (i % 10 === 0) {
+            const systemUpdate = {
+              type: 'system_update',
+              data: {
+                docker: { 
+                  ok: true, 
+                  version: '24.0.5' 
+                },
+                disk: { 
+                  freeBytes: Math.floor(50_000_000_000 - (i * 1000000)), // Slowly decreasing
+                  totalBytes: 100_000_000_000 
+                },
+                version: { 
+                  hola: '1.0.0', 
+                  compose: '2.20.0' 
+                },
+                oras: { 
+                  ok: true, 
+                  version: '1.1.0' 
+                },
+                authentik: { 
+                  ok: Math.random() > 0.1 // Occasionally false to simulate issues
+                }
+              }
+            };
+            
+            const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
+            controller.enqueue(new TextEncoder().encode(evt));
+          }
+          
+          // Heartbeat
+          if (i % 30 === 0) {
+            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }
+        }, 5000); // Every 5 seconds
+        
+        // Keep alive for a long time for system monitoring
+        setTimeout(() => { clearInterval(timer); controller.close(); }, 600000); // 10 minutes
+      }
+    });
+    return new Response(stream, { headers: sse() });
   }
 
   return notFound();

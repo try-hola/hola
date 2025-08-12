@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import { 
   User, 
   Shield, 
@@ -19,15 +19,35 @@ import {
 } from 'lucide-react';
 import type { 
   SystemEnvVar,
-  GetSettingsResponse,
-  PatchSettingsRequest,
-  GetBackupSettingsResponse,
-  PatchBackupSettingsRequest,
-  SystemStatus
+  GetBackupSettingsResponse
 } from '@hola/shared';
-// import { API } from '@hola/shared'; // Used in commented API calls
+import { useSettingsApi } from '../hooks/useSettingsApi';
+import { useBackupSettingsApi } from '../hooks/useSettingsApi';
+import { useSystemStatusApi } from '../hooks/useSettingsApi';
 
 export const Settings: React.FC = () => {
+  // API hooks for data management
+  const { 
+    data: settings, 
+    loading: settingsLoading, 
+    error: settingsError, 
+    updateSettings 
+  } = useSettingsApi();
+  
+  const { 
+    data: backupSettings, 
+    loading: backupLoading, 
+    error: backupError, 
+    updateBackupSettings 
+  } = useBackupSettingsApi();
+  
+  const { 
+    data: systemStatus, 
+    loading: statusLoading, 
+    error: statusError 
+  } = useSystemStatusApi();
+
+  // Local UI state
   const [theme, setTheme] = useState('dark');
   const [notifications, setNotifications] = useState({
     email: true,
@@ -37,179 +57,94 @@ export const Settings: React.FC = () => {
     errors: true,
   });
   const [analytics, setAnalytics] = useState(false);
-  const [systemEnvVars, setSystemEnvVars] = useState<SystemEnvVar[]>([
-    { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain for all services' },
-    { key: 'TIMEZONE', value: 'UTC', isSecret: false, description: 'System timezone' },
-    { key: 'BACKUP_RETENTION_DAYS', value: '30', isSecret: false, description: 'Default backup retention period' },
-    { key: 'SMTP_HOST', value: '', isSecret: false, description: 'SMTP server for notifications' },
-    { key: 'SMTP_USER', value: '', isSecret: false, description: 'SMTP username' },
-    { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-    { key: 'SSL_EMAIL', value: '', isSecret: false, description: 'Email for SSL certificates' },
-  ]);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
-  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [settings, setSettings] = useState<GetSettingsResponse | null>(null);
-  const [backupSettings, setBackupSettings] = useState<GetBackupSettingsResponse | null>(null);
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingBackup, setSavingBackup] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  // Load settings and system status
-  const loadSettings = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      // TODO: Replace with actual API calls when ready
-      // const [settingsResponse, backupSettingsResponse, statusResponse] = await Promise.all([
-      //   fetch(API.settings.base),
-      //   fetch(API.settings.backup),
-      //   fetch(API.system.status)
-      // ]);
-      // await Promise.all([
-      //   ensureOk(settingsResponse),     // from ../utils/error
-      //   ensureOk(backupSettingsResponse),
-      //   ensureOk(statusResponse),
-      // ]);
-      // const settingsData: GetSettingsResponse = await settingsResponse.json();
-      // const backupSettingsData: GetBackupSettingsResponse = await backupSettingsResponse.json();
-      // const statusData: GetSystemStatusResponse = await statusResponse.json();
-      
-      // For now, use mock data
-      const mockSettings: GetSettingsResponse = {
-        systemEnv: systemEnvVars,
-        docker: { host: 'unix:///var/run/docker.sock' },
-        tls: { email: 'admin@localhost' },
-        notifications: { 
-          smtpHost: 'smtp.localhost', 
-          smtpUser: 'admin@localhost',
-          smtpPassword: '[REDACTED]' // Password is redacted in GET responses
-        }
-      };
+  // Local state for system env vars editing
+  const [localSystemEnvVars, setLocalSystemEnvVars] = useState<SystemEnvVar[]>([]);
+  
+  // Local state for backup settings editing
+  const [localBackupSettings, setLocalBackupSettings] = useState<GetBackupSettingsResponse | null>(null);
 
-      const mockBackupSettings: GetBackupSettingsResponse = {
-        scheduleEnabled: true,
-        scheduleTime: '02:00',
-        retentionDays: 30
-      };
-      
-      const mockStatus: SystemStatus = {
-        docker: { ok: true, version: '24.0.7' },
-        disk: { freeBytes: 50 * 1024 * 1024 * 1024, totalBytes: 100 * 1024 * 1024 * 1024 },
-        version: { hola: '1.0.0', compose: '2.23.3' },
-        oras: { ok: true, version: '1.1.0' },
-        authentik: { ok: true },
-      };
-      
-      setSettings(mockSettings);
-      setBackupSettings(mockBackupSettings);
-      setSystemStatus(mockStatus);
-      setSystemEnvVars(mockSettings.systemEnv);
-    } catch (err) {
-      console.error('Failed to load settings:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load settings');
-    } finally {
-      setLoading(false);
+  // Initialize local env vars when settings load
+  React.useEffect(() => {
+    if (settings?.systemEnv) {
+      setLocalSystemEnvVars(settings.systemEnv);
     }
-  }, [systemEnvVars]);
+  }, [settings]);
 
-  // Save settings
-  const saveSettings = useCallback(async () => {
-    if (!settings) return;
-    
-    try {
-      setSaving(true);
-      setError(null);
-      
-      const updateRequest: PatchSettingsRequest = {
-        systemEnv: systemEnvVars,
-        // Only include changed fields in the patch
-      };
-      
-      // TODO: Replace with actual API call when ready
-      // const response = await fetch(API.settings.base, {
-      //   method: 'PATCH',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(updateRequest)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      // const updatedSettings: GetSettingsResponse = await response.json();
-      
-      // For now, just update local state
-      console.log('Saving settings:', updateRequest);
-      
-      // Show success feedback
-      setError(null);
-    } catch (err) {
-      console.error('Failed to save settings:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save settings');
-    } finally {
-      setSaving(false);
-    }
-  }, [settings, systemEnvVars]);
-
-  // Save backup settings
-  const saveBackupSettings = useCallback(async () => {
-    if (!backupSettings) return;
-    
-    try {
-      setSavingBackup(true);
-      setError(null);
-      
-      const updateRequest: PatchBackupSettingsRequest = {
-        scheduleEnabled: backupSettings.scheduleEnabled,
-        scheduleTime: backupSettings.scheduleTime,
-        retentionDays: backupSettings.retentionDays
-      };
-      
-      // TODO: Replace with actual API call when ready
-      // const response = await fetch(API.settings.backup, {
-      //   method: 'PATCH',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(updateRequest)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      // const updatedBackupSettings: GetBackupSettingsResponse = await response.json();
-      
-      // For now, just update local state
-      console.log('Saving backup settings:', updateRequest);
-      
-      // Show success feedback
-      setError(null);
-    } catch (err) {
-      console.error('Failed to save backup settings:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save backup settings');
-    } finally {
-      setSavingBackup(false);
+  // Initialize local backup settings when they load
+  React.useEffect(() => {
+    if (backupSettings) {
+      setLocalBackupSettings(backupSettings);
     }
   }, [backupSettings]);
 
-  useEffect(() => {
-    loadSettings();
-  }, [loadSettings]);
+  // Loading state - any API loading
+  const loading = settingsLoading || backupLoading || statusLoading;
+  
+  // Combined error state
+  const error = settingsError || backupError || statusError;
 
+  // Save settings handlers
+  const handleSaveSettings = async () => {
+    if (!settings || !updateSettings) return;
+    
+    try {
+      setSaving(true);
+      await updateSettings({
+        systemEnv: localSystemEnvVars,
+        // Only include changed fields in the patch
+      });
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Save backup settings handler
+  const handleSaveBackupSettings = async () => {
+    if (!localBackupSettings || !updateBackupSettings) return;
+    
+    try {
+      setSavingBackup(true);
+      await updateBackupSettings({
+        scheduleEnabled: localBackupSettings.scheduleEnabled,
+        scheduleTime: localBackupSettings.scheduleTime,
+        retentionDays: localBackupSettings.retentionDays
+      });
+    } catch (err) {
+      console.error('Failed to save backup settings:', err);
+    } finally {
+      setSavingBackup(false);
+    }
+  };
+
+  // Helper functions for system env vars
   const addSystemEnvVar = () => {
-    setSystemEnvVars([...systemEnvVars, { key: '', value: '', isSecret: false, description: '' }]);
+    setLocalSystemEnvVars([...localSystemEnvVars, { key: '', value: '', isSecret: false, description: '' }]);
   };
 
   const updateSystemEnvVar = (index: number, field: keyof SystemEnvVar, value: string | boolean) => {
-    const updated = [...systemEnvVars];
+    const updated = [...localSystemEnvVars];
     updated[index] = { ...updated[index], [field]: value };
-    setSystemEnvVars(updated);
+    setLocalSystemEnvVars(updated);
   };
 
   const removeSystemEnvVar = (index: number) => {
-    setSystemEnvVars(systemEnvVars.filter((_, i) => i !== index));
+    setLocalSystemEnvVars(localSystemEnvVars.filter((_, i) => i !== index));
   };
 
   const toggleSecretVisibility = (key: string) => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const updateBackupSettings = (field: keyof GetBackupSettingsResponse, value: boolean | string | number) => {
-    if (!backupSettings) return;
-    setBackupSettings({ ...backupSettings, [field]: value });
+  // Helper to update local backup settings
+  const updateLocalBackupSettings = (field: keyof GetBackupSettingsResponse, value: boolean | string | number) => {
+    if (!localBackupSettings) return;
+    setLocalBackupSettings({ ...localBackupSettings, [field]: value });
   };
 
   return (
@@ -373,7 +308,7 @@ export const Settings: React.FC = () => {
             <div className="h-4 bg-surface-2 rounded w-1/4"></div>
             <div className="h-10 bg-surface-2 rounded w-1/2"></div>
           </div>
-        ) : backupSettings ? (
+        ) : localBackupSettings ? (
           <div className="space-y-6">
             {/* Schedule Toggle */}
             <div className="flex items-center justify-between">
@@ -383,8 +318,8 @@ export const Settings: React.FC = () => {
               </div>
               <input
                 type="checkbox"
-                checked={backupSettings.scheduleEnabled}
-                onChange={(e) => updateBackupSettings('scheduleEnabled', e.target.checked)}
+                checked={localBackupSettings.scheduleEnabled}
+                onChange={(e) => updateLocalBackupSettings('scheduleEnabled', e.target.checked)}
                 className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
               />
             </div>
@@ -395,9 +330,9 @@ export const Settings: React.FC = () => {
               <div className="flex items-center space-x-3">
                 <input
                   type="time"
-                  value={backupSettings.scheduleTime}
-                  onChange={(e) => updateBackupSettings('scheduleTime', e.target.value)}
-                  disabled={!backupSettings.scheduleEnabled}
+                  value={localBackupSettings.scheduleTime}
+                  onChange={(e) => updateLocalBackupSettings('scheduleTime', e.target.value)}
+                  disabled={!localBackupSettings.scheduleEnabled}
                   className="px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 <span className="text-sm text-text-muted">Daily backup time (server timezone)</span>
@@ -412,8 +347,8 @@ export const Settings: React.FC = () => {
                   type="number"
                   min="1"
                   max="365"
-                  value={backupSettings.retentionDays}
-                  onChange={(e) => updateBackupSettings('retentionDays', parseInt(e.target.value))}
+                  value={localBackupSettings.retentionDays}
+                  onChange={(e) => updateLocalBackupSettings('retentionDays', parseInt(e.target.value))}
                   className="w-24 px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
                 />
                 <span className="text-sm text-text-muted">days (1-365)</span>
@@ -432,7 +367,7 @@ export const Settings: React.FC = () => {
                 </div>
               )}
               <button 
-                onClick={saveBackupSettings}
+                onClick={handleSaveBackupSettings}
                 disabled={savingBackup}
                 className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
@@ -492,7 +427,7 @@ export const Settings: React.FC = () => {
             <div className="col-span-1"></div>
           </div>
 
-          {systemEnvVars.map((envVar, index) => (
+          {localSystemEnvVars.map((envVar: SystemEnvVar, index: number) => (
             <div key={index} className="grid grid-cols-12 gap-3 items-center p-3 bg-surface-2 rounded-lg">
               <div className="col-span-3">
                 <input
@@ -558,7 +493,7 @@ export const Settings: React.FC = () => {
             </div>
           )}
           <button 
-            onClick={saveSettings}
+            onClick={handleSaveSettings}
             disabled={saving}
             className="bg-success text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >

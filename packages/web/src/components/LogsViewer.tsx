@@ -11,13 +11,19 @@ import {
   Activity,
   CheckCircle,
   XCircle,
-  Clock
+  Clock,
+  Wifi,
+  WifiOff,
+  AlertCircle
 } from 'lucide-react';
+import { useLogsSSE } from '../hooks/useSSE';
+import { api } from '../utils/api';
 import type {
   LogEntry,
   LogLevel,
   Job,
-  JobStatus
+  JobStatus,
+  SSEConnectionState
 } from '@hola/shared';
 
 interface LogsViewerProps {
@@ -142,7 +148,17 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   maxHeight = 'max-h-96',
   showJobStatus = false
 }) => {
-  const [logs, setLogs] = useState<LogEntry[]>(mockLogs);
+  // Use SSE for real-time logs
+  const { 
+    logs: sseLogsData, 
+    connectionState, 
+    error: sseError, 
+    isConnected,
+    clearLogs: clearSSELogs 
+  } = useLogsSSE(deploymentId, jobId);
+
+  // Local state for managing logs and UI
+  const [allLogs, setAllLogs] = useState<LogEntry[]>([]);
   const [job, setJob] = useState<Job | null>(null);
   const [isStreaming, setIsStreaming] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -154,109 +170,106 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
 
-  // API functions
-  const loadLogs = useCallback(async () => {
+  // Merge SSE logs with existing logs
+  React.useEffect(() => {
+    if (sseLogsData.length > 0) {
+      setAllLogs(prev => {
+        // Create a map to avoid duplicates (based on timestamp + message)
+        const existingSet = new Set(prev.map(log => `${log.timestamp}-${log.message}`));
+        const newLogs = sseLogsData.filter(log => 
+          !existingSet.has(`${log.timestamp}-${log.message}`)
+        ).map(log => ({
+          ...log,
+          level: log.level as LogLevel // Ensure proper typing
+        }));
+        return [...prev, ...newLogs];
+      });
+    }
+  }, [sseLogsData]);
+
+  // Set error from SSE
+  React.useEffect(() => {
+    if (sseError) {
+      setError(sseError);
+    }
+  }, [sseError]);
+
+  // Load initial logs and job data
+  const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Determine the API endpoint to use
-      if (jobId) {
-        // API endpoint: API.jobs.logs(jobId)
-        console.log('Loading logs for job:', jobId);
-      } else if (deploymentId) {
-        // API endpoint: API.deployments.logs(deploymentId)
-        console.log('Loading logs for deployment:', deploymentId);
-      } else {
-        return;
+      // Load initial logs if not using SSE or SSE is not connected
+      if (!isConnected && (jobId || deploymentId)) {
+        const logsPromise = jobId 
+          ? api.jobs.logs(jobId) as Promise<{ items: LogEntry[] }>
+          : deploymentId 
+            ? api.deployments.logs(deploymentId) as Promise<{ items: LogEntry[] }>
+            : Promise.resolve({ items: [] });
+            
+        const logsData = await logsPromise;
+        setAllLogs(logsData.items || []);
       }
       
-      // TODO: Replace with actual API call
-      // const response = await fetch(url);
-      // await ensureOk(response); // from ../utils/error
-      // const data: GetLogsResponse = await response.json();
-      
-      // For now, use mock data
-      setLogs(mockLogs);
+      // Load job data if jobId is provided
+      if (jobId) {
+        const jobData = await api.jobs.byId(jobId) as Job;
+        setJob(jobData);
+      }
     } catch (err) {
-      console.error('Failed to load logs:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load logs');
+      console.error('Failed to load initial data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load data');
       // Fallback to mock data for development
-      setLogs(mockLogs);
+      setAllLogs(mockLogs);
     } finally {
       setLoading(false);
     }
-  }, [jobId, deploymentId]);
+  }, [jobId, deploymentId, isConnected]);
 
-  const loadJob = useCallback(async () => {
-    if (!jobId) return;
-    
-    try {
-      setError(null);
-      
-      // TODO: Replace with actual API call
-      // const response = await fetch(API.jobs.byId(jobId));
-      // await ensureOk(response); // from ../utils/error
-      // const data: GetJobResponse = await response.json();
-      
-      // For now, use mock data
-      const mockJob: Job = {
-        id: jobId,
-        type: 'install',
-        status: 'running',
-        startedAt: new Date(Date.now() - 300000).toISOString(), // 5 minutes ago
-        progress: 65,
-        deploymentId: deploymentId
-      };
-      setJob(mockJob);
-    } catch (err) {
-      console.error('Failed to load job:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load job details');
-    }
-  }, [jobId, deploymentId]);
-
-  // Load initial data
+  // Load initial data on mount
   useEffect(() => {
-    loadLogs();
-    loadJob();
-  }, [loadLogs, loadJob]);
+    loadInitialData();
+  }, [loadInitialData]);
 
-  // Auto-scroll to bottom when new logs arrive
+  // Auto-scroll to bottom when new logs arrive and streaming is enabled
   useEffect(() => {
     if (isStreaming && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs, isStreaming]);
+  }, [allLogs, isStreaming]);
 
-  // Simulate real-time log streaming
-  useEffect(() => {
-    if (!isStreaming) return;
+  // Connection status indicator
+  const getConnectionIcon = () => {
+    switch (connectionState) {
+      case 'connected':
+        return <Wifi className="w-4 h-4 text-success" />;
+      case 'connecting':
+        return <Activity className="w-4 h-4 text-warning animate-pulse" />;
+      case 'error':
+        return <AlertCircle className="w-4 h-4 text-danger" />;
+      default:
+        return <WifiOff className="w-4 h-4 text-text-muted" />;
+    }
+  };
 
-    const interval = setInterval(() => {
-      const newLog: LogEntry = {
-        timestamp: new Date().toISOString(),
-        service: ['nextcloud', 'postgres', 'redis'][Math.floor(Math.random() * 3)],
-        level: ['info', 'warn', 'error', 'debug'][Math.floor(Math.random() * 4)] as LogEntry['level'],
-        message: [
-          'Processing request',
-          'Cache hit for user session',
-          'Database query executed',
-          'File uploaded successfully',
-          'Background job completed',
-          'Memory usage: 67%'
-        ][Math.floor(Math.random() * 6)]
-      };
-      
-      setLogs(prev => [...prev, newLog]);
-    }, 2000);
+  const getConnectionStatus = () => {
+    switch (connectionState) {
+      case 'connected':
+        return 'Live';
+      case 'connecting':
+        return 'Connecting';
+      case 'error':
+        return 'Error';
+      default:
+        return 'Offline';
+    }
+  };
 
-    return () => clearInterval(interval);
-  }, [isStreaming]);
-
-  const services = Array.from(new Set(logs.map(log => log.service)));
+  const services = Array.from(new Set(allLogs.map(log => log.service)));
   const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
 
-  const filteredLogs = logs.filter(log => {
+  const filteredLogs = allLogs.filter(log => {
     const matchesSearch = searchTerm === '' || 
       log.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
       log.service.toLowerCase().includes(searchTerm.toLowerCase());
@@ -291,7 +304,8 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   };
 
   const clearLogs = () => {
-    setLogs([]);
+    setAllLogs([]);
+    clearSSELogs();
   };
 
   const LogsContent = () => (
@@ -315,9 +329,15 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
               </div>
             )}
             <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full ${isStreaming ? 'bg-success animate-pulse' : 'bg-text-muted'}`}></div>
+              <div className="flex items-center space-x-1">
+                {getConnectionIcon()}
+                <span className="text-sm text-text-muted">
+                  {getConnectionStatus()}
+                </span>
+              </div>
+              <span className="text-text-muted">•</span>
               <span className="text-sm text-text-muted">
-                {isStreaming ? 'Live' : 'Paused'} • {filteredLogs.length} entries
+                {filteredLogs.length} entries
               </span>
             </div>
           </div>
@@ -371,6 +391,11 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
         {error && (
           <div className="mb-4 p-3 bg-danger/10 border border-danger/20 rounded text-danger text-sm">
             {error}
+            {connectionState === 'error' && (
+              <div className="mt-2 text-xs">
+                Connection failed. Logs will be updated when connection is restored.
+              </div>
+            )}
           </div>
         )}
 

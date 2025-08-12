@@ -35,6 +35,7 @@ export const API = {
     byId: (deploymentId: string) => `/api/deployments/${deploymentId}`,
     history: (deploymentId: string) => `/api/deployments/${deploymentId}/history`,
     logs: (deploymentId: string) => `/api/deployments/${deploymentId}/logs`,
+    logsStream: (deploymentId: string) => `/api/deployments/${deploymentId}/logs/stream`,
     actions: (deploymentId: string) => `/api/deployments/${deploymentId}/actions`,
   },
 
@@ -42,6 +43,7 @@ export const API = {
     base: '/api/jobs', // list jobs with ?deploymentId=&status=&page=&limit=
     byId: (jobId: string) => `/api/jobs/${jobId}`,
     logs: (jobId: string) => `/api/jobs/${jobId}/logs`,
+    logsStream: (jobId: string) => `/api/jobs/${jobId}/logs/stream`,
   },
 
   backups: {
@@ -339,6 +341,42 @@ export type GetLogsResponse = {
   items: LogEntry[];
   nextSince?: string;
 };
+
+// SSE Events for real-time logs
+export type SSELogEvent = {
+  type: 'log';
+  data: LogEntry;
+};
+
+export type SSEJobUpdateEvent = {
+  type: 'job_update';
+  data: {
+    jobId: string;
+    status: JobStatus;
+    progress?: number;
+    finishedAt?: string;
+  };
+};
+
+export type SSESystemUpdateEvent = {
+  type: 'system_update';
+  data: Partial<SystemStatus>;
+};
+
+export type SSEDeploymentUpdateEvent = {
+  type: 'deployment_update';
+  data: {
+    deploymentId: string;
+    status: DeploymentStatus;
+    uptime?: string;
+    lastUpdated: string;
+  };
+};
+
+export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent;
+
+// Connection status for SSE
+export type SSEConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 // ------------------------------------------------------
 // Backups

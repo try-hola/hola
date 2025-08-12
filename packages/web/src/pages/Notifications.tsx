@@ -1,66 +1,12 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Bell, X, Clock, AlertTriangle, CheckCircle, Info, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { 
   NotificationItem, 
-  NotificationType, 
-  GetNotificationsResponse
+  NotificationType
 } from '@hola/shared';
+import { useNotificationsApi } from '../hooks/useNotificationsApi';
 
-// Mock data that conforms to shared types
-const mockNotificationsResponse: GetNotificationsResponse = {
-  items: [
-    {
-      id: '1',
-      type: 'update',
-      title: 'Update Available: Nextcloud 28.0.3',
-      message: 'A new version of Nextcloud is available with security improvements.',
-      timestamp: '2024-01-15T12:30:00Z',
-      read: false,
-      priority: 'medium',
-    },
-    {
-      id: '2',
-      type: 'error',
-      title: 'Backup Failed: Plex Media Server',
-      message: 'Backup failed due to insufficient disk space. Please free up space and retry.',
-      timestamp: '2024-01-15T08:30:00Z',
-      read: false,
-      priority: 'high',
-    },
-    {
-      id: '3',
-      type: 'success',
-      title: 'Installation Complete: Grafana',
-      message: 'Grafana has been successfully installed and is now running.',
-      timestamp: '2024-01-14T14:30:00Z',
-      read: true,
-      priority: 'low',
-    },
-    {
-      id: '4',
-      type: 'info',
-      title: 'Scheduled Maintenance',
-      message: 'System backup will run tonight at 2:00 AM. No action required.',
-      timestamp: '2024-01-13T14:30:00Z',
-      read: true,
-      priority: 'low',
-    },
-    {
-      id: '5',
-      type: 'warning',
-      title: 'Low Disk Space Warning',
-      message: 'Available disk space is below 10%. Consider cleaning up old backups.',
-      timestamp: '2024-01-12T14:30:00Z',
-      read: false,
-      priority: 'medium',
-    },
-  ],
-  page: 1,
-  limit: 10,
-  total: 5,
-  unreadCount: 3
-};
-
+// Helper functions
 const getTypeIcon = (type: NotificationType) => {
   switch (type) {
     case 'error':
@@ -114,208 +60,87 @@ const formatRelativeTime = (timestamp: string): string => {
 
 export const Notifications: React.FC = () => {
   // State management
-  const [notificationsData, setNotificationsData] = useState<GetNotificationsResponse>(mockNotificationsResponse);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'unread' | `type:${NotificationType}`>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  
+  // Use API hook for data fetching
+  const { 
+    data: notificationsData, 
+    loading, 
+    error, 
+    refetch,
+    markAsRead,
+    dismissNotification,
+    markAllAsRead,
+    dismissAll
+  } = useNotificationsApi(filter, currentPage);
   
   // Operations state
   const [operationLoading, setOperationLoading] = useState<{ [key: string]: boolean }>({});
 
-  // Fetch notifications from API
-  const fetchNotifications = useCallback(async (page: number = 1, filterValue?: typeof filter) => {
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: '10'
-      });
-      
-      if (filterValue && filterValue !== 'all') {
-        params.append('filter', filterValue);
-      }
-
-      // In a real implementation, this would be an actual API call
-      // const response = await fetch(`${API.notifications.base}?${params}`);
-      // await ensureOk(response); // from ../utils/error
-      // const data: GetNotificationsResponse = await response.json();
-      
-      // For now, simulate API call with filtered mock data
-      await new Promise(resolve => setTimeout(resolve, 500)); // Simulate API delay
-      
-      let filteredItems = mockNotificationsResponse.items;
-      
-      if (filterValue === 'unread') {
-        filteredItems = filteredItems.filter(notification => !notification.read);
-      } else if (filterValue && filterValue.startsWith('type:')) {
-        const typeFilter = filterValue.replace('type:', '') as NotificationType;
-        filteredItems = filteredItems.filter(notification => notification.type === typeFilter);
-      }
-      
-      const unreadCount = mockNotificationsResponse.items.filter(n => !n.read).length;
-      
-      const data: GetNotificationsResponse = {
-        items: filteredItems,
-        page,
-        limit: 10,
-        total: filteredItems.length,
-        unreadCount
-      };
-      
-      setNotificationsData(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch notifications');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Mark notification as read
-  const markAsRead = useCallback(async (id: string) => {
+  // Handle individual operations
+  const handleMarkAsRead = useCallback(async (id: string) => {
     const operationKey = `mark-read-${id}`;
     setOperationLoading(prev => ({ ...prev, [operationKey]: true }));
     
     try {
-      // In a real implementation:
-      // const request: PatchNotificationRequest = { read: true };
-      // const response = await fetch(API.notifications.byId(id), {
-      //   method: 'PATCH',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(request)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Update local state
-      setNotificationsData(prev => ({
-        ...prev,
-        items: prev.items.map(n => n.id === id ? { ...n, read: true } : n),
-        unreadCount: Math.max(0, prev.unreadCount - 1)
-      }));
+      await markAsRead(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mark notification as read');
+      console.error('Failed to mark notification as read:', err);
     } finally {
       setOperationLoading(prev => ({ ...prev, [operationKey]: false }));
     }
-  }, []);
+  }, [markAsRead]);
 
-  // Dismiss notification
-  const dismissNotification = useCallback(async (id: string) => {
+  const handleDismissNotification = useCallback(async (id: string) => {
     const operationKey = `dismiss-${id}`;
     setOperationLoading(prev => ({ ...prev, [operationKey]: true }));
     
     try {
-      // In a real implementation:
-      // const request: PatchNotificationRequest = { dismiss: true };
-      // const response = await fetch(API.notifications.byId(id), {
-      //   method: 'PATCH',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(request)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      // Update local state
-      setNotificationsData(prev => ({
-        ...prev,
-        items: prev.items.filter(n => n.id !== id),
-        total: prev.total - 1,
-        unreadCount: prev.items.find(n => n.id === id)?.read === false 
-          ? Math.max(0, prev.unreadCount - 1) 
-          : prev.unreadCount
-      }));
+      await dismissNotification(id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to dismiss notification');
+      console.error('Failed to dismiss notification:', err);
     } finally {
       setOperationLoading(prev => ({ ...prev, [operationKey]: false }));
     }
-  }, []);
+  }, [dismissNotification]);
 
-  // Mark all as read
-  const markAllAsRead = useCallback(async () => {
+  const handleMarkAllAsRead = useCallback(async () => {
     setOperationLoading(prev => ({ ...prev, 'mark-all-read': true }));
     
     try {
-      // In a real implementation:
-      // const request: PostNotificationsActionRequest = { action: 'markAllRead' };
-      // const response = await fetch(API.notifications.actions, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(request)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Update local state
-      setNotificationsData(prev => ({
-        ...prev,
-        items: prev.items.map(n => ({ ...n, read: true })),
-        unreadCount: 0
-      }));
+      await markAllAsRead();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to mark all notifications as read');
+      console.error('Failed to mark all notifications as read:', err);
     } finally {
       setOperationLoading(prev => ({ ...prev, 'mark-all-read': false }));
     }
-  }, []);
+  }, [markAllAsRead]);
 
-  // Dismiss all notifications
-  const dismissAll = useCallback(async () => {
+  const handleDismissAll = useCallback(async () => {
     setOperationLoading(prev => ({ ...prev, 'dismiss-all': true }));
     
     try {
-      // In a real implementation:
-      // const request: PostNotificationsActionRequest = { action: 'dismissAll' };
-      // const response = await fetch(API.notifications.actions, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(request)
-      // });
-      // await ensureOk(response); // from ../utils/error
-      
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // Update local state
-      setNotificationsData(prev => ({
-        ...prev,
-        items: [],
-        total: 0,
-        unreadCount: 0
-      }));
+      await dismissAll();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to dismiss all notifications');
+      console.error('Failed to dismiss all notifications:', err);
     } finally {
       setOperationLoading(prev => ({ ...prev, 'dismiss-all': false }));
     }
-  }, []);
-
-  // Load initial data
-  useEffect(() => {
-    fetchNotifications(1, filter);
-  }, [fetchNotifications, filter]);
+  }, [dismissAll]);
 
   // Handle page change
   const handlePageChange = useCallback((page: number) => {
-    fetchNotifications(page, filter);
-  }, [filter, fetchNotifications]);
+    setCurrentPage(page);
+  }, []);
 
   // Handle filter changes
   const handleFilterChange = useCallback((newFilter: typeof filter) => {
     setFilter(newFilter);
-    fetchNotifications(1, newFilter);
-  }, [fetchNotifications]);
+    setCurrentPage(1);
+  }, []);
 
-  const filteredNotifications = notificationsData.items;
-  const unreadCount = notificationsData.unreadCount;
+  const unreadCount = notificationsData?.unreadCount ?? 0;
 
   return (
     <div className="space-y-6">
@@ -336,7 +161,7 @@ export const Notifications: React.FC = () => {
         <div className="flex space-x-2">
           {unreadCount > 0 && (
             <button
-              onClick={markAllAsRead}
+              onClick={handleMarkAllAsRead}
               disabled={operationLoading['mark-all-read']}
               className="px-4 py-2 bg-surface-1 border border-border rounded-lg text-sm font-medium hover:bg-surface-2 transition-colors disabled:opacity-50"
             >
@@ -344,7 +169,7 @@ export const Notifications: React.FC = () => {
             </button>
           )}
           <button
-            onClick={dismissAll}
+            onClick={handleDismissAll}
             disabled={operationLoading['dismiss-all']}
             className="px-4 py-2 bg-surface-1 border border-border rounded-lg text-sm font-medium hover:bg-surface-2 transition-colors disabled:opacity-50"
           >
@@ -359,7 +184,7 @@ export const Notifications: React.FC = () => {
           <AlertTriangle className="w-4 h-4" />
           <span>{error}</span>
           <button
-            onClick={() => setError(null)}
+            onClick={() => refetch()}
             className="ml-auto p-1 hover:bg-danger/20 rounded transition-colors"
           >
             <X className="w-3 h-3" />
@@ -410,7 +235,7 @@ export const Notifications: React.FC = () => {
               </div>
             ))}
           </div>
-        ) : filteredNotifications.length === 0 ? (
+        ) : notificationsData?.items?.length === 0 ? (
           <div className="text-center py-12">
             <Bell className="w-12 h-12 text-text-muted mx-auto mb-4" />
             <h3 className="text-lg font-medium mb-2">No notifications</h3>
@@ -419,7 +244,7 @@ export const Notifications: React.FC = () => {
             </p>
           </div>
         ) : (
-          filteredNotifications.map((notification: NotificationItem) => (
+          notificationsData?.items?.map((notification: NotificationItem) => (
             <div
               key={notification.id}
               className={`border-l-4 rounded-lg p-4 ${getTypeColor(notification.type)} ${
@@ -455,7 +280,7 @@ export const Notifications: React.FC = () => {
                 <div className="flex items-center space-x-2 flex-shrink-0 ml-4">
                   {!notification.read && (
                     <button
-                      onClick={() => markAsRead(notification.id)}
+                      onClick={() => handleMarkAsRead(notification.id)}
                       disabled={operationLoading[`mark-read-${notification.id}`]}
                       className="text-xs text-primary hover:text-primary/90 transition-colors disabled:opacity-50"
                     >
@@ -463,7 +288,7 @@ export const Notifications: React.FC = () => {
                     </button>
                   )}
                   <button
-                    onClick={() => dismissNotification(notification.id)}
+                    onClick={() => handleDismissNotification(notification.id)}
                     disabled={operationLoading[`dismiss-${notification.id}`]}
                     className="p-1 text-text-muted hover:text-danger transition-colors disabled:opacity-50"
                     title="Dismiss notification"
@@ -478,25 +303,25 @@ export const Notifications: React.FC = () => {
       </div>
 
       {/* Pagination */}
-      {Math.ceil(notificationsData.total / notificationsData.limit) > 1 && (
+      {notificationsData && Math.ceil(notificationsData.total / notificationsData.limit) > 1 && (
         <div className="bg-surface-1 rounded-lg border border-border px-6 py-4">
           <div className="flex items-center justify-between">
             <div className="text-sm text-text-muted">
               Page {notificationsData.page} of {Math.ceil(notificationsData.total / notificationsData.limit)} 
-              (showing {filteredNotifications.length} of {notificationsData.total} notifications)
+              (showing {notificationsData.items.length} of {notificationsData.total} notifications)
             </div>
             <div className="flex items-center space-x-2">
               <button
-                onClick={() => handlePageChange(notificationsData.page - 1)}
-                disabled={notificationsData.page <= 1 || loading}
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1 || loading}
                 className="p-2 text-text-muted hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Previous page"
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
               <button
-                onClick={() => handlePageChange(notificationsData.page + 1)}
-                disabled={notificationsData.page >= Math.ceil(notificationsData.total / notificationsData.limit) || loading}
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= Math.ceil(notificationsData.total / notificationsData.limit) || loading}
                 className="p-2 text-text-muted hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Next page"
               >

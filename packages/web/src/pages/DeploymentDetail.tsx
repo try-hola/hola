@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
@@ -24,19 +24,12 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
-import { API } from '@hola/shared';
 import type {
-  DeploymentDetail as DeploymentDetailType,
   AppEnvVar,
   SystemEnvVar,
-  PostDeploymentActionRequest,
-  PatchDeploymentRequest,
-  GetDeploymentResponse,
-  GetDeploymentHistoryResponse,
-  DeploymentHistoryItem,
   JobStatus
 } from '@hola/shared';
-import { ensureOk } from '../utils/error';
+import { useDeploymentDetailApi, useDeploymentHistoryApi } from '../hooks/useDeploymentDetailApi';
 
 // Helper functions for history tab
 const getJobStatusColor = (status: JobStatus): string => {
@@ -106,21 +99,28 @@ export const DeploymentDetail: React.FC = () => {
   const { deploymentId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
-  
-  // Deployment data state
-  const [deployment, setDeployment] = useState<DeploymentDetailType | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  // History state
-  const [history, setHistory] = useState<DeploymentHistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyPage, setHistoryPage] = useState(1);
-  const [historyTotal, setHistoryTotal] = useState(0);
   
-    // Form state
+  // Use API hooks for data fetching
+  const { 
+    data: deployment, 
+    loading, 
+    error, 
+    refetch: refetchDeployment,
+    updateConfiguration,
+    executeAction 
+  } = useDeploymentDetailApi(deploymentId);
+  
+  const { 
+    data: historyData, 
+    loading: historyLoading, 
+    refetch: refetchHistory 
+  } = useDeploymentHistoryApi(deploymentId, historyPage);
+  
+  // Form state
   const [isEditing, setIsEditing] = useState(false);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
+  const [operationLoading, setOperationLoading] = useState<{[key: string]: boolean}>({});
 
   // System-wide environment variables (would come from API/context)
   const systemEnvVars: SystemEnvVar[] = [
@@ -147,105 +147,6 @@ export const DeploymentDetail: React.FC = () => {
     { key: 'NEXTCLOUD_ADMIN_PASSWORD', value: 'admin_password_456', isSecret: true, description: 'Admin password' },
   ]);
 
-  // Mock data - memoized to avoid recreating on every render
-  const mockDeployment = useMemo<DeploymentDetailType>(() => ({
-    id: deploymentId || '',
-    name: 'Nextcloud',
-    app: 'nextcloud',
-    icon: '☁️',
-    status: 'running',
-    uptime: '15 days',
-    version: '28.0.2',
-    url: 'https://nextcloud.local',
-    resources: { cpu: '12%', memory: '256MB', disk: '2.4GB' },
-    ports: ['8080:80', '8443:443'],
-    lastUpdated: '2 days ago',
-  }), [deploymentId]);
-
-  const mockHistory = useMemo<DeploymentHistoryItem[]>(() => [
-    {
-      id: 'job-001',
-      type: 'restart',
-      status: 'completed',
-      startedAt: '2024-08-06T10:30:00Z',
-      finishedAt: '2024-08-06T10:31:15Z'
-    },
-    {
-      id: 'job-002',
-      type: 'update',
-      status: 'completed',
-      startedAt: '2024-08-05T14:20:00Z',
-      finishedAt: '2024-08-05T14:25:30Z'
-    },
-    {
-      id: 'job-003',
-      type: 'backup',
-      status: 'completed',
-      startedAt: '2024-08-04T02:00:00Z',
-      finishedAt: '2024-08-04T02:05:45Z'
-    },
-    {
-      id: 'job-004',
-      type: 'start',
-      status: 'failed',
-      startedAt: '2024-08-03T16:45:00Z',
-      finishedAt: '2024-08-03T16:45:30Z'
-    }
-  ], []);
-
-  // Load deployment data from API
-  const loadDeployment = useCallback(async () => {
-    if (!deploymentId) return;
-    
-    setLoading(true);
-    setError(null);
-    
-    try {
-      const response = await fetch(API.deployments.byId(deploymentId));
-      await ensureOk(response);
-      const data: GetDeploymentResponse = await response.json();
-      setDeployment(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load deployment');
-      // Fallback to mock data for development
-      setDeployment(mockDeployment);
-    } finally {
-      setLoading(false);
-    }
-  }, [deploymentId, mockDeployment]);
-
-  // Load deployment history from API
-  const loadHistory = useCallback(async (page = 1) => {
-    if (!deploymentId) return;
-    
-    setHistoryLoading(true);
-    
-    try {
-      const params = new URLSearchParams({ page: page.toString(), limit: '10' });
-      const response = await fetch(`${API.deployments.history(deploymentId)}?${params.toString()}`);
-      await ensureOk(response);
-      const data: GetDeploymentHistoryResponse = await response.json();
-      setHistory(data.items);
-      setHistoryTotal(data.total);
-      setHistoryPage(page);
-    } catch (err) {
-      console.error('Failed to load deployment history:', err);
-      // Fallback to mock data for development
-      setHistory(mockHistory);
-      setHistoryTotal(mockHistory.length);
-    } finally {
-      setHistoryLoading(false);
-    }
-  }, [deploymentId, mockHistory]);
-
-  // Load data on component mount
-  useEffect(() => {
-    loadDeployment();
-    if (activeTab === 'history') {
-      loadHistory();
-    }
-  }, [loadDeployment, loadHistory, activeTab]);
-
   // Handle tab changes
   // Note: handleTabChange was unused; tabs update via inline onClick handlers above.
 
@@ -269,7 +170,7 @@ export const DeploymentDetail: React.FC = () => {
           <h3 className="text-lg font-medium mb-2">Failed to load deployment</h3>
           <p className="text-text-muted mb-4">{error}</p>
           <button
-            onClick={() => loadDeployment()}
+            onClick={() => refetchDeployment()}
             className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
           >
             Try Again
@@ -333,41 +234,39 @@ export const DeploymentDetail: React.FC = () => {
   };
 
   const handleAction = async (action: 'start' | 'stop' | 'restart' | 'delete') => {
+    if (!deployment) return;
+    
+    const operationKey = `action-${action}`;
+    setOperationLoading(prev => ({ ...prev, [operationKey]: true }));
+    
     try {
-      const request: PostDeploymentActionRequest = { action };
-      const response = await fetch(API.deployments.actions(deployment.id), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request)
-      });
-      
-      await ensureOk(response);
-      // TODO: Handle response, update UI state, show success message
+      await executeAction(action);
+      // TODO: Show success message
     } catch (error) {
       console.error(`Error performing ${action}:`, error);
       // TODO: Show error message to user
+    } finally {
+      setOperationLoading(prev => ({ ...prev, [operationKey]: false }));
     }
   };
 
   const saveConfiguration = async () => {
+    if (!deployment) return;
+    
+    setOperationLoading(prev => ({ ...prev, 'save-config': true }));
+    
     try {
-      const request: PatchDeploymentRequest = {
+      await updateConfiguration({
         env: deploymentEnvVars,
         systemOverrides: deploymentOverrides
-      };
-      
-      const response = await fetch(API.deployments.byId(deployment.id), {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request)
       });
-      
-      await ensureOk(response);
       setIsEditing(false);
       // TODO: Show success message
     } catch (error) {
       console.error('Error saving configuration:', error);
       // TODO: Show error message to user
+    } finally {
+      setOperationLoading(prev => ({ ...prev, 'save-config': false }));
     }
   };
 
@@ -490,14 +389,17 @@ export const DeploymentDetail: React.FC = () => {
                     setIsEditing(true);
                   }
                 }}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2 ${
+                disabled={operationLoading['save-config']}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2 disabled:opacity-50 ${
                   isEditing 
                     ? 'bg-success text-primary-contrast hover:bg-success/90' 
                     : 'bg-primary text-primary-contrast hover:bg-primary/90'
                 }`}
               >
                 <Edit className="w-4 h-4" />
-                <span>{isEditing ? 'Save Changes' : 'Edit Configuration'}</span>
+                <span>
+                  {operationLoading['save-config'] ? 'Saving...' : (isEditing ? 'Save Changes' : 'Edit Configuration')}
+                </span>
               </button>
             </div>
 
@@ -736,7 +638,7 @@ export const DeploymentDetail: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-medium">Deployment History</h3>
               <button 
-                onClick={() => loadHistory(1)}
+                onClick={() => refetchHistory()}
                 className="px-4 py-2 bg-primary text-primary-contrast rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex items-center space-x-2"
               >
                 <RotateCw className="w-4 h-4" />
@@ -752,7 +654,7 @@ export const DeploymentDetail: React.FC = () => {
             ) : (
               <div className="bg-surface-1 rounded-lg border border-border overflow-hidden">
                 <div className="divide-y divide-border">
-                  {history.map((item) => (
+                  {historyData?.items?.map((item) => (
                     <div key={item.id} className="p-4 hover:bg-surface-2 transition-colors">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
@@ -784,7 +686,7 @@ export const DeploymentDetail: React.FC = () => {
                   ))}
                 </div>
 
-                {history.length === 0 && !historyLoading && (
+                {historyData?.items?.length === 0 && !historyLoading && (
                   <div className="text-center py-12">
                     <Clock className="w-12 h-12 text-text-muted mx-auto mb-4" />
                     <h3 className="text-lg font-medium mb-2">No history found</h3>
@@ -793,15 +695,15 @@ export const DeploymentDetail: React.FC = () => {
                 )}
 
                 {/* Pagination */}
-                {historyTotal > 10 && (
+                {historyData && historyData.total > 10 && (
                   <div className="px-4 py-3 bg-surface-2 border-t border-border flex items-center justify-between">
                     <div className="text-sm text-text-muted">
-                      Showing {((historyPage - 1) * 10) + 1} to {Math.min(historyPage * 10, historyTotal)} of {historyTotal} activities
+                      Showing {((historyPage - 1) * 10) + 1} to {Math.min(historyPage * 10, historyData.total)} of {historyData.total} activities
                     </div>
                     
                     <div className="flex items-center space-x-2">
                       <button
-                        onClick={() => loadHistory(historyPage - 1)}
+                        onClick={() => setHistoryPage(historyPage - 1)}
                         disabled={historyPage <= 1}
                         className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
                       >
@@ -809,12 +711,12 @@ export const DeploymentDetail: React.FC = () => {
                       </button>
                       
                       <span className="px-3 py-1 text-sm">
-                        Page {historyPage} of {Math.ceil(historyTotal / 10)}
+                        Page {historyPage} of {Math.ceil(historyData.total / 10)}
                       </span>
                       
                       <button
-                        onClick={() => loadHistory(historyPage + 1)}
-                        disabled={historyPage >= Math.ceil(historyTotal / 10)}
+                        onClick={() => setHistoryPage(historyPage + 1)}
+                        disabled={historyPage >= Math.ceil(historyData.total / 10)}
                         className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <ChevronRight className="w-4 h-4" />
