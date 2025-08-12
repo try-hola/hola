@@ -1,6 +1,7 @@
 import { API } from '@hola/shared';
 import type { ErrorResponse } from '@hola/shared';
 import { safeFetch } from './error';
+import { globalCache, CacheTTL } from './cache';
 
 // Environment-based configuration
 const getBaseUrl = (): string => {
@@ -33,8 +34,26 @@ const getBaseUrl = (): string => {
 
 const BASE_URL = getBaseUrl();
 
-// Request deduplication cache
-const pendingRequests = new Map<string, Promise<Response>>();
+// Enhanced request deduplication with cancellation
+interface PendingRequest {
+  promise: Promise<Response>;
+  controller: AbortController;
+  timestamp: number;
+}
+
+const pendingRequests = new Map<string, PendingRequest>();
+
+// Request deduplication policies
+const DEDUPE_POLICIES = {
+  // Always deduplicate GET requests
+  GET: true,
+  // Deduplicate idempotent mutations within short time window
+  PUT: true,
+  PATCH: true,
+  // Don't deduplicate creation or deletion
+  POST: false,
+  DELETE: false,
+} as const;
 
 // Create cache key for request deduplication
 function createCacheKey(url: string, options: RequestInit = {}): string {
@@ -43,7 +62,21 @@ function createCacheKey(url: string, options: RequestInit = {}): string {
   return `${method}:${url}:${body}`;
 }
 
-// Type-safe API client with error handling and request deduplication
+// Cache TTL mapping based on endpoint patterns
+function getCacheTTL(path: string): number {
+  if (path.includes('/summary')) return CacheTTL.dashboard;
+  if (path.includes('/status')) return CacheTTL.system_status;
+  if (path.includes('/jobs')) return CacheTTL.job_status;
+  if (path.includes('/deployments')) return CacheTTL.deployments;
+  if (path.includes('/notifications')) return CacheTTL.notifications;
+  if (path.includes('/catalog')) return CacheTTL.catalog;
+  if (path.includes('/settings')) return CacheTTL.settings;
+  if (path.includes('/backups')) return CacheTTL.backups;
+  if (path.includes('/me')) return CacheTTL.user_info;
+  return CacheTTL.deployments; // default
+}
+
+// Type-safe API client with enhanced deduplication, caching, and optimistic updates
 export class ApiClient {
   private baseUrl: string;
 
@@ -56,21 +89,31 @@ export class ApiClient {
     return `${this.baseUrl}${path}`;
   }
 
-  // Generic request method with deduplication
+  // Enhanced request method with smart deduplication and caching
   private async request<T>(
     path: string,
     options: RequestInit = {},
     dedupeEnabled: boolean = true
   ): Promise<T> {
     const url = this.buildUrl(path);
+    const method = (options.method || 'GET') as keyof typeof DEDUPE_POLICIES;
     const cacheKey = createCacheKey(url, options);
 
-    // Check for existing request for GET operations
-    if (dedupeEnabled && (!options.method || options.method === 'GET')) {
+    // Check if deduplication should be applied
+    const shouldDedupe = dedupeEnabled && DEDUPE_POLICIES[method];
+
+    // Check for existing request
+    if (shouldDedupe) {
       const existingRequest = pendingRequests.get(cacheKey);
       if (existingRequest) {
-        const response = await existingRequest;
-        return response.clone().json();
+        // Cancel if older than 30 seconds
+        if (Date.now() - existingRequest.timestamp > 30000) {
+          existingRequest.controller.abort();
+          pendingRequests.delete(cacheKey);
+        } else {
+          const response = await existingRequest.promise;
+          return response.clone().json();
+        }
       }
     }
 
@@ -80,29 +123,63 @@ export class ApiClient {
       ...options.headers,
     };
 
-    // Create request promise
+    // Create abort controller for cancellation
+    const controller = new AbortController();
+    
+    // Create request promise with abort signal
     const requestPromise = safeFetch(url, {
       ...options,
       headers,
+      signal: controller.signal,
     });
 
-    // Cache GET requests
-    if (dedupeEnabled && (!options.method || options.method === 'GET')) {
-      pendingRequests.set(cacheKey, requestPromise);
+    // Store pending request if deduplication is enabled
+    if (shouldDedupe) {
+      const pendingRequest: PendingRequest = {
+        promise: requestPromise,
+        controller,
+        timestamp: Date.now(),
+      };
+      
+      pendingRequests.set(cacheKey, pendingRequest);
 
-      // Clean up cache after request completes
+      // Clean up after completion
       requestPromise
         .then(() => pendingRequests.delete(cacheKey))
         .catch(() => pendingRequests.delete(cacheKey));
     }
 
     const response = await requestPromise;
+    
+    // Cache GET responses with appropriate TTL
+    if (method === 'GET') {
+      const data = await response.clone().json();
+      const ttl = getCacheTTL(path);
+      globalCache.set(`api:${url}`, data, ttl);
+      return data;
+    }
+    
     return response.json();
   }
 
-  // HTTP method helpers
-  async get<T>(path: string, dedupeEnabled: boolean = true): Promise<T> {
-    return this.request<T>(path, { method: 'GET' }, dedupeEnabled);
+  // Try to get from cache first, then fetch if not available
+  private async getWithCache<T>(path: string): Promise<T> {
+    const url = this.buildUrl(path);
+    const cached = globalCache.get<T>(`api:${url}`);
+    
+    if (cached !== null) {
+      return cached;
+    }
+    
+    return this.request<T>(path, { method: 'GET' });
+  }
+
+  // HTTP method helpers with smart caching
+  async get<T>(path: string, useCache: boolean = true): Promise<T> {
+    if (useCache) {
+      return this.getWithCache<T>(path);
+    }
+    return this.request<T>(path, { method: 'GET' }, false);
   }
 
   async post<T>(path: string, data?: unknown): Promise<T> {
@@ -113,14 +190,22 @@ export class ApiClient {
   }
 
   async patch<T>(path: string, data?: unknown): Promise<T> {
-    return this.request<T>(path, {
+    const result = await this.request<T>(path, {
       method: 'PATCH',
       body: data ? JSON.stringify(data) : undefined,
-    }, false);
+    }, true); // Enable deduplication for idempotent PATCH operations
+    
+    // Invalidate related cache entries
+    this.invalidateCache(path);
+    return result;
   }
 
   async delete<T>(path: string): Promise<T> {
-    return this.request<T>(path, { method: 'DELETE' }, false);
+    const result = await this.request<T>(path, { method: 'DELETE' }, false);
+    
+    // Invalidate related cache entries
+    this.invalidateCache(path);
+    return result;
   }
 
   // Specialized methods for file uploads
@@ -133,7 +218,11 @@ export class ApiClient {
       body: formData,
     });
 
-    return response.json();
+    const result = await response.json();
+    
+    // Invalidate related cache entries
+    this.invalidateCache(path);
+    return result;
   }
 
   // Build query string from parameters
@@ -150,19 +239,52 @@ export class ApiClient {
     return queryString ? `?${queryString}` : '';
   }
 
-  // Clear request cache (useful for forced refreshes)
+  // Smart cache invalidation
+  invalidateCache(path: string): void {
+    const url = this.buildUrl(path);
+    
+    // Remove exact match
+    globalCache.delete(`api:${url}`);
+    
+    // Remove related cache entries based on path patterns
+    if (path.includes('/deployments/')) {
+      globalCache.deleteByPattern(/^api:.*\/deployments/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on deployments
+    } else if (path.includes('/jobs/')) {
+      globalCache.deleteByPattern(/^api:.*\/jobs/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on jobs
+    } else if (path.includes('/backups/')) {
+      globalCache.deleteByPattern(/^api:.*\/backups/);
+    } else if (path.includes('/notifications/')) {
+      globalCache.deleteByPattern(/^api:.*\/notifications/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard shows notification count
+    } else if (path.includes('/settings/')) {
+      globalCache.deleteByPattern(/^api:.*\/settings/);
+    }
+  }
+
+  // Clear all caches (useful for forced refreshes)
   clearCache(): void {
+    globalCache.clear();
     pendingRequests.clear();
+  }
+
+  // Cancel all pending requests
+  cancelPendingRequests(): void {
+    for (const [key, request] of pendingRequests.entries()) {
+      request.controller.abort();
+      pendingRequests.delete(key);
+    }
   }
 }
 
 // Default API client instance
 export const apiClient = new ApiClient();
 
-// Convenience API methods using shared API constants
+// Convenience API methods using shared API constants with enhanced caching
 export const api = {
   // Health and basic endpoints
-  health: () => apiClient.get(API.health),
+  health: () => apiClient.get(API.health, false), // Don't cache health checks
   me: () => apiClient.get(API.me),
   summary: () => apiClient.get(API.summary),
 
@@ -171,7 +293,7 @@ export const api = {
     status: () => apiClient.get(API.system.status),
   },
 
-  // Catalog
+  // Catalog with smart caching
   catalog: {
     apps: (params?: { query?: string; category?: string; page?: number; limit?: number }) => {
       const query = apiClient.buildQuery(params || {});
@@ -186,12 +308,12 @@ export const api = {
       apiClient.get(API.catalog.versionDetail(appId, version)),
   },
 
-  // Drafts (Install Wizard)
+  // Drafts (Install Wizard) with cache invalidation
   drafts: {
     create: (data: { appId: string; version?: string }) => 
       apiClient.post(API.drafts.create, data),
     
-    byId: (draftId: string) => apiClient.get(API.drafts.byId(draftId)),
+    byId: (draftId: string) => apiClient.get(API.drafts.byId(draftId), false), // Don't cache draft state
     
     update: (draftId: string, data: unknown) => 
       apiClient.patch(API.drafts.byId(draftId), data),
@@ -212,7 +334,7 @@ export const api = {
       apiClient.post(API.drafts.finalize(draftId)),
   },
 
-  // Deployments
+  // Deployments with optimistic cache management
   deployments: {
     list: (params?: { status?: string; page?: number; limit?: number; q?: string }) => {
       const query = apiClient.buildQuery(params || {});
@@ -234,26 +356,26 @@ export const api = {
     
     logs: (deploymentId: string, params?: { since?: string; lines?: number }) => {
       const query = apiClient.buildQuery(params || {});
-      return apiClient.get(`${API.deployments.logs(deploymentId)}${query}`);
+      return apiClient.get(`${API.deployments.logs(deploymentId)}${query}`, false); // Don't cache logs
     },
   },
 
-  // Jobs
+  // Jobs with frequent updates
   jobs: {
     list: (params?: { deploymentId?: string; status?: string; page?: number; limit?: number }) => {
       const query = apiClient.buildQuery(params || {});
       return apiClient.get(`${API.jobs.base}${query}`);
     },
     
-    byId: (jobId: string) => apiClient.get(API.jobs.byId(jobId)),
+    byId: (jobId: string) => apiClient.get(API.jobs.byId(jobId), false), // Don't cache job details
     
     logs: (jobId: string, params?: { since?: string; lines?: number }) => {
       const query = apiClient.buildQuery(params || {});
-      return apiClient.get(`${API.jobs.logs(jobId)}${query}`);
+      return apiClient.get(`${API.jobs.logs(jobId)}${query}`, false); // Don't cache logs
     },
   },
 
-  // Backups
+  // Backups with cache management
   backups: {
     list: (params?: { appId?: string; status?: string; page?: number; limit?: number }) => {
       const query = apiClient.buildQuery(params || {});
@@ -272,7 +394,7 @@ export const api = {
       apiClient.delete(API.backups.byId(backupId)),
   },
 
-  // Notifications
+  // Notifications with cache management
   notifications: {
     list: (params?: { filter?: string; page?: number; limit?: number }) => {
       const query = apiClient.buildQuery(params || {});
@@ -288,7 +410,7 @@ export const api = {
       apiClient.post(API.notifications.actions, data),
   },
 
-  // Settings
+  // Settings with cache management
   settings: {
     get: () => apiClient.get(API.settings.base),
     
@@ -301,6 +423,13 @@ export const api = {
       update: (data: unknown) => 
         apiClient.patch(API.settings.backup, data),
     },
+  },
+
+  // Cache management utilities
+  cache: {
+    clear: () => apiClient.clearCache(),
+    invalidate: (path: string) => apiClient.invalidateCache(path),
+    stats: () => globalCache.getStats(),
   },
 };
 

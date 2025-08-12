@@ -3,7 +3,7 @@ import { api } from '../utils/api';
 import { globalCache } from '../utils/cache';
 import type { GetSummaryResponse } from '@hola/shared';
 
-// StrictMode-compatible API hook for dashboard data
+// StrictMode-compatible API hook for dashboard data with enhanced caching
 export function useWorkingApi() {
   const [state, setState] = React.useState<{
     data: GetSummaryResponse | null;
@@ -15,16 +15,15 @@ export function useWorkingApi() {
     error: null,
   });
 
-  // Fetch data with caching and error handling
+  // Fetch data with enhanced caching and error handling
   const fetchData = React.useCallback(async () => {
     const cacheKey = 'dashboard-summary';
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
+    const cached = globalCache.get<GetSummaryResponse>(cacheKey);
     
-    // Check cache (5 second TTL)
-    if (cached && (now - cached.timestamp) < 5000) {
+    // Check cache first
+    if (cached !== null) {
       setState({
-        data: cached.data as GetSummaryResponse,
+        data: cached,
         loading: false,
         error: null,
       });
@@ -36,9 +35,7 @@ export function useWorkingApi() {
     try {
       const result = await api.summary() as GetSummaryResponse;
       
-      // Cache the result
-      globalCache.set(cacheKey, { data: result, timestamp: now });
-      
+      // Cache is handled automatically by the enhanced API client
       setState({
         data: result,
         loading: false,
