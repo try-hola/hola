@@ -1,6 +1,6 @@
 import { API } from '@hola/shared';
 import type { ErrorResponse } from '@hola/shared';
-import { safeFetch } from './error';
+import { safeFetchEnhanced } from './error-enhanced';
 import { globalCache, CacheTTL } from './cache';
 
 // Environment-based configuration
@@ -127,7 +127,7 @@ export class ApiClient {
     const controller = new AbortController();
     
     // Create request promise with abort signal
-    const requestPromise = safeFetch(url, {
+    const requestPromise = safeFetchEnhanced(url, {
       ...options,
       headers,
       signal: controller.signal,
@@ -213,7 +213,7 @@ export class ApiClient {
     const url = this.buildUrl(path);
     
     // Don't set Content-Type for FormData - let browser set it with boundary
-    const response = await safeFetch(url, {
+    const response = await safeFetchEnhanced(url, {
       method: 'POST',
       body: formData,
     });

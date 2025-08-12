@@ -5,6 +5,7 @@ import { Dashboard } from './pages/Dashboard';
 import { VerySimpleStrictTest } from './pages/VerySimpleStrictTest';
 import { LiveFeaturesDemo } from './pages/LiveFeaturesDemo';
 import PerformanceOptimizationsDemo from './pages/PerformanceOptimizationsDemo';
+import ErrorHandlingDemo from './pages/ErrorHandlingDemo';
 import { Catalog } from './pages/Catalog';
 import { Deployments } from './pages/Deployments';
 import { DeploymentDetail } from './pages/DeploymentDetail';
@@ -24,6 +25,7 @@ function App() {
             <Route path="/very-simple-strict" element={<VerySimpleStrictTest />} />
             <Route path="/live-features-demo" element={<LiveFeaturesDemo />} />
             <Route path="/performance-optimizations-demo" element={<PerformanceOptimizationsDemo />} />
+            <Route path="/error-handling-demo" element={<ErrorHandlingDemo />} />
             <Route path="/catalog" element={<Catalog />} />
             <Route path="/catalog/:appId/install" element={<InstallWizard />} />
             <Route path="/deployments" element={<Deployments />} />
