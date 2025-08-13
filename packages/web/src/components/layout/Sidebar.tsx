@@ -9,7 +9,11 @@ import {
   Settings,
   Activity,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Code,
+  Bug,
+  Zap,
+  AlertTriangle
 } from 'lucide-react';
 
 const navigationItems = [
@@ -19,6 +23,14 @@ const navigationItems = [
   { name: 'Backups', path: '/backups', icon: Shield },
   { name: 'Notifications', path: '/notifications', icon: Bell, badge: 3 },
   { name: 'Settings', path: '/settings', icon: Settings },
+];
+
+const developmentItems = [
+  { name: 'Live Features Demo', path: '/live-features-demo', icon: Zap },
+  { name: 'Performance Demo', path: '/performance-optimizations-demo', icon: Activity },
+  { name: 'Error Handling Demo', path: '/error-handling-demo', icon: AlertTriangle },
+  { name: 'Development Tools', path: '/development-dashboard', icon: Code },
+  { name: 'Advanced Debugging', path: '/advanced-debugging', icon: Bug },
 ];
 
 interface SidebarProps {
@@ -78,6 +90,36 @@ export const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, onToggleCollapse 
                   {item.badge}
                 </span>
               )}
+            </Link>
+          );
+        })}
+
+        {/* Development Tools Section */}
+        {!isCollapsed && (
+          <div className="pt-4">
+            <div className="px-3 py-2 text-xs font-semibold text-text-muted uppercase tracking-wider">
+              Development Tools
+            </div>
+          </div>
+        )}
+        
+        {developmentItems.map((item) => {
+          const Icon = item.icon;
+          const active = isActive(item.path);
+          
+          return (
+            <Link
+              key={item.name}
+              to={item.path}
+              className={`flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                active
+                  ? 'bg-primary/10 text-primary border border-primary/20'
+                  : 'text-text-muted hover:text-text-strong hover:bg-surface-2'
+              }`}
+              title={isCollapsed ? item.name : undefined}
+            >
+              <Icon className="w-4 h-4" />
+              {!isCollapsed && <span>{item.name}</span>}
             </Link>
           );
         })}

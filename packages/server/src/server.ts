@@ -96,7 +96,7 @@ import {
 } from './mock-data';
 
 // Import development tools
-import { developmentToolsEndpoints } from './config/development-api';
+import { developmentToolsEndpoints, createApiMonitoringMiddleware } from './config/development-api';
 import { initializeDevelopmentEnvironment } from './config/development';
 
 const PORT = Number(Bun.env.PORT || 3001);
@@ -1021,7 +1021,13 @@ const server = Bun.serve({
     if (pre) return pre;
 
     const url = new URL(req.url);
-    const res = await route(url, req);
+    
+    // Apply API monitoring middleware
+    const apiMonitoringMiddleware = createApiMonitoringMiddleware();
+    const res = await apiMonitoringMiddleware(req, async () => {
+      return await route(url, req);
+    });
+    
     return withCors(res);
   },
 });
