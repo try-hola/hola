@@ -95,6 +95,10 @@ import {
   config,
 } from './mock-data';
 
+// Import development tools
+import { developmentToolsEndpoints } from './config/development-api';
+import { initializeDevelopmentEnvironment } from './config/development';
+
 const PORT = Number(Bun.env.PORT || 3001);
 
 function json(data: unknown, init?: ResponseInit) {
@@ -772,6 +776,63 @@ async function route(url: URL, req: Request): Promise<Response> {
     return new Response(stream, { headers: sse() });
   }
 
+  // ===== DEVELOPMENT TOOLS ROUTES =====
+  
+  // Development configuration
+  if (pathname === '/api/dev/config' && req.method === 'GET') {
+    return developmentToolsEndpoints.getConfig();
+  }
+  
+  // Available scenarios
+  if (pathname === '/api/dev/scenarios' && req.method === 'GET') {
+    return developmentToolsEndpoints.getScenarios();
+  }
+  
+  // Apply scenario
+  if (pathname === '/api/dev/scenarios/apply' && req.method === 'POST') {
+    return await developmentToolsEndpoints.applyScenario(req);
+  }
+  
+  // Update customization
+  if (pathname === '/api/dev/customization' && req.method === 'PATCH') {
+    return await developmentToolsEndpoints.updateCustomization(req);
+  }
+  
+  // Reset mock data
+  if (pathname === '/api/dev/mock-data/reset' && req.method === 'POST') {
+    return developmentToolsEndpoints.resetMockData();
+  }
+  
+  // API call history
+  if (pathname === '/api/dev/api-calls' && req.method === 'GET') {
+    return developmentToolsEndpoints.getApiCallHistory(req);
+  }
+  
+  // Clear API call history
+  if (pathname === '/api/dev/api-calls/clear' && req.method === 'DELETE') {
+    return developmentToolsEndpoints.clearApiCallHistory();
+  }
+  
+  // Performance metrics
+  if (pathname === '/api/dev/performance' && req.method === 'GET') {
+    return developmentToolsEndpoints.getPerformanceMetrics();
+  }
+  
+  // State debugging info
+  if (pathname === '/api/dev/state' && req.method === 'GET') {
+    return developmentToolsEndpoints.getStateDebugInfo();
+  }
+  
+  // Benchmark endpoint
+  if (pathname === '/api/dev/benchmark' && req.method === 'POST') {
+    return await developmentToolsEndpoints.benchmark(req);
+  }
+  
+  // Network simulation
+  if (pathname === '/api/dev/network/simulate' && req.method === 'POST') {
+    return await developmentToolsEndpoints.simulateNetworkCondition(req);
+  }
+
   // ===== API DOCUMENTATION ROUTES =====
   
   // OpenAPI JSON specification
@@ -966,6 +1027,9 @@ const server = Bun.serve({
 });
 
 console.log(`[server] listening on http://localhost:${server.port}${API.base}`);
+
+// Initialize development environment
+initializeDevelopmentEnvironment();
 
 // Initialize periodic tasks for mock data enhancement
 if (config.USE_MOCK_DATA) {
