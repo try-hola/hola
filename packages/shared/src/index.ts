@@ -466,3 +466,8 @@ export type PatchBackupSettingsResponse = GetBackupSettingsResponse;
 // System status
 // ------------------------------------------------------
 export type GetSystemStatusResponse = SystemStatus;
+
+// ------------------------------------------------------
+// Documentation utilities
+// ------------------------------------------------------
+export * from './docs';

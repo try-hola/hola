@@ -772,6 +772,184 @@ async function route(url: URL, req: Request): Promise<Response> {
     return new Response(stream, { headers: sse() });
   }
 
+  // ===== API DOCUMENTATION ROUTES =====
+  
+  // OpenAPI JSON specification
+  if (pathname === '/api/openapi.json' && req.method === 'GET') {
+    const { generateOpenAPISpec } = await import('@hola/shared');
+    const spec = generateOpenAPISpec();
+    return json(spec);
+  }
+
+  // Swagger UI
+  if (pathname === '/docs' && req.method === 'GET') {
+    const { generateSwaggerUI } = await import('@hola/shared');
+    const html = generateSwaggerUI('/api/openapi.json');
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  // ReDoc UI
+  if (pathname === '/redoc' && req.method === 'GET') {
+    const { generateReDocUI } = await import('@hola/shared');
+    const html = generateReDocUI('/api/openapi.json');
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  // API Examples
+  if (pathname === '/docs/examples' && req.method === 'GET') {
+    const { generateExamplesHTML } = await import('@hola/shared');
+    const html = generateExamplesHTML();
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  // API Changelog
+  if (pathname === '/docs/changelog' && req.method === 'GET') {
+    const { generateChangelogHTML } = await import('@hola/shared');
+    const html = generateChangelogHTML();
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  // API Changelog (raw markdown)
+  if (pathname === '/docs/changelog.md' && req.method === 'GET') {
+    const { generateChangelog } = await import('@hola/shared');
+    const changelog = generateChangelog();
+    return new Response(changelog, {
+      headers: { 'content-type': 'text/markdown; charset=utf-8' }
+    });
+  }
+
+  // Type Browser
+  if (pathname === '/docs/types' && req.method === 'GET') {
+    const { generateTypeBrowserHTML } = await import('@hola/shared');
+    const html = generateTypeBrowserHTML();
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  // Migration Guide Generator
+  if (pathname === '/docs/migration' && req.method === 'GET') {
+    const fromVersion = searchParams.get('from');
+    const toVersion = searchParams.get('to');
+    
+    if (!fromVersion || !toVersion) {
+      return json({ error: { code: 'MISSING_PARAMS', message: 'from and to version parameters required' } }, { status: 400 });
+    }
+
+    const { generateMigrationGuide } = await import('@hola/shared');
+    const guide = generateMigrationGuide(fromVersion, toVersion);
+    
+    if (!guide) {
+      return json({ error: { code: 'INVALID_VERSIONS', message: 'Invalid version numbers or migration not available' } }, { status: 404 });
+    }
+    
+    return json(guide);
+  }
+
+  // Documentation Home Page
+  if (pathname === '/docs/home' && req.method === 'GET') {
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hola API Documentation</title>
+  <style>
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 800px; 
+      margin: 0 auto; 
+      padding: 2rem;
+      line-height: 1.6;
+    }
+    h1 { color: #3b82f6; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
+    .links { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 2rem 0; }
+    .link-card { 
+      border: 1px solid #e5e7eb; 
+      border-radius: 8px; 
+      padding: 1.5rem; 
+      text-decoration: none; 
+      color: inherit;
+      transition: border-color 0.2s;
+    }
+    .link-card:hover { border-color: #3b82f6; }
+    .link-card h3 { margin: 0 0 0.5rem 0; color: #1f2937; }
+    .link-card p { margin: 0; color: #6b7280; font-size: 0.9rem; }
+    .badge { 
+      background: #dbeafe; 
+      color: #1e40af; 
+      padding: 0.25rem 0.5rem; 
+      border-radius: 4px; 
+      font-size: 0.75rem;
+      font-weight: 500;
+    }
+  </style>
+</head>
+<body>
+  <h1>🚀 Hola API Documentation</h1>
+  <p>Welcome to the comprehensive API documentation for the Hola Application Platform. Choose from the interactive documentation options below:</p>
+  
+  <div class="links">
+    <a href="/docs" class="link-card">
+      <h3>📊 Swagger UI <span class="badge">Interactive</span></h3>
+      <p>Interactive API explorer with live testing capabilities. Try endpoints directly from your browser.</p>
+    </a>
+    
+    <a href="/redoc" class="link-card">
+      <h3>📖 ReDoc <span class="badge">Clean</span></h3>
+      <p>Beautiful, responsive API documentation with improved organization and readability.</p>
+    </a>
+    
+    <a href="/docs/examples" class="link-card">
+      <h3>💡 Code Examples <span class="badge">Comprehensive</span></h3>
+      <p>Complete code examples including React hooks, error handling, testing patterns, and real-time features.</p>
+    </a>
+    
+    <a href="/docs/types" class="link-card">
+      <h3>🔍 Type Browser <span class="badge">Reference</span></h3>
+      <p>Explore TypeScript types, their relationships, and usage patterns throughout the API.</p>
+    </a>
+    
+    <a href="/docs/changelog" class="link-card">
+      <h3>📋 Changelog <span class="badge">History</span></h3>
+      <p>Track all API changes, breaking changes, and migration requirements across versions.</p>
+    </a>
+  </div>
+  
+  <h2>🔗 Quick Links</h2>
+  <ul>
+    <li><strong>OpenAPI Spec:</strong> <a href="/api/openapi.json">/api/openapi.json</a></li>
+    <li><strong>Health Check:</strong> <a href="/api/health">/api/health</a></li>
+    <li><strong>API Base:</strong> <code>${API.base}</code></li>
+  </ul>
+  
+  <h2>🔑 Authentication</h2>
+  <p>All API endpoints require authentication via the <code>X-API-Key</code> header:</p>
+  <pre style="background: #f3f4f6; padding: 1rem; border-radius: 4px; overflow-x: auto;">curl -H "X-API-Key: your-api-key" http://localhost:3001/api/health</pre>
+  
+  <h2>📚 Getting Started</h2>
+  <ol>
+    <li>Explore the <a href="/docs">interactive API documentation</a></li>
+    <li>Check out <a href="/docs/examples">code examples</a> for your language</li>
+    <li>Review the <a href="/docs/types">type definitions</a> for proper integration</li>
+    <li>Read the <a href="/docs/changelog">changelog</a> for version updates</li>
+  </ol>
+</body>
+</html>`;
+    
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
+
   return notFound();
 }
 
