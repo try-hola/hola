@@ -52,6 +52,13 @@ import {
   type JobStatus,
 } from '@hola/shared';
 
+// Phase 0: Infrastructure imports
+import { appConfig, featureFlags } from './config/features';
+import { initializeLogger, getLogger } from './lib/logger';
+import { initializeMetrics } from './lib/metrics';
+import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
+import { initializeServices, shutdownServices } from './services/factory';
+
 // Import enhanced mock data
 import {
   // Deployments
@@ -99,7 +106,31 @@ import {
 import { developmentToolsEndpoints, createApiMonitoringMiddleware } from './config/development-api';
 import { initializeDevelopmentEnvironment } from './config/development';
 
-const PORT = Number(Bun.env.PORT || 3001);
+// Phase 0: Initialize infrastructure
+const logger = getLogger().child({ service: 'HolaServer' });
+initializeLogger(appConfig.logLevel, appConfig.logFormat);
+initializeMetrics();
+initializeServices();
+
+// Phase 0: Startup messaging
+console.log('🚀 Starting Hola Server - Phase 0 Implementation');
+console.log('📋 Phase 0 Deliverables:');
+console.log('  ✅ Feature flag scaffolding and service factory');
+console.log('  ✅ Request ID middleware, structured logging, basic metrics');
+console.log('  ✅ Health and readiness endpoints (/healthz, /readyz, /metrics)');
+console.log('  ✅ Contract test infrastructure');
+console.log('');
+
+logger.info('Phase 0 infrastructure initialized', {
+  featureFlags,
+  config: appConfig,
+});
+
+const PORT = appConfig.port;
+
+// Phase 0: Initialize middleware
+const requestMiddleware = createRequestMiddleware();
+const healthMiddleware = createHealthMiddleware();
 
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
@@ -133,7 +164,7 @@ function withCors(res: Response) {
   const headers = new Headers(res.headers);
   headers.set('access-control-allow-origin', '*');
   headers.set('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-  headers.set('access-control-allow-headers', 'content-type,authorization');
+  headers.set('access-control-allow-headers', 'content-type,authorization,x-request-id');
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
@@ -172,9 +203,46 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json(payload);
   }
 
+  // Phase 0: Health endpoints  
+  if (pathname === '/healthz' && req.method === 'GET') {
+    return healthMiddleware.healthCheck();
+  }
+
+  if (pathname === '/readyz' && req.method === 'GET') {
+    return healthMiddleware.readinessCheck();
+  }
+
+  if (pathname === '/metrics' && req.method === 'GET') {
+    return healthMiddleware.metricsEndpoint();
+  }
+
+  // Phase 0: Feature flags and service info
+  if (pathname === '/api/phase0/features' && req.method === 'GET') {
+    return json({
+      phase: 'Phase 0 - Foundations',
+      featureFlags,
+      config: appConfig,
+      services: {
+        logging: true,
+        metrics: true,
+        healthChecks: true,
+        serviceFactory: true,
+      },
+    });
+  }
+
+  // Phase 0: Service factory status
+  if (pathname === '/api/phase0/services' && req.method === 'GET') {
+    const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
+    return json({
+      healthStatus: serviceFactory.getHealthStatus(),
+      activatedServices: [],
+    });
+  }
+
   // Hello
   if (pathname === API.hello && req.method === 'GET') {
-    const payload: HelloResponse = { message: 'Hello from Bun server' };
+    const payload: HelloResponse = { message: 'Hello from Hola server (Phase 0 - Foundations)' };
     return json(payload);
   }
 
@@ -182,7 +250,13 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.echo && req.method === 'POST') {
     try {
       const body = await req.json();
-      return json({ received: body });
+      // Phase 0: Use request context to access the request ID
+      const context = getRequestContext(req);
+      return json({ 
+        received: body,
+        timestamp: new Date().toISOString(),
+        requestId: context?.requestId || req.headers.get('x-request-id'),
+      });
     } catch {
       return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
     }
@@ -1018,24 +1092,50 @@ const server = Bun.serve({
   port: PORT,
   async fetch(req) {
     const pre = handlePreflight(req);
-    if (pre) return pre;
+    if (pre) return withCors(pre);
 
     const url = new URL(req.url);
     
-    // Apply API monitoring middleware
-    const apiMonitoringMiddleware = createApiMonitoringMiddleware();
-    const res = await apiMonitoringMiddleware(req, async () => {
-      return await route(url, req);
+    // Phase 0: Apply request middleware first, then API monitoring
+    const response = await requestMiddleware(req, async () => {
+      // Apply API monitoring middleware
+      const apiMonitoringMiddleware = createApiMonitoringMiddleware();
+      return await apiMonitoringMiddleware(req, async () => {
+        return await route(url, req);
+      });
     });
     
-    return withCors(res);
+    return withCors(response);
   },
 });
 
-console.log(`[server] listening on http://localhost:${server.port}${API.base}`);
+logger.info('Hola server started successfully', {
+  port: server.port,
+  apiBase: `http://localhost:${server.port}${API.base}`,
+  phase0Endpoints: {
+    healthz: `http://localhost:${server.port}/healthz`,
+    readyz: `http://localhost:${server.port}/readyz`,
+    metrics: `http://localhost:${server.port}/metrics`,
+    features: `http://localhost:${server.port}/api/phase0/features`,
+    services: `http://localhost:${server.port}/api/phase0/services`,
+  },
+});
 
 // Initialize development environment
 initializeDevelopmentEnvironment();
+
+// Phase 0: Graceful shutdown handling
+process.on('SIGTERM', () => {
+  logger.info('Received SIGTERM, shutting down gracefully');
+  shutdownServices();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  logger.info('Received SIGINT, shutting down gracefully');
+  shutdownServices();
+  process.exit(0);
+});
 
 // Initialize periodic tasks for mock data enhancement
 if (config.USE_MOCK_DATA) {
