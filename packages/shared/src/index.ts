@@ -65,6 +65,11 @@ export const API = {
 
   system: {
     status: '/api/system/status',
+    health: '/api/system/health',
+    config: '/api/system/config',
+    healthz: '/healthz',
+    readyz: '/readyz',
+    metrics: '/metrics',
   },
 } as const;
 
@@ -466,6 +471,48 @@ export type PatchBackupSettingsResponse = GetBackupSettingsResponse;
 // System status
 // ------------------------------------------------------
 export type GetSystemStatusResponse = SystemStatus;
+
+export type SystemHealthResponse = {
+  healthStatus: Record<string, {
+    healthy: boolean;
+    lastCheck: string;
+  }>;
+  activatedServices: string[];
+};
+
+export type SystemConfigResponse = {
+  phase: string;
+  featureFlags: Record<string, boolean>;
+  config: Record<string, unknown>;
+  services: Record<string, boolean>;
+};
+
+export type HealthzResponse = {
+  status: 'healthy' | 'unhealthy';
+  timestamp: string;
+  uptime: number;
+  memory: {
+    rss: number;
+    heapTotal: number;
+    heapUsed: number;
+    external: number;
+    arrayBuffers: number;
+  };
+};
+
+// readyz returns a simple success response (200 OK with minimal/no body)
+export type ReadyzResponse = Record<string, never>; // Empty object or simple success
+
+export type MetricsResponse = {
+  http_requests: Record<string, number>;
+  service_activations: Record<string, number>;
+  http_request_duration: Record<string, {
+    count: number;
+    sum: number;
+    avg: number;
+  }>;
+  memory_usage: Record<string, number>;
+};
 
 // ------------------------------------------------------
 // Documentation utilities

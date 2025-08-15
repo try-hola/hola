@@ -219,8 +219,8 @@ async function route(url: URL, req: Request): Promise<Response> {
     return healthMiddleware.metricsEndpoint();
   }
 
-  // Phase 0: Feature flags and service info
-  if (pathname === '/api/phase0/features' && req.method === 'GET') {
+  // System: Feature flags and service info
+  if (pathname === '/api/system/config' && req.method === 'GET') {
     return json({
       phase: 'Phase 0 - Foundations',
       featureFlags,
@@ -234,8 +234,8 @@ async function route(url: URL, req: Request): Promise<Response> {
     });
   }
 
-  // Phase 0: Service factory status
-  if (pathname === '/api/phase0/services' && req.method === 'GET') {
+  // System: Service factory health status
+  if (pathname === '/api/system/health' && req.method === 'GET') {
     const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
     return json({
       healthStatus: serviceFactory.getHealthStatus(),
@@ -1181,12 +1181,12 @@ const server = Bun.serve({
 logger.info('Hola server started successfully', {
   port: server.port,
   apiBase: `http://localhost:${server.port}${API.base}`,
-  phase0Endpoints: {
+  systemEndpoints: {
     healthz: `http://localhost:${server.port}/healthz`,
     readyz: `http://localhost:${server.port}/readyz`,
     metrics: `http://localhost:${server.port}/metrics`,
-    features: `http://localhost:${server.port}/api/phase0/features`,
-    services: `http://localhost:${server.port}/api/phase0/services`,
+    config: `http://localhost:${server.port}/api/system/config`,
+    health: `http://localhost:${server.port}/api/system/health`,
   },
 });
 
