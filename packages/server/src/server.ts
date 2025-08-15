@@ -57,7 +57,7 @@ import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices, getConfigService } from './services/factory';
+import { initializeServices, shutdownServices, getActiveConfigService } from './services/factory';
 
 // Phase 1: Enhanced observability imports
 import { createErrorMappingMiddleware } from './middleware/error-mapping';
@@ -760,10 +760,10 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json(payload);
   }
 
-  // Settings - Phase 1: Using real ConfigService
+  // Settings - Phase 2: Using smart config service (database-backed when enabled)
   if (pathname === API.settings.base && req.method === 'GET') {
     try {
-      const configService = getConfigService();
+      const configService = getActiveConfigService();
       const systemSettings = await configService.getSystemSettings();
       
       const payload: GetSettingsResponse = {
@@ -792,7 +792,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.settings.base && req.method === 'PATCH') {
     try {
       const body = (await req.json().catch(() => ({}))) as Partial<PatchSettingsRequest>;
-      const configService = getConfigService();
+      const configService = getActiveConfigService();
       
       // Update system settings
       const updatedSettings = await configService.updateSystemSettings(body);
@@ -816,7 +816,7 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === API.settings.backup && req.method === 'GET') {
     try {
-      const configService = getConfigService();
+      const configService = getActiveConfigService();
       const backupSettings = await configService.getBackupSettings();
       
       const payload: GetBackupSettingsResponse = {
@@ -840,7 +840,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.settings.backup && req.method === 'PATCH') {
     try {
       const body = (await req.json().catch(() => ({}))) as Partial<PatchBackupSettingsRequest>;
-      const configService = getConfigService();
+      const configService = getActiveConfigService();
       
       // Update backup settings
       const updatedSettings = await configService.updateBackupSettings(body);

@@ -13,6 +13,10 @@ import { recordServiceActivation } from '../lib/metrics';
 import { RealStorageService, MockStorageService, type StorageService } from './core/storage';
 import { RealConfigService, MockConfigService, type ConfigService } from './core/config';
 
+// Phase 2 imports
+import { RealDatabaseService, MockDatabaseService, type DatabaseService } from './core/database';
+import { RealDatabaseConfigService, type DatabaseConfigService } from './core/database-config';
+
 export interface ServiceHealth {
   healthy: boolean;
   lastCheck: Date;
@@ -289,4 +293,74 @@ export function getConfigService(): ConfigService {
     featureFlag: 'useRealConfig',
     healthCheckInterval: 60000, // 1 minute
   });
+}
+
+/**
+ * Phase 2 Service Helpers
+ * Helper functions to create Phase 2 services with database support
+ */
+
+/**
+ * Get or create database service (depends on storage)
+ */
+export function getDatabaseService(): DatabaseService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<DatabaseService>('database');
+  if (existing) {
+    return existing;
+  }
+
+  // Get storage service first (dependency)
+  const storageService = getStorageService();
+
+  // Create new service
+  return factory.createService<DatabaseService>({
+    name: 'database',
+    mockImplementation: new MockDatabaseService(),
+    realImplementation: new RealDatabaseService(storageService),
+    featureFlag: 'useRealDatabase',
+    healthCheckInterval: 30000, // 30 seconds
+  });
+}
+
+/**
+ * Get or create database config service (depends on database)
+ * This is an alternative to the file-based config service for Phase 2
+ */
+export function getDatabaseConfigService(): DatabaseConfigService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<DatabaseConfigService>('database-config');
+  if (existing) {
+    return existing;
+  }
+
+  // Get database service first (dependency)
+  const databaseService = getDatabaseService();
+
+  // Create new service
+  return factory.createService<DatabaseConfigService>({
+    name: 'database-config',
+    mockImplementation: new MockConfigService() as unknown as DatabaseConfigService,
+    realImplementation: new RealDatabaseConfigService(databaseService),
+    featureFlag: 'useRealDatabase', // Uses database flag, not config flag
+    healthCheckInterval: 60000, // 1 minute
+  });
+}
+
+/**
+ * Smart config service getter - returns database-backed config if database is enabled,
+ * otherwise returns file-based config
+ */
+export function getActiveConfigService(): ConfigService | DatabaseConfigService {
+  const { useRealDatabase } = featureFlags;
+  
+  if (useRealDatabase) {
+    return getDatabaseConfigService();
+  } else {
+    return getConfigService();
+  }
 }
