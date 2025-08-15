@@ -110,17 +110,77 @@ export type HelloResponse = {
 };
 
 // ------------------------------------------------------
-// Identity
+// Identity and Authentication (Phase 3)
 // ------------------------------------------------------
-export type Identity = {
+export type PrincipalType = 'user' | 'service' | 'system';
+
+export type Principal = {
   id: string;
+  type: PrincipalType;
   name: string;
-  email: string;
+  email?: string;
   roles: string[];
+  capabilities: string[];
+  metadata?: Record<string, unknown>;
 };
 
+export type AuthContext = {
+  isAuthenticated: boolean;
+  principal?: Principal;
+  error?: string;
+};
+
+// Standard application capabilities
+export const CAPABILITIES = {
+  // Read operations
+  READ_SYSTEM: 'read:system',
+  READ_DEPLOYMENTS: 'read:deployments',
+  READ_LOGS: 'read:logs',
+  READ_BACKUPS: 'read:backups',
+  READ_CATALOG: 'read:catalog',
+  
+  // Write operations  
+  WRITE_DEPLOYMENTS: 'write:deployments',
+  WRITE_SETTINGS: 'write:settings',
+  WRITE_BACKUPS: 'write:backups',
+  
+  // Management operations
+  MANAGE_SYSTEM: 'manage:system',
+  MANAGE_USERS: 'manage:users',
+  
+  // Special capabilities
+  ADMIN: 'admin',
+  ALL: '*',
+} as const;
+
+export type Capability = typeof CAPABILITIES[keyof typeof CAPABILITIES];
+
+// Auth API endpoints
+export const AUTH_API = {
+  login: '/api/auth/login',
+  logout: '/api/auth/logout',
+  refresh: '/api/auth/refresh',
+  me: '/api/auth/me',
+} as const;
+
+// Auth request/response types
+export type LoginRequest = {
+  // API key login
+  apiKey?: string;
+  // Future: username/password, OAuth, etc.
+};
+
+export type LoginResponse = {
+  success: boolean;
+  token?: string;
+  principal?: Principal;
+  error?: string;
+};
+
+export type GetAuthMeResponse = Principal;
+
 // GET /api/me
-export type GetMeResponse = Identity;
+export type GetMeResponse = Principal;
 
 // ------------------------------------------------------
 // Dashboard Summary

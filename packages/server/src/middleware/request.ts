@@ -4,13 +4,16 @@
 
 import { getLogger, createLogger, type LogContext } from '../lib/logger';
 import { recordHttpRequest, getMetrics } from '../lib/metrics';
+import type { Principal } from '../services/auth/auth-service';
+import { getAuthContext, type AuthContext } from './auth';
 
 export interface RequestContext {
   requestId: string;
   startTime: number;
   logger: ReturnType<typeof createLogger>;
   userId?: string;
-  principal?: unknown; // For auth context later
+  principal?: Principal; // Auth principal from Phase 3
+  auth?: AuthContext;    // Auth context from Phase 3
 }
 
 // Extend Request interface to include our context
@@ -56,12 +59,18 @@ export function createRequestMiddleware() {
     const url = new URL(req.url);
     const userContext = extractUserContext(req);
     
+    // Extract auth context (if available from auth middleware)
+    const authContext = getAuthContext(req);
+    const principal = authContext?.principal;
+    
     // Create request-scoped logger
     const logContext: LogContext = {
       requestId,
       method: req.method,
       path: url.pathname,
       userAgent: req.headers.get('user-agent') || undefined,
+      principalId: principal?.id,
+      principalType: principal?.type,
       ...userContext,
     };
     
@@ -72,6 +81,8 @@ export function createRequestMiddleware() {
       method: req.method,
       path: url.pathname,
       query: url.search,
+      authenticated: authContext?.isAuthenticated || false,
+      principalId: principal?.id,
     });
     
     // Store context for request handlers
@@ -79,6 +90,8 @@ export function createRequestMiddleware() {
       requestId,
       startTime,
       logger,
+      principal,
+      auth: authContext || undefined,
       ...userContext,
     };
     

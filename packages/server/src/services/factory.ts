@@ -17,6 +17,9 @@ import { RealConfigService, MockConfigService, type ConfigService } from './core
 import { RealDatabaseService, MockDatabaseService, type DatabaseService } from './core/database';
 import { RealDatabaseConfigService, type DatabaseConfigService } from './core/database-config';
 
+// Phase 3 imports
+import { RealAuthService, MockAuthService, ApiKeyAuthProvider, type AuthService } from './auth/auth-service';
+
 export interface ServiceHealth {
   healthy: boolean;
   lastCheck: Date;
@@ -363,4 +366,55 @@ export function getActiveConfigService(): ConfigService | DatabaseConfigService 
   } else {
     return getConfigService();
   }
+}
+
+/**
+ * Phase 3 Service Helpers
+ * Helper functions to create Phase 3 services with authentication support
+ */
+
+/**
+ * Get or create auth service
+ */
+export function getAuthService(): AuthService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<AuthService>('auth');
+  if (existing) {
+    return existing;
+  }
+
+  // Create auth service with default configuration
+  const realAuthService = new RealAuthService(featureFlags.useAuth);
+  
+  // Register API key provider with default development keys
+  if (featureFlags.useAuth) {
+    const apiKeyProvider = new ApiKeyAuthProvider({
+      'dev-key-123': {
+        id: 'dev-user-1',
+        name: 'Development User',
+        email: 'dev@hola.local',
+        roles: ['admin'],
+        capabilities: ['*'],
+      },
+      'readonly-key-456': {
+        id: 'readonly-user',
+        name: 'Read Only User',
+        roles: ['reader'],
+        capabilities: ['read:system', 'read:deployments', 'read:logs', 'read:backups', 'read:catalog'],
+      },
+    });
+    
+    realAuthService.registerProvider(apiKeyProvider);
+  }
+
+  // Create new service
+  return factory.createService<AuthService>({
+    name: 'auth',
+    mockImplementation: new MockAuthService(),
+    realImplementation: realAuthService,
+    featureFlag: 'useAuth',
+    healthCheckInterval: 60000, // 1 minute
+  });
 }

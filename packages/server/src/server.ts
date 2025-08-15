@@ -62,6 +62,9 @@ import { initializeServices, shutdownServices, getActiveConfigService } from './
 // Phase 1: Enhanced observability imports
 import { createErrorMappingMiddleware } from './middleware/error-mapping';
 
+// Phase 3: Authentication imports
+import { createAuthMiddleware } from './middleware/auth';
+
 // Import enhanced mock data
 import {
   // Deployments
@@ -135,6 +138,9 @@ const PORT = appConfig.port;
 const requestMiddleware = createRequestMiddleware();
 const healthMiddleware = createHealthMiddleware();
 
+// Phase 3: Initialize auth middleware
+const authMiddleware = createAuthMiddleware();
+
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
     headers: {
@@ -184,7 +190,14 @@ function getIdentity(req: Request): GetMeResponse | null {
   const email = req.headers.get('x-user-email') || 'demo@example.com';
   const name = req.headers.get('x-user-name') || 'Demo User';
   if (!id) return null;
-  return { id, email, name, roles: ['user'] };
+  return { 
+    id, 
+    email, 
+    name, 
+    type: 'user',
+    roles: ['user'],
+    capabilities: ['read:system', 'read:deployments']
+  };
 }
 
 // SSE helper
@@ -1165,12 +1178,15 @@ const server = Bun.serve({
 
     const url = new URL(req.url);
     
-    // Phase 0: Apply request middleware first, then API monitoring
+    // Phase 0: Apply request middleware first, then auth, then API monitoring
     const response = await requestMiddleware(req, async () => {
-      // Apply API monitoring middleware
-      const apiMonitoringMiddleware = createApiMonitoringMiddleware();
-      return await apiMonitoringMiddleware(req, async () => {
-        return await route(url, req);
+      // Phase 3: Apply auth middleware  
+      return await authMiddleware(req, async () => {
+        // Apply API monitoring middleware
+        const apiMonitoringMiddleware = createApiMonitoringMiddleware();
+        return await apiMonitoringMiddleware(req, async () => {
+          return await route(url, req);
+        });
       });
     });
     
