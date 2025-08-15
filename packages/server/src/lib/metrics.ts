@@ -271,3 +271,16 @@ export function recordServiceActivation(service: string, mode: 'real' | 'mock', 
     result: success ? 'success' : 'fallback'
   });
 }
+
+/**
+ * Error metrics
+ */
+export function recordErrorMetric(errorCode: string, statusCode: number): void {
+  const metrics = getMetrics();
+  
+  metrics.counter('errors').increment({
+    code: errorCode,
+    status: statusCode.toString(),
+    status_class: `${Math.floor(statusCode / 100)}xx`
+  });
+}

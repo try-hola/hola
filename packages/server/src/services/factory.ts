@@ -9,6 +9,10 @@ import { featureFlags, type FeatureFlags } from '../config/features';
 import { getLogger } from '../lib/logger';
 import { recordServiceActivation } from '../lib/metrics';
 
+// Phase 1 imports
+import { RealStorageService, MockStorageService, type StorageService } from './core/storage';
+import { RealConfigService, MockConfigService, type ConfigService } from './core/config';
+
 export interface ServiceHealth {
   healthy: boolean;
   lastCheck: Date;
@@ -210,15 +214,18 @@ export function getServiceFactory(): ServiceFactory {
  * Initialize services with the factory
  */
 export function initializeServices(): void {
-  getServiceFactory();
+  getServiceFactory(); // Initialize the factory
   const logger = getLogger().child({ service: 'ServiceInitialization' });
   
   logger.info('Initializing services with feature flags', { 
     flags: featureFlags 
   });
   
-  // Services will be registered here as we implement them in later phases
-  // For now, this is just the foundation
+  // Phase 1: Storage and Config Services
+  logger.info('Registering Phase 1 services: Storage and Config');
+  
+  // Services will be created on-demand when needed
+  // The factory pattern allows for lazy initialization
   
   logger.info('Service initialization complete');
 }
@@ -230,4 +237,56 @@ export function shutdownServices(): void {
   if (globalServiceFactory) {
     globalServiceFactory.shutdown();
   }
+}
+
+/**
+ * Phase 1 Service Helpers
+ * Helper functions to create Phase 1 services with proper feature flag handling
+ */
+
+/**
+ * Get or create storage service
+ */
+export function getStorageService(): StorageService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<StorageService>('storage');
+  if (existing) {
+    return existing;
+  }
+
+  // Create new service
+  return factory.createService<StorageService>({
+    name: 'storage',
+    mockImplementation: new MockStorageService(),
+    realImplementation: new RealStorageService(),
+    featureFlag: 'useRealStorage',
+    healthCheckInterval: 60000, // 1 minute
+  });
+}
+
+/**
+ * Get or create config service (depends on storage)
+ */
+export function getConfigService(): ConfigService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<ConfigService>('config');
+  if (existing) {
+    return existing;
+  }
+
+  // Get storage service first (dependency)
+  const storageService = getStorageService();
+
+  // Create new service
+  return factory.createService<ConfigService>({
+    name: 'config',
+    mockImplementation: new MockConfigService(),
+    realImplementation: new RealConfigService(storageService),
+    featureFlag: 'useRealConfig',
+    healthCheckInterval: 60000, // 1 minute
+  });
 }

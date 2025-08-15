@@ -1,0 +1,313 @@
+/**
+ * Error Mapping Middleware - Phase 1 Observability
+ * 
+ * Provides structured error handling and mapping for consistent HTTP responses.
+ * Integrates with logging and metrics for comprehensive error tracking.
+ */
+
+import { getLogger } from '../lib/logger';
+import { recordErrorMetric } from '../lib/metrics';
+import { getRequestContext } from './request';
+
+export interface ErrorResponse {
+  error: {
+    code: string;
+    message: string;
+    details?: unknown;
+    requestId?: string;
+  };
+}
+
+export interface ApiError extends Error {
+  code?: string;
+  status?: number;
+  details?: unknown;
+}
+
+/**
+ * Standard error types for the application
+ */
+export class ValidationError extends Error implements ApiError {
+  code = 'VALIDATION_ERROR';
+  status = 400;
+  details?: unknown;
+
+  constructor(message: string, details?: unknown) {
+    super(message);
+    this.name = 'ValidationError';
+    this.details = details;
+  }
+}
+
+export class NotFoundError extends Error implements ApiError {
+  code = 'NOT_FOUND';
+  status = 404;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotFoundError';
+  }
+}
+
+export class UnauthorizedError extends Error implements ApiError {
+  code = 'UNAUTHORIZED';
+  status = 401;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnauthorizedError';
+  }
+}
+
+export class ForbiddenError extends Error implements ApiError {
+  code = 'FORBIDDEN';
+  status = 403;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ForbiddenError';
+  }
+}
+
+export class ConflictError extends Error implements ApiError {
+  code = 'CONFLICT';
+  status = 409;
+  details?: unknown;
+
+  constructor(message: string, details?: unknown) {
+    super(message);
+    this.name = 'ConflictError';
+    this.details = details;
+  }
+}
+
+export class ServiceError extends Error implements ApiError {
+  code = 'SERVICE_ERROR';
+  status = 500;
+  details?: unknown;
+
+  constructor(message: string, details?: unknown) {
+    super(message);
+    this.name = 'ServiceError';
+    this.details = details;
+  }
+}
+
+export class TimeoutError extends Error implements ApiError {
+  code = 'TIMEOUT';
+  status = 408;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+export class RateLimitError extends Error implements ApiError {
+  code = 'RATE_LIMIT_EXCEEDED';
+  status = 429;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'RateLimitError';
+  }
+}
+
+/**
+ * Map errors to consistent HTTP responses
+ */
+export function mapErrorToResponse(error: unknown, requestId?: string): { status: number; body: ErrorResponse } {
+  const logger = getLogger().child({ service: 'ErrorMapping' });
+
+  // Handle known API errors
+  if (error instanceof Error && 'status' in error && 'code' in error) {
+    const apiError = error as ApiError;
+    
+    const response = {
+      status: apiError.status || 500,
+      body: {
+        error: {
+          code: apiError.code || 'UNKNOWN_ERROR',
+          message: apiError.message,
+          details: apiError.details,
+          requestId,
+        },
+      },
+    };
+
+    // Log the error with appropriate level
+    if (response.status >= 500) {
+      logger.error('Server error', error, { 
+        requestId, 
+        status: response.status, 
+        code: response.body.error.code 
+      });
+    } else if (response.status >= 400) {
+      logger.warn('Client error', { 
+        requestId, 
+        status: response.status, 
+        code: response.body.error.code,
+        message: error.message,
+      });
+    }
+
+    // Record error metric
+    recordErrorMetric(response.body.error.code, response.status);
+
+    return response;
+  }
+
+  // Handle standard JavaScript errors
+  if (error instanceof Error) {
+    logger.error('Unhandled error', error, { requestId });
+    recordErrorMetric('INTERNAL_ERROR', 500);
+
+    return {
+      status: 500,
+      body: {
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'An internal server error occurred',
+          requestId,
+        },
+      },
+    };
+  }
+
+  // Handle non-Error objects
+  const errorMessage = typeof error === 'string' ? error : 'Unknown error occurred';
+  logger.error('Non-Error object thrown', undefined, { 
+    requestId, 
+    errorValue: error 
+  });
+  recordErrorMetric('UNKNOWN_ERROR', 500);
+
+  return {
+    status: 500,
+    body: {
+      error: {
+        code: 'UNKNOWN_ERROR',
+        message: errorMessage,
+        requestId,
+      },
+    },
+  };
+}
+
+/**
+ * Create error response JSON
+ */
+export function createErrorResponse(error: unknown, requestId?: string): Response {
+  const { status, body } = mapErrorToResponse(error, requestId);
+  
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    },
+  });
+}
+
+/**
+ * Error handling middleware factory
+ */
+export function createErrorMappingMiddleware() {
+  const logger = getLogger().child({ service: 'ErrorMappingMiddleware' });
+
+  return async (
+    request: Request,
+    handler: (req: Request) => Promise<Response>
+  ): Promise<Response> => {
+    const context = getRequestContext(request);
+    const requestId = context?.requestId || 'unknown';
+
+    try {
+      return await handler(request);
+    } catch (error) {
+      logger.debug('Error caught by middleware', { 
+        requestId, 
+        url: request.url, 
+        method: request.method 
+      });
+      
+      return createErrorResponse(error, requestId);
+    }
+  };
+}
+
+/**
+ * Validate JSON body middleware
+ */
+export function createJsonValidationMiddleware() {
+  return async (
+    request: Request,
+    handler: (req: Request) => Promise<Response>
+  ): Promise<Response> => {
+    // Only validate JSON for requests with JSON content-type
+    const contentType = request.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        // Clone the request to avoid consuming the body
+        const clonedRequest = request.clone();
+        await clonedRequest.json();
+      } catch (error) {
+        const context = getRequestContext(request);
+        throw new ValidationError('Invalid JSON in request body', {
+          originalError: error instanceof Error ? error.message : String(error),
+          requestId: context?.requestId,
+        });
+      }
+    }
+
+    return handler(request);
+  };
+}
+
+/**
+ * Timeout middleware
+ */
+export function createTimeoutMiddleware(timeoutMs: number = 30000) {
+  return async (
+    request: Request,
+    handler: (req: Request) => Promise<Response>
+  ): Promise<Response> => {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new TimeoutError(`Request timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+
+    return Promise.race([
+      handler(request),
+      timeoutPromise,
+    ]);
+  };
+}
+
+/**
+ * Helper functions for creating specific errors
+ */
+export const createValidationError = (message: string, details?: unknown) => 
+  new ValidationError(message, details);
+
+export const createNotFoundError = (resource: string, id?: string) => 
+  new NotFoundError(`${resource}${id ? ` '${id}'` : ''} not found`);
+
+export const createUnauthorizedError = (message: string = 'Authentication required') => 
+  new UnauthorizedError(message);
+
+export const createForbiddenError = (message: string = 'Access denied') => 
+  new ForbiddenError(message);
+
+export const createConflictError = (message: string, details?: unknown) => 
+  new ConflictError(message, details);
+
+export const createServiceError = (message: string, details?: unknown) => 
+  new ServiceError(message, details);
+
+export const createTimeoutError = (operation: string) => 
+  new TimeoutError(`${operation} timed out`);
+
+export const createRateLimitError = (message: string = 'Rate limit exceeded') => 
+  new RateLimitError(message);

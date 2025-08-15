@@ -57,7 +57,10 @@ import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices } from './services/factory';
+import { initializeServices, shutdownServices, getConfigService } from './services/factory';
+
+// Phase 1: Enhanced observability imports
+import { createErrorMappingMiddleware } from './middleware/error-mapping';
 
 // Import enhanced mock data
 import {
@@ -558,7 +561,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.jobs.base && req.method === 'GET') {
     const url = new URL(req.url);
     const deploymentId = url.searchParams.get('deploymentId');
-    const status = url.searchParams.get('status') as JobStatus | null;
+    const statusParam = url.searchParams.get('status');
     const page = parseInt(url.searchParams.get('page') ?? '1', 10);
     const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
 
@@ -569,8 +572,9 @@ async function route(url: URL, req: Request): Promise<Response> {
       jobs = getAllJobs();
     }
 
-    // Filter by status if provided
-    if (status && status !== 'all') {
+    // Filter by status if provided and not 'all'
+    if (statusParam && statusParam !== 'all') {
+      const status = statusParam as JobStatus;
       jobs = jobs.filter(job => job.status === status);
     }
 
@@ -756,40 +760,105 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json(payload);
   }
 
-  // Settings
+  // Settings - Phase 1: Using real ConfigService
   if (pathname === API.settings.base && req.method === 'GET') {
-    const payload: GetSettingsResponse = {
-      systemEnv: [
-        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-      ],
-      docker: { host: '/var/run/docker.sock' },
-      tls: { email: '' },
-      notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
-    };
-    return json(payload);
+    try {
+      const configService = getConfigService();
+      const systemSettings = await configService.getSystemSettings();
+      
+      const payload: GetSettingsResponse = {
+        systemEnv: systemSettings.systemEnv,
+        docker: systemSettings.docker,
+        tls: systemSettings.tls,
+        notifications: systemSettings.notifications,
+      };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to get system settings', error as Error);
+      // Fallback to default settings
+      const payload: GetSettingsResponse = {
+        systemEnv: [
+          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+        ],
+        docker: { host: '/var/run/docker.sock' },
+        tls: { email: '' },
+        notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+      };
+      return json(payload);
+    }
   }
 
   if (pathname === API.settings.base && req.method === 'PATCH') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<PatchSettingsRequest>;
-    const payload: PatchSettingsResponse = {
-      systemEnv: [],
-      docker: {},
-      tls: {},
-      notifications: {},
-    };
-    return json(payload);
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<PatchSettingsRequest>;
+      const configService = getConfigService();
+      
+      // Update system settings
+      const updatedSettings = await configService.updateSystemSettings(body);
+      
+      const payload: PatchSettingsResponse = {
+        systemEnv: updatedSettings.systemEnv,
+        docker: updatedSettings.docker,
+        tls: updatedSettings.tls,
+        notifications: updatedSettings.notifications,
+      };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to update system settings', error as Error);
+      // Return validation error or service error
+      return json(
+        { error: { code: 'UPDATE_FAILED', message: error instanceof Error ? error.message : 'Failed to update settings' } }, 
+        { status: 500 }
+      );
+    }
   }
 
   if (pathname === API.settings.backup && req.method === 'GET') {
-    const payload: GetBackupSettingsResponse = { scheduleEnabled: true, scheduleTime: '02:00', retentionDays: 7 };
-    return json(payload);
+    try {
+      const configService = getConfigService();
+      const backupSettings = await configService.getBackupSettings();
+      
+      const payload: GetBackupSettingsResponse = {
+        scheduleEnabled: backupSettings.scheduleEnabled,
+        scheduleTime: backupSettings.scheduleTime,
+        retentionDays: backupSettings.retentionDays,
+      };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to get backup settings', error as Error);
+      // Fallback to default settings
+      const payload: GetBackupSettingsResponse = { 
+        scheduleEnabled: true, 
+        scheduleTime: '02:00', 
+        retentionDays: 7 
+      };
+      return json(payload);
+    }
   }
 
   if (pathname === API.settings.backup && req.method === 'PATCH') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<PatchBackupSettingsRequest>;
-    const payload: PatchBackupSettingsResponse = { scheduleEnabled: true, scheduleTime: '02:00', retentionDays: 7 };
-    return json(payload);
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<PatchBackupSettingsRequest>;
+      const configService = getConfigService();
+      
+      // Update backup settings
+      const updatedSettings = await configService.updateBackupSettings(body);
+      
+      const payload: PatchBackupSettingsResponse = {
+        scheduleEnabled: updatedSettings.scheduleEnabled,
+        scheduleTime: updatedSettings.scheduleTime,
+        retentionDays: updatedSettings.retentionDays,
+      };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to update backup settings', error as Error);
+      // Return validation error or service error
+      return json(
+        { error: { code: 'UPDATE_FAILED', message: error instanceof Error ? error.message : 'Failed to update backup settings' } }, 
+        { status: 500 }
+      );
+    }
   }
 
   // System status
