@@ -186,13 +186,22 @@ bun lint                  # Lint all packages
 
 **Development Server**:
 ```bash
-# IMPORTANT: When testing API integration, always start server in background
+# CRITICAL: Always start server in background for testing and integration work
 cd packages/server && bun run dev &    # Start server in background with &
-curl http://localhost:3001/api/health  # Test server is running
+sleep 3                                # Wait for server to start
+curl http://localhost:3001/healthz     # Test server is running
 kill %1                                # Stop background server when done
 
-# Alternative: Use the isBackground parameter in run_in_terminal tool
-# run_in_terminal with isBackground: true for long-running processes
+# Alternative: Use pkill for cleanup
+pkill -f "bun run dev"                 # Kill any remaining bun dev processes
+
+# For API testing with feature flags
+HOLA_USE_REAL_DOCKER=true bun run dev & # Enable specific features
+# Always verify server health before running tests
+curl http://localhost:3001/healthz || echo "Server not ready"
+
+# NEVER run server without & when testing - it will block terminal
+# ALWAYS verify server is running before running tests against it
 ```
 
 **Development Flow**:
@@ -205,9 +214,12 @@ kill %1                                # Stop background server when done
 
 **Testing API Integration**:
 - Always start the server in background mode when testing API calls
-- Use `cd packages/server && bun run dev &` or `isBackground: true` in terminal tools
-- Test endpoints with curl before running frontend tests
-- Remember to stop background processes when done (`kill %1` or similar)
+- Use `cd packages/server && bun run dev &` (with ampersand) for background execution
+- Wait 3-5 seconds for server startup before running tests
+- Test endpoints with curl before running test suites to verify connectivity
+- Use `kill %1` or `pkill -f "bun run dev"` to stop background processes when done
+- Verify server health with `/healthz` endpoint before running contract tests
+- For feature testing, set environment variables before starting server
 
 ## Architecture Patterns
 
@@ -358,3 +370,133 @@ import type { SomeType } from '@hola/shared';
 - Group related functionality in directories
 - Prefer flat structures over deep nesting
 - Keep components focused and single-purpose
+
+## Implementation Lessons & Best Practices
+
+### Server Development & Testing
+**Background Process Management**:
+- **ALWAYS** use `&` (ampersand) when starting servers for testing
+- **NEVER** run `bun run dev` without `&` in testing scenarios - it blocks the terminal
+- Wait 3-5 seconds after starting server before running tests
+- Verify server health with `curl http://localhost:3001/healthz` before proceeding
+- Use `kill %1` or `pkill -f "bun run dev"` for cleanup
+
+**Feature Flag Testing**:
+```bash
+# Start server with specific feature flags enabled
+HOLA_USE_REAL_DOCKER=true HOLA_USE_REAL_DATABASE=true bun run dev &
+sleep 3
+curl http://localhost:3001/api/system/health  # Verify services are healthy
+bun test __tests__/phase4-contract.test.ts    # Run tests
+kill %1  # Cleanup
+```
+
+**Health Verification Pattern**:
+- Always check `/healthz` endpoint before running tests
+- Use `/api/system/health` to verify service factory status
+- Check `/api/system/config` to confirm feature flag activation
+- Verify specific service health before testing their endpoints
+
+### Service Implementation Patterns
+**Service Factory Integration**:
+- All real services must implement `HealthCheckable` interface
+- Use health monitoring with automatic fallback to mocks
+- Register services with descriptive names and appropriate health check intervals
+- Test both healthy and unhealthy service states
+
+**Feature Flag Implementation**:
+- Default all feature flags to `false` for safety
+- Use environment variables for activation (`HOLA_USE_REAL_*=true`)
+- Implement graceful degradation when services are unavailable
+- Log service activation/fallback events for observability
+
+**Error Handling & Resilience**:
+- Always provide mock implementations as fallbacks
+- Use structured logging with request correlation IDs
+- Handle external tool unavailability gracefully (e.g., Docker not installed)
+- Implement timeout and retry logic for external commands
+
+### Testing Strategies
+**Contract Testing**:
+- Test both mock and real implementations against same contracts
+- Verify API compatibility across all phases
+- Use dedicated test servers with different feature flag configurations
+- Test graceful degradation scenarios
+
+**Service Testing**:
+- Test service health checks and failure scenarios
+- Verify automatic fallback behavior
+- Test feature flag activation and deactivation
+- Mock external dependencies appropriately
+
+**Integration Testing**:
+- Start test servers with background processes
+- Use realistic test data and scenarios
+- Test SSE streams and real-time functionality
+- Verify performance under load
+
+### SSE (Server-Sent Events) Implementation
+**Real-time Streaming Best Practices**:
+- Use callback-based monitoring for real data
+- Implement fallback to mock streams when real services fail
+- Use standardized event format with type and data fields
+- Configure appropriate update intervals (5-second default)
+- Handle client disconnections gracefully
+
+### Database & Storage Patterns
+**SQLite Best Practices**:
+- Use WAL mode for better concurrency
+- Implement proper transaction management
+- Handle migration versioning with rollback support
+- Use repository pattern for data access abstraction
+
+**File System Operations**:
+- Use atomic file writes for configuration persistence
+- Create directory structures idempotently
+- Implement proper file locking and cleanup
+- Handle permissions and disk space errors gracefully
+
+### Monitoring & Observability
+**Health Check Implementation**:
+- Implement comprehensive health checks for all services
+- Include timestamps in health status responses
+- Test actual functionality, not just service availability
+- Aggregate health status in service factory
+
+**Structured Logging**:
+- Use request correlation IDs across all operations
+- Log service activation, fallback, and health events
+- Include relevant context in log messages
+- Use appropriate log levels (debug, info, warn, error)
+
+**Metrics Collection**:
+- Track service health status changes
+- Monitor API response times and error rates
+- Count service activations and fallbacks
+- Measure resource usage (memory, disk, CPU)
+
+### Progressive Deployment
+**Phase-by-Phase Implementation**:
+- Complete each phase fully before moving to next
+- Maintain backward compatibility throughout
+- Use feature flags for safe rollout
+- Test integration between phases
+
+**Rollback Strategies**:
+- Always provide fallback to previous phase
+- Test rollback scenarios thoroughly
+- Document rollback procedures
+- Monitor system health during transitions
+
+### External Tool Integration
+**Docker Integration Lessons**:
+- Check Docker client and server availability separately
+- Handle Docker unavailability gracefully with clear error messages
+- Use proper timeouts for Docker operations
+- Implement log streaming with proper cleanup
+
+**System Resource Monitoring**:
+- Use system commands (`df`, `/proc/meminfo`) for real data
+- Provide meaningful fallback estimates when commands fail
+- Parse command output defensively
+- Cache resource data appropriately to reduce system load
