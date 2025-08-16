@@ -20,6 +20,10 @@ import { RealDatabaseConfigService, type DatabaseConfigService } from './core/da
 // Phase 3 imports
 import { RealAuthService, MockAuthService, ApiKeyAuthProvider, type AuthService } from './auth/auth-service';
 
+// Phase 4 imports
+import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
+import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
+
 export interface ServiceHealth {
   healthy: boolean;
   lastCheck: Date;
@@ -62,6 +66,20 @@ class ServiceFactory {
       this.logger.info('Using mock implementation', { name, reason: useReal ? 'no_real_impl' : 'feature_disabled' });
       recordServiceActivation(name, 'mock', true);
       this.activeServices.set(name, mockImplementation);
+
+      // Start health monitoring for mock implementations if they support it,
+      // otherwise mark them healthy by default so they appear in health reports.
+      if (this.isHealthCheckable(mockImplementation)) {
+        this.performHealthCheck(name, mockImplementation as T & HealthCheckable).catch(error => {
+          this.logger.warn('Initial mock health check failed', { name, error: error instanceof Error ? error.message : String(error) });
+        });
+      } else {
+        this.healthStates.set(name, {
+          healthy: true,
+          lastCheck: new Date(),
+        });
+      }
+
       return mockImplementation;
     }
 
@@ -133,8 +151,10 @@ class ServiceFactory {
   ): void {
     const { name, healthCheckInterval = 30000 } = descriptor;
     
-    // Initial health check
-    this.performHealthCheck(name, service);
+    // Run initial health check immediately in background
+    this.performHealthCheck(name, service).catch(error => {
+      this.logger.warn('Initial health check failed', { name, error: error.message });
+    });
     
     // Set up periodic checks
     const timer = setInterval(() => {
@@ -179,6 +199,13 @@ class ServiceFactory {
    */
   getHealthStatus(): Record<string, ServiceHealth> {
     return Object.fromEntries(this.healthStates);
+  }
+
+  /**
+   * Get list of activated service names
+   */
+  getActivatedServices(): string[] {
+    return Array.from(this.activeServices.keys());
   }
 
   /**
@@ -230,6 +257,18 @@ export function initializeServices(): void {
   
   // Phase 1: Storage and Config Services
   logger.info('Registering Phase 1 services: Storage and Config');
+  
+  // Phase 4: Docker and System Monitoring Services
+  logger.info('Registering Phase 4 services: Docker and System Monitoring');
+  
+  // Initialize Phase 4 services for health monitoring
+  try {
+    getDockerService(); // Register Docker service
+    getSystemMonitoringService(); // Register system monitoring service
+    logger.info('Phase 4 services registered successfully');
+  } catch (error) {
+    logger.warn('Phase 4 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
+  }
   
   // Services will be created on-demand when needed
   // The factory pattern allows for lazy initialization
@@ -416,5 +455,54 @@ export function getAuthService(): AuthService {
     realImplementation: realAuthService,
     featureFlag: 'useAuth',
     healthCheckInterval: 60000, // 1 minute
+  });
+}
+
+/**
+ * Phase 4 Service Helpers
+ * Helper functions to create Phase 4 services with Docker and system monitoring
+ */
+
+/**
+ * Get or create Docker service
+ */
+export function getDockerService(): DockerService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<DockerService>('docker');
+  if (existing) {
+    return existing;
+  }
+
+  // Create new service
+  return factory.createService<DockerService>({
+    name: 'docker',
+    mockImplementation: new MockDockerService(),
+    realImplementation: new RealDockerService(),
+    featureFlag: 'useRealDocker',
+    healthCheckInterval: 30000, // 30 seconds
+  });
+}
+
+/**
+ * Get or create system monitoring service (depends on storage)
+ */
+export function getSystemMonitoringService(): SystemMonitoringService {
+  const factory = getServiceFactory();
+  
+  // Check if already created
+  const existing = factory.getService<SystemMonitoringService>('system-monitoring');
+  if (existing) {
+    return existing;
+  }
+
+  // Create new service with default .hola path
+  return factory.createService<SystemMonitoringService>({
+    name: 'system-monitoring',
+    mockImplementation: new MockSystemMonitoringService(),
+    realImplementation: new RealSystemMonitoringService(), // Uses default ~/.hola path
+    featureFlag: 'useRealDocker', // Uses Docker flag since it depends on Docker monitoring
+    healthCheckInterval: 30000, // 30 seconds
   });
 }

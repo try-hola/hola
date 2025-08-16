@@ -57,7 +57,7 @@ import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices, getActiveConfigService } from './services/factory';
+import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getDockerService } from './services/factory';
 
 // Phase 1: Enhanced observability imports
 import { createErrorMappingMiddleware } from './middleware/error-mapping';
@@ -252,7 +252,7 @@ async function route(url: URL, req: Request): Promise<Response> {
     const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
     return json({
       healthStatus: serviceFactory.getHealthStatus(),
-      activatedServices: [],
+      activatedServices: serviceFactory.getActivatedServices(),
     });
   }
 
@@ -287,8 +287,24 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // Summary
   if (pathname === API.summary && req.method === 'GET') {
-    const payload: GetSummaryResponse = getSummary();
-    return json(payload);
+    try {
+      // Phase 4: Use real system monitoring service for system status in summary
+      const systemMonitoringService = getSystemMonitoringService();
+      const systemStatus = await systemMonitoringService.getSystemStatus();
+      
+      // Get summary data with real system status
+      const summary = getSummary();
+      const payload: GetSummaryResponse = {
+        ...summary,
+        system: systemStatus,
+      };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to get system status for summary, using mock', error as Error);
+      // Fallback to full mock implementation
+      const payload: GetSummaryResponse = getSummary();
+      return json(payload);
+    }
   }
 
   // Catalog
@@ -876,57 +892,95 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // System status
   if (pathname === API.system.status && req.method === 'GET') {
-    const payload: GetSystemStatusResponse = getSystemStatus();
-    return json(payload);
+    try {
+      // Phase 4: Use real system monitoring service when available
+      const systemMonitoringService = getSystemMonitoringService();
+      const payload: GetSystemStatusResponse = await systemMonitoringService.getSystemStatus();
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to get system status from monitoring service, falling back to mock', error as Error);
+      // Fallback to mock implementation
+      const payload: GetSystemStatusResponse = getSystemStatus();
+      return json(payload);
+    }
   }
 
-  // System Status SSE Stream - new endpoint for real-time system updates
+  // System Status SSE Stream - Phase 4: Real-time system updates with monitoring service
   if (pathname === '/api/system/status/stream' && req.method === 'GET') {
     const stream = new ReadableStream({
       start(controller) {
-        let i = 0;
-        const timer = setInterval(() => {
-          i++;
+        let monitoring: { stop: () => void } | null = null;
+        
+        try {
+          // Phase 4: Use real system monitoring service
+          const systemMonitoringService = getSystemMonitoringService();
           
-          // Occasionally send system updates
-          if (i % 10 === 0) {
+          // Start monitoring with callback to send SSE events
+          monitoring = systemMonitoringService.startMonitoring((systemStatus) => {
             const systemUpdate = {
               type: 'system_update',
-              data: {
-                docker: { 
-                  ok: true, 
-                  version: '24.0.5' 
-                },
-                disk: { 
-                  freeBytes: Math.floor(50_000_000_000 - (i * 1000000)), // Slowly decreasing
-                  totalBytes: 100_000_000_000 
-                },
-                version: { 
-                  hola: '1.0.0', 
-                  compose: '2.20.0' 
-                },
-                oras: { 
-                  ok: true, 
-                  version: '1.1.0' 
-                },
-                authentik: { 
-                  ok: Math.random() > 0.1 // Occasionally false to simulate issues
-                }
-              }
+              data: systemStatus,
             };
             
-            const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
+            const evt = `event: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
             controller.enqueue(new TextEncoder().encode(evt));
-          }
+          }, 5000); // Update every 5 seconds
           
-          // Heartbeat
-          if (i % 30 === 0) {
-            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
-          }
-        }, 5000); // Every 5 seconds
+        } catch (error) {
+          logger.error('Failed to start real system monitoring, falling back to mock SSE', error as Error);
+          
+          // Fallback to mock implementation
+          let i = 0;
+          const timer = setInterval(() => {
+            i++;
+            
+            // Occasionally send system updates
+            if (i % 10 === 0) {
+              const systemUpdate = {
+                type: 'system_update',
+                data: {
+                  docker: { 
+                    ok: true, 
+                    version: '24.0.5' 
+                  },
+                  disk: { 
+                    freeBytes: Math.floor(50_000_000_000 - (i * 1000000)), // Slowly decreasing
+                    totalBytes: 100_000_000_000 
+                  },
+                  version: { 
+                    hola: '1.0.0', 
+                    compose: '2.20.0' 
+                  },
+                  oras: { 
+                    ok: true, 
+                    version: '1.1.0' 
+                  },
+                  authentik: { 
+                    ok: Math.random() > 0.1 // Occasionally false to simulate issues
+                  }
+                }
+              };
+              
+              const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
+              controller.enqueue(new TextEncoder().encode(evt));
+            }
+            
+            // Heartbeat
+            if (i % 30 === 0) {
+              controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+            }
+          }, 5000); // Every 5 seconds
+          
+          // Store timer for cleanup
+          monitoring = { stop: () => clearInterval(timer) };
+        }
         
-        // Keep alive for a long time for system monitoring
-        setTimeout(() => { clearInterval(timer); controller.close(); }, 600000); // 10 minutes
+        // Cleanup on stream close
+        return () => {
+          if (monitoring) {
+            monitoring.stop();
+          }
+        };
       }
     });
     return new Response(stream, { headers: sse() });
