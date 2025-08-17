@@ -5,43 +5,6 @@
  * inheritance patterns, and usage examples throughout the API.
  */
 
-import type {
-  // Import all shared types for analysis
-  Identity,
-  SystemStatus,
-  SummaryJob,
-  GetSummaryResponse,
-  CatalogApp,
-  GetCatalogAppsResponse,
-  Draft,
-  CreateDraftRequest,
-  DeploymentListItem,
-  DeploymentDetail,
-  Job,
-  BackupItem,
-  NotificationItem,
-  SystemEnvVar,
-  AppEnvVar,
-  DraftDefaults,
-  PageRequest,
-  PageResponse,
-  ErrorResponse,
-  SSEEvent,
-  SSELogEvent,
-  SSEJobUpdateEvent,
-  SSESystemUpdateEvent,
-  SSEDeploymentUpdateEvent,
-  JobType,
-  JobStatus,
-  DeploymentStatus,
-  BackupStatus,
-  BackupType,
-  NotificationType,
-  NotificationPriority,
-  LogLevel,
-  SSEConnectionState,
-} from '../index';
-
 /**
  * TypeScript type definition with metadata
  */

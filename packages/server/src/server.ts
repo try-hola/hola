@@ -5,9 +5,6 @@ import {
   type GetMeResponse,
   type GetSummaryResponse,
   type GetCatalogAppsResponse,
-  type GetCatalogAppResponse,
-  type GetCatalogAppVersionsResponse,
-  type GetCatalogAppVersionDetailResponse,
   type CreateDraftRequest,
   type CreateDraftResponse,
   type GetDraftResponse,
@@ -25,10 +22,7 @@ import {
   type PatchDeploymentResponse,
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
-  type GetLogsResponse,
-  type GetJobsRequest,
   type GetJobsResponse,
-  type GetJobResponse,
   type GetBackupsResponse,
   type CreateBackupRequest,
   type CreateBackupResponse,
@@ -57,10 +51,10 @@ import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getDockerService } from './services/factory';
+import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService } from './services/factory';
 
 // Phase 1: Enhanced observability imports
-import { createErrorMappingMiddleware } from './middleware/error-mapping';
+// import { createErrorMappingMiddleware } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
 import { createAuthMiddleware } from './middleware/auth';
@@ -82,28 +76,27 @@ import {
   getJobById,
   getAllJobs,
   getJobsByDeployment,
-  getActiveJobs,
   // System
   getSummary,
   getSystemStatus,
   updateSystemHealth,
   // Notifications
-  getNotifications,
-  updateNotification,
-  executeNotificationAction,
+  // getNotifications,
+  // updateNotification,
+  // executeNotificationAction,
   generateJobNotifications,
   // Backups
-  getBackups,
-  getBackupById,
-  createBackup,
-  restoreBackup,
-  deleteBackup,
+  // getBackups,
+  // getBackupById,
+  // createBackup,
+  // restoreBackup,
+  // deleteBackup,
   scheduleAutomaticBackups,
   // Settings
-  getSettings,
-  updateSettings,
-  getBackupSettings,
-  updateBackupSettings,
+  // getSettings,
+  // updateSettings,
+  // getBackupSettings,
+  // updateBackupSettings,
   // Configuration
   config,
 } from './mock-data';
@@ -153,17 +146,7 @@ function json(data: unknown, init?: ResponseInit) {
   });
 }
 
-function text(body: string, init?: ResponseInit) {
-  return new Response(body, {
-    headers: {
-      'content-type': 'text/plain; charset=utf-8',
-      'cache-control': 'no-store',
-      ...init?.headers,
-    },
-    status: init?.status ?? 200,
-    statusText: init?.statusText,
-  });
-}
+// Plain text response helper (unused currently)
 
 function notFound() {
   return json({ error: { code: 'NOT_FOUND', message: 'Not Found' } }, { status: 404 });
@@ -247,8 +230,32 @@ async function route(url: URL, req: Request): Promise<Response> {
     });
   }
 
+  // Phase 0 compatibility: features endpoint
+  if (pathname === '/api/phase0/features' && req.method === 'GET') {
+    return json({
+      phase: 'Phase 0 - Foundations',
+      featureFlags,
+      config: appConfig,
+      services: {
+        logging: true,
+        metrics: true,
+        healthChecks: true,
+        serviceFactory: true,
+      },
+    });
+  }
+
   // System: Service factory health status
   if (pathname === '/api/system/health' && req.method === 'GET') {
+    const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
+    return json({
+      healthStatus: serviceFactory.getHealthStatus(),
+      activatedServices: serviceFactory.getActivatedServices(),
+    });
+  }
+
+  // Phase 0 compatibility: services endpoint
+  if (pathname === '/api/phase0/services' && req.method === 'GET') {
     const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
     return json({
       healthStatus: serviceFactory.getHealthStatus(),
@@ -479,7 +486,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   if (deploymentMatch && req.method === 'PATCH') {
-    const _body = (await req.json().catch(() => ({}))) as PatchDeploymentRequest;
+    await req.json().catch(() => ({})) as PatchDeploymentRequest;
     const payload: PatchDeploymentResponse = { ok: true };
     return json(payload);
   }
@@ -494,8 +501,18 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json({ error: { code: 'INVALID_ACTION', message: 'Invalid action' } }, { status: 400 });
     }
     
-    const payload: PostDeploymentActionResponse = executeDeploymentAction(deploymentId, action);
-    return json(payload);
+    try {
+      // Phase 5: create a real job via JobService when enabled
+      const jobService = getJobService();
+      // Map deployment actions to job types
+      const jobType = action === 'delete' ? 'backup' : (action as 'start' | 'stop' | 'restart');
+      const job = await jobService.createJob({ type: jobType, deploymentId });
+      return json({ ok: true, jobId: job.id } satisfies PostDeploymentActionResponse);
+    } catch {
+      // Fallback to mock behavior
+      const payload: PostDeploymentActionResponse = executeDeploymentAction(deploymentId, action);
+      return json(payload);
+    }
   }
 
   const deploymentHistoryMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/history$/);
@@ -593,18 +610,24 @@ async function route(url: URL, req: Request): Promise<Response> {
     const statusParam = url.searchParams.get('status');
     const page = parseInt(url.searchParams.get('page') ?? '1', 10);
     const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
-
-    let jobs: Job[];
-    if (deploymentId) {
-      jobs = getJobsByDeployment(deploymentId);
-    } else {
-      jobs = getAllJobs();
-    }
-
-    // Filter by status if provided and not 'all'
-    if (statusParam && statusParam !== 'all') {
-      const status = statusParam as JobStatus;
-      jobs = jobs.filter(job => job.status === status);
+    
+    let jobs: Job[] = [];
+    try {
+      // Phase 5: Use JobService if available
+      const jobService = getJobService();
+      const status = statusParam && statusParam !== 'all' ? statusParam as JobStatus : undefined;
+      jobs = await jobService.listJobs({ deploymentId: deploymentId ?? undefined, status });
+    } catch {
+      // Fallback to mock data
+      if (deploymentId) {
+        jobs = getJobsByDeployment(deploymentId);
+      } else {
+        jobs = getAllJobs();
+      }
+      if (statusParam && statusParam !== 'all') {
+        const status = statusParam as JobStatus;
+        jobs = jobs.filter(job => job.status === status);
+      }
     }
 
     // Apply pagination
@@ -634,88 +657,149 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   const jobLogsMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs$/);
   if (jobLogsMatch && req.method === 'GET') {
-    const stream = new ReadableStream({
-      start(controller) {
-        let i = 0;
-        const timer = setInterval(() => {
-          i++;
-          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: 'job', level: ['info','warn','error','debug'][i%4], message: 'Job log ' + i })}\n\n`;
-          controller.enqueue(new TextEncoder().encode(evt));
-          if (i % 8 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
-        }, 1000);
-        setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
-      }
-    });
-    return new Response(stream, { headers: sse() });
+    const jobId = jobLogsMatch[1];
+    try {
+      const logging = getLoggingService();
+      const stream = new ReadableStream({
+        start(controller) {
+          let isStreamClosed = false;
+          
+          // Helper function to safely enqueue data
+          const safeEnqueue = (data: string) => {
+            if (!isStreamClosed) {
+              try {
+                controller.enqueue(new TextEncoder().encode(data));
+              } catch (error) {
+                // Stream was closed, mark it and stop trying to write
+                isStreamClosed = true;
+                logger.debug('Job logs SSE stream closed during write', { jobId, error: error instanceof Error ? error.message : String(error) });
+              }
+            }
+          };
+          
+          const sub = logging.onLog({ kind: 'job', id: jobId }, (entry) => {
+            const evt = `event: message\ndata: ${JSON.stringify({ type: 'log', data: { timestamp: entry.timestamp, service: entry.service, level: entry.level, message: entry.message } })}\n\n`;
+            safeEnqueue(evt);
+          });
+          
+          // Heartbeats
+          const hb = setInterval(() => {
+            safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
+          }, 15000);
+          
+          // Emit initial heartbeat
+          safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
+          
+          // Cleanup
+          return () => { 
+            isStreamClosed = true;
+            sub.unsubscribe(); 
+            clearInterval(hb); 
+          };
+        }
+      });
+      return new Response(stream, { headers: sse() });
+    } catch {
+      const stream = new ReadableStream({
+        start(controller) {
+          let i = 0;
+          const timer = setInterval(() => {
+            i++;
+            const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: 'job', level: ['info','warn','error','debug'][i%4], message: 'Job log ' + i })}\n\n`;
+            controller.enqueue(new TextEncoder().encode(evt));
+            if (i % 8 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }, 1000);
+          setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
+        }
+      });
+      return new Response(stream, { headers: sse() });
+    }
   }
 
   // Job Logs SSE Stream - new endpoint for real-time job logs and updates
   const jobLogsStreamMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs\/stream$/);
   if (jobLogsStreamMatch && req.method === 'GET') {
     const jobId = jobLogsStreamMatch[1];
-    const stream = new ReadableStream({
-      start(controller) {
-        let i = 0;
-        let progress = 0;
-        const timer = setInterval(() => {
-          i++;
-          progress = Math.min(progress + Math.random() * 5, 100);
+    try {
+      const logging = getLoggingService();
+      const jobService = getJobService();
+      const stream = new ReadableStream({
+        start(controller) {
+          let isStreamClosed = false;
           
-          // Send log events
-          const logEvent = {
-            type: 'log',
-            data: {
-              timestamp: new Date().toISOString(),
-              service: 'job-runner',
-              level: ['info', 'warn', 'debug'][i % 3],
-              message: `Job ${jobId} step ${i}: ${[
-                'Initializing task',
-                'Downloading container image',
-                'Setting up volumes',
-                'Starting services',
-                'Running health checks',
-                'Finalizing installation'
-              ][i % 6]}`
+          // Helper function to safely enqueue data
+          const safeEnqueue = (data: string) => {
+            if (!isStreamClosed) {
+              try {
+                controller.enqueue(new TextEncoder().encode(data));
+              } catch (error) {
+                // Stream was closed, mark it and stop trying to write
+                isStreamClosed = true;
+                logger.debug('SSE stream closed during write', { jobId, error: error instanceof Error ? error.message : String(error) });
+              }
             }
           };
           
-          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
-          controller.enqueue(new TextEncoder().encode(evt));
+          // Subscribe to logs
+          const sub = logging.onLog({ kind: 'job', id: jobId }, (entry) => {
+            const evt = { type: 'log', data: { timestamp: entry.timestamp, service: entry.service, level: entry.level, message: entry.message } };
+            safeEnqueue(`event: message\ndata: ${JSON.stringify(evt)}\n\n`);
+          });
           
-          // Job progress updates
-          if (i % 5 === 0) {
-            const jobUpdate = {
-              type: 'job_update',
+          // Subscribe to job updates
+          const upd = jobService.onJobUpdate(jobId, (update) => {
+            const evt = { type: 'job_update', data: { jobId, status: update.status, progress: update.progress, finishedAt: update.finishedAt } };
+            safeEnqueue(`event: message\ndata: ${JSON.stringify(evt)}\n\n`);
+          });
+          
+          // Heartbeats
+          const hb = setInterval(() => {
+            safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
+          }, 15000);
+          
+          // Initial heartbeat
+          safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
+          
+          return () => { 
+            isStreamClosed = true;
+            sub.unsubscribe(); 
+            upd.unsubscribe(); 
+            clearInterval(hb); 
+          };
+        }
+      });
+      return new Response(stream, { headers: sse() });
+    } catch {
+      // Fallback to previous simulated stream
+      const stream = new ReadableStream({
+        start(controller) {
+          let i = 0;
+          let progress = 0;
+          const timer = setInterval(() => {
+            i++;
+            progress = Math.min(progress + Math.random() * 5, 100);
+            const logEvent = {
+              type: 'log',
               data: {
-                jobId,
-                status: progress >= 100 ? 'completed' : 'running',
-                progress: Math.floor(progress),
-                ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {})
+                timestamp: new Date().toISOString(),
+                service: 'job-runner',
+                level: ['info', 'warn', 'debug'][i % 3],
+                message: `Job ${jobId} step ${i}`
               }
             };
-            const jobEvt = `id: ${i}-job\nevent: message\ndata: ${JSON.stringify(jobUpdate)}\n\n`;
-            controller.enqueue(new TextEncoder().encode(jobEvt));
-            
-            // Complete job after 100% progress
-            if (progress >= 100) {
-              setTimeout(() => {
-                clearInterval(timer);
-                controller.close();
-              }, 5000);
+            controller.enqueue(new TextEncoder().encode(`id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`));
+            if (i % 5 === 0) {
+              const jobUpdate = { type: 'job_update', data: { jobId, status: progress >= 100 ? 'completed' : 'running', progress: Math.floor(progress), ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {}) } };
+              controller.enqueue(new TextEncoder().encode(`id: ${i}-job\nevent: message\ndata: ${JSON.stringify(jobUpdate)}\n\n`));
+              if (progress >= 100) { setTimeout(() => { clearInterval(timer); controller.close(); }, 5000); }
             }
-          }
-          
-          // Heartbeat
-          if (i % 20 === 0) {
-            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
-          }
-        }, 1500);
-        
-        // Timeout after 200s
-        setTimeout(() => { clearInterval(timer); controller.close(); }, 200000);
-      }
-    });
-    return new Response(stream, { headers: sse() });
+            if (i % 20 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          }, 1500);
+          setTimeout(() => { clearInterval(timer); controller.close(); }, 200000);
+        }
+      });
+      return new Response(stream, { headers: sse() });
+    }
   }
 
   // Backups
@@ -731,7 +815,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   if (pathname === API.backups.base && req.method === 'POST') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<CreateBackupRequest>;
+    await req.json().catch(() => ({})) as Partial<CreateBackupRequest>;
     const payload: CreateBackupResponse = { jobId: crypto.randomUUID(), backupId: crypto.randomUUID() };
     return json(payload);
   }
@@ -754,7 +838,7 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   const backupRestoreMatch = pathname.match(/^\/api\/backups\/([^/]+)\/restore$/);
   if (backupRestoreMatch && req.method === 'POST') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<RestoreBackupRequest>;
+    await req.json().catch(() => ({})) as Partial<RestoreBackupRequest>;
     const payload: RestoreBackupResponse = { jobId: crypto.randomUUID() };
     return json(payload);
   }
@@ -778,13 +862,13 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   const notificationByIdMatch = pathname.match(/^\/api\/notifications\/([^/]+)$/);
   if (notificationByIdMatch && req.method === 'PATCH') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<PatchNotificationRequest>;
+    await req.json().catch(() => ({})) as Partial<PatchNotificationRequest>;
     const payload: PatchNotificationResponse = { id: notificationByIdMatch[1], read: true };
     return json(payload);
   }
 
   if (pathname === API.notifications.actions && req.method === 'POST') {
-    const _body = (await req.json().catch(() => ({}))) as Partial<PostNotificationsActionRequest>;
+    await req.json().catch(() => ({})) as Partial<PostNotificationsActionRequest>;
     const payload: PostNotificationsActionResponse = { ok: true };
     return json(payload);
   }

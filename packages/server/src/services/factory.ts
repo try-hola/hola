@@ -23,6 +23,9 @@ import { RealAuthService, MockAuthService, ApiKeyAuthProvider, type AuthService 
 // Phase 4 imports
 import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
 import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
+// Phase 5 imports
+import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
+import { RealJobService, MockJobService, type JobService } from './core/jobs';
 
 export interface ServiceHealth {
   healthy: boolean;
@@ -269,6 +272,16 @@ export function initializeServices(): void {
   } catch (error) {
     logger.warn('Phase 4 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
   }
+
+  // Phase 5: Logging and Jobs Services
+  logger.info('Registering Phase 5 services: Logging and Jobs');
+  try {
+    getLoggingService();
+    getJobService();
+    logger.info('Phase 5 services registered successfully');
+  } catch (error) {
+    logger.warn('Phase 5 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
+  }
   
   // Services will be created on-demand when needed
   // The factory pattern allows for lazy initialization
@@ -504,5 +517,41 @@ export function getSystemMonitoringService(): SystemMonitoringService {
     realImplementation: new RealSystemMonitoringService(), // Uses default ~/.hola path
     featureFlag: 'useRealDocker', // Uses Docker flag since it depends on Docker monitoring
     healthCheckInterval: 30000, // 30 seconds
+  });
+}
+
+/**
+ * Phase 5 Service Helpers
+ * Logging and Jobs services with feature flags (useRealJobs toggles both)
+ */
+
+export function getLoggingService(): LoggingService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<LoggingService>('logging');
+  if (existing) return existing;
+
+  // Create new service (no separate flag; tie to jobs feature for activation)
+  return factory.createService<LoggingService>({
+    name: 'logging',
+    mockImplementation: new MockLoggingService(),
+    realImplementation: new RealLoggingService(),
+    featureFlag: 'useRealJobs',
+    healthCheckInterval: 60000,
+  });
+}
+
+export function getJobService(): JobService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<JobService>('jobs');
+  if (existing) return existing;
+
+  return factory.createService<JobService>({
+    name: 'jobs',
+    mockImplementation: new MockJobService(),
+    realImplementation: new RealJobService(),
+    featureFlag: 'useRealJobs',
+    healthCheckInterval: 30000,
   });
 }

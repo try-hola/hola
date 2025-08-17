@@ -177,6 +177,11 @@ class InMemoryMetrics implements Metrics {
             .map(([k, v]) => `${k}=${v}`)
             .join(',');
           gaugeData[readableKey] = value;
+          // Also export simplified keys when labels contain a single 'type'
+          if (labels && typeof labels === 'object' && 'type' in labels && Object.keys(labels).length === 1) {
+            const simpleKey = `type=${(labels as Record<string, unknown>).type}`;
+            gaugeData[simpleKey] = value;
+          }
         } catch {
           // If not JSON, use the key as-is
           gaugeData[labelKey] = value;
