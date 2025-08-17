@@ -67,7 +67,7 @@ import {
   getDeploymentHistory,
   executeDeploymentAction,
   createDeploymentFromDraft,
-  // Catalog
+  // Catalog (fallback mocks)
   getCatalogApps,
   getCatalogAppById,
   getCatalogAppVersions,
@@ -335,40 +335,76 @@ async function route(url: URL, req: Request): Promise<Response> {
     const limit = Number(searchParams.get('limit')) || 12;
     const query = searchParams.get('query') || undefined;
     const category = searchParams.get('category') || undefined;
-    
-    const payload: GetCatalogAppsResponse = getCatalogApps({ page, limit, query, category });
-    return json(payload);
+    try {
+      const { getCatalogService } = await import('./services/factory');
+      const catalog = getCatalogService();
+      const payload = await catalog.listApps({ page, limit, q: query, category });
+      return json(payload);
+  } catch {
+      const payload: GetCatalogAppsResponse = getCatalogApps({ page, limit, query, category });
+      return json(payload);
+    }
   }
 
   const catalogAppMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)$/);
   if (catalogAppMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogAppMatch[1]);
-    const payload = getCatalogAppById(appId);
-    if (!payload) {
-      return notFound();
+    try {
+      const { getCatalogService } = await import('./services/factory');
+      const catalog = getCatalogService();
+      const payload = await catalog.getApp(appId);
+      return json(payload);
+    } catch {
+      const payload = getCatalogAppById(appId);
+      if (!payload) return notFound();
+      return json(payload);
     }
-    return json(payload);
   }
 
   const catalogVersionsMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions$/);
   if (catalogVersionsMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogVersionsMatch[1]);
-    const payload = getCatalogAppVersions(appId);
-    if (!payload) {
-      return notFound();
+    try {
+      const { getCatalogService } = await import('./services/factory');
+      const catalog = getCatalogService();
+      const payload = await catalog.getVersions(appId);
+      return json(payload);
+    } catch {
+      const payload = getCatalogAppVersions(appId);
+      if (!payload) return notFound();
+      return json(payload);
     }
-    return json(payload);
   }
 
   const catalogVersionDetailMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions\/(.+)$/);
   if (catalogVersionDetailMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogVersionDetailMatch[1]);
     const version = decodeURIComponent(catalogVersionDetailMatch[2]);
-    const payload = getCatalogAppVersionDetail(appId, version);
-    if (!payload) {
-      return notFound();
+    try {
+      const { getCatalogService } = await import('./services/factory');
+      const catalog = getCatalogService();
+      const payload = await catalog.getVersionDetail(appId, version);
+      return json(payload);
+    } catch (error) {
+      logger.warn('Catalog version detail via real service failed, using mock', { appId, version, error: error instanceof Error ? error.message : String(error) });
+      const payload = getCatalogAppVersionDetail(appId, version);
+      if (!payload) return notFound();
+      return json(payload);
     }
-    return json(payload);
+  }
+
+  // Catalog refresh
+  if (pathname === API.catalog.refresh && req.method === 'POST') {
+    try {
+      const force = searchParams.get('force') === 'true';
+      const { getCatalogService } = await import('./services/factory');
+      const catalog = getCatalogService();
+      await catalog.refresh(force);
+      return json({ success: true, timestamp: new Date().toISOString() });
+    } catch (error) {
+      logger.warn('Catalog refresh failed', { error: error instanceof Error ? error.message : String(error) });
+      return json({ error: { code: 'REFRESH_FAILED', message: 'Catalog refresh failed' } }, { status: 500 });
+    }
   }
 
   // Drafts
@@ -1396,3 +1432,32 @@ if (config.USE_MOCK_DATA) {
   
   console.log('[server] Mock data enhancement tasks started');
 }
+
+// Initialize periodic catalog refresh
+const initializeCatalogRefresh = async () => {
+  try {
+    const { getCatalogService } = await import('./services/factory');
+    const catalog = getCatalogService();
+    
+    // Initial refresh on startup
+    await catalog.refresh(false);
+    logger.info('Initial catalog refresh completed');
+    
+    // Schedule periodic refresh
+    setInterval(async () => {
+      try {
+        await catalog.refresh(false);
+        logger.debug('Periodic catalog refresh completed');
+      } catch (error) {
+        logger.warn('Periodic catalog refresh failed', { error: error instanceof Error ? error.message : String(error) });
+      }
+    }, 300000); // Every 5 minutes (300000ms)
+    
+    logger.info('Catalog periodic refresh initialized');
+  } catch (error) {
+    logger.warn('Failed to initialize catalog refresh', { error: error instanceof Error ? error.message : String(error) });
+  }
+};
+
+// Start catalog refresh in background
+initializeCatalogRefresh();

@@ -14,6 +14,7 @@ export const API = {
 
   catalog: {
     apps: '/api/catalog/apps', // list, query via ?query=&category=&page=&limit=
+    refresh: '/api/catalog/refresh',
     appById: (appId: string) => `/api/catalog/apps/${appId}`,
     versions: (appId: string) => `/api/catalog/apps/${appId}/versions`,
     versionDetail: (appId: string, version: string) =>

@@ -26,6 +26,9 @@ import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMo
 // Phase 5 imports
 import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
 import { RealJobService, MockJobService, type JobService } from './core/jobs';
+// Phase 6 imports
+import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
+import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
 
 export interface ServiceHealth {
   healthy: boolean;
@@ -253,6 +256,12 @@ class ServiceFactory {
       enabledServices.push({ name: 'logging', flag: 'useRealJobs', service: () => new RealLoggingService() });
       enabledServices.push({ name: 'jobs', flag: 'useRealJobs', service: () => new RealJobService() });
     }
+    if (featureFlags.useRealCatalog) {
+      enabledServices.push({ name: 'catalog', flag: 'useRealCatalog', service: () => new RealCatalogService() });
+    }
+    if (featureFlags.useRealBundles) {
+      enabledServices.push({ name: 'bundles', flag: 'useRealBundles', service: () => new RealBundleService() });
+    }
 
     if (enabledServices.length === 0) {
       logger.info('No real services enabled, using all mocks');
@@ -369,6 +378,23 @@ export async function initializeServices(): Promise<void> {
     logger.info('Phase 5 services registered successfully');
   } catch (error) {
     logger.warn('Phase 5 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+  
+  // Phase 6: Catalog service
+  logger.info('Registering Phase 6 services: Catalog');
+  try {
+    getCatalogService();
+    logger.info('Phase 6 services registered successfully');
+  } catch (error) {
+    logger.warn('Phase 6 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+  // Phase 6: Bundle service
+  logger.info('Registering Phase 6 services: Bundles');
+  try {
+    getBundleService();
+    logger.info('Bundle service registered successfully');
+  } catch (error) {
+    logger.warn('Bundle service registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
   }
   
   // Services will be created on-demand when needed
@@ -641,5 +667,38 @@ export function getJobService(): JobService {
     realImplementation: new RealJobService(),
     featureFlag: 'useRealJobs',
     healthCheckInterval: 30000,
+  });
+}
+
+/**
+ * Phase 6 Service Helpers
+ */
+export function getCatalogService(): CatalogService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<CatalogService>('catalog');
+  if (existing) return existing;
+
+  return factory.createService<CatalogService>({
+    name: 'catalog',
+    mockImplementation: new MockCatalogService(),
+    realImplementation: new RealCatalogService(),
+    featureFlag: 'useRealCatalog',
+    healthCheckInterval: 60_000,
+  });
+}
+
+export function getBundleService(): BundleService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<BundleService>('bundles');
+  if (existing) return existing;
+
+  return factory.createService<BundleService>({
+    name: 'bundles',
+    mockImplementation: new MockBundleService(),
+    realImplementation: new RealBundleService(),
+    featureFlag: 'useRealBundles',
+    healthCheckInterval: 60_000,
   });
 }

@@ -12,6 +12,7 @@ export interface FeatureFlags {
   useRealDocker: boolean;
   useRealJobs: boolean;
   useRealCatalog: boolean;
+  useRealBundles: boolean;
   useRealDeployments: boolean;
   useRealBackups: boolean;
   useAuth: boolean;
@@ -25,6 +26,7 @@ export const defaultFeatureFlags: FeatureFlags = {
   useRealDocker: false,
   useRealJobs: false,
   useRealCatalog: false,
+  useRealBundles: false,
   useRealDeployments: false,
   useRealBackups: false,
   useAuth: false,
@@ -42,6 +44,7 @@ export function loadFeatureFlags(): FeatureFlags {
     useRealDocker: process.env.HOLA_USE_REAL_DOCKER === 'true',
     useRealJobs: process.env.HOLA_USE_REAL_JOBS === 'true',
     useRealCatalog: process.env.HOLA_USE_REAL_CATALOG === 'true',
+  useRealBundles: process.env.HOLA_USE_REAL_BUNDLES === 'true',
     useRealDeployments: process.env.HOLA_USE_REAL_DEPLOYMENTS === 'true',
     useRealBackups: process.env.HOLA_USE_REAL_BACKUPS === 'true',
     useAuth: process.env.HOLA_USE_AUTH === 'true',
