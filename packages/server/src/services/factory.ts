@@ -1,8 +1,8 @@
 /**
  * Service factory for switching between mock and real implementations
  * 
- * Uses feature flags to determine which implementation to use,
- * with automatic fallback to mocks on health check failures.
+ * Uses feature flags to determine which implementation to use.
+ * When USE_REAL flags are enabled, services must be healthy or startup fails.
  */
 
 import { featureFlags, type FeatureFlags } from '../config/features';
@@ -232,6 +232,86 @@ class ServiceFactory {
     this.healthStates.clear();
     this.activeServices.clear();
   }
+
+  /**
+   * Validate that all enabled real services are healthy, fail fast if not
+   */
+  async validateRealServices(): Promise<void> {
+    const logger = this.logger.child({ method: 'validateRealServices' });
+    const enabledServices: Array<{ name: string; flag: keyof FeatureFlags; service: () => object }> = [];
+
+    // Check which real services are enabled
+    if (featureFlags.useRealStorage) enabledServices.push({ name: 'storage', flag: 'useRealStorage', service: () => new RealStorageService() });
+    if (featureFlags.useRealConfig) enabledServices.push({ name: 'config', flag: 'useRealConfig', service: () => new RealConfigService(new RealStorageService()) });
+    if (featureFlags.useRealDatabase) enabledServices.push({ name: 'database', flag: 'useRealDatabase', service: () => new RealDatabaseService(new RealStorageService()) });
+    if (featureFlags.useAuth) enabledServices.push({ name: 'auth', flag: 'useAuth', service: () => new RealAuthService(featureFlags.useAuth) });
+    if (featureFlags.useRealDocker) {
+      enabledServices.push({ name: 'docker', flag: 'useRealDocker', service: () => new RealDockerService() });
+      enabledServices.push({ name: 'system-monitoring', flag: 'useRealDocker', service: () => new RealSystemMonitoringService() });
+    }
+    if (featureFlags.useRealJobs) {
+      enabledServices.push({ name: 'logging', flag: 'useRealJobs', service: () => new RealLoggingService() });
+      enabledServices.push({ name: 'jobs', flag: 'useRealJobs', service: () => new RealJobService() });
+    }
+
+    if (enabledServices.length === 0) {
+      logger.info('No real services enabled, using all mocks');
+      return;
+    }
+
+    logger.info('Validating enabled real services', { 
+      enabledServices: enabledServices.map(s => s.name),
+      flags: enabledServices.map(s => s.flag)
+    });
+
+    const failures: Array<{ name: string; flag: string; error: string }> = [];
+
+    for (const { name, flag, service } of enabledServices) {
+      try {
+        const serviceInstance = service();
+        
+        // Only health check if the service supports it
+        if (this.isHealthCheckable(serviceInstance)) {
+          const health = await (serviceInstance as HealthCheckable).healthCheck();
+          if (!health.healthy) {
+            failures.push({
+              name,
+              flag: `HOLA_${flag.replace(/([A-Z])/g, '_$1').toUpperCase()}`,
+              error: health.error || 'Health check failed'
+            });
+          } else {
+            logger.info('Real service validated successfully', { name });
+          }
+        } else {
+          logger.info('Real service validated (no health check)', { name });
+        }
+      } catch (error) {
+        failures.push({
+          name,
+          flag: `HOLA_${flag.replace(/([A-Z])/g, '_$1').toUpperCase()}`,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
+    if (failures.length > 0) {
+      const errorMessage = [
+        `❌ ${failures.length} real service(s) failed validation:`,
+        ...failures.map(f => `  • ${f.name}: ${f.error}`),
+        '',
+        '🛠️  Fix options:',
+        ...failures.map(f => `  • Fix ${f.name} dependency and restart`),
+        ...failures.map(f => `  • Disable real service: export ${f.flag}=false`),
+        '',
+        '💡 With real services disabled, the server will use mock implementations.',
+      ].join('\n');
+
+      logger.error('Real service validation failed', undefined, { failures });
+      throw new Error(errorMessage);
+    }
+
+    logger.info('All enabled real services validated successfully');
+  }
 }
 
 // Global service factory instance
@@ -248,15 +328,23 @@ export function getServiceFactory(): ServiceFactory {
 }
 
 /**
- * Initialize services with the factory
+ * Initialize services with the factory and validate real services
  */
-export function initializeServices(): void {
-  getServiceFactory(); // Initialize the factory
+export async function initializeServices(): Promise<void> {
+  const factory = getServiceFactory(); // Initialize the factory
   const logger = getLogger().child({ service: 'ServiceInitialization' });
   
   logger.info('Initializing services with feature flags', { 
     flags: featureFlags 
   });
+
+  // First, validate that all enabled real services are healthy
+  try {
+    await factory.validateRealServices();
+  } catch (error) {
+    logger.error('Service validation failed during initialization', error instanceof Error ? error : undefined);
+    throw error; // This will cause startup to fail with a clear message
+  }
   
   // Phase 1: Storage and Config Services
   logger.info('Registering Phase 1 services: Storage and Config');

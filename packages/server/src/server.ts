@@ -105,25 +105,40 @@ import {
 import { developmentToolsEndpoints, createApiMonitoringMiddleware } from './config/development-api';
 import { initializeDevelopmentEnvironment } from './config/development';
 
-// Phase 0: Initialize infrastructure
+// Phase 0: Initialize infrastructure with fail-fast validation
 const logger = getLogger().child({ service: 'HolaServer' });
-initializeLogger(appConfig.logLevel, appConfig.logFormat);
-initializeMetrics();
-initializeServices();
 
-// Phase 0: Startup messaging
-console.log('🚀 Starting Hola Server - Phase 0 Implementation');
-console.log('📋 Phase 0 Deliverables:');
-console.log('  ✅ Feature flag scaffolding and service factory');
-console.log('  ✅ Request ID middleware, structured logging, basic metrics');
-console.log('  ✅ Health and readiness endpoints (/healthz, /readyz, /metrics)');
-console.log('  ✅ Contract test infrastructure');
-console.log('');
+async function initializeInfrastructure() {
+  initializeLogger(appConfig.logLevel, appConfig.logFormat);
+  initializeMetrics();
+  
+  try {
+    await initializeServices();
+  } catch (error) {
+    console.error('');
+    console.error('❌ Server startup failed:');
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error('');
+    process.exit(1);
+  }
 
-logger.info('Phase 0 infrastructure initialized', {
-  featureFlags,
-  config: appConfig,
-});
+  // Phase 0: Startup messaging
+  console.log('🚀 Starting Hola Server - Phase 0 Implementation');
+  console.log('📋 Phase 0 Deliverables:');
+  console.log('  ✅ Feature flag scaffolding and service factory');
+  console.log('  ✅ Request ID middleware, structured logging, basic metrics');
+  console.log('  ✅ Health and readiness endpoints (/healthz, /readyz, /metrics)');
+  console.log('  ✅ Contract test infrastructure');
+  console.log('');
+
+  logger.info('Phase 0 infrastructure initialized', {
+    featureFlags,
+    config: appConfig,
+  });
+}
+
+// Start infrastructure initialization (this will exit on failure)
+await initializeInfrastructure();
 
 const PORT = appConfig.port;
 

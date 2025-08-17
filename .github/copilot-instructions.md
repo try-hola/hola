@@ -400,34 +400,53 @@ kill %1  # Cleanup
 ### Service Implementation Patterns
 **Service Factory Integration**:
 - All real services must implement `HealthCheckable` interface
-- Use health monitoring with automatic fallback to mocks
+- Use health monitoring for ongoing service health tracking
 - Register services with descriptive names and appropriate health check intervals
 - Test both healthy and unhealthy service states
 
-**Feature Flag Implementation**:
+**Feature Flag Implementation - Fail-Fast Approach**:
 - Default all feature flags to `false` for safety
 - Use environment variables for activation (`HOLA_USE_REAL_*=true`)
-- Implement graceful degradation when services are unavailable
-- Log service activation/fallback events for observability
+- **CRITICAL**: When a `USE_REAL` flag is enabled, the service MUST be healthy or startup fails
+- **NO automatic fallback** to mocks when real implementations are explicitly requested
+- **Fail-fast validation**: Real services are health-checked at startup before server starts
+- Provide clear error messages with remediation steps when real services fail
 
-**Error Handling & Resilience**:
-- Always provide mock implementations as fallbacks
+**Fail-Fast Error Handling**:
+- When `HOLA_USE_REAL_*=true` and the service fails: **throw an error and abort startup**
+- Error messages must include:
+  - Which dependency failed and why
+  - How to fix the real dependency (e.g., "install Docker")
+  - How to disable the flag to use mocks (`export HOLA_USE_REAL_DOCKER=false`)
+- **Never silently pivot** from real to mock implementations when real flag is enabled
 - Use structured logging with request correlation IDs
-- Handle external tool unavailability gracefully (e.g., Docker not installed)
-- Implement timeout and retry logic for external commands
+- Implement timeout and retry logic for external commands during health checks
+
+**Service Startup Validation**:
+- Real services are validated before server startup via `validateRealServices()`
+- Health checks are performed on all enabled real services
+- Server startup fails immediately if any real service is unhealthy
+- Clear, actionable error messages guide operators to resolution
 
 ### Testing Strategies
 **Contract Testing**:
 - Test both mock and real implementations against same contracts
 - Verify API compatibility across all phases
 - Use dedicated test servers with different feature flag configurations
-- Test graceful degradation scenarios
+- Test fail-fast scenarios where real services are unavailable
 
 **Service Testing**:
 - Test service health checks and failure scenarios
-- Verify automatic fallback behavior
+- **Test fail-fast behavior**: Verify server startup fails when real flag enabled but service unhealthy
 - Test feature flag activation and deactivation
+- Test error message clarity and actionability
 - Mock external dependencies appropriately
+
+**Fail-Fast Testing**:
+- Verify server fails to start when `HOLA_USE_REAL_*=true` but dependency unavailable
+- Test error messages include both fix and disable options
+- Confirm no silent fallback from real to mock when real flag enabled
+- Test startup validation catches service issues before server accepts requests
 
 **Integration Testing**:
 - Start test servers with background processes
