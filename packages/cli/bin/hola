@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+// Minimal runtime shims to keep CLI stable in Node environments
+// Some optional dev-only deps (e.g., react-devtools-core) expect browser globals
+// Provide harmless fallbacks to avoid ReferenceError during evaluation
+if (typeof globalThis.self === 'undefined') {
+	// eslint-disable-next-line no-global-assign
+	globalThis.self = globalThis;
+}
+if (typeof globalThis.window === 'undefined') {
+	// eslint-disable-next-line no-global-assign
+	globalThis.window = globalThis;
+}
+// Ensure devtools auto-imports are disabled
+if (!process.env.DEV) {
+	process.env.DEV = 'false';
+}
+
+import('../dist/index.js');

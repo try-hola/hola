@@ -13,10 +13,14 @@ export interface FeatureFlags {
   useRealJobs: boolean;
   useRealCatalog: boolean;
   useRealBundles: boolean;
+  useRealDrafts: boolean;
+  useRealValidation: boolean;
   useRealDeployments: boolean;
+  useRealDevSessions: boolean;
   useRealBackups: boolean;
   useAuth: boolean;
   useObservability: boolean; // enables metrics/tracing/exporters
+  enableDevApi: boolean; // enables Phase 7 dev API endpoints
 }
 
 export const defaultFeatureFlags: FeatureFlags = {
@@ -27,10 +31,14 @@ export const defaultFeatureFlags: FeatureFlags = {
   useRealJobs: false,
   useRealCatalog: false,
   useRealBundles: false,
+  useRealDrafts: false,
+  useRealValidation: false,
   useRealDeployments: false,
+  useRealDevSessions: false,
   useRealBackups: false,
   useAuth: false,
   useObservability: false,
+  enableDevApi: false,
 };
 
 /**
@@ -45,10 +53,14 @@ export function loadFeatureFlags(): FeatureFlags {
     useRealJobs: process.env.HOLA_USE_REAL_JOBS === 'true',
     useRealCatalog: process.env.HOLA_USE_REAL_CATALOG === 'true',
   useRealBundles: process.env.HOLA_USE_REAL_BUNDLES === 'true',
+    useRealDrafts: process.env.HOLA_USE_REAL_DRAFTS === 'true',
+    useRealValidation: process.env.HOLA_USE_REAL_VALIDATION === 'true',
     useRealDeployments: process.env.HOLA_USE_REAL_DEPLOYMENTS === 'true',
+    useRealDevSessions: process.env.HOLA_USE_REAL_DEV_SESSIONS === 'true',
     useRealBackups: process.env.HOLA_USE_REAL_BACKUPS === 'true',
     useAuth: process.env.HOLA_USE_AUTH === 'true',
     useObservability: process.env.HOLA_USE_OBSERVABILITY === 'true',
+    enableDevApi: process.env.HOLA_ENABLE_DEV_API === 'true',
   };
 }
 

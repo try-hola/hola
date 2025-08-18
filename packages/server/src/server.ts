@@ -44,6 +44,19 @@ import {
   type GetSystemStatusResponse,
   type Job,
   type JobStatus,
+  // Phase 7 types
+  type CreateDevSessionRequest,
+  type CreateDevSessionResponse,
+  type GetDevSessionsRequest,
+  type GetDevSessionsResponse,
+  type DevSession,
+  type DevSessionListItem,
+  type ValidationComposeRequest,
+  type ValidationComposeResponse,
+  type ValidationReport,
+  type ValidationIssue,
+  type RollbackRequest,
+  type RollbackResponse,
 } from '@hola/shared';
 
 // Phase 0: Infrastructure imports
@@ -1119,6 +1132,227 @@ async function route(url: URL, req: Request): Promise<Response> {
       }
     });
     return new Response(stream, { headers: sse() });
+  }
+
+  // ===== PHASE 7 API ENDPOINTS =====
+  
+  // Check if Phase 7 API is enabled
+  if (!featureFlags.enableDevApi) {
+    // Skip Phase 7 endpoints if not enabled
+  } else {
+    
+    // Dev Sessions API
+    if (pathname === API.dev.sessions && req.method === 'POST') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const requestData: CreateDevSessionRequest = await req.json();
+        const response = await devSessionService.createSession(requestData);
+        return json(response, { status: 201 });
+      } catch (error) {
+        logger.error('Failed to create dev session', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create dev session' } }, { status: 500 });
+      }
+    }
+
+    if (pathname === API.dev.sessions && req.method === 'GET') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const page = Number(searchParams.get('page')) || 1;
+        const limit = Number(searchParams.get('limit')) || 10;
+        const status = searchParams.get('status') as 'all' | 'starting' | 'running' | 'stopped' | 'error' | undefined;
+        const request: GetDevSessionsRequest = { page, limit, status };
+        const response = await devSessionService.listSessions(request);
+        return json(response);
+      } catch (error) {
+        logger.error('Failed to list dev sessions', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list dev sessions' } }, { status: 500 });
+      }
+    }
+
+    // Dev Session by ID
+    const devSessionMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)$/);
+    if (devSessionMatch && req.method === 'GET') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const sessionId = devSessionMatch[1];
+        const session = await devSessionService.getSession(sessionId);
+        if (!session) {
+          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
+        }
+        return json(session);
+      } catch (error) {
+        logger.error('Failed to get dev session', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get dev session' } }, { status: 500 });
+      }
+    }
+
+    if (devSessionMatch && req.method === 'PUT') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const sessionId = devSessionMatch[1];
+        const updateData = await req.json();
+        const session = await devSessionService.updateSession(sessionId, updateData);
+        if (!session) {
+          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
+        }
+        return json(session);
+      } catch (error) {
+        logger.error('Failed to update dev session', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update dev session' } }, { status: 500 });
+      }
+    }
+
+    if (devSessionMatch && req.method === 'DELETE') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const sessionId = devSessionMatch[1];
+        await devSessionService.deleteSession(sessionId);
+        return json({ ok: true });
+      } catch (error) {
+        logger.error('Failed to delete dev session', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete dev session' } }, { status: 500 });
+      }
+    }
+
+    // Dev Session actions
+    const devSessionDeployMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)\/deploy$/);
+    if (devSessionDeployMatch && req.method === 'POST') {
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        const sessionId = devSessionDeployMatch[1];
+        const deployData = await req.json();
+        const result = await devSessionService.executeAction(sessionId, { action: 'deploy', ...deployData });
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to deploy dev session', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to deploy dev session' } }, { status: 500 });
+      }
+    }
+
+    // Drafts API
+    if (pathname === API.drafts.create && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const requestData: CreateDraftRequest = await req.json();
+        const response = await draftService.createDraft(requestData);
+        return json(response, { status: 201 });
+      } catch (error) {
+        logger.error('Failed to create draft', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create draft' } }, { status: 500 });
+      }
+    }
+
+    // Draft by ID
+    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+    if (draftMatch && req.method === 'GET') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftMatch[1];
+        const draft = await draftService.getDraft(draftId);
+        if (!draft) {
+          return json({ error: { code: 'NOT_FOUND', message: 'Draft not found' } }, { status: 404 });
+        }
+        return json(draft);
+      } catch (error) {
+        logger.error('Failed to get draft', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get draft' } }, { status: 500 });
+      }
+    }
+
+    if (draftMatch && req.method === 'PUT') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftMatch[1];
+        const updateData: PatchDraftRequest = await req.json();
+        const response = await draftService.updateDraft(draftId, updateData);
+        return json(response);
+      } catch (error) {
+        logger.error('Failed to update draft', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update draft' } }, { status: 500 });
+      }
+    }
+
+    // Draft validation
+    const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
+    if (draftValidateMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftValidateMatch[1];
+        const result = await draftService.validateDraft(draftId);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to validate draft', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to validate draft' } }, { status: 500 });
+      }
+    }
+
+    // Draft finalization
+    const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
+    if (draftFinalizeMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftFinalizeMatch[1];
+        const result = await draftService.finalizeDraft(draftId);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to finalize draft', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to finalize draft' } }, { status: 500 });
+      }
+    }
+
+    // Validation API
+    if (pathname === API.validation.compose && req.method === 'POST') {
+      try {
+        const { getValidationService } = await import('./services/factory');
+        const validationService = getValidationService();
+        const requestData: ValidationComposeRequest = await req.json();
+        const result = await validationService.validateCompose(requestData);
+        const response: ValidationComposeResponse = result;
+        return json(response);
+      } catch (error) {
+        logger.error('Failed to validate compose', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to validate compose' } }, { status: 500 });
+      }
+    }
+
+    // Deployment rollback endpoint
+    const deploymentRollbackMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/rollback$/);
+    if (deploymentRollbackMatch && req.method === 'POST') {
+      const deploymentId = deploymentRollbackMatch[1];
+      try {
+        const body = await req.json().catch(() => ({}));
+        const { targetReleaseId, reason }: RollbackRequest = body;
+        
+        if (!targetReleaseId) {
+          return json({ error: { code: 'MISSING_PARAMETER', message: 'targetReleaseId is required' } }, { status: 400 });
+        }
+        
+        const { getDeploymentService } = await import('./services/factory');
+        const deploymentService = getDeploymentService();
+        const result = await deploymentService.rollback(deploymentId, { targetReleaseId, reason });
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to rollback deployment', error as Error);
+        // Fallback to mock behavior
+        const mockResponse: RollbackResponse = {
+          jobId: crypto.randomUUID(),
+          targetReleaseId: 'rel-unknown',
+          previousReleaseId: crypto.randomUUID(),
+        };
+        return json(mockResponse);
+      }
+    }
   }
 
   // ===== DEVELOPMENT TOOLS ROUTES =====

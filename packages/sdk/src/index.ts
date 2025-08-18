@@ -1,0 +1,201 @@
+import { 
+  API, 
+  // Phase 7 Draft types
+  CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
+  PatchDraftRequest, PatchDraftResponse,
+  UploadDraftFileResponse, DeleteDraftFileResponse,
+  ValidateDraftResponse, FinalizeDraftResponse,
+  // Phase 7 Validation types
+  ValidationComposeRequest, ValidationComposeResponse,
+  // Phase 7 Deployment types
+  CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
+  GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
+  PatchDeploymentRequest, PatchDeploymentResponse, 
+  PostDeploymentActionRequest, PostDeploymentActionResponse,
+  RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
+  // Phase 7 Dev Session types
+  CreateDevSessionRequest, CreateDevSessionResponse, 
+  GetDevSessionsRequest, GetDevSessionsResponse, GetDevSessionResponse,
+  PatchDevSessionRequest, PatchDevSessionResponse,
+  PostDevSessionActionRequest, PostDevSessionActionResponse,
+  DevSyncDeltaRequest, DevSyncDeltaResponse, DevDeployRequest, DevDeployResponse, 
+  GetDevSessionStatusResponse,
+  // Other existing types
+  BundleImportRequest, BundleImportResponse, SystemConfigResponse 
+} from '@hola/shared';
+
+export type SdkInitOptions = {
+  baseUrl?: string;
+  token?: string;
+  fetchImpl?: typeof fetch;
+};
+
+export class HolaSdk {
+  private baseUrl: string;
+  private token?: string;
+  private fetchImpl: typeof fetch;
+
+  constructor(opts: SdkInitOptions = {}) {
+    this.baseUrl = opts.baseUrl ?? inferBaseUrl();
+    this.token = opts.token ?? inferToken();
+    this.fetchImpl = opts.fetchImpl ?? (globalThis.fetch as typeof fetch);
+    if (!this.fetchImpl) {
+      throw new Error('fetch is not available. Provide fetchImpl or use a runtime with fetch.');
+    }
+  }
+
+  private url(path: string) {
+    return `${this.baseUrl}${path}`;
+  }
+
+  private headers(extra?: HeadersInit): HeadersInit {
+    const h: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (extra) Object.assign(h, extra as Record<string, string>);
+    if (this.token) h['Authorization'] = `Bearer ${this.token}`;
+    return h;
+  }
+
+  async get<T>(path: string): Promise<T> {
+    const res = await this.fetchImpl(this.url(path), { method: 'GET', headers: this.headers() });
+    return parseJson<T>(res);
+  }
+
+  async post<T>(path: string, body?: unknown): Promise<T> {
+    const res = await this.fetchImpl(this.url(path), {
+      method: 'POST',
+      headers: this.headers(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return parseJson<T>(res);
+  }
+
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    const res = await this.fetchImpl(this.url(path), {
+      method: 'PATCH',
+      headers: this.headers(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return parseJson<T>(res);
+  }
+
+  async delete<T>(path: string): Promise<T> {
+    const res = await this.fetchImpl(this.url(path), { method: 'DELETE', headers: this.headers() });
+    return parseJson<T>(res);
+  }
+
+  // --- Convenience methods using shared API constants ---
+
+  health() { return this.get(API.health); }
+  me() { return this.get(API.me); }
+  summary() { return this.get(API.summary); }
+
+  drafts = {
+    create: (data: CreateDraftRequest) => this.post<CreateDraftResponse>(API.drafts.create, data),
+    byId: (draftId: string) => this.get<GetDraftResponse>(API.drafts.byId(draftId)),
+    update: (draftId: string, data: PatchDraftRequest) => this.patch<PatchDraftResponse>(API.drafts.byId(draftId), data),
+    uploadFile: (draftId: string, filePath: string, content: string) => 
+      this.post<UploadDraftFileResponse>(API.drafts.uploads(draftId), { filePath, content }),
+    removeFile: (draftId: string, uploadId: string) => 
+      this.delete<DeleteDraftFileResponse>(API.drafts.uploadById(draftId, uploadId)),
+    validate: (draftId: string) => this.post<ValidateDraftResponse>(API.drafts.validate(draftId)),
+    preflight: (draftId: string) => this.post<ValidateDraftResponse>(API.drafts.preflight(draftId)),
+    finalize: (draftId: string) => this.post<FinalizeDraftResponse>(API.drafts.finalize(draftId)),
+  };
+
+  deployments = {
+    create: (data: CreateDeploymentFromDraftRequest) => this.post<CreateDeploymentFromDraftResponse>(API.deployments.base, data),
+    list: (qs?: GetDeploymentsRequest) => this.get<GetDeploymentsResponse>(`${API.deployments.base}${buildQuery(qs)}`),
+    byId: (deploymentId: string) => this.get<GetDeploymentResponse>(API.deployments.byId(deploymentId)),
+    update: (deploymentId: string, data: PatchDeploymentRequest) => this.patch<PatchDeploymentResponse>(API.deployments.byId(deploymentId), data),
+    delete: (deploymentId: string) => this.delete<void>(API.deployments.byId(deploymentId)),
+    history: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetDeploymentHistoryResponse>(`${API.deployments.history(deploymentId)}${buildQuery(qs)}`),
+    action: (deploymentId: string, action: PostDeploymentActionRequest) => this.post<PostDeploymentActionResponse>(API.deployments.actions(deploymentId), action),
+    rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),
+    logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
+  };
+
+  jobs = {
+    byId: (jobId: string) => this.get(API.jobs.byId(jobId)),
+    logs: (jobId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.jobs.logs(jobId)}${buildQuery(qs)}`),
+  };
+
+  // --- Phase 7 additive helpers (feature-flagged) ---
+
+  validation = {
+    compose: (body: ValidationComposeRequest) => this.post<ValidationComposeResponse>(API.validation.compose, body),
+  };
+
+  bundles = {
+    import: (body: BundleImportRequest) => this.post<BundleImportResponse>(API.bundles.import, body),
+    register: (body: { ref: string; metadata?: Record<string, unknown> }) => this.post<{ ok: boolean }>(API.bundles.register, body),
+  };
+
+  dev = {
+    sessions: {
+      create: (body: CreateDevSessionRequest) => this.post<CreateDevSessionResponse>(API.dev.sessions, body),
+      list: (qs?: GetDevSessionsRequest) => this.get<GetDevSessionsResponse>(`${API.dev.sessions}${buildQuery(qs)}`),
+      byId: (id: string) => this.get<GetDevSessionResponse>(API.dev.sessionById(id)),
+      update: (id: string, body: PatchDevSessionRequest) => this.patch<PatchDevSessionResponse>(API.dev.sessionById(id), body),
+      delete: (id: string) => this.delete<{ ok: boolean }>(API.dev.sessionById(id)),
+      action: (id: string, action: PostDevSessionActionRequest) => this.post<PostDevSessionActionResponse>(API.dev.sessionById(id) + '/actions', action),
+      status: (id: string) => this.get<GetDevSessionStatusResponse>(API.dev.status(id)),
+      deploy: (id: string, body?: DevDeployRequest) => this.post<DevDeployResponse>(API.dev.deploy(id), body),
+      sync: (id: string, body: DevSyncDeltaRequest) => this.patch<DevSyncDeltaResponse>(API.dev.sync(id), body),
+      logs: (id: string, qs?: { since?: string; limit?: number }) => this.get(`${API.dev.sessionById(id)}/logs${buildQuery(qs)}`),
+      // events: SSE consumer will use API.dev.events(id)
+    },
+  };
+
+  system = {
+    config: () => this.get<SystemConfigResponse>(API.system.config),
+  };
+}
+
+// --- helpers ---
+
+function inferBaseUrl() {
+  // Prefer CLI/server env var first
+  if (typeof process !== 'undefined' && process.env?.HOLA_API_URL) return process.env.HOLA_API_URL;
+  // Vite-style for future web integration
+  try {
+    const viteUrl = (import.meta as { env?: { VITE_API_BASE_URL?: string } })?.env?.VITE_API_BASE_URL;
+    if (typeof viteUrl === 'string' && viteUrl) return viteUrl;
+  } catch {
+    // ignore error
+  }
+  return 'http://localhost:3001';
+}
+
+function inferToken() {
+  if (typeof process !== 'undefined' && process.env?.HOLA_TOKEN) return process.env.HOLA_TOKEN;
+  return undefined;
+}
+
+async function parseJson<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const text = await safeText(res);
+    throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ''}`);
+  }
+  // May be empty body (204)
+  const ct = res.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) return undefined as unknown as T;
+  return res.json() as Promise<T>;
+}
+
+async function safeText(res: Response) {
+  try { return await res.text(); } catch { return ''; }
+}
+
+function buildQuery(qs?: Record<string, string | number | boolean | undefined>): string {
+  if (!qs) return '';
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(qs)) {
+    if (v !== undefined && v !== null) sp.append(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
+export { buildQuery };

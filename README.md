@@ -3,15 +3,19 @@
 A modern home lab app deployment platform. Hola helps enthusiasts discover, install, and manage self‑hosted applications on their personal servers with a guided UX, safe customization, and lifecycle management—all from a web dashboard.
 
 This repository is a TypeScript-first monorepo powered by Bun workspaces containing:
-- Web UI: Vite + React + TypeScript
-- Server API: Bun + TypeScript
-- Shared: TypeScript configs and shared types
+- **Web UI**: Vite + React + TypeScript
+- **Server API**: Bun + TypeScript (Phase 7 Complete: Drafts, Validation, Deployments, Dev Sessions)
+- **Shared**: TypeScript configs and shared types
+- **CLI**: Command-line interface for deployment workflows
+- **SDK**: TypeScript client library for server API
+
+**Current Status**: 🚀 Phase 7 server implementation complete! Ready for SDK and CLI integration.
 
 More docs:
-- Monorepo guide: [`docs/monorepo.declaration()`](docs/monorepo.md)
-- Server plan: [`docs/SERVER_ARCHITECTURE.declaration()`](docs/SERVER_ARCHITECTURE.md)
-- Product overview (PRD): [`docs/PRD.declaration()`](docs/PRD.md)
-- High-level architecture: [`docs/ARCHITECTURE.declaration()`](docs/ARCHITECTURE.md)
+- Monorepo guide: [`docs/monorepo.md`](docs/monorepo.md)
+- Server plan: [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
+- Product overview (PRD): [`docs/PRD.md`](docs/PRD.md)
+- High-level architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 
 ## What Hola Does
 
@@ -37,8 +41,10 @@ Non-goals (see full PRD for details):
 .
 ├── packages/
 │   ├── web/       # Vite + React + TS frontend
-│   ├── server/    # Bun + TS server (API)
-│   └── shared/    # Shared TS configs/types
+│   ├── server/    # Bun + TS server (API) - Phase 7 Complete
+│   ├── shared/    # Shared TS configs/types  
+│   ├── cli/       # Command-line interface
+│   └── sdk/       # TypeScript client library
 ├── docs/          # Architecture, server plan, product docs
 ├── .bun-version   # Bun version pin
 ├── package.json   # Bun workspaces root
@@ -46,10 +52,12 @@ Non-goals (see full PRD for details):
 ```
 
 Key entry points:
-- Web entry: [`packages/web/src/main.declaration()`](packages/web/src/main.tsx)
-- Web app shell: [`packages/web/src/App.declaration()`](packages/web/src/App.tsx)
-- Server entry: [`packages/server/src/server.declaration()`](packages/server/src/server.ts)
-- Shared types: [`packages/shared/src/index.declaration()`](packages/shared/src/index.ts)
+- Web entry: [`packages/web/src/main.tsx`](packages/web/src/main.tsx)
+- Web app shell: [`packages/web/src/App.tsx`](packages/web/src/App.tsx)
+- Server entry: [`packages/server/src/server.ts`](packages/server/src/server.ts)
+- Shared types: [`packages/shared/src/index.ts`](packages/shared/src/index.ts)
+- CLI entry: [`packages/cli/src/index.tsx`](packages/cli/src/index.tsx)
+- SDK entry: [`packages/sdk/src/index.ts`](packages/sdk/src/index.ts)
 
 ## Tech Stack
 

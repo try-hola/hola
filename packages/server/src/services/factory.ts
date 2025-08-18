@@ -30,6 +30,12 @@ import { RealJobService, MockJobService, type JobService } from './core/jobs';
 import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
 import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
 
+// Phase 7 imports
+import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
+import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
+import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
+import { RealDevSessionService, MockDevSessionService, type DevSessionService } from './core/dev-session';
+
 export interface ServiceHealth {
   healthy: boolean;
   lastCheck: Date;
@@ -397,6 +403,18 @@ export async function initializeServices(): Promise<void> {
     logger.warn('Bundle service registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
   }
   
+  // Phase 7: Draft, Validation, Deployment, and Dev Session services
+  logger.info('Registering Phase 7 services: Drafts, Validation, Deployments, Dev Sessions');
+  try {
+    getDraftService();
+    getValidationService();
+    getDeploymentService();
+    getDevSessionService();
+    logger.info('Phase 7 services registered successfully');
+  } catch (error) {
+    logger.warn('Phase 7 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+  
   // Services will be created on-demand when needed
   // The factory pattern allows for lazy initialization
   
@@ -700,5 +718,82 @@ export function getBundleService(): BundleService {
     realImplementation: new RealBundleService(),
     featureFlag: 'useRealBundles',
     healthCheckInterval: 60_000,
+  });
+}
+
+// Phase 7 Service Getters
+
+export function getDraftService(): DraftService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<DraftService>('drafts');
+  if (existing) return existing;
+
+  return factory.createService<DraftService>({
+    name: 'drafts',
+    mockImplementation: new MockDraftService(),
+    realImplementation: new RealDraftService(
+      getStorageService(),
+      getCatalogService(),
+      getValidationService()
+    ),
+    featureFlag: 'useRealDrafts',
+    healthCheckInterval: 60_000,
+  });
+}
+
+export function getValidationService(): ValidationService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<ValidationService>('validation');
+  if (existing) return existing;
+
+  return factory.createService<ValidationService>({
+    name: 'validation',
+    mockImplementation: new MockValidationService(),
+    realImplementation: new RealValidationService(
+      getDockerService(),
+      getSystemMonitoringService()
+    ),
+    featureFlag: 'useRealValidation',
+    healthCheckInterval: 30_000,
+  });
+}
+
+export function getDeploymentService(): DeploymentService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<DeploymentService>('deployments');
+  if (existing) return existing;
+
+  return factory.createService<DeploymentService>({
+    name: 'deployments',
+    mockImplementation: new MockDeploymentService(),
+    realImplementation: new RealDeploymentService(
+      getStorageService(),
+      getJobService(),
+      getDockerService()
+    ),
+    featureFlag: 'useRealDeployments',
+    healthCheckInterval: 60_000,
+  });
+}
+
+export function getDevSessionService(): DevSessionService {
+  const factory = getServiceFactory();
+
+  const existing = factory.getService<DevSessionService>('dev-sessions');
+  if (existing) return existing;
+
+  return factory.createService<DevSessionService>({
+    name: 'dev-sessions',
+    mockImplementation: new MockDevSessionService(),
+    realImplementation: new RealDevSessionService(
+      getStorageService(),
+      getJobService(),
+      getDraftService()
+    ),
+    featureFlag: 'useRealDevSessions',
+    healthCheckInterval: 30_000,
   });
 }
