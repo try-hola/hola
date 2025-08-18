@@ -64,7 +64,7 @@ import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService } from './services/factory';
+import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService, getDeploymentService } from './services/factory';
 
 // Phase 1: Enhanced observability imports
 // import { createErrorMappingMiddleware } from './middleware/error-mapping';
@@ -76,10 +76,8 @@ import { createAuthMiddleware } from './middleware/auth';
 import {
   // Deployments
   getDeployments,
-  getDeploymentById,
   getDeploymentHistory,
   executeDeploymentAction,
-  createDeploymentFromDraft,
   // Catalog (fallback mocks)
   getCatalogApps,
   getCatalogAppById,
@@ -534,19 +532,21 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.deployments.base && req.method === 'POST') {
     // create from draft
     const body = await req.json().catch(() => ({}));
-    const draftId = body.draftId || crypto.randomUUID();
-    const payload: PostDeploymentActionResponse = createDeploymentFromDraft(draftId);
+    const deploymentService = await getDeploymentService();
+    const payload = await deploymentService.createFromDraft(body);
     return json(payload);
   }
 
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
-    const payload = getDeploymentById(id);
-    if (!payload) {
+    const deploymentService = await getDeploymentService();
+    try {
+      const payload = await deploymentService.getDeployment(id);
+      return json(payload);
+    } catch {
       return notFound();
     }
-    return json(payload);
   }
 
   if (deploymentMatch && req.method === 'PATCH') {

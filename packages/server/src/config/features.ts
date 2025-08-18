@@ -38,7 +38,7 @@ export const defaultFeatureFlags: FeatureFlags = {
   useRealBackups: false,
   useAuth: false,
   useObservability: false,
-  enableDevApi: false,
+  enableDevApi: true, // Enable Phase 7 dev API endpoints by default
 };
 
 /**
@@ -60,7 +60,7 @@ export function loadFeatureFlags(): FeatureFlags {
     useRealBackups: process.env.HOLA_USE_REAL_BACKUPS === 'true',
     useAuth: process.env.HOLA_USE_AUTH === 'true',
     useObservability: process.env.HOLA_USE_OBSERVABILITY === 'true',
-    enableDevApi: process.env.HOLA_ENABLE_DEV_API === 'true',
+    enableDevApi: process.env.HOLA_ENABLE_DEV_API !== 'false', // Default to true unless explicitly disabled
   };
 }
 
