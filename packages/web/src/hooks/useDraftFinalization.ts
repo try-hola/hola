@@ -1,5 +1,5 @@
 import React from 'react';
-import { api } from '../utils/api';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import type { FinalizeDraftResponse } from '@hola/shared';
 
 // StrictMode-compatible hook for draft finalization

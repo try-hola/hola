@@ -1,5 +1,5 @@
 import React from 'react';
-import { API } from '@hola/shared';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
 import type { 
   GetBackupsResponse,
