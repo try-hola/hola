@@ -5,26 +5,13 @@
  * real and mock modes by checking feature flags at runtime.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { GetJobsResponse, PostDeploymentActionResponse, SystemConfigResponse } from '@hola/shared';
+import { createTestServer, isServerRunning, type TestServerManager } from '../utils/test-server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
-
-async function waitForServerReady(timeoutMs = 15000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(`${BASE_URL}/healthz`);
-      if (res.ok) return true;
-    } catch {
-      // ignore until server is ready
-    }
-    await new Promise(r => setTimeout(r, 500));
-  }
-  throw new Error('Server failed to start within timeout');
-}
 
 async function getConfig(): Promise<SystemConfigResponse> {
   const res = await fetch(`${BASE_URL}${API.system.config}`);
@@ -33,12 +20,29 @@ async function getConfig(): Promise<SystemConfigResponse> {
 }
 
 describe('Phase 5 Contract Tests - Jobs and Structured Logs', () => {
+  let testServer: TestServerManager | null = null;
 
   beforeAll(async () => {
-    await waitForServerReady(20000);
-  await getConfig();
-  // Note: config flags could be used to branch assertions in future
+    // Check if server is already running (e.g., in CI)
+    if (await isServerRunning()) {
+      console.log('Using existing server for contract tests');
+    } else {
+      // Start server for local testing
+      console.log('Starting test server for contract tests');
+      testServer = createTestServer();
+      await testServer.start();
+    }
+    
+    await getConfig();
+    // Note: config flags could be used to branch assertions in future
   }, TEST_TIMEOUT);
+
+  afterAll(async () => {
+    if (testServer) {
+      await testServer.stop();
+      testServer = null;
+    }
+  });
 
   describe('Create job via deployment action', () => {
     it('POST /api/deployments/:id/actions returns a jobId for start action', async () => {
