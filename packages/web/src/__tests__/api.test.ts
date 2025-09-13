@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { api, apiClient } from '../utils/api';
+import { api, apiClient } from '../utils/api-hybrid'; // Use hybrid API
 import type { 
   HealthResponse, 
   GetSummaryResponse, 

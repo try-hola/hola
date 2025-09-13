@@ -2,7 +2,7 @@
 // Provides better retry mechanisms, offline support, and user-friendly error handling
 
 import React from 'react';
-import { api } from '../utils/api';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
 import { 
   NetworkStatus, 
