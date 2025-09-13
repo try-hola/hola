@@ -648,17 +648,17 @@ export class MockDatabaseService implements DatabaseService {
 
   async query<T = Record<string, unknown>>(sql: string, _params?: SQLiteParam[]): Promise<QueryResult<T>> {
     // Simple mock implementation - just return empty results
-    this.logger.debug('Mock query executed', { sql: sql.substring(0, 50) });
+    this.logger.debug('Mock query executed', { sql: sql.substring(0, 50), params: _params?.length || 0 });
     return { rows: [], rowCount: 0 };
   }
 
   async run(sql: string, _params?: SQLiteParam[]): Promise<{ lastInsertRowId: number; changes: number }> {
-    this.logger.debug('Mock statement executed', { sql: sql.substring(0, 50) });
+    this.logger.debug('Mock statement executed', { sql: sql.substring(0, 50), params: _params?.length || 0 });
     return { lastInsertRowId: Date.now(), changes: 1 };
   }
 
   async get<T = Record<string, unknown>>(sql: string, _params?: SQLiteParam[]): Promise<T | null> {
-    this.logger.debug('Mock single row query executed', { sql: sql.substring(0, 50) });
+    this.logger.debug('Mock single row query executed', { sql: sql.substring(0, 50), params: _params?.length || 0 });
     return null;
   }
 
@@ -688,7 +688,8 @@ export class MockDatabaseService implements DatabaseService {
     return ['settings', 'jobs', 'catalog_apps', 'migrations'];
   }
 
-  async getTableInfo(_tableName: string): Promise<TableInfo[]> {
+  async getTableInfo(tableName: string): Promise<TableInfo[]> {
+    this.logger.debug('Mock table info requested', { tableName });
     return [];
   }
 

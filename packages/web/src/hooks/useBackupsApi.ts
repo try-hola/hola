@@ -1,5 +1,5 @@
 import React from 'react';
-import { api } from '../utils/api-hybrid'; // Use hybrid API
+import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
 import type { 
   GetBackupsResponse,
@@ -37,16 +37,10 @@ export function useBackupsApi(
   }, [statusFilter, appFilter, page]);
 
   const fetchData = React.useCallback(async () => {
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-    
+    const cached = globalCache.get<GetBackupsResponse>(cacheKey);
     // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetBackupsResponse,
-        loading: false,
-        error: null,
-      });
+    if (cached !== null) {
+      setState({ data: cached, loading: false, error: null });
       return;
     }
     
@@ -73,7 +67,7 @@ export function useBackupsApi(
       }
       
       const result: GetBackupsResponse = await response.json();
-      globalCache.set(cacheKey, { data: result, timestamp: now });
+      globalCache.set<GetBackupsResponse>(cacheKey, result);
       setState({ data: result, loading: false, error: null });
     } catch (error) {
       setState({
@@ -102,11 +96,7 @@ export function useBackupsApi(
     }
     
     // Invalidate backup caches and refetch
-    for (const key of globalCache.keys()) {
-      if (key.startsWith('backups-')) {
-        globalCache.delete(key);
-      }
-    }
+    globalCache.deleteByPattern(/^backups-/);
     await fetchData();
     
     return response.json();
@@ -139,11 +129,7 @@ export function useBackupsApi(
     }
     
     // Invalidate backup caches and refetch
-    for (const key of globalCache.keys()) {
-      if (key.startsWith('backups-')) {
-        globalCache.delete(key);
-      }
-    }
+    globalCache.deleteByPattern(/^backups-/);
     await fetchData();
     
     return response.json();

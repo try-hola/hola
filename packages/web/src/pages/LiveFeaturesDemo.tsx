@@ -1,6 +1,5 @@
 import React from 'react';
 import { useLiveJobUpdates, useLiveSystemStatus, useLiveDashboard } from '../hooks/useLiveUpdates';
-import { useLogsSSE } from '../hooks/useSSE';
 import { LogsViewer } from '../components/LogsViewer';
 
 /**

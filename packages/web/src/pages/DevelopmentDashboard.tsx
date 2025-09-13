@@ -111,7 +111,7 @@ export default function DevelopmentDashboard() {
     };
 
     loadData();
-  }, []);
+  }, [apiClient]);
 
   // Auto-refresh data based on active tab
   useEffect(() => {

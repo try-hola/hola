@@ -16,8 +16,7 @@ import {
   type PreflightResponse,
   type FinalizeDraftResponse,
   type GetDeploymentsResponse,
-  type GetDeploymentResponse,
-  type GetDeploymentHistoryResponse,
+  
   type PatchDeploymentRequest,
   type PatchDeploymentResponse,
   type PostDeploymentActionRequest,
@@ -46,15 +45,9 @@ import {
   type JobStatus,
   // Phase 7 types
   type CreateDevSessionRequest,
-  type CreateDevSessionResponse,
   type GetDevSessionsRequest,
-  type GetDevSessionsResponse,
-  type DevSession,
-  type DevSessionListItem,
   type ValidationComposeRequest,
   type ValidationComposeResponse,
-  type ValidationReport,
-  type ValidationIssue,
   type RollbackRequest,
   type RollbackResponse,
 } from '@hola/shared';

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { ApiClient } from '../utils/api';
 import { globalCache } from '../utils/cache';
 
@@ -104,7 +104,7 @@ export default function DebuggingDashboard() {
   const apiClient = useMemo(() => new ApiClient(), []);
 
   // Load API call history with enhanced details
-  const loadApiCallHistory = async () => {
+  const loadApiCallHistory = React.useCallback(async () => {
     try {
       const calls = await apiClient.get<DetailedApiCall[]>('/api/dev/api-calls?limit=100&enhanced=true');
       setApiCalls(calls);
@@ -113,10 +113,10 @@ export default function DebuggingDashboard() {
       // Use mock data for demo
       setApiCalls(generateMockApiCalls());
     }
-  };
+  }, [apiClient]);
 
   // Load cache data from client-side cache
-  const loadCacheData = async () => {
+  const loadCacheData = React.useCallback(async () => {
     const entries: CacheEntry[] = [];
     
     // Get cache keys and metadata (this would need cache enhancement)
@@ -159,31 +159,27 @@ export default function DebuggingDashboard() {
     });
 
     setCacheEntries(entries);
-  };
+  }, []);
 
   // Load error analysis data
-  const loadErrorAnalysis = async () => {
+  const loadErrorAnalysis = React.useCallback(async () => {
     try {
-      // This would come from enhanced server analytics
-      // For now, generate from existing API calls
       const analysis = analyzeErrors(apiCalls);
       setErrorAnalysis(analysis);
     } catch (error) {
       console.error('Failed to load error analysis:', error);
     }
-  };
+  }, [apiCalls]);
 
   // Load performance insights
-  const loadPerformanceInsights = async () => {
+  const loadPerformanceInsights = React.useCallback(async () => {
     try {
-      // This would come from enhanced server analytics
-      // For now, generate from existing API calls
       const insights = analyzePerformance(apiCalls);
       setPerformanceInsights(insights);
     } catch (error) {
       console.error('Failed to load performance insights:', error);
     }
-  };
+  }, [apiCalls]);
 
   // Load data based on active tab
   useEffect(() => {
@@ -213,7 +209,7 @@ export default function DebuggingDashboard() {
     };
 
     loadData();
-  }, [activeTab, apiClient, apiCalls]);
+  }, [activeTab, loadApiCallHistory, loadCacheData, loadErrorAnalysis, loadPerformanceInsights]);
 
   // Auto-refresh data
   useEffect(() => {
@@ -226,90 +222,9 @@ export default function DebuggingDashboard() {
     }, 3000); // Refresh every 3 seconds
 
     return () => clearInterval(interval);
-  }, [activeTab]);
+  }, [activeTab, loadApiCallHistory, loadCacheData]);
 
-  // Load API call history with enhanced details
-  const loadApiCallHistory = async () => {
-    try {
-      const calls = await apiClient.get<DetailedApiCall[]>('/api/dev/api-calls?limit=100&enhanced=true');
-      setApiCalls(calls);
-    } catch (error) {
-      console.error('Failed to load API call history:', error);
-      // Use mock data for demo
-      setApiCalls(generateMockApiCalls());
-    }
-  };
-
-  // Load cache data from client-side cache
-  const loadCacheData = async () => {
-    const stats = globalCache.getStats();
-    const entries: CacheEntry[] = [];
-    
-    // Get cache keys and metadata (this would need cache enhancement)
-    // For now, generate mock cache entries
-    const mockKeys = [
-      'api:/api/summary',
-      'api:/api/deployments',
-      'api:/api/catalog/apps',
-      'api:/api/jobs',
-      'api:/api/notifications',
-    ];
-
-    mockKeys.forEach((key, index) => {
-      const metadata = globalCache.getMetadata(key.replace('api:', ''));
-      if (metadata) {
-        entries.push({
-          key,
-          data: globalCache.get(key.replace('api:', '')),
-          metadata: {
-            ...metadata,
-            size: JSON.stringify(globalCache.get(key.replace('api:', ''))).length,
-            hitRate: Math.random() * 100,
-          },
-        });
-      } else {
-        // Mock entry for demonstration
-        entries.push({
-          key,
-          data: { mockData: true, items: index * 5 },
-          metadata: {
-            timestamp: Date.now() - Math.random() * 300000,
-            ttl: 30000,
-            accessCount: Math.floor(Math.random() * 50),
-            lastAccessed: Date.now() - Math.random() * 60000,
-            size: Math.floor(Math.random() * 5000) + 500,
-            hitRate: Math.random() * 100,
-          },
-        });
-      }
-    });
-
-    setCacheEntries(entries);
-  };
-
-  // Load error analysis data
-  const loadErrorAnalysis = async () => {
-    try {
-      // This would come from enhanced server analytics
-      // For now, generate from existing API calls
-      const analysis = analyzeErrors(apiCalls);
-      setErrorAnalysis(analysis);
-    } catch (error) {
-      console.error('Failed to load error analysis:', error);
-    }
-  };
-
-  // Load performance insights
-  const loadPerformanceInsights = async () => {
-    try {
-      // This would come from enhanced server analytics
-      // For now, generate from existing API calls
-      const insights = analyzePerformance(apiCalls);
-      setPerformanceInsights(insights);
-    } catch (error) {
-      console.error('Failed to load performance insights:', error);
-    }
-  };
+  // (deduplicated function definitions removed)
 
   // Filter API calls based on search and status
   const filteredApiCalls = useMemo(() => {

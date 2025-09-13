@@ -77,6 +77,7 @@ export class MockAuthService implements AuthService {
   private logger = getLogger().child({ service: 'MockAuthService' });
 
   async authenticate(_token: string): Promise<AuthResult> {
+    void _token;
     this.logger.debug('Mock auth: allowing all requests');
     
     // Create a default principal for mock mode
@@ -96,6 +97,8 @@ export class MockAuthService implements AuthService {
   }
 
   hasCapability(_principal: Principal, _capability: string): boolean {
+    void _principal;
+    void _capability;
     // Mock mode: always grant capabilities
     return true;
   }

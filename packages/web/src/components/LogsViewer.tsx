@@ -1,29 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { 
-  Play, 
-  Pause, 
-  Download, 
-  Search, 
-  Maximize2, 
-  Copy,
-  RefreshCw,
-  X,
-  Activity,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Wifi,
-  WifiOff,
-  AlertCircle
-} from 'lucide-react';
+import * as Icons from 'lucide-react';
 import { useLogsSSE } from '../hooks/useSSE';
 import { api } from '../utils/api';
 import type {
   LogEntry,
   LogLevel,
   Job,
-  JobStatus,
-  SSEConnectionState
+  JobStatus
 } from '@hola/shared';
 
 interface LogsViewerProps {
@@ -113,15 +96,15 @@ const formatTimestamp = (timestamp: string) => {
 const getJobStatusIcon = (status: JobStatus) => {
   switch (status) {
     case 'running':
-      return <Activity className="w-4 h-4 text-info animate-pulse" />;
+      return React.createElement(Icons.Activity as React.ElementType, { className: 'w-4 h-4 text-info animate-pulse' });
     case 'completed':
-      return <CheckCircle className="w-4 h-4 text-success" />;
+      return React.createElement(Icons.CheckCircle as React.ElementType, { className: 'w-4 h-4 text-success' });
     case 'failed':
-      return <XCircle className="w-4 h-4 text-danger" />;
+      return React.createElement(Icons.XCircle as React.ElementType, { className: 'w-4 h-4 text-danger' });
     case 'queued':
-      return <Clock className="w-4 h-4 text-text-muted" />;
+      return React.createElement(Icons.Clock as React.ElementType, { className: 'w-4 h-4 text-text-muted' });
     default:
-      return <Clock className="w-4 h-4 text-text-muted" />;
+      return React.createElement(Icons.Clock as React.ElementType, { className: 'w-4 h-4 text-text-muted' });
   }
 };
 
@@ -243,13 +226,13 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   const getConnectionIcon = () => {
     switch (connectionState) {
       case 'connected':
-        return <Wifi className="w-4 h-4 text-success" />;
+        return React.createElement(Icons.Wifi as React.ElementType, { className: 'w-4 h-4 text-success' });
       case 'connecting':
-        return <Activity className="w-4 h-4 text-warning animate-pulse" />;
+        return React.createElement(Icons.Activity as React.ElementType, { className: 'w-4 h-4 text-warning animate-pulse' });
       case 'error':
-        return <AlertCircle className="w-4 h-4 text-danger" />;
+        return React.createElement(Icons.AlertCircle as React.ElementType, { className: 'w-4 h-4 text-danger' });
       default:
-        return <WifiOff className="w-4 h-4 text-text-muted" />;
+        return React.createElement(Icons.WifiOff as React.ElementType, { className: 'w-4 h-4 text-text-muted' });
     }
   };
 
@@ -348,7 +331,9 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
               className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors"
               title={isStreaming ? 'Pause streaming' : 'Resume streaming'}
             >
-              {isStreaming ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isStreaming 
+                ? React.createElement(Icons.Pause as React.ElementType, { className: 'w-4 h-4' })
+                : React.createElement(Icons.Play as React.ElementType, { className: 'w-4 h-4' })}
             </button>
             
             <button
@@ -356,7 +341,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
               className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors"
               title="Copy logs"
             >
-              <Copy className="w-4 h-4" />
+              {React.createElement(Icons.Copy as React.ElementType, { className: 'w-4 h-4' })}
             </button>
             
             <button
@@ -364,7 +349,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
               className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors"
               title="Download logs"
             >
-              <Download className="w-4 h-4" />
+              {React.createElement(Icons.Download as React.ElementType, { className: 'w-4 h-4' })}
             </button>
             
             <button
@@ -372,7 +357,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
               className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors text-danger"
               title="Clear logs"
             >
-              <RefreshCw className="w-4 h-4" />
+              {React.createElement(Icons.RefreshCw as React.ElementType, { className: 'w-4 h-4' })}
             </button>
             
             {!isFullscreen && (
@@ -381,7 +366,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
                 className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors"
                 title="Fullscreen"
               >
-                <Maximize2 className="w-4 h-4" />
+                {React.createElement(Icons.Maximize2 as React.ElementType, { className: 'w-4 h-4' })}
               </button>
             )}
           </div>
@@ -418,7 +403,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
         {/* Filters */}
         <div className="flex flex-wrap gap-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
+            {React.createElement(Icons.Search as React.ElementType, { className: 'absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted' })}
             <input
               type="text"
               placeholder="Search logs..."
@@ -505,7 +490,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
             onClick={() => setIsFullscreen(false)}
             className="p-2 bg-surface-2 hover:bg-surface-1 rounded transition-colors"
           >
-            <X className="w-4 h-4" />
+            {React.createElement(Icons.X as React.ElementType, { className: 'w-4 h-4' })}
           </button>
         </div>
         <div className="flex-1 p-4">

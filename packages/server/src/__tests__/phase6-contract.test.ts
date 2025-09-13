@@ -362,10 +362,14 @@ services:
           }]
         };
 
-        // Temporarily override the catalog data
-        const originalLoadMethod = (catalog as any).loadRemoteCatalog;
-        (catalog as any).loadRemoteCatalog = async function() {
-          this.cache = { data: mockApp, ts: Date.now() };
+        // Temporarily override the catalog data without using any
+        type CatalogPrivate = { loadRemoteCatalog?: () => Promise<void> };
+        const catalogPriv = catalog as unknown as CatalogPrivate;
+        const originalLoadMethod = catalogPriv.loadRemoteCatalog;
+        catalogPriv.loadRemoteCatalog = async () => {
+          // Set the private cache field via reflection
+          const target = catalog as unknown as { cache?: { data: unknown; ts: number } };
+          target.cache = { data: mockApp, ts: Date.now() };
         };
 
         try {
@@ -385,7 +389,7 @@ services:
           expect(true).toBe(true); // Pass the test
         } finally {
           // Restore original method
-          (catalog as any).loadRemoteCatalog = originalLoadMethod;
+          (catalog as unknown as CatalogPrivate).loadRemoteCatalog = originalLoadMethod;
         }
       } catch (error) {
         console.warn('Real OCI integration test skipped:', error);

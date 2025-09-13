@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { api } from '../utils/api-hybrid';
-import type { HealthResponse } from '@hola/shared';
 
 // Test that the hybrid API works and health endpoint is migrated
 describe('Hybrid API - Health Migration', () => {

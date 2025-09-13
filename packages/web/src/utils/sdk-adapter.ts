@@ -12,7 +12,6 @@ import type {
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   // Deployment types
-  CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
   PatchDeploymentRequest, PatchDeploymentResponse, 
   PostDeploymentActionRequest, PostDeploymentActionResponse,
@@ -114,9 +113,10 @@ export class SdkAdapter {
 
   // Create enhanced fetch implementation that preserves web enhancements
   private createEnhancedFetch(): typeof fetch {
-    return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const f = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       return safeFetchEnhanced(input, init);
-    };
+    }) as unknown as typeof fetch;
+    return f;
   }
 
   // Build full URL for direct fetch calls
@@ -268,9 +268,9 @@ export class SdkAdapter {
   // Health and basic endpoints
   health(useCache: boolean = false): Promise<HealthResponse> {
     if (useCache) {
-      return this.getWithCache('/api/health', () => this.sdk.health());
+      return this.getWithCache('/api/health', () => this.sdk.get<HealthResponse>('/api/health'));
     }
-    return this.enhancedRequest('GET', '/api/health', () => this.sdk.health(), undefined, false);
+    return this.enhancedRequest('GET', '/api/health', () => this.sdk.get<HealthResponse>('/api/health'), undefined, false);
   }
 
   me(): Promise<unknown> {
@@ -278,7 +278,7 @@ export class SdkAdapter {
   }
 
   summary(): Promise<GetSummaryResponse> {
-    return this.getWithCache('/api/summary', () => this.sdk.summary());
+    return this.getWithCache('/api/summary', () => this.sdk.get<GetSummaryResponse>('/api/summary'));
   }
 
   // System status
@@ -417,7 +417,7 @@ export class SdkAdapter {
     byId: (jobId: string): Promise<GetJobResponse> => {
       const path = `/api/jobs/${jobId}`;
       // Don't cache job details as they change frequently
-      return this.enhancedRequest('GET', path, () => this.sdk.jobs.byId(jobId), undefined, false);
+      return this.enhancedRequest('GET', path, () => this.sdk.get<GetJobResponse>(path), undefined, false);
     },
     
     logs: (jobId: string, params?: { since?: string; lines?: number }): Promise<unknown> => {

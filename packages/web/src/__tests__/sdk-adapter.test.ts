@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { sdkAdapter } from '../utils/sdk-adapter';
-import type { HealthResponse } from '@hola/shared';
 
 // Test the SDK adapter with basic functionality
 describe('SDK Adapter', () => {

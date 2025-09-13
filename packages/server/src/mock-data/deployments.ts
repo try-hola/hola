@@ -340,7 +340,7 @@ export function executeDeploymentAction(
   return { ok: true, jobId: job.id };
 }
 
-export function createDeploymentFromDraft(_draftId: string): { jobId: string; ok: boolean } {
+export function createDeploymentFromDraft(): { jobId: string; ok: boolean } {
   // TODO: Use draftId to create deployment from actual draft data
   // Create a new deployment job
   const jobId = crypto.randomUUID();

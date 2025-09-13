@@ -7,7 +7,7 @@ import {
   developmentUtils,
   type MockDataCustomization 
 } from '../config/development';
-import { stateManager, type MockJob, type MockDeployment, type MockNotification } from '../mock-data/state-manager';
+import { stateManager } from '../mock-data/state-manager';
 
 // API monitoring data structure
 interface ApiCall {

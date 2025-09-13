@@ -13,32 +13,27 @@ import {
 const mockFetch = vi.fn();
 const originalFetch = global.fetch;
 
-// Store original globals
-const originalNavigator = global.navigator;
-const originalWindow = global.window;
-
 describe('Enhanced Error Handling - Phase 3.2', () => {
   beforeEach(() => {
     // Mock global fetch
     global.fetch = mockFetch as unknown as typeof fetch;
     mockFetch.mockClear();
 
-    // Mock navigator.onLine to be true for most tests
-    global.navigator = { onLine: true } as Navigator;
-    
-    // Mock window object for event listeners
-    global.window = {
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    } as unknown as Window & typeof globalThis;
+    // Ensure navigator.onLine is true without replacing the entire navigator
+    Object.defineProperty(window.navigator, 'onLine', {
+      configurable: true,
+      value: true,
+    });
+
+    // Spy on window event listeners instead of overwriting window
+    vi.spyOn(window, 'addEventListener').mockImplementation(vi.fn() as unknown as typeof window.addEventListener);
+    vi.spyOn(window, 'removeEventListener').mockImplementation(vi.fn() as unknown as typeof window.removeEventListener);
   });
 
   afterEach(() => {
     // Restore global fetch
     global.fetch = originalFetch;
-    // Restore globals
-    global.navigator = originalNavigator;
-    global.window = originalWindow;
+    vi.restoreAllMocks();
   });
 
   describe('Error Classification', () => {
@@ -80,13 +75,14 @@ describe('Enhanced Error Handling - Phase 3.2', () => {
 
     it('should classify offline errors when navigator is offline', () => {
       // Temporarily set navigator offline for this test
-      global.navigator = { onLine: false } as Navigator;
-      
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        value: false,
+      });
+
       const type = classifyError();
       expect(type).toBe(ErrorType.OFFLINE);
-      
-      // Restore navigator for other tests
-      global.navigator = { onLine: true } as Navigator;
+      // Restore is handled in afterEach via defineProperty in beforeEach
     });
   });
 
@@ -248,26 +244,26 @@ describe('Enhanced Error Handling - Phase 3.2', () => {
 
   describe('Network Status', () => {
     it('should detect online status', () => {
-      global.navigator = { onLine: true } as Navigator;
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        value: true,
+      });
       expect(NetworkStatus.isOnline()).toBe(true);
     });
 
     it('should detect offline status', () => {
-      global.navigator = { onLine: false } as Navigator;
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        value: false,
+      });
       expect(NetworkStatus.isOnline()).toBe(false);
-      // Restore for other tests
-      global.navigator = { onLine: true } as Navigator;
+      // Restore is handled by beforeEach
     });
 
     it('should allow adding and removing listeners', () => {
       const mockCallback = vi.fn();
-      const mockAddEventListener = vi.fn();
-      const mockRemoveEventListener = vi.fn();
-      
-      global.window = {
-        addEventListener: mockAddEventListener,
-        removeEventListener: mockRemoveEventListener
-      } as unknown as Window & typeof globalThis;
+  const mockAddEventListener = vi.spyOn(window, 'addEventListener').mockImplementation(vi.fn() as unknown as typeof window.addEventListener);
+  const mockRemoveEventListener = vi.spyOn(window, 'removeEventListener').mockImplementation(vi.fn() as unknown as typeof window.removeEventListener);
       
       const cleanup = NetworkStatus.addListener(mockCallback);
       
@@ -275,8 +271,9 @@ describe('Enhanced Error Handling - Phase 3.2', () => {
       expect(typeof cleanup).toBe('function');
       
       // Should have added event listeners
-      expect(mockAddEventListener).toHaveBeenCalledWith('online', expect.any(Function));
-      expect(mockAddEventListener).toHaveBeenCalledWith('offline', expect.any(Function));
+  expect(mockAddEventListener).toHaveBeenCalledWith('online', expect.any(Function));
+  expect(mockAddEventListener).toHaveBeenCalledWith('offline', expect.any(Function));
+  expect(mockRemoveEventListener).not.toHaveBeenCalled();
       
       // Should be able to call cleanup without errors
       expect(() => cleanup()).not.toThrow();

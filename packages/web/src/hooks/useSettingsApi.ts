@@ -1,5 +1,5 @@
 import React from 'react';
-import { api } from '../utils/api-hybrid'; // Use hybrid API
+import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
 import type { 
   GetSettingsResponse,
@@ -27,16 +27,10 @@ export function useSettingsApi() {
   const cacheKey = 'settings-system';
 
   const fetchData = React.useCallback(async () => {
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-    
+    const cached = globalCache.get<GetSettingsResponse>(cacheKey);
     // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetSettingsResponse,
-        loading: false,
-        error: null,
-      });
+    if (cached !== null) {
+      setState({ data: cached, loading: false, error: null });
       return;
     }
     
@@ -50,7 +44,7 @@ export function useSettingsApi() {
       }
       
       const result: GetSettingsResponse = await response.json();
-      globalCache.set(cacheKey, { data: result, timestamp: now });
+      globalCache.set<GetSettingsResponse>(cacheKey, result);
       setState({ data: result, loading: false, error: null });
     } catch (error) {
       setState({
@@ -108,16 +102,10 @@ export function useBackupSettingsApi() {
   const cacheKey = 'settings-backup';
 
   const fetchData = React.useCallback(async () => {
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-    
+    const cached = globalCache.get<GetBackupSettingsResponse>(cacheKey);
     // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetBackupSettingsResponse,
-        loading: false,
-        error: null,
-      });
+    if (cached !== null) {
+      setState({ data: cached, loading: false, error: null });
       return;
     }
     
@@ -131,7 +119,7 @@ export function useBackupSettingsApi() {
       }
       
       const result: GetBackupSettingsResponse = await response.json();
-      globalCache.set(cacheKey, { data: result, timestamp: now });
+      globalCache.set<GetBackupSettingsResponse>(cacheKey, result);
       setState({ data: result, loading: false, error: null });
     } catch (error) {
       setState({
@@ -189,16 +177,10 @@ export function useSystemStatusApi() {
   const cacheKey = 'system-status';
 
   const fetchData = React.useCallback(async () => {
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-    
+    const cached = globalCache.get<GetSystemStatusResponse>(cacheKey);
     // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetSystemStatusResponse,
-        loading: false,
-        error: null,
-      });
+    if (cached !== null) {
+      setState({ data: cached, loading: false, error: null });
       return;
     }
     
@@ -212,7 +194,7 @@ export function useSystemStatusApi() {
       }
       
       const result: GetSystemStatusResponse = await response.json();
-      globalCache.set(cacheKey, { data: result, timestamp: now });
+      globalCache.set<GetSystemStatusResponse>(cacheKey, result);
       setState({ data: result, loading: false, error: null });
     } catch (error) {
       setState({

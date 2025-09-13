@@ -5,81 +5,8 @@
  * including OpenAPI schema generation, Swagger UI integration, and ReDoc setup.
  */
 
-import type {
-  // Health & Identity
-  HealthResponse,
-  HelloResponse,
-  GetMeResponse,
-  GetSummaryResponse,
-  
-  // Catalog
-  GetCatalogAppsRequest,
-  GetCatalogAppsResponse,
-  GetCatalogAppResponse,
-  GetCatalogAppVersionsResponse,
-  GetCatalogAppVersionDetailResponse,
-  
-  // Drafts
-  CreateDraftRequest,
-  CreateDraftResponse,
-  GetDraftResponse,
-  PatchDraftRequest,
-  PatchDraftResponse,
-  UploadDraftFileResponse,
-  DeleteDraftFileResponse,
-  ValidateDraftResponse,
-  PreflightResponse,
-  FinalizeDraftResponse,
-  
-  // Deployments
-  GetDeploymentsRequest,
-  GetDeploymentsResponse,
-  GetDeploymentResponse,
-  GetDeploymentHistoryResponse,
-  PatchDeploymentRequest,
-  PatchDeploymentResponse,
-  PostDeploymentActionRequest,
-  PostDeploymentActionResponse,
-  
-  // Jobs
-  GetJobsRequest,
-  GetJobsResponse,
-  GetJobResponse,
-  
-  // Backups
-  GetBackupsRequest,
-  GetBackupsResponse,
-  CreateBackupRequest,
-  CreateBackupResponse,
-  GetBackupResponse,
-  RestoreBackupRequest,
-  RestoreBackupResponse,
-  DeleteBackupResponse,
-  
-  // Notifications
-  GetNotificationsRequest,
-  GetNotificationsResponse,
-  PatchNotificationRequest,
-  PatchNotificationResponse,
-  PostNotificationsActionRequest,
-  PostNotificationsActionResponse,
-  
-  // Settings
-  GetSettingsResponse,
-  PatchSettingsRequest,
-  PatchSettingsResponse,
-  GetBackupSettingsResponse,
-  PatchBackupSettingsRequest,
-  PatchBackupSettingsResponse,
-  
-  // System
-  GetSystemStatusResponse,
-  
-  // Common
-  ErrorResponse,
-  PageRequest,
-  PageResponse,
-} from '../index';
+// Note: This module generates documentation metadata and string-based schemas.
+// It does not require importing runtime or type symbols from the shared index.
 
 /**
  * HTTP methods supported by the API

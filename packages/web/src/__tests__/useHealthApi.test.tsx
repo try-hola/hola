@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { renderHook, waitFor } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import { useHealthApi } from '../hooks/useHealthApi';
 
 // Test the health hook using SDK adapter migration

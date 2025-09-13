@@ -185,7 +185,7 @@ export class RealValidationService implements ValidationService {
           detail: `${freeGB.toFixed(1)}GB free space available`,
           remediation: freeGB < threshold ? 'Free up disk space' : undefined,
         });
-      } catch (error) {
+      } catch {
         checks.push({
           name: 'disk',
           type: 'disk',
@@ -610,7 +610,7 @@ export class MockValidationService implements ValidationService {
     };
   }
 
-  async validateCompose(_request: ValidationComposeRequest): Promise<ValidationComposeResponse> {
+  async validateCompose(): Promise<ValidationComposeResponse> {
     this.logger.info('Mock: Validating compose');
 
     return {

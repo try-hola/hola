@@ -13,24 +13,17 @@ import { useErrorHandler } from '../hooks/useErrorHandler';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import React from 'react';
 
-// Mock network status
-const mockAddEventListener = vi.fn();
-const mockRemoveEventListener = vi.fn();
-
 beforeEach(() => {
-  vi.stubGlobal('navigator', {
-    onLine: true,
-  });
-  
-  vi.stubGlobal('window', {
-    addEventListener: mockAddEventListener,
-    removeEventListener: mockRemoveEventListener,
+  // Ensure navigator.onLine is true without replacing the entire navigator
+  Object.defineProperty(window.navigator, 'onLine', {
+    configurable: true,
+    value: true,
   });
 });
 
 afterEach(() => {
   vi.clearAllMocks();
-  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('Enhanced Error Handling - Phase 3.2', () => {
@@ -59,7 +52,10 @@ describe('Enhanced Error Handling - Phase 3.2', () => {
     });
 
     it('should detect offline status', () => {
-      vi.stubGlobal('navigator', { onLine: false });
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        value: false,
+      });
       const errorType = classifyError();
       expect(errorType).toBe(ErrorType.OFFLINE);
     });
