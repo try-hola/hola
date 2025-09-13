@@ -119,6 +119,12 @@ export class SdkAdapter {
     };
   }
 
+  // Build full URL for direct fetch calls
+  private buildFullUrl(path: string): string {
+    const baseUrl = getWebBaseUrl();
+    return `${baseUrl}${path}`;
+  }
+
   // Enhanced request method with smart deduplication and caching
   private async enhancedRequest<T>(
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
@@ -321,11 +327,21 @@ export class SdkAdapter {
       return this.enhancedRequest('PATCH', path, () => this.sdk.drafts.update(draftId, data), data, true);
     },
     
-    uploadFile: (draftId: string, filePath: string, content: string): Promise<UploadDraftFileResponse> => {
+    uploadFile: (draftId: string, formData: FormData): Promise<UploadDraftFileResponse> => {
       const path = `/api/drafts/${draftId}/uploads`;
-      return this.enhancedRequest('POST', path, () => 
-        this.sdk.drafts.uploadFile(draftId, filePath, content), 
-        { filePath, content }, false);
+      // For web file uploads, we need to preserve FormData approach
+      // This bypasses the SDK and uses our enhanced fetch directly
+      return this.enhancedRequest('POST', path, async () => {
+        const response = await this.createEnhancedFetch()(this.buildFullUrl(path), {
+          method: 'POST',
+          body: formData, // Send FormData directly, not JSON
+          headers: {
+            // Don't set Content-Type for FormData - let browser set it with boundary
+            // No JSON content-type header for FormData
+          }
+        });
+        return response.json();
+      }, formData, false);
     },
     
     deleteFile: (draftId: string, uploadId: string): Promise<DeleteDraftFileResponse> => {

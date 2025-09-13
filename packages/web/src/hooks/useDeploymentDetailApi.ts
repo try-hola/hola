@@ -1,5 +1,5 @@
 import React from 'react';
-import { API } from '@hola/shared';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
 import type { 
   GetDeploymentResponse, 
@@ -51,13 +51,7 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const response = await fetch(API.deployments.byId(deploymentId));
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch deployment: ${response.status} ${response.statusText}`);
-      }
-      
-      const result: GetDeploymentResponse = await response.json();
+      const result = await api.deployments.byId(deploymentId) as GetDeploymentResponse;
       globalCache.set(cacheKey, { data: result, timestamp: now });
       setState({ data: result, loading: false, error: null });
     } catch (error) {
@@ -77,21 +71,13 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
   const updateConfiguration = React.useCallback(async (request: PatchDeploymentRequest) => {
     if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
     
-    const response = await fetch(API.deployments.byId(deploymentId), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to update deployment: ${response.status} ${response.statusText}`);
-    }
+    const result = await api.deployments.update(deploymentId, request);
     
     // Invalidate cache and refetch
     globalCache.delete(cacheKey);
     await fetchData();
     
-    return response.json();
+    return result;
   }, [deploymentId, cacheKey, fetchData]);
 
   // Execute action
@@ -99,21 +85,13 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
     
     const request: PostDeploymentActionRequest = { action };
-    const response = await fetch(API.deployments.actions(deploymentId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to ${action} deployment: ${response.status} ${response.statusText}`);
-    }
+    const result = await api.deployments.action(deploymentId, request);
     
     // Invalidate cache and refetch
     globalCache.delete(cacheKey);
     await fetchData();
     
-    return response.json();
+    return result;
   }, [deploymentId, cacheKey, fetchData]);
 
   return { 
@@ -167,18 +145,7 @@ export function useDeploymentHistoryApi(deploymentId: string | undefined, page: 
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const params = new URLSearchParams({ 
-        page: page.toString(), 
-        limit: '10' 
-      });
-      
-      const response = await fetch(`${API.deployments.history(deploymentId)}?${params.toString()}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch deployment history: ${response.status} ${response.statusText}`);
-      }
-      
-      const result: GetDeploymentHistoryResponse = await response.json();
+      const result = await api.deployments.history(deploymentId, { page, limit: 10 }) as GetDeploymentHistoryResponse;
       globalCache.set(cacheKey, { data: result, timestamp: now });
       setState({ data: result, loading: false, error: null });
     } catch (error) {

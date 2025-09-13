@@ -6,17 +6,17 @@ import { sdkAdapter } from './sdk-adapter';
 
 // Migration flags to control which endpoints use the SDK adapter
 const USE_SDK_FOR = {
-  health: true,   // ✅ Migrated - simple and safe
-  me: true,       // ✅ Migrated - simple user info  
-  summary: true,  // ✅ Migrated - dashboard data
-  catalog: true,  // ✅ Migrated - read-only catalog data
-  system: true,   // ✅ Migrating now - system status reads
-  drafts: false,  // Not migrated yet
-  deployments: false, // Not migrated yet
-  jobs: false,    // Not migrated yet
-  backups: false, // Not migrated yet
-  notifications: false, // Not migrated yet
-  settings: false, // Not migrated yet
+  health: true,       // ✅ Migrated - simple and safe
+  me: true,           // ✅ Migrated - simple user info  
+  summary: true,      // ✅ Migrated - dashboard data
+  catalog: true,      // ✅ Migrated - read-only catalog data
+  system: true,       // ✅ Migrated - system status reads
+  drafts: true,       // ✅ Migrated - draft operations (create, read, update, validate, finalize)
+  deployments: true,  // ✅ Migrated - deployment operations
+  jobs: true,         // ✅ Migrating now - job monitoring
+  backups: true,      // ✅ Migrating now - backup management
+  notifications: true, // ✅ Migrating now - notification management
+  settings: true,     // ✅ Migrating now - settings management
 } as const;
 
 // Hybrid API that gradually switches to SDK adapter
