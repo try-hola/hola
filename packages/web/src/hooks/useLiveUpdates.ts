@@ -1,7 +1,7 @@
 import React from 'react';
 import { useSSE } from './useSSE';
 import { usePoll } from './usePoll';
-import { api } from '../utils/api';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
 import type { 
   SSEEvent, 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { api } from '../utils/api';
+import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
 import type { GetJobsResponse, JobStatus } from '@hola/shared';
 
