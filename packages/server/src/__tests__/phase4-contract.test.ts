@@ -5,36 +5,40 @@
  * with graceful degradation when Docker is unavailable.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { 
   GetSystemStatusResponse,
   GetSummaryResponse,
   SystemHealthResponse
 } from '@hola/shared';
+import { createTestServer, isServerRunning, type TestServerManager } from '../utils/test-server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
 
 describe('Phase 4 Contract Tests - Docker + System Monitoring + SSE', () => {
+  let testServer: TestServerManager | null = null;
+
   beforeAll(async () => {
-    // Wait for server to be ready
-    let retries = 10;
-    while (retries > 0) {
-      try {
-        const response = await fetch(`${BASE_URL}/healthz`);
-        if (response.ok) break;
-      } catch {
-        // Server not ready yet
-      }
-      retries--;
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    // Check if server is already running (e.g., in CI)
+    if (await isServerRunning()) {
+      console.log('Using existing server for contract tests');
+      return;
     }
-    
-    if (retries === 0) {
-      throw new Error('Server failed to start within timeout');
-    }
+
+    // Start server for local testing
+    console.log('Starting test server for contract tests');
+    testServer = createTestServer();
+    await testServer.start();
   }, TEST_TIMEOUT);
+
+  afterAll(async () => {
+    if (testServer) {
+      await testServer.stop();
+      testServer = null;
+    }
+  });
 
   describe('System Status with Real Monitoring', () => {
     it('returns real system data from monitoring service', async () => {

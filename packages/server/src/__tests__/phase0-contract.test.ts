@@ -5,27 +5,35 @@
  * and maintains API compatibility.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
+import { createTestServer, isServerRunning, type TestServerManager } from '../utils/test-server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
 
 describe('Phase 0 Contract Tests', () => {
+  let testServer: TestServerManager | null = null;
+
   beforeAll(async () => {
-    // Wait for server to be ready
-    let retries = 10;
-    while (retries > 0) {
-      try {
-        const response = await fetch(`${BASE_URL}/healthz`);
-        if (response.ok) break;
-      } catch {
-        // Server not ready yet
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      retries--;
+    // Check if server is already running (e.g., in CI)
+    if (await isServerRunning()) {
+      console.log('Using existing server for contract tests');
+      return;
     }
+
+    // Start server for local testing
+    console.log('Starting test server for contract tests');
+    testServer = createTestServer();
+    await testServer.start();
   }, TEST_TIMEOUT);
+
+  afterAll(async () => {
+    if (testServer) {
+      await testServer.stop();
+      testServer = null;
+    }
+  });
 
   describe('Health and Infrastructure Endpoints', () => {
     it('should have healthy health check endpoint', async () => {
