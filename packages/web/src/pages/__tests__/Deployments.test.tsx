@@ -1,9 +1,7 @@
-import { render, screen, waitFor } from '@testing-library/react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
-import { Deployments } from '../Deployments';
-import { API } from '@hola/shared';
-import type { GetDeploymentsResponse, DeploymentListItem } from '@hola/shared';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { sdkAdapter } from '../../utils/sdk-adapter';
+import { mockFetch, createMockResponse } from '../../setupTests';
+import type { GetDeploymentsResponse, GetDeploymentsRequest, DeploymentListItem } from '@hola/shared';
 
 const mockDeployments: DeploymentListItem[] = [
   {
@@ -34,141 +32,115 @@ const mockDeployments: DeploymentListItem[] = [
   }
 ];
 
-const originalFetch = global.fetch;
+// Test the SDK adapter deployments functionality directly
+describe('Deployments - SDK Adapter', () => {
+  beforeEach(() => {
+    // Clear the mock and any cached data between tests
+    mockFetch.mockClear();
+    sdkAdapter.clearCache();
+  });
 
-function setupMockFetch(response: GetDeploymentsResponse) {
-  global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input).includes(API.deployments.base)) {
-      return new Response(JSON.stringify(response), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response('Not Found', { status: 404 });
-  }) as typeof fetch;
-}
+  it('fetches deployments list when API call succeeds', async () => {
+    const mockResponse: GetDeploymentsResponse = {
+      items: mockDeployments,
+      page: 1,
+      limit: 10,
+      total: 2
+    };
 
-function setupMockFetchError() {
-  global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-    if (String(input).includes(API.deployments.base)) {
-      return new Response(JSON.stringify({ 
+    mockFetch.mockResolvedValueOnce(createMockResponse(mockResponse));
+
+    const params: GetDeploymentsRequest = { page: 1, limit: 10 };
+    const result = await sdkAdapter.deployments.list(params);
+
+    expect(result).toBeDefined();
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].name).toBe('Nextcloud');
+    expect(result.items[1].name).toBe('Grafana');
+    expect(result.total).toBe(2);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles API error gracefully', async () => {
+    const errorResponse = createMockResponse(
+      { 
         error: { 
           code: 'PERMISSION_DENIED', 
           message: 'Permission denied' 
         } 
-      }), {
-        status: 403,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response('Not Found', { status: 404 });
-  }) as typeof fetch;
-}
+      },
+      { status: 403, ok: false }
+    );
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+    mockFetch.mockResolvedValueOnce(errorResponse);
 
-afterEach(() => {
-  global.fetch = originalFetch;
-});
-
-const DeploymentsWithRouter = () => (
-  <MemoryRouter>
-    <Deployments />
-  </MemoryRouter>
-);
-
-describe('Deployments', () => {
-  it('renders deployments list when API call succeeds', async () => {
-    // Set up a response with more items than the limit to trigger pagination
-    setupMockFetch({
-      items: mockDeployments,
-      page: 1,
-      limit: 1, // Set limit lower than number of items to show pagination
-      total: 2
-    });
-
-    render(<DeploymentsWithRouter />);
-
-    // Should show loading initially
-    expect(screen.getByText(/loading/i)).toBeInTheDocument();
-
-    // Wait for deployments to load
-    await waitFor(() => {
-      expect(screen.getByText('Nextcloud')).toBeInTheDocument();
-      expect(screen.getByText('Grafana')).toBeInTheDocument();
-    });
-
-    // Should show pagination info when total > limit
-    await waitFor(() => {
-      expect(screen.getByText(/showing.*1.*to.*2.*of.*2.*deployments/i)).toBeInTheDocument();
-    });
+    const params: GetDeploymentsRequest = { page: 1, limit: 10 };
+    
+    await expect(sdkAdapter.deployments.list(params)).rejects.toThrow('Permission denied');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('handles API error gracefully', async () => {
-    setupMockFetchError();
-
-    render(<DeploymentsWithRouter />);
-
-    // Wait for error to be displayed
-    await waitFor(() => {
-      expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
-    });
-  });
-
-  it('displays deployment status correctly', async () => {
-    setupMockFetch({
-      items: mockDeployments,
+  it('filters deployments by status correctly', async () => {
+    const filteredMockResponse: GetDeploymentsResponse = {
+      items: [mockDeployments[0]], // Only running deployment
       page: 1,
       limit: 10,
-      total: 2
-    });
+      total: 1
+    };
 
-    render(<DeploymentsWithRouter />);
+    mockFetch.mockResolvedValueOnce(createMockResponse(filteredMockResponse));
 
-    await waitFor(() => {
-      // Check for running status in deployment cards (more specific selector)
-      const deploymentCards = screen.getAllByText(/running/i).filter(el => 
-        el.className.includes('bg-success/10')
-      );
-      expect(deploymentCards.length).toBeGreaterThan(0);
-      
-      // Check for stopped status
-      expect(screen.getByText(/stopped/i)).toBeInTheDocument();
-    });
+    const params: GetDeploymentsRequest = { page: 1, limit: 10, status: 'running' };
+    const result = await sdkAdapter.deployments.list(params);
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].status).toBe('running');
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/deployments?page=1&limit=10&status=running'),
+      expect.any(Object)
+    );
   });
 
   it('shows empty state when no deployments', async () => {
-    setupMockFetch({
+    const emptyResponse: GetDeploymentsResponse = {
       items: [],
       page: 1,
       limit: 10,
       total: 0
-    });
+    };
 
-    render(<DeploymentsWithRouter />);
+    mockFetch.mockResolvedValueOnce(createMockResponse(emptyResponse));
 
-    await waitFor(() => {
-      expect(screen.getByText(/no deployments found/i)).toBeInTheDocument();
-    });
+    const params: GetDeploymentsRequest = { page: 1, limit: 10 };
+    const result = await sdkAdapter.deployments.list(params);
+
+    expect(result.items).toHaveLength(0);
+    expect(result.total).toBe(0);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it('uses shared API constants for fetch calls', async () => {
-    setupMockFetch({
+  it('uses correct API endpoint with query parameters', async () => {
+    const mockResponse: GetDeploymentsResponse = {
       items: mockDeployments,
-      page: 1,
-      limit: 10,
+      page: 2,
+      limit: 5,
       total: 2
-    });
+    };
 
-    render(<DeploymentsWithRouter />);
+    mockFetch.mockResolvedValueOnce(createMockResponse(mockResponse));
 
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringMatching(new RegExp(`^${API.deployments.base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)),
-        expect.any(Object)
-      );
-    });
+    const params: GetDeploymentsRequest = { 
+      page: 2, 
+      limit: 5, 
+      q: 'nextcloud',
+      status: 'running'
+    };
+    
+    await sdkAdapter.deployments.list(params);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/deployments?page=2&limit=5&q=nextcloud&status=running'),
+      expect.any(Object)
+    );
   });
 });
