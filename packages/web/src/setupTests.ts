@@ -1,9 +1,15 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import React from 'react';
+import * as React from 'react';
 
 // Ensure React is available globally for hooks
 globalThis.React = React;
+
+// Also ensure React.useState is available directly  
+if (!globalThis.React || !globalThis.React.useState) {
+  console.error('React not properly initialized in test setup');
+  globalThis.React = React;
+}
 
 // Mock fetch globally for tests with proper response handling
 const mockFetch = vi.fn();

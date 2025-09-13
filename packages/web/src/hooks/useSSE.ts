@@ -1,5 +1,8 @@
-import React from 'react';
+import * as React from 'react';
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
+
+// EventSource factory type for dependency injection
+export type EventSourceFactory = (url: string) => EventSource;
 
 // Configuration for SSE connection
 export interface SSEOptions {
@@ -18,6 +21,9 @@ export interface SSEOptions {
   
   // Headers for authentication if needed
   headers?: Record<string, string>;
+  
+  // Dependency injection for testing
+  eventSourceFactory?: EventSourceFactory;
 }
 
 // SSE hook state
@@ -29,7 +35,7 @@ export interface SSEState {
 }
 
 // Default configuration
-const DEFAULT_OPTIONS: Required<SSEOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & Pick<SSEOptions, 'eventSourceFactory'> = {
   reconnect: true,
   reconnectDelay: 1000,
   maxReconnectDelay: 30000,
@@ -38,6 +44,7 @@ const DEFAULT_OPTIONS: Required<SSEOptions> = {
   heartbeatTimeout: 5000,
   eventTypes: [],
   headers: {},
+  eventSourceFactory: undefined,
 };
 
 /**
@@ -213,7 +220,10 @@ export function useSSE(
     }));
 
     try {
-      const eventSource = new EventSource(urlRef.current);
+      // Use injected factory or default EventSource
+      const eventSource = config.eventSourceFactory 
+        ? config.eventSourceFactory(urlRef.current)
+        : new EventSource(urlRef.current);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
