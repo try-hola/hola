@@ -9,9 +9,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:ui": "vitest",
-    "test:watch": "vitest --watch"
+    "test": "npx vitest run",
+    "test:ui": "npx vitest --ui",
+    "test:watch": "npx vitest --watch"
   },
   "dependencies": {
     "@hola/sdk": "workspace:*",
