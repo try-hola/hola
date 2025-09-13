@@ -1,0 +1,503 @@
+// SDK Adapter: Wraps @hola/sdk with web-specific enhancements
+// Preserves caching, deduplication, error handling while using isomorphic SDK
+
+import { HolaSdk } from '@hola/sdk';
+import type { 
+  // Health and basic
+  HealthResponse, GetSummaryResponse,
+  // Catalog types
+  GetCatalogAppsResponse, GetCatalogAppResponse, GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  // Draft types  
+  CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
+  PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
+  UploadDraftFileResponse, DeleteDraftFileResponse,
+  // Deployment types
+  CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
+  GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
+  PatchDeploymentRequest, PatchDeploymentResponse, 
+  PostDeploymentActionRequest, PostDeploymentActionResponse,
+  GetDeploymentHistoryResponse,
+  // Job types
+  GetJobsResponse, GetJobResponse,
+  // Backup types  
+  GetBackupsResponse, GetBackupResponse,
+  // Notification types
+  GetNotificationsResponse, NotificationItem,
+  // Settings types
+  GetSettingsResponse,
+  // System types
+  GetSystemStatusResponse
+} from '@hola/shared';
+import { globalCache, CacheTTL } from './cache';
+import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
+
+// Environment-based configuration for SDK
+function getWebBaseUrl(): string {
+  // Check for explicit Vite environment variable first
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL;
+  }
+  
+  // Check for Node.js environment variable (for tests)
+  if (typeof process !== 'undefined' && process.env?.VITE_API_BASE_URL) {
+    return process.env.VITE_API_BASE_URL;
+  }
+  
+  // In development with Vite, use the proxy (empty base URL)
+  if (
+    typeof import.meta !== 'undefined' && 
+    (import.meta.env?.DEV || import.meta.env?.MODE === 'development')
+  ) {
+    return ''; // Use Vite proxy
+  }
+  
+  // For tests or any environment without import.meta, use direct connection
+  if (typeof import.meta === 'undefined' || typeof process !== 'undefined') {
+    return 'http://localhost:3001';
+  }
+  
+  // In production, API should be served from same origin
+  return '';
+}
+
+// Request deduplication support
+interface PendingRequest {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  timestamp: number;
+}
+
+const pendingRequests = new Map<string, PendingRequest>();
+
+// Request deduplication policies - same as original api.ts
+const DEDUPE_POLICIES = {
+  GET: true,
+  PUT: true,
+  PATCH: true,
+  POST: false,
+  DELETE: false,
+} as const;
+
+function createCacheKey(method: string, path: string, body?: unknown): string {
+  const bodyStr = body ? JSON.stringify(body) : '';
+  return `${method}:${path}:${bodyStr}`;
+}
+
+// Cache TTL mapping based on endpoint patterns - same as original
+function getCacheTTL(path: string): number {
+  if (path.includes('/summary')) return CacheTTL.dashboard;
+  if (path.includes('/status')) return CacheTTL.system_status;
+  if (path.includes('/jobs')) return CacheTTL.job_status;
+  if (path.includes('/deployments')) return CacheTTL.deployments;
+  if (path.includes('/notifications')) return CacheTTL.notifications;
+  if (path.includes('/catalog')) return CacheTTL.catalog;
+  if (path.includes('/settings')) return CacheTTL.settings;
+  if (path.includes('/backups')) return CacheTTL.backups;
+  if (path.includes('/me')) return CacheTTL.user_info;
+  return CacheTTL.deployments; // default
+}
+
+// Enhanced SDK Adapter class
+export class SdkAdapter {
+  private sdk: HolaSdk;
+
+  constructor() {
+    // Initialize SDK with web-specific configuration
+    this.sdk = new HolaSdk({
+      baseUrl: getWebBaseUrl(),
+      // Web doesn't use token auth - relies on cookies/session
+      token: undefined,
+      // Provide enhanced fetch that includes our error handling and retry logic
+      fetchImpl: this.createEnhancedFetch(),
+    });
+  }
+
+  // Create enhanced fetch implementation that preserves web enhancements
+  private createEnhancedFetch(): typeof fetch {
+    return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      return safeFetchEnhanced(input, init);
+    };
+  }
+
+  // Enhanced request method with smart deduplication and caching
+  private async enhancedRequest<T>(
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    path: string,
+    sdkCall: () => Promise<T>,
+    body?: unknown,
+    dedupeEnabled: boolean = true
+  ): Promise<T> {
+    const cacheKey = createCacheKey(method, path, body);
+    
+    // Check if deduplication should be applied
+    const shouldDedupe = dedupeEnabled && DEDUPE_POLICIES[method];
+
+    // Check for existing request
+    if (shouldDedupe) {
+      const existingRequest = pendingRequests.get(cacheKey);
+      if (existingRequest) {
+        // Cancel if older than 30 seconds
+        if (Date.now() - existingRequest.timestamp > 30000) {
+          existingRequest.controller.abort();
+          pendingRequests.delete(cacheKey);
+        } else {
+          return existingRequest.promise as Promise<T>;
+        }
+      }
+    }
+
+    // Create abort controller for cancellation
+    const controller = new AbortController();
+    
+    // Wrap SDK call with request tracking
+    const requestPromise = (async (): Promise<T> => {
+      try {
+        const result = await sdkCall();
+        
+        // Cache GET responses with appropriate TTL
+        if (method === 'GET') {
+          const ttl = getCacheTTL(path);
+          globalCache.set(`api:${path}`, result, ttl);
+        }
+        
+        return result;
+      } catch (error) {
+        // Ensure we throw enhanced errors
+        if (error instanceof Error && !(error as EnhancedError).type) {
+          throw createEnhancedError(error);
+        }
+        throw error;
+      }
+    })();
+
+    // Store pending request if deduplication is enabled
+    if (shouldDedupe) {
+      const pendingRequest: PendingRequest = {
+        promise: requestPromise,
+        controller,
+        timestamp: Date.now(),
+      };
+      
+      pendingRequests.set(cacheKey, pendingRequest);
+
+      // Clean up after completion
+      requestPromise
+        .then(() => pendingRequests.delete(cacheKey))
+        .catch(() => pendingRequests.delete(cacheKey));
+    }
+
+    const result = await requestPromise;
+    
+    // Handle cache invalidation for mutations
+    if (method !== 'GET') {
+      this.invalidateCache(path);
+    }
+    
+    return result;
+  }
+
+  // Try to get from cache first, then fetch if not available
+  private async getWithCache<T>(path: string, sdkCall: () => Promise<T>): Promise<T> {
+    const cached = globalCache.get<T>(`api:${path}`);
+    
+    if (cached !== null) {
+      return cached;
+    }
+    
+    return this.enhancedRequest('GET', path, sdkCall, undefined, false);
+  }
+
+  // Smart cache invalidation - same logic as original api.ts
+  private invalidateCache(path: string): void {
+    // Remove exact match
+    globalCache.delete(`api:${path}`);
+    
+    // Remove related cache entries based on path patterns
+    if (path.includes('/deployments/')) {
+      globalCache.deleteByPattern(/^api:.*\/deployments/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on deployments
+    } else if (path.includes('/jobs/')) {
+      globalCache.deleteByPattern(/^api:.*\/jobs/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on jobs
+    } else if (path.includes('/backups/')) {
+      globalCache.deleteByPattern(/^api:.*\/backups/);
+    } else if (path.includes('/notifications/')) {
+      globalCache.deleteByPattern(/^api:.*\/notifications/);
+      globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard shows notification count
+    } else if (path.includes('/settings/')) {
+      globalCache.deleteByPattern(/^api:.*\/settings/);
+    }
+  }
+
+  // Build query string from parameters
+  buildQuery(params: Record<string, string | number | boolean | undefined>): string {
+    const searchParams = new URLSearchParams();
+    
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        searchParams.append(key, String(value));
+      }
+    });
+
+    const queryString = searchParams.toString();
+    return queryString ? `?${queryString}` : '';
+  }
+
+  // Clear all caches (useful for forced refreshes)
+  clearCache(): void {
+    globalCache.clear();
+    pendingRequests.clear();
+  }
+
+  // Cancel all pending requests
+  cancelPendingRequests(): void {
+    for (const [key, request] of pendingRequests.entries()) {
+      request.controller.abort();
+      pendingRequests.delete(key);
+    }
+  }
+
+  // === API Methods using SDK with enhancements ===
+
+  // Health and basic endpoints
+  health(useCache: boolean = false): Promise<HealthResponse> {
+    if (useCache) {
+      return this.getWithCache('/api/health', () => this.sdk.health());
+    }
+    return this.enhancedRequest('GET', '/api/health', () => this.sdk.health(), undefined, false);
+  }
+
+  me(): Promise<unknown> {
+    return this.getWithCache('/api/me', () => this.sdk.me());
+  }
+
+  summary(): Promise<GetSummaryResponse> {
+    return this.getWithCache('/api/summary', () => this.sdk.summary());
+  }
+
+  // System status
+  system = {
+    status: (): Promise<GetSystemStatusResponse> => 
+      this.getWithCache('/api/system/status', () => this.sdk.get('/api/system/status')),
+  };
+
+  // Catalog with smart caching
+  catalog = {
+    apps: (params?: { query?: string; category?: string; page?: number; limit?: number }): Promise<GetCatalogAppsResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/catalog/apps${query}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    appById: (appId: string): Promise<GetCatalogAppResponse> => {
+      const path = `/api/catalog/apps/${appId}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    versions: (appId: string): Promise<GetCatalogAppVersionsResponse> => {
+      const path = `/api/catalog/apps/${appId}/versions`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    versionDetail: (appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse> => {
+      const path = `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+  };
+
+  // Drafts (Install Wizard) with cache invalidation
+  drafts = {
+    create: (data: CreateDraftRequest): Promise<CreateDraftResponse> =>
+      this.enhancedRequest('POST', '/api/drafts', () => this.sdk.drafts.create(data), data, false),
+    
+    byId: (draftId: string): Promise<GetDraftResponse> => {
+      const path = `/api/drafts/${draftId}`;
+      // Don't cache draft state as it changes frequently
+      return this.enhancedRequest('GET', path, () => this.sdk.drafts.byId(draftId), undefined, false);
+    },
+    
+    update: (draftId: string, data: PatchDraftRequest): Promise<PatchDraftResponse> => {
+      const path = `/api/drafts/${draftId}`;
+      return this.enhancedRequest('PATCH', path, () => this.sdk.drafts.update(draftId, data), data, true);
+    },
+    
+    uploadFile: (draftId: string, filePath: string, content: string): Promise<UploadDraftFileResponse> => {
+      const path = `/api/drafts/${draftId}/uploads`;
+      return this.enhancedRequest('POST', path, () => 
+        this.sdk.drafts.uploadFile(draftId, filePath, content), 
+        { filePath, content }, false);
+    },
+    
+    deleteFile: (draftId: string, uploadId: string): Promise<DeleteDraftFileResponse> => {
+      const path = `/api/drafts/${draftId}/uploads/${uploadId}`;
+      return this.enhancedRequest('DELETE', path, () => 
+        this.sdk.drafts.removeFile(draftId, uploadId), undefined, false);
+    },
+    
+    validate: (draftId: string): Promise<ValidateDraftResponse> => {
+      const path = `/api/drafts/${draftId}/validate`;
+      return this.enhancedRequest('POST', path, () => this.sdk.drafts.validate(draftId), undefined, false);
+    },
+    
+    preflight: (draftId: string): Promise<ValidateDraftResponse> => {
+      const path = `/api/drafts/${draftId}/preflight`;
+      return this.enhancedRequest('POST', path, () => this.sdk.drafts.preflight(draftId), undefined, false);
+    },
+    
+    finalize: (draftId: string): Promise<FinalizeDraftResponse> => {
+      const path = `/api/drafts/${draftId}/finalize`;
+      return this.enhancedRequest('POST', path, () => this.sdk.drafts.finalize(draftId), undefined, false);
+    },
+  };
+
+  // Deployments with optimistic cache management
+  deployments = {
+    list: (params?: GetDeploymentsRequest): Promise<GetDeploymentsResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/deployments${query}`;
+      return this.getWithCache(path, () => this.sdk.deployments.list(params));
+    },
+    
+    byId: (deploymentId: string): Promise<GetDeploymentResponse> => {
+      const path = `/api/deployments/${deploymentId}`;
+      return this.getWithCache(path, () => this.sdk.deployments.byId(deploymentId));
+    },
+    
+    update: (deploymentId: string, data: PatchDeploymentRequest): Promise<PatchDeploymentResponse> => {
+      const path = `/api/deployments/${deploymentId}`;
+      return this.enhancedRequest('PATCH', path, () => 
+        this.sdk.deployments.update(deploymentId, data), data, true);
+    },
+    
+    history: (deploymentId: string, params?: { page?: number; limit?: number }): Promise<GetDeploymentHistoryResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/deployments/${deploymentId}/history${query}`;
+      return this.getWithCache(path, () => this.sdk.deployments.history(deploymentId, params));
+    },
+    
+    action: (deploymentId: string, action: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse> => {
+      const path = `/api/deployments/${deploymentId}/actions`;
+      return this.enhancedRequest('POST', path, () => 
+        this.sdk.deployments.action(deploymentId, action), action, false);
+    },
+    
+    logs: (deploymentId: string, params?: { since?: string; lines?: number }): Promise<unknown> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/deployments/${deploymentId}/logs${query}`;
+      // Don't cache logs
+      return this.enhancedRequest('GET', path, () => 
+        this.sdk.deployments.logs(deploymentId, params), undefined, false);
+    },
+  };
+
+  // Jobs with frequent updates
+  jobs = {
+    list: (params?: { deploymentId?: string; status?: string; page?: number; limit?: number }): Promise<GetJobsResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/jobs${query}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    byId: (jobId: string): Promise<GetJobResponse> => {
+      const path = `/api/jobs/${jobId}`;
+      // Don't cache job details as they change frequently
+      return this.enhancedRequest('GET', path, () => this.sdk.jobs.byId(jobId), undefined, false);
+    },
+    
+    logs: (jobId: string, params?: { since?: string; lines?: number }): Promise<unknown> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/jobs/${jobId}/logs${query}`;
+      // Don't cache logs
+      return this.enhancedRequest('GET', path, () => 
+        this.sdk.jobs.logs(jobId, params), undefined, false);
+    },
+  };
+
+  // Backups with cache management
+  backups = {
+    list: (params?: { appId?: string; status?: string; page?: number; limit?: number }): Promise<GetBackupsResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/backups${query}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    byId: (backupId: string): Promise<GetBackupResponse> => {
+      const path = `/api/backups/${backupId}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    create: (data: { appId?: string }): Promise<unknown> => {
+      const path = '/api/backups';
+      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+    },
+    
+    restore: (backupId: string, data?: { targetDeploymentId?: string }): Promise<unknown> => {
+      const path = `/api/backups/${backupId}/restore`;
+      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+    },
+    
+    delete: (backupId: string): Promise<unknown> => {
+      const path = `/api/backups/${backupId}`;
+      return this.enhancedRequest('DELETE', path, () => this.sdk.delete(path), undefined, false);
+    },
+  };
+
+  // Notifications with cache management
+  notifications = {
+    list: (params?: { filter?: string; page?: number; limit?: number }): Promise<GetNotificationsResponse> => {
+      const query = this.buildQuery(params || {});
+      const path = `/api/notifications${query}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    byId: (id: string): Promise<NotificationItem> => {
+      const path = `/api/notifications/${id}`;
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    update: (id: string, data: { read?: boolean; dismiss?: boolean }): Promise<unknown> => {
+      const path = `/api/notifications/${id}`;
+      return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+    },
+    
+    actions: (data: { action: 'markAllRead' | 'dismissAll' }): Promise<unknown> => {
+      const path = '/api/notifications/actions';
+      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+    },
+  };
+
+  // Settings with cache management
+  settings = {
+    get: (): Promise<GetSettingsResponse> => {
+      const path = '/api/settings';
+      return this.getWithCache(path, () => this.sdk.get(path));
+    },
+    
+    update: (data: unknown): Promise<unknown> => {
+      const path = '/api/settings';
+      return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+    },
+    
+    backup: {
+      get: (): Promise<unknown> => {
+        const path = '/api/settings/backup';
+        return this.getWithCache(path, () => this.sdk.get(path));
+      },
+      
+      update: (data: unknown): Promise<unknown> => {
+        const path = '/api/settings/backup';
+        return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+      },
+    },
+  };
+
+  // Cache management utilities
+  cache = {
+    clear: () => this.clearCache(),
+    invalidate: (path: string) => this.invalidateCache(path),
+    stats: () => globalCache.getStats(),
+  };
+}
+
+// Default SDK adapter instance
+export const sdkAdapter = new SdkAdapter();
