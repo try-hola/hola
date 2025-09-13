@@ -13,7 +13,7 @@ import type { SSEEvent } from '@hola/shared';
 
 // Factory function for creating controllable EventSource in tests
 export const createControllableEventSourceFactory = () => {
-  return (url: string) => new ControllableEventSource(url) as unknown as EventSource;
+  return (url: string) => new ControllableEventSource(url) as EventSource;
 };
 
 // Helper to wait for React state updates
@@ -103,7 +103,7 @@ export class SSETestHelper {
   /**
    * Send a system update event
    */
-  static async sendSystemUpdateEvent(data: any) {
+  static async sendSystemUpdateEvent(data: Record<string, unknown>) {
     const eventData = SSEEventCreators.systemUpdate(data);
     await act(async () => {
       eventSourceController.simulateMessageAll(eventData);

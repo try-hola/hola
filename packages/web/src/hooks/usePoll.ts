@@ -68,7 +68,7 @@ export function usePoll<T>(
   });
 
   const mountedRef = useRef(true);
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const timeoutRef = useRef<number | null>(null);
   const isPollingRef = useRef(false);
 
   // Cleanup on unmount

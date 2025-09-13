@@ -80,7 +80,7 @@ export function useOptimisticUpdates<T>() {
         setPendingUpdates(prev => new Map(prev.set(updateId, update)));
 
         // Set up rollback timeout if specified
-        let rollbackTimer: NodeJS.Timeout | undefined;
+        let rollbackTimer: number | undefined;
         if (options.rollbackTimeout) {
           rollbackTimer = setTimeout(() => {
             rollbackUpdate(updateId);

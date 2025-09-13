@@ -76,9 +76,9 @@ export function useSSE(
 
   // Refs for managing connection lifecycle
   const eventSourceRef = React.useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  const heartbeatTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = React.useRef<number | null>(null);
+  const heartbeatTimeoutRef = React.useRef<number | null>(null);
+  const heartbeatIntervalRef = React.useRef<number | null>(null);
   const mountedRef = React.useRef(true);
   const urlRef = React.useRef(url);
   const onEventRef = React.useRef(onEvent);

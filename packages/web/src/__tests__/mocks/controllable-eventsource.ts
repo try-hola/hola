@@ -120,8 +120,7 @@ export const ControllableEventSource = function(this: ControllableEventSourceIns
   Object.assign(this, instance);
   
   return instance;
-} as unknown as {
-  new (url: string): ControllableEventSourceInstance;
+} as new (url: string) => ControllableEventSourceInstance & {
   readonly CONNECTING: 0;
   readonly OPEN: 1;
   readonly CLOSED: 2;
@@ -136,7 +135,7 @@ ControllableEventSource.CLOSED = 2;
 export const eventSourceController = globalController;
 
 // Helper function to create SSE event data
-export function createSSEEventData(event: any): string {
+export function createSSEEventData(event: Record<string, unknown>): string {
   return JSON.stringify(event);
 }
 
@@ -167,7 +166,7 @@ export const SSEEventCreators = {
     data,
   }),
 
-  systemUpdate: (data: any) => createSSEEventData({
+  systemUpdate: (data: Record<string, unknown>) => createSSEEventData({
     type: 'system_update',
     data,
   }),

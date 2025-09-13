@@ -4,11 +4,15 @@ import React from 'react';
 
 // Simple component to test React rendering
 function TestComponent() {
+  const handleClick = () => {
+    // Button click handler for testing
+  };
+
   return (
     <div>
       <h1>Hello World</h1>
       <p>This is a test component</p>
-      <button onClick={() => console.log('clicked')}>Click me</button>
+      <button onClick={handleClick}>Click me</button>
     </div>
   );
 }
