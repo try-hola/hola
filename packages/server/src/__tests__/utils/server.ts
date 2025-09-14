@@ -14,20 +14,23 @@ let serverPid: number | null = null;
 /**
  * Start the server in background and capture PID
  * Uses `bun run dev &` as recommended in repo docs
+ * @param port - Port to start server on (default: 3001)
+ * @param env - Additional environment variables
  */
-export async function startServer(): Promise<void> {
+export async function startServer(port: number = 3001, env: Record<string, string> = {}): Promise<void> {
   if (serverProcess) {
     throw new Error('Server is already running. Call stopServer() first.');
   }
 
-  console.log('Starting server with `bun run dev`...');
+  console.log(`Starting server with \`bun run dev\` on port ${port}...`);
   
   // Start server process in background
   serverProcess = spawn('bun', ['run', 'dev'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      PORT: '3001', // Ensure consistent port
+      PORT: String(port),
+      ...env, // Allow custom environment variables
     },
     stdio: 'ignore', // Suppress server output in tests
     detached: true, // Run in background
@@ -37,18 +40,19 @@ export async function startServer(): Promise<void> {
   console.log(`Server started with PID: ${serverPid}`);
 
   // Wait for server to be healthy before returning
-  await waitForHealthz();
+  await waitForHealthz(15000, port);
 }
 
 /**
  * Poll /healthz endpoint until healthy or timeout
  * @param timeoutMs - Maximum time to wait in milliseconds (default: 15000)
+ * @param port - Port to check (default: 3001)
  */
-export async function waitForHealthz(timeoutMs: number = 15000): Promise<void> {
+export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3001): Promise<void> {
   const startTime = Date.now();
-  const baseUrl = 'http://localhost:3001';
+  const baseUrl = `http://localhost:${port}`;
   
-  console.log(`Waiting for server health check (timeout: ${timeoutMs}ms)...`);
+  console.log(`Waiting for server health check on port ${port} (timeout: ${timeoutMs}ms)...`);
   
   while (Date.now() - startTime < timeoutMs) {
     try {
@@ -115,15 +119,17 @@ export function shouldSkipServerStart(): boolean {
 /**
  * Centralized server management for contract tests
  * Handles startup/shutdown with environment variable opt-out
+ * @param port - Port to start server on (default: 3001)
+ * @param env - Additional environment variables
  */
-export async function setupTestServer(): Promise<void> {
+export async function setupTestServer(port: number = 3001, env: Record<string, string> = {}): Promise<void> {
   if (shouldSkipServerStart()) {
     console.log('Skipping server startup (HOLA_TEST_SKIP_SERVER_START=true)');
     
     // Verify existing server is healthy
-    if (!(await isServerRunning())) {
+    if (!(await isServerRunning(port))) {
       throw new Error(
-        'HOLA_TEST_SKIP_SERVER_START=true but no healthy server found on port 3001. ' +
+        `HOLA_TEST_SKIP_SERVER_START=true but no healthy server found on port ${port}. ` +
         'Start server manually or unset the environment variable.'
       );
     }
@@ -133,13 +139,13 @@ export async function setupTestServer(): Promise<void> {
   }
 
   // Check if server is already running
-  if (await isServerRunning()) {
-    console.log('Server already running, using existing instance');
+  if (await isServerRunning(port)) {
+    console.log(`Server already running on port ${port}, using existing instance`);
     return;
   }
 
   // Start new server instance
-  await startServer();
+  await startServer(port, env);
 }
 
 /**

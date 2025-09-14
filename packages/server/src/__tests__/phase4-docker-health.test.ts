@@ -9,58 +9,21 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
+import { setupTestServer, teardownTestServer } from './utils/server';
 
 const TEST_PORT = 3010;
 const BASE_URL = `http://localhost:${TEST_PORT}`;
 
-let child: ReturnType<typeof Bun.spawn> | null = null;
-
-async function waitForHealthz(timeoutMs = 15000): Promise<void> {
-  const start = Date.now();
-  // Try up to timeout
-  while (true) {
-    try {
-      const res = await fetch(`${BASE_URL}${API.system.healthz}`);
-      if (res.ok) return;
-    } catch {
-      // not up yet
-    }
-    if (Date.now() - start > timeoutMs) {
-      throw new Error('Server failed to become healthy in time');
-    }
-    await new Promise(r => setTimeout(r, 300));
-  }
-}
-
 describe('Real Docker service reporting via system endpoints', () => {
   beforeAll(async () => {
     // Start a dedicated server with real docker flag enabled
-    child = Bun.spawn([
-      'bun',
-      'run',
-      'src/server.ts',
-    ], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PORT: String(TEST_PORT),
-        HOLA_USE_REAL_DOCKER: 'true',
-        // keep defaults for others
-      },
-      stdout: 'ignore',
-      stderr: 'ignore',
+    await setupTestServer(TEST_PORT, {
+      HOLA_USE_REAL_DOCKER: 'true',
     });
-
-    await waitForHealthz(20000);
   }, 30000);
 
   afterAll(async () => {
-    try {
-      child?.kill();
-    } catch {
-      // ignore
-    }
-    child = null;
+    await teardownTestServer();
   });
 
   it('exposes feature flag useRealDocker=true in system config', async () => {
