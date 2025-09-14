@@ -256,7 +256,7 @@ services:
   describe('Catalog Refresh', () => {
     test('should support on-demand refresh endpoint', async () => {
       // Import the Bun-compatible server utility for this test
-      const { setupTestServer, teardownTestServer } = await import('./utils/bun-server');
+      const { setupTestServer } = await import('./utils/bun-server');
       
       try {
         await setupTestServer(3002);

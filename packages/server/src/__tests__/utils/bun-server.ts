@@ -62,7 +62,7 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
         console.log('Server is healthy and ready');
         return;
       }
-    } catch (error) {
+    } catch {
       // Server not ready yet, continue polling
     }
     

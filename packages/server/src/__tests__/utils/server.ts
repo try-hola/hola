@@ -36,7 +36,7 @@ export async function startServer(port: number = 3001, env: Record<string, strin
     detached: true, // Run in background
   });
 
-  serverPid = serverProcess.pid;
+  serverPid = serverProcess.pid ?? null;
   console.log(`Server started with PID: ${serverPid}`);
 
   // Wait for server to be healthy before returning
@@ -61,7 +61,7 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
         console.log('Server is healthy and ready');
         return;
       }
-    } catch (error) {
+    } catch {
       // Server not ready yet, continue polling
     }
     
