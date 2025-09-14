@@ -6,7 +6,6 @@
 
 import { describe, test, expect } from 'bun:test';
 import { parseComposeDefaults, mergeDefaults } from '../../services/core/compose-parser';
-import type { AppEnvVar } from '@hola/shared';
 
 describe('Compose Parser', () => {
   test('should parse compose.yaml and extract ports, volumes, and environment', async () => {
