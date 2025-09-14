@@ -129,7 +129,7 @@ export function parseComposeDefaults(bundlePath: string): ParsedDefaults {
             for (const [key, value] of Object.entries(service.environment)) {
               result.environment.push({
                 key,
-                value: String(value || ''),
+                value: String(value ?? ''),
                 isSecret: isLikelySecret(key),
                 description: generateEnvDescription(key),
               });
