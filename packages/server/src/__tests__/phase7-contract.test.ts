@@ -47,66 +47,8 @@ interface SystemHealth {
   activatedServices: string[];
 }
 
-// Test server management for bun:test
-class BunTestServer {
-  private child: ReturnType<typeof Bun.spawn> | null = null;
-  private readonly port: number = 3001;
-
-  async start(): Promise<void> {
-    if (this.child) return;
-
-    this.child = Bun.spawn([
-      'bun',
-      'run',
-      'src/server.ts',
-    ], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PORT: String(this.port),
-      },
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
-
-    // Wait for server to be healthy
-    await this.waitForHealthy();
-  }
-
-  async stop(): Promise<void> {
-    if (this.child) {
-      try {
-        this.child.kill();
-      } catch {
-        // Ignore kill errors
-      }
-      this.child = null;
-    }
-  }
-
-  async isHealthy(): Promise<boolean> {
-    try {
-      const response = await fetch(`http://localhost:${this.port}/healthz`);
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  private async waitForHealthy(): Promise<void> {
-    const start = Date.now();
-    const timeout = 15000;
-    
-    while (Date.now() - start < timeout) {
-      if (await this.isHealthy()) {
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 300));
-    }
-    
-    throw new Error(`Server failed to become healthy within ${timeout}ms`);
-  }
-}
+// Import shared server utilities
+import { setupTestServer, teardownTestServer } from './utils/bun-server';
 
 // Test infrastructure
 interface TestResponse<T = unknown> {
@@ -157,7 +99,6 @@ async function makeRequest<T = unknown>(options: {
 
 describe('Phase 7: Drafts, Validation, and Deployments', () => {
   let baseURL: string;
-  let testServer: BunTestServer | null = null;
 
   beforeAll(async () => {
     // Enable Phase 7 features for testing
@@ -169,24 +110,18 @@ describe('Phase 7: Drafts, Validation, and Deployments', () => {
     
     baseURL = 'http://localhost:3001';
     
-    // Check if server is already running (e.g., in CI)
-    testServer = new BunTestServer();
-    if (!(await testServer.isHealthy())) {
-      console.log('Starting test server for contract tests');
-      await testServer.start();
-    } else {
-      console.log('Using existing server for contract tests');
-      // Don't manage the server if it's already running
-      testServer = null;
-    }
+    // Use centralized server setup
+    await setupTestServer(3001, {
+      HOLA_ENABLE_DEV_API: 'true',
+      HOLA_USE_REAL_DRAFTS: 'false',
+      HOLA_USE_REAL_VALIDATION: 'false',
+      HOLA_USE_REAL_DEPLOYMENTS: 'false',
+      HOLA_USE_REAL_DEV_SESSIONS: 'false',
+    });
   });
 
   afterAll(async () => {
-    // Clean up test server
-    if (testServer) {
-      await testServer.stop();
-      testServer = null;
-    }
+    await teardownTestServer();
     
     // Clean up environment
     delete process.env.HOLA_ENABLE_DEV_API;

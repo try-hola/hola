@@ -255,18 +255,12 @@ services:
 
   describe('Catalog Refresh', () => {
     test('should support on-demand refresh endpoint', async () => {
-      // This test requires starting the server in background
-      const serverProcess = Bun.spawn(['bun', 'run', 'dev'], {
-        cwd: '/workspaces/hola/packages/server',
-        env: { ...process.env, PORT: '3002' },
-        stdout: 'pipe',
-        stderr: 'pipe'
-      });
-
-      // Wait for server to start
-      await new Promise(resolve => setTimeout(resolve, 3000));
-
+      // Import the Bun-compatible server utility for this test
+      const { setupTestServer, teardownTestServer } = await import('./utils/bun-server');
+      
       try {
+        await setupTestServer(3002);
+        
         const response = await fetch('http://localhost:3002/api/catalog/refresh', {
           method: 'POST'
         });
@@ -279,8 +273,8 @@ services:
         console.warn('Refresh endpoint test skipped - server not available:', error);
         expect(true).toBe(true); // Pass the test
       } finally {
-        serverProcess.kill();
-        await serverProcess.exited;
+        const { teardownTestServer } = await import('./utils/bun-server');
+        await teardownTestServer();
       }
     });
 
