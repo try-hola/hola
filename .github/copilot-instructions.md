@@ -11,7 +11,7 @@ TypeScript monorepo for application deployment platform with:
 ## Core Principles
 
 - **Modern TypeScript**: Strict typing, ESNext features, workspace references
-- **Code Quality**: Linting must pass before committing code - no exceptions
+- **Code Quality**: **CRITICAL - ALL linting errors must be fixed before any work can be considered complete. Zero linting errors allowed.**
 - **Testing**: Use fakes instead of mocks, organize by feature, ensure isolation  
 - **Monorepo Structure**: Clean separation between web, server, and shared packages
 - **Type Safety**: End-to-end type safety from API to UI
@@ -187,23 +187,29 @@ bun lint                  # Lint all packages
 
 ## Code Quality Requirements
 
-**CRITICAL: Linting must pass before code is committed - no exceptions.**
+**🚨 CRITICAL: ALL LINTING ERRORS MUST BE FIXED - NO EXCEPTIONS 🚨**
+
+**Linting is not optional - it is a strict requirement. Work is not complete until linting passes 100% clean with zero errors or warnings. This is non-negotiable.**
 
 ### Pre-Commit Checklist
 ```bash
-# ALWAYS run these commands before committing:
-bun run lint              # Fix all linting errors
-bun run typecheck         # Fix all type errors  
-bun run test             # Ensure all tests pass
-bun run build            # Verify build succeeds
+# 🚨 MANDATORY - ALWAYS run these commands before committing:
+bun run lint              # ⚠️  MUST pass with ZERO errors - FIX ALL LINTING ISSUES
+bun run typecheck         # ⚠️  Fix all type errors  
+bun run test              # ⚠️  Ensure all tests pass
+bun run build             # ⚠️  Verify build succeeds
 ```
 
+**If ANY of these commands fail, you MUST fix the issues before proceeding. No shortcuts, no exceptions.**
+
 ### Linting Standards
-- **Zero linting errors allowed** - all code must pass ESLint checks
-- **Type safety enforced** - TypeScript strict mode with no `any` types
-- **React hooks rules** - proper dependency arrays and effect patterns
-- **Import/export consistency** - organized imports, consistent export patterns
-- **Code style uniformity** - consistent formatting and naming conventions
+- **🚨 ABSOLUTE ZERO LINTING ERRORS ALLOWED** - ALL code must pass ESLint checks completely
+- **🚨 MANDATORY TYPE SAFETY** - TypeScript strict mode with no `any` types
+- **🚨 STRICT REACT HOOKS RULES** - proper dependency arrays and effect patterns are required
+- **🚨 MANDATORY IMPORT/EXPORT CONSISTENCY** - organized imports, consistent export patterns
+- **🚨 REQUIRED CODE STYLE UNIFORMITY** - consistent formatting and naming conventions
+
+**⚠️ WARNING: Any linting errors will cause GitHub Actions workflows to fail. Fix ALL errors immediately.**
 
 ### Common Linting Issues to Avoid
 - ❌ Using `any` type - use proper typing or `unknown` with type guards
@@ -244,13 +250,13 @@ curl http://localhost:3001/healthz || echo "Server not ready"
 ```
 
 **Development Flow**:
-1. **Code Quality First**: Always run linting and type checking before committing
+1. **🚨 CODE QUALITY FIRST - NON-NEGOTIABLE**: ALWAYS run linting and type checking before committing - work is incomplete if linting fails
 2. Define types in `packages/shared/src/index.ts`
 3. Implement API endpoints in `packages/server/`
 4. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
 5. Build UI components in `packages/web/` using the API hooks
 6. Test integration between frontend and backend
-7. **Final Check**: Ensure linting, type checking, and tests pass before committing
+7. **🚨 FINAL CHECK - MANDATORY**: Ensure linting, type checking, and tests pass 100% before committing - NO EXCEPTIONS
 
 **Testing API Integration**:
 - Always start the server in background mode when testing API calls

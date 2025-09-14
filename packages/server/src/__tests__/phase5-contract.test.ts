@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { GetJobsResponse, PostDeploymentActionResponse, SystemConfigResponse } from '@hola/shared';
-import { createTestServer, isServerRunning, type TestServerManager } from '../utils/test-server';
+import { setupTestServer, teardownTestServer } from './utils/server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
@@ -20,28 +20,14 @@ async function getConfig(): Promise<SystemConfigResponse> {
 }
 
 describe('Phase 5 Contract Tests - Jobs and Structured Logs', () => {
-  let testServer: TestServerManager | null = null;
-
   beforeAll(async () => {
-    // Check if server is already running (e.g., in CI)
-    if (await isServerRunning()) {
-      console.log('Using existing server for contract tests');
-    } else {
-      // Start server for local testing
-      console.log('Starting test server for contract tests');
-      testServer = createTestServer();
-      await testServer.start();
-    }
-    
+    await setupTestServer();
     await getConfig();
     // Note: config flags could be used to branch assertions in future
   }, TEST_TIMEOUT);
 
   afterAll(async () => {
-    if (testServer) {
-      await testServer.stop();
-      testServer = null;
-    }
+    await teardownTestServer();
   });
 
   describe('Create job via deployment action', () => {
