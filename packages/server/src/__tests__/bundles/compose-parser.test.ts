@@ -6,6 +6,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { parseComposeDefaults, mergeDefaults } from '../../services/core/compose-parser';
+import type { AppEnvVar } from '@hola/shared';
 
 describe('Compose Parser', () => {
   test('should parse compose.yaml and extract ports, volumes, and environment', async () => {
@@ -43,16 +44,19 @@ services:
       expect(defaults).toHaveProperty('environment');
 
       // Check ports extraction
-      expect(defaults.ports).toContain('8080:80');
-      expect(defaults.ports).toContain('8443:443');
+      expect(defaults.ports).toHaveLength(2);
+      expect(defaults.ports.some(p => p.host === 8080 && p.container === 80)).toBe(true);
+      expect(defaults.ports.some(p => p.host === 8443 && p.container === 443)).toBe(true);
 
-      // Check volumes extraction
-      expect(defaults.volumes).toContain('./html:/usr/share/nginx/html:ro');
-      expect(defaults.volumes).toContain('./conf:/etc/nginx/conf.d:ro');
+      // Check volumes extraction  
+      expect(defaults.volumes).toHaveLength(2);
+      expect(defaults.volumes.some(v => v.hostPath === './html' && v.containerPath === '/usr/share/nginx/html')).toBe(true);
+      expect(defaults.volumes.some(v => v.hostPath === './conf' && v.containerPath === '/etc/nginx/conf.d')).toBe(true);
 
       // Check environment extraction
-      expect(defaults.environment).toHaveProperty('NGINX_WORKER_PROCESSES', 'auto');
-      expect(defaults.environment).toHaveProperty('NGINX_WORKER_CONNECTIONS', '1024');
+      expect(defaults.environment).toHaveLength(2);
+      expect(defaults.environment.some(e => e.key === 'NGINX_WORKER_PROCESSES' && e.value === 'auto')).toBe(true);
+      expect(defaults.environment.some(e => e.key === 'NGINX_WORKER_CONNECTIONS' && e.value === '1024')).toBe(true);
     } finally {
       // Clean up
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -61,35 +65,39 @@ services:
 
   test('should merge compose and manifest defaults with manifest precedence', () => {
     const composeDefaults = {
-      ports: ['8080:80'],
-      volumes: ['./data:/app/data'],
-      environment: {
-        'NODE_ENV': 'production',
-        'PORT': '3000',
-      },
+      ports: [{ host: 8080, container: 80, protocol: 'tcp' as const }],
+      volumes: [{ hostPath: './data', containerPath: '/app/data', readOnly: false }],
+      environment: [
+        { key: 'NODE_ENV', value: 'production', isSecret: false, description: 'Environment' },
+        { key: 'PORT', value: '3000', isSecret: false, description: 'Port number' },
+      ],
     };
 
     const manifestDefaults = {
-      ports: ['9090:90'],  // Different port
-      environment: {
-        'PORT': '4000',    // Override
-        'DEBUG': 'true',   // Additional
-      },
+      ports: [{ host: 9090, container: 90, protocol: 'tcp' as const }],  // Different port
+      volumes: [],  // No volume overrides
     };
 
-    const merged = mergeDefaults(composeDefaults, manifestDefaults);
+    const manifestEnv = [
+      { key: 'PORT', value: '4000', isSecret: false, description: 'Port override' },
+      { key: 'DEBUG', value: 'true', isSecret: false, description: 'Debug flag' },
+    ];
+
+    const merged = mergeDefaults(composeDefaults, manifestDefaults, manifestEnv);
 
     // Ports should be combined
-    expect(merged.ports).toContain('8080:80');
-    expect(merged.ports).toContain('9090:90');
+    expect(merged.defaults.ports).toHaveLength(2);
+    expect(merged.defaults.ports.some(p => p.host === 8080 && p.container === 80)).toBe(true);
+    expect(merged.defaults.ports.some(p => p.host === 9090 && p.container === 90)).toBe(true);
 
     // Volumes should be preserved
-    expect(merged.volumes).toContain('./data:/app/data');
+    expect(merged.defaults.volumes).toHaveLength(1);
+    expect(merged.defaults.volumes.some(v => v.hostPath === './data' && v.containerPath === '/app/data')).toBe(true);
 
-    // Environment should be combined with compose first, then manifest
-    expect(merged.environment['NODE_ENV']).toBe('production'); // From compose
-    expect(merged.environment['PORT']).toBe('4000'); // Manifest wins
-    expect(merged.environment['DEBUG']).toBe('true'); // From manifest
+    // Environment should be combined
+    expect(merged.defaultEnv.some(e => e.key === 'NODE_ENV' && e.value === 'production')).toBe(true); // From compose
+    expect(merged.defaultEnv.some(e => e.key === 'PORT' && e.value === '4000')).toBe(true); // Manifest wins
+    expect(merged.defaultEnv.some(e => e.key === 'DEBUG' && e.value === 'true')).toBe(true); // From manifest
   });
 
   test('should handle various compose environment formats', async () => {
@@ -126,11 +134,11 @@ services:
 
     try {
       // Both formats should produce the same result
-      expect(arrayDefaults.environment['NODE_ENV']).toBe('production');
-      expect(arrayDefaults.environment['DEBUG']).toBe('false');
+      expect(arrayDefaults.environment.some(e => e.key === 'NODE_ENV' && e.value === 'production')).toBe(true);
+      expect(arrayDefaults.environment.some(e => e.key === 'DEBUG' && e.value === 'false')).toBe(true);
 
-      expect(objectDefaults.environment['NODE_ENV']).toBe('production');
-      expect(objectDefaults.environment['DEBUG']).toBe('false');
+      expect(objectDefaults.environment.some(e => e.key === 'NODE_ENV' && e.value === 'production')).toBe(true);
+      expect(objectDefaults.environment.some(e => e.key === 'DEBUG' && e.value === 'false')).toBe(true);
     } finally {
       // Clean up
       fs.rmSync(tempDir1, { recursive: true, force: true });
