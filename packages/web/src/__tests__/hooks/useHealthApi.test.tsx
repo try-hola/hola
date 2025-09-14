@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { sdkAdapter } from '../utils/sdk-adapter';
-import { mockFetch, createMockResponse } from '../setupTests';
+import { sdkAdapter } from '../../utils/sdk-adapter';
+import { mockFetch, createMockResponse } from '../../setupTests';
 
 // Test the SDK adapter directly instead of through React hooks
 describe('Health API - SDK Migration', () => {

@@ -8,15 +8,13 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
-import { SSETestHelper } from '../helpers/sse-test-helper';
-import { useSSE } from '../../hooks/useSSE';
+import { SSETestHelper } from '../utils/helpers/sse-test-helper';
+import { useSSE, type EventSourceFactory } from '../../hooks/useSSE';
 import { API } from '@hola/shared';
 import type { SSEDevSessionStatusEvent, SSELogEvent } from '@hola/shared';
 
 // Test component that uses SSE hook
-const DevSessionMonitor: React.FC<{ sessionId: string }> = ({ sessionId }) => {
-  const eventSourceFactory = SSETestHelper.setup();
-  
+const DevSessionMonitor: React.FC<{ sessionId: string; eventSourceFactory: EventSourceFactory }> = ({ sessionId, eventSourceFactory }) => {
   const { connectionState, lastEvent, error, events } = useSSE(
     API.dev.events(sessionId),
     {
@@ -49,8 +47,10 @@ const DevSessionMonitor: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 };
 
 describe('Dev Session SSE Integration', () => {
+  let eventSourceFactory: EventSourceFactory;
+
   beforeEach(() => {
-    SSETestHelper.setup();
+    eventSourceFactory = SSETestHelper.setup();
   });
 
   afterEach(() => {
@@ -61,7 +61,7 @@ describe('Dev Session SSE Integration', () => {
     it('establishes connection and updates state', async () => {
       const sessionId = 'test-session-123';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Initially should be connecting
       expect(screen.getByTestId('connection-state')).toHaveTextContent('connecting');
@@ -80,7 +80,7 @@ describe('Dev Session SSE Integration', () => {
     it('handles connection errors gracefully', async () => {
       const sessionId = 'test-session-456';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Simulate connection error
       await SSETestHelper.simulateError();
@@ -93,7 +93,7 @@ describe('Dev Session SSE Integration', () => {
     it('handles connection close and reconnection', async () => {
       const sessionId = 'test-session-789';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -114,7 +114,7 @@ describe('Dev Session SSE Integration', () => {
     it('receives and processes session status events', async () => {
       const sessionId = 'test-session-status';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -146,7 +146,7 @@ describe('Dev Session SSE Integration', () => {
     it('receives and processes log events from dev session', async () => {
       const sessionId = 'test-session-logs';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -176,7 +176,7 @@ describe('Dev Session SSE Integration', () => {
     it('handles multiple event types in sequence', async () => {
       const sessionId = 'test-session-multi';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -219,8 +219,6 @@ describe('Dev Session SSE Integration', () => {
       
       // Create component that only listens for session_status events
       const FilteredComponent: React.FC = () => {
-        const eventSourceFactory = SSETestHelper.setup();
-        
         const { events } = useSSE(
           API.dev.events(sessionId),
           {
@@ -277,7 +275,7 @@ describe('Dev Session SSE Integration', () => {
     it('handles malformed events gracefully', async () => {
       const sessionId = 'test-session-malformed';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -308,7 +306,7 @@ describe('Dev Session SSE Integration', () => {
     it('simulates complete dev session lifecycle', async () => {
       const sessionId = 'test-session-lifecycle';
       
-      render(<DevSessionMonitor sessionId={sessionId} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();

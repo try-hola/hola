@@ -1,5 +1,5 @@
 /**
- * Phase 3 Contract Tests: Authentication and Authorization
+ * Authentication and Authorization Tests
  * 
  * Tests the minimal AuthN/Z implementation including:
  * - Auth service functionality
@@ -10,24 +10,24 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { getLogger } from '../lib/logger';
-import { initializeServices, shutdownServices, getAuthService } from '../services/factory';
-import { featureFlags } from '../config/features';
-import { createAuthMiddleware, getAuthContext, getPrincipal } from '../middleware/auth';
-import { RealAuthService, ApiKeyAuthProvider, CAPABILITIES } from '../services/auth/auth-service';
+import { getLogger } from '../../lib/logger';
+import { initializeServices, shutdownServices, getAuthService } from '../../services/factory';
+import { featureFlags } from '../../config/features';
+import { createAuthMiddleware, getAuthContext, getPrincipal } from '../../middleware/auth';
+import { RealAuthService, ApiKeyAuthProvider, CAPABILITIES } from '../../services/auth/auth-service';
 
-describe('Phase 3: Authentication and Authorization', () => {
-  const logger = getLogger().child({ test: 'phase3-contract' });
+describe('Authentication and Authorization', () => {
+  const logger = getLogger().child({ test: 'auth-contract' });
   
   beforeAll(async () => {
     // Initialize services for testing
     initializeServices();
-    logger.info('Phase 3 contract tests starting');
+    logger.info('Auth contract tests starting');
   });
 
   afterAll(async () => {
     shutdownServices();
-    logger.info('Phase 3 contract tests completed');
+    logger.info('Auth contract tests completed');
   });
 
   describe('AuthService', () => {
@@ -303,7 +303,7 @@ describe('Phase 3: Authentication and Authorization', () => {
     });
   });
 
-  describe('Phase 3 Definition of Done', () => {
+  describe('Authentication and Authorization Definition of Done', () => {
     it('✅ AuthService with pluggable providers (disabled by default)', () => {
       const authService = getAuthService();
       expect(authService.isEnabled()).toBe(false); // Disabled by default

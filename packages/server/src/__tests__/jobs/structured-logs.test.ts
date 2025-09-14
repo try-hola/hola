@@ -1,5 +1,5 @@
 /**
- * Phase 5 Contract Tests - Jobs and Structured Logs
+ * Jobs and Structured Logs Tests
  *
  * Verifies jobs creation, listing, and SSE log streams. Works in both
  * real and mock modes by checking feature flags at runtime.
@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { GetJobsResponse, PostDeploymentActionResponse, SystemConfigResponse } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from './utils/server';
+import { setupTestServer, teardownTestServer } from '../utils/server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
@@ -19,7 +19,7 @@ async function getConfig(): Promise<SystemConfigResponse> {
   return res.json() as Promise<SystemConfigResponse>;
 }
 
-describe('Phase 5 Contract Tests - Jobs and Structured Logs', () => {
+describe('Jobs and Structured Logs', () => {
   beforeAll(async () => {
     await setupTestServer();
     await getConfig();

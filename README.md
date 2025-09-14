@@ -122,6 +122,13 @@ bun run typecheck
 bun run lint
 ```
 
+Run tests:
+```bash
+bun test                    # All tests
+bun run test:web           # Web tests only
+cd packages/server && bun test  # Server tests only
+```
+
 Build:
 ```bash
 bun run build
@@ -136,6 +143,8 @@ Root workspace scripts orchestrate common flows:
 - build: build all
 - typecheck: tsc --noEmit across packages
 - lint: eslint across packages
+- test: run all tests across packages
+- test:web: web tests using Vitest
 
 See per-package scripts:
 - Web: [`packages/web/package.declaration()`](packages/web/package.json)

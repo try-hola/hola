@@ -1,4 +1,4 @@
-import * as React from 'react';
+import React from 'react';
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
 
 // EventSource factory type for dependency injection

@@ -68,42 +68,48 @@ yarn workspace server build
 
 Run all tests:
 ```bash
-yarn test
+bun test
 ```
 
 Run tests for a specific workspace:
 ```bash
-yarn workspace server test
+bun run --filter './packages/*' test
+# or specifically
+cd packages/server && bun test
+cd packages/web && bun test
 ```
 
-Run a specific test file:
+Run tests from the workspace root:
 ```bash
-yarn workspace server test src/controllers/__tests__/apps/deploy.test.ts
+# Web tests (using Vitest)
+bun run test:web
+
+# Server tests (using Bun's built-in test runner)
+cd packages/server && bun test
+
+# Run tests in watch mode
+cd packages/web && bun test:watch
 ```
 
-Run tests matching a specific pattern:
+Run specific test files or patterns:
 ```bash
-yarn workspace server test --test-name-pattern="deployApp"
-```
+# Run a specific test file
+bun test packages/server/src/__tests__/health/infrastructure.test.ts
 
-Run tests in watch mode:
-```bash
-yarn workspace server test --watch
-```
-
-Watch a specific test file:
-```bash
-yarn workspace server test --watch src/controllers/__tests__/apps/deploy.test.ts
+# Run tests in a specific domain
+bun test packages/server/src/__tests__/auth/
+bun test packages/web/src/__tests__/hooks/
 ```
 
 #### Linting
 
 ```bash
 # Lint all workspaces
-yarn workspaces run lint
+bun run lint
 
 # Lint a specific workspace
-yarn workspace server lint
+cd packages/server && bun run lint
+cd packages/web && bun run lint
 ```
 
 ## Development Workflow
@@ -120,12 +126,15 @@ yarn workspace server lint
 
 3. Run tests to ensure your changes don't break existing functionality:
    ```bash
-   yarn workspace server test
+   bun test
+   # or for a specific workspace
+   cd packages/server && bun test
+   cd packages/web && bun test
    ```
 
 4. Lint your code:
    ```bash
-   yarn workspace server lint
+   bun run lint
    ```
 
 5. Commit your changes with a descriptive commit message
@@ -134,13 +143,40 @@ yarn workspace server lint
 
 ## Testing Guidelines
 
-- We organize tests by feature area, with each function having its own dedicated test file
-- Tests are grouped in subdirectories matching the component structure
-- Follow the established pattern:
-  1. Import and setup mocks first
-  2. Import modules under test after mocking
-  3. Define test fixtures in beforeEach()
-  4. Write specific test cases with clear assertions
+We organize tests by functional domains rather than implementation structure. Tests are grouped into logical feature areas for better maintainability and discoverability.
+
+### Test Organization
+
+**Server Tests** (`packages/server/src/__tests__/`):
+- `health/` - Health endpoints, infrastructure, and observability
+- `auth/` - Authentication, authorization, and security
+- `system/` - System monitoring, status, and performance
+- `docker/` - Docker service integration and health reporting
+- `jobs/` - Job management, tracking, and structured logging
+- `bundles/` - Bundle cache, OCI integration, and catalog management
+- `drafts/` - Draft lifecycle and validation
+- `deployments/` - Deployment management and actions
+- `dev-sessions/` - Development session management
+- `sse/` - Server-Sent Events and real-time features
+- `utils/` - Test utilities and shared helpers
+
+**Web Tests** (`packages/web/src/__tests__/`):
+- `hooks/` - React hooks and custom API hooks
+- `components/` - React component unit tests  
+- `pages/` - Page component integration tests
+- `api/` - API client and integration tests
+- `sse/` - SSE client-side functionality and real-time features
+- `utils/` - Test utilities, mocks, and fixtures
+
+### Test Patterns
+
+Follow these established patterns:
+1. Import dependencies and setup mocks first
+2. Import modules under test after mocking  
+3. Define test fixtures and setup in beforeEach()
+4. Write specific test cases with clear, descriptive assertions
+5. Use functional test names that describe behavior, not implementation details
+6. Group related tests in describe blocks by feature or scenario
 
 ## Documentation Standards
 

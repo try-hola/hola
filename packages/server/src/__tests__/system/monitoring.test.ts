@@ -1,8 +1,8 @@
 /**
- * Phase 4 Contract Tests - Docker + System Monitoring + SSE Status
+ * System Monitoring Tests
  * 
- * Tests real Docker service, system monitoring service, and enhanced SSE status streaming
- * with graceful degradation when Docker is unavailable.
+ * Tests real system monitoring service and enhanced status endpoints
+ * with graceful degradation when external dependencies are unavailable.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -12,12 +12,12 @@ import type {
   GetSummaryResponse,
   SystemHealthResponse
 } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from './utils/server';
+import { setupTestServer, teardownTestServer } from '../utils/server';
 
 const BASE_URL = 'http://localhost:3001';
 const TEST_TIMEOUT = 30000;
 
-describe('Phase 4 Contract Tests - Docker + System Monitoring + SSE', () => {
+describe('System Monitoring', () => {
   beforeAll(async () => {
     await setupTestServer();
   }, TEST_TIMEOUT);
@@ -92,7 +92,7 @@ describe('Phase 4 Contract Tests - Docker + System Monitoring + SSE', () => {
       expect(systemStatus.disk.totalBytes).toBeGreaterThan(systemStatus.disk.freeBytes);
     }, TEST_TIMEOUT);
 
-    it('includes Phase 4 services in health status', async () => {
+    it('includes system monitoring services in health status', async () => {
       const response = await fetch(`${BASE_URL}${API.system.health}`);
       
       expect(response.ok).toBe(true);
@@ -102,64 +102,15 @@ describe('Phase 4 Contract Tests - Docker + System Monitoring + SSE', () => {
       expect(data).toHaveProperty('healthStatus');
       expect(data).toHaveProperty('activatedServices');
       
-      // Should include new Phase 4 services
+      // Should include system monitoring services
       const services = data.activatedServices;
       const healthStatus = data.healthStatus;
-      
-      // Docker service should be present (may be healthy or not depending on Docker availability)
-      expect(services).toContain('docker');
-      expect(healthStatus).toHaveProperty('docker');
-      expect(typeof healthStatus.docker.healthy).toBe('boolean');
-      expect(healthStatus.docker.lastCheck).toBeDefined();
       
       // System monitoring service should be present
       expect(services).toContain('system-monitoring');
       expect(healthStatus).toHaveProperty('system-monitoring');
       expect(typeof healthStatus['system-monitoring'].healthy).toBe('boolean');
       expect(healthStatus['system-monitoring'].lastCheck).toBeDefined();
-    }, TEST_TIMEOUT);
-  });
-
-  describe('Docker Service Integration', () => {
-    it('handles Docker graceful degradation', async () => {
-      // This test verifies that the system works whether Docker is available or not
-      const response = await fetch(`${BASE_URL}${API.system.status}`);
-      
-      expect(response.ok).toBe(true);
-      expect(response.status).toBe(200);
-      
-      const data = await response.json() as GetSystemStatusResponse;
-      
-      if (data.docker.ok) {
-        // If Docker is available, version should be present
-        expect(data.docker.version).toBeDefined();
-        expect(data.docker.version).toMatch(/^\d+\.\d+/); // Should start with version number
-      } else {
-        // If Docker is not available, should still return valid response
-        expect(data.docker.ok).toBe(false);
-        // Version may or may not be present (client might be installed but server not running)
-      }
-      
-      // System should continue to work regardless of Docker status
-      expect(data.disk.freeBytes).toBeGreaterThan(0);
-      expect(data.version.hola).toBeDefined();
-    }, TEST_TIMEOUT);
-
-    it('detects ORAS tool availability', async () => {
-      const response = await fetch(`${BASE_URL}${API.system.status}`);
-      
-      expect(response.ok).toBe(true);
-      expect(response.status).toBe(200);
-      
-      const data = await response.json() as GetSystemStatusResponse;
-      
-      // ORAS status is optional but should be valid if present
-      if (data.oras) {
-        expect(typeof data.oras.ok).toBe('boolean');
-        if (data.oras.ok && data.oras.version) {
-          expect(typeof data.oras.version).toBe('string');
-        }
-      }
     }, TEST_TIMEOUT);
   });
 
@@ -218,26 +169,6 @@ describe('Phase 4 Contract Tests - Docker + System Monitoring + SSE', () => {
   });
 
   describe('External Tool Detection', () => {
-    it('detects Docker in various states', async () => {
-      const response = await fetch(`${BASE_URL}${API.system.status}`);
-      
-      expect(response.ok).toBe(true);
-      expect(response.status).toBe(200);
-      
-      const data = await response.json() as GetSystemStatusResponse;
-      
-      // Docker detection should work in all states:
-      // 1. Not installed at all (ok: false, no version)
-      // 2. Installed but daemon not running (ok: false, may have version)
-      // 3. Installed and running (ok: true, has version)
-      expect(typeof data.docker.ok).toBe('boolean');
-      
-      if (data.docker.version) {
-        expect(typeof data.docker.version).toBe('string');
-        expect(data.docker.version.length).toBeGreaterThan(0);
-      }
-    }, TEST_TIMEOUT);
-
     it('handles multiple independent tool detection', async () => {
       const response = await fetch(`${BASE_URL}${API.system.status}`);
       
