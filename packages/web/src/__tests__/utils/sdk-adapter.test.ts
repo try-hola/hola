@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sdkAdapter } from '../utils/sdk-adapter';
+import { sdkAdapter } from '../../utils/sdk-adapter';
 
 // Test the SDK adapter with basic functionality
 describe('SDK Adapter', () => {

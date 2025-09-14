@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sdkAdapter } from '../utils/sdk-adapter';
+import { sdkAdapter } from '../../utils/sdk-adapter';
 import type { 
   HealthResponse, 
   GetSummaryResponse, 

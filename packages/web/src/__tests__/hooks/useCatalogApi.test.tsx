@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { sdkAdapter } from '../utils/sdk-adapter';
-import { mockFetch, createMockResponse } from '../setupTests';
-import { createGetCatalogAppsResponseFixture, createCatalogAppFixture } from './fixtures';
+import { sdkAdapter } from '../../utils/sdk-adapter';
+import { mockFetch, createMockResponse } from '../../setupTests';
+import { createGetCatalogAppsResponseFixture, createCatalogAppFixture } from '../utils/fixtures';
 import type { GetCatalogAppsResponse } from '@hola/shared';
 
 // Test catalog API through SDK adapter directly

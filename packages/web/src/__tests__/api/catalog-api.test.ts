@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { api } from '../utils/api';
+import { api } from '../../utils/api';
 import type { GetCatalogAppsResponse, GetCatalogAppVersionsResponse } from '@hola/shared';
 
 describe('Catalog API Integration', () => {

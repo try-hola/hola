@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api } from '../utils/api';
+import { api } from '../../utils/api';
 import type { 
   CreateDraftResponse, 
   GetDraftResponse, 

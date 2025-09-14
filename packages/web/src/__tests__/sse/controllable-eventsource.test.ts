@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ControllableEventSource, eventSourceController, SSEEventCreators } from './mocks/controllable-eventsource';
+import { ControllableEventSource, eventSourceController, SSEEventCreators } from '../utils/mocks/controllable-eventsource';
 
 describe('Controllable EventSource Mock', () => {
   beforeEach(() => {
