@@ -18,7 +18,8 @@ import type {
   PostDevSessionActionRequest,
   PostDevSessionActionResponse,
   DevSessionSettings,
-  LogEntry
+  LogEntry,
+  SSEEvent
 } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
@@ -49,7 +50,7 @@ export interface DevSessionService extends HealthCheckable {
   syncFiles(sessionId: string, files: { path: string; content: string }[]): Promise<void>;
   
   // SSE monitoring for real-time events
-  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void };
+  startMonitoring(sessionId: string, callback: (event: SSEEvent) => void): { stop: () => void };
 }
 
 export class RealDevSessionService implements DevSessionService {
@@ -447,7 +448,7 @@ export class RealDevSessionService implements DevSessionService {
     }
   }
   
-  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void } {
+  startMonitoring(sessionId: string, callback: (event: SSEEvent) => void): { stop: () => void } {
     this.logger.info('Starting dev session monitoring', { sessionId });
     
     // Start periodic monitoring
@@ -640,7 +641,7 @@ export class MockDevSessionService implements DevSessionService {
     this.logger.info('Mock: Syncing files', { sessionId, fileCount: files.length });
   }
   
-  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void } {
+  startMonitoring(sessionId: string, callback: (event: SSEEvent) => void): { stop: () => void } {
     this.logger.info('Mock: Starting dev session monitoring', { sessionId });
     
     // Mock monitoring with simulated events

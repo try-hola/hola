@@ -1312,7 +1312,7 @@ async function route(url: URL, req: Request): Promise<Response> {
                     controller.enqueue(new TextEncoder().encode(heartbeat));
                   }
                   
-                } catch (error) {
+                } catch {
                   logger.debug('Dev session SSE stream closed during mock write', { sessionId });
                   clearInterval(timer);
                 }

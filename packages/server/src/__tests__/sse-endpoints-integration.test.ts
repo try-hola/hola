@@ -37,9 +37,9 @@ async function readSSEEvents(
   response: Response, 
   expectedEventCount: number = 1,
   timeoutMs: number = SSE_TIMEOUT
-): Promise<{ events: SSEEvent[]; headers: Headers }> {
+): Promise<{ events: (SSEEvent | { type?: string; data?: unknown })[]; headers: Headers }> {
   return new Promise((resolve, reject) => {
-    const events: SSEEvent[] = [];
+    const events: (SSEEvent | { type?: string; data?: unknown })[] = [];
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let buffer = '';

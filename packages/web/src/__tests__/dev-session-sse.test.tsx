@@ -282,11 +282,14 @@ describe('Dev Session SSE Integration', () => {
       // Establish connection
       await SSETestHelper.simulateOpen();
       
-      // Send malformed event (should be handled gracefully)
-      await SSETestHelper.sendCustomEvent({
+      // Send malformed event (should be handled gracefully) 
+      // Create a malformed event object that TypeScript will accept but is missing required fields
+      const malformedEvent = {
         type: 'session_status',
         // Missing required data fields
-      } as any);
+      } as Partial<SSEDevSessionStatusEvent> & { type: 'session_status' };
+      
+      await SSETestHelper.sendCustomEvent(malformedEvent as SSEEvent);
       
       // Send valid event after malformed one
       await SSETestHelper.sendDevSessionStatusEvent({
