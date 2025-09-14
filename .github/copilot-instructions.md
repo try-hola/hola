@@ -11,6 +11,7 @@ TypeScript monorepo for application deployment platform with:
 ## Core Principles
 
 - **Modern TypeScript**: Strict typing, ESNext features, workspace references
+- **Code Quality**: Linting must pass before committing code - no exceptions
 - **Testing**: Use fakes instead of mocks, organize by feature, ensure isolation  
 - **Monorepo Structure**: Clean separation between web, server, and shared packages
 - **Type Safety**: End-to-end type safety from API to UI
@@ -184,6 +185,44 @@ bun typecheck             # Type check all packages
 bun lint                  # Lint all packages
 ```
 
+## Code Quality Requirements
+
+**CRITICAL: Linting must pass before code is committed - no exceptions.**
+
+### Pre-Commit Checklist
+```bash
+# ALWAYS run these commands before committing:
+bun run lint              # Fix all linting errors
+bun run typecheck         # Fix all type errors  
+bun run test             # Ensure all tests pass
+bun run build            # Verify build succeeds
+```
+
+### Linting Standards
+- **Zero linting errors allowed** - all code must pass ESLint checks
+- **Type safety enforced** - TypeScript strict mode with no `any` types
+- **React hooks rules** - proper dependency arrays and effect patterns
+- **Import/export consistency** - organized imports, consistent export patterns
+- **Code style uniformity** - consistent formatting and naming conventions
+
+### Common Linting Issues to Avoid
+- ❌ Using `any` type - use proper typing or `unknown` with type guards
+- ❌ Missing dependencies in React hook arrays - causes infinite loops
+- ❌ Unused variables or imports - clean up code before committing
+- ❌ `console.log` in production code - use proper error handling or logging
+- ❌ Type assertions with `as any` - use proper type guards instead
+- ❌ Missing return types on functions - explicitly type function returns
+
+### Fixing Linting Errors
+```bash
+# Run linting in individual packages for focused fixes
+cd packages/web && npm run lint          # Web package only
+cd packages/server && bun run lint      # Server package only
+
+# Auto-fix common issues (be careful, review changes)
+cd packages/web && npx eslint . --fix   # Auto-fix web package
+```
+
 **Development Server**:
 ```bash
 # CRITICAL: Always start server in background for testing and integration work
@@ -205,12 +244,13 @@ curl http://localhost:3001/healthz || echo "Server not ready"
 ```
 
 **Development Flow**:
-1. Define types in `packages/shared/src/index.ts`
-2. Implement API endpoints in `packages/server/`
-3. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
-4. Build UI components in `packages/web/` using the API hooks
-5. Test integration between frontend and backend
-6. Ensure type safety across the entire stack
+1. **Code Quality First**: Always run linting and type checking before committing
+2. Define types in `packages/shared/src/index.ts`
+3. Implement API endpoints in `packages/server/`
+4. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
+5. Build UI components in `packages/web/` using the API hooks
+6. Test integration between frontend and backend
+7. **Final Check**: Ensure linting, type checking, and tests pass before committing
 
 **Testing API Integration**:
 - Always start the server in background mode when testing API calls

@@ -1,5 +1,8 @@
-import React from 'react';
+import * as React from 'react';
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
+
+// EventSource factory type for dependency injection
+export type EventSourceFactory = (url: string) => EventSource;
 
 // Configuration for SSE connection
 export interface SSEOptions {
@@ -18,6 +21,9 @@ export interface SSEOptions {
   
   // Headers for authentication if needed
   headers?: Record<string, string>;
+  
+  // Dependency injection for testing
+  eventSourceFactory?: EventSourceFactory;
 }
 
 // SSE hook state
@@ -29,7 +35,7 @@ export interface SSEState {
 }
 
 // Default configuration
-const DEFAULT_OPTIONS: Required<SSEOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & Pick<SSEOptions, 'eventSourceFactory'> = {
   reconnect: true,
   reconnectDelay: 1000,
   maxReconnectDelay: 30000,
@@ -38,6 +44,7 @@ const DEFAULT_OPTIONS: Required<SSEOptions> = {
   heartbeatTimeout: 5000,
   eventTypes: [],
   headers: {},
+  eventSourceFactory: undefined,
 };
 
 /**
@@ -69,9 +76,9 @@ export function useSSE(
 
   // Refs for managing connection lifecycle
   const eventSourceRef = React.useRef<EventSource | null>(null);
-  const reconnectTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  const heartbeatTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
-  const heartbeatIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
+  const reconnectTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = React.useRef(true);
   const urlRef = React.useRef(url);
   const onEventRef = React.useRef(onEvent);
@@ -97,14 +104,16 @@ export function useSSE(
   }, []);
 
   // Calculate reconnection delay with exponential backoff
+  const { reconnectDelay, maxReconnectDelay, heartbeatTimeout, heartbeatInterval, eventTypes, eventSourceFactory, reconnect, reconnectAttempts } = config;
+
   const getReconnectDelay = React.useCallback((attempt: number) => {
     const delay = Math.min(
-      config.reconnectDelay * Math.pow(2, attempt),
-      config.maxReconnectDelay
+      reconnectDelay * Math.pow(2, attempt),
+      maxReconnectDelay
     );
     // Add jitter to prevent thundering herd
     return delay + Math.random() * 1000;
-  }, [config.reconnectDelay, config.maxReconnectDelay]);
+  }, [reconnectDelay, maxReconnectDelay]);
 
   // Handle connection errors
   const handleError = React.useCallback((errorMessage: string) => {
@@ -128,7 +137,7 @@ export function useSSE(
 
     // Attempt reconnection if enabled and within limits
     setState(prev => {
-      if (config.reconnect && prev.reconnectAttempt < config.reconnectAttempts) {
+      if (reconnect && prev.reconnectAttempt < reconnectAttempts) {
         const delay = getReconnectDelay(prev.reconnectAttempt);
         
         reconnectTimeoutRef.current = setTimeout(() => {
@@ -154,7 +163,7 @@ export function useSSE(
         };
       }
     });
-  }, [config.reconnect, config.reconnectAttempts, getReconnectDelay, clearTimeouts]);
+  }, [reconnect, reconnectAttempts, getReconnectDelay, clearTimeouts]);
 
   // Handle SSE message events
   const handleMessage = React.useCallback((event: MessageEvent) => {
@@ -164,7 +173,7 @@ export function useSSE(
       const sseEvent: SSEEvent = JSON.parse(event.data);
       
       // Filter events if types are specified
-      if (config.eventTypes.length > 0 && !config.eventTypes.includes(sseEvent.type)) {
+      if (eventTypes.length > 0 && !eventTypes.includes(sseEvent.type)) {
         return;
       }
 
@@ -184,7 +193,7 @@ export function useSSE(
         if (!mountedRef.current) return;
         console.warn('SSE heartbeat timeout');
         handleError('Heartbeat timeout');
-      }, config.heartbeatTimeout);
+      }, heartbeatTimeout);
 
     } catch (error) {
       console.error('Failed to parse SSE event:', error);
@@ -193,7 +202,7 @@ export function useSSE(
         error: error instanceof Error ? error.message : 'Failed to parse event',
       }));
     }
-  }, [config.eventTypes, config.heartbeatTimeout, handleError]);
+  }, [eventTypes, heartbeatTimeout, handleError]);
 
   // Establish SSE connection
   const connect = React.useCallback(() => {
@@ -213,7 +222,10 @@ export function useSSE(
     }));
 
     try {
-      const eventSource = new EventSource(urlRef.current);
+      // Use injected factory or default EventSource
+      const eventSource = eventSourceFactory 
+        ? eventSourceFactory(urlRef.current)
+        : new EventSource(urlRef.current);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {
@@ -230,7 +242,7 @@ export function useSSE(
         heartbeatIntervalRef.current = setInterval(() => {
           // The heartbeat is monitored by expecting regular messages
           // If no message is received within heartbeatTimeout, handleError will be called
-        }, config.heartbeatInterval);
+        }, heartbeatInterval);
       };
 
       eventSource.onmessage = handleMessage;
@@ -242,7 +254,7 @@ export function useSSE(
     } catch (error) {
       handleError(error instanceof Error ? error.message : 'Failed to connect');
     }
-  }, [config.heartbeatInterval, handleMessage, handleError, clearTimeouts]);
+  }, [heartbeatInterval, eventSourceFactory, handleMessage, handleError, clearTimeouts]);
 
   // Disconnect SSE
   const disconnect = React.useCallback(() => {

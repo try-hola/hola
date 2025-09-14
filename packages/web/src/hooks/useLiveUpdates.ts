@@ -1,4 +1,6 @@
-import React from 'react';
+// EventSource factory type for dependency injection (imported from useSSE)
+import type { EventSourceFactory } from './useSSE';
+import * as React from 'react';
 import { useSSE } from './useSSE';
 import { usePoll } from './usePoll';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
@@ -16,7 +18,9 @@ import type {
  * Hook for live job progress updates using SSE with polling fallback.
  * Follows StrictMode-compatible patterns established in the project.
  */
-export function useLiveJobUpdates(jobId?: string) {
+export function useLiveJobUpdates(jobId?: string, options?: {
+  eventSourceFactory?: EventSourceFactory;
+}) {
   const [jobData, setJobData] = React.useState<{
     status: Job['status'] | null;
     progress?: number;
@@ -64,6 +68,7 @@ export function useLiveJobUpdates(jobId?: string) {
     reconnect: true,
     reconnectDelay: 2000,
     maxReconnectDelay: 10000,
+    eventSourceFactory: options?.eventSourceFactory,
   });
 
   // Polling fallback for job status
