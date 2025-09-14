@@ -47,6 +47,9 @@ export interface DevSessionService extends HealthCheckable {
   enableFileWatching(sessionId: string): Promise<void>;
   disableFileWatching(sessionId: string): Promise<void>;
   syncFiles(sessionId: string, files: { path: string; content: string }[]): Promise<void>;
+  
+  // SSE monitoring for real-time events
+  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void };
 }
 
 export class RealDevSessionService implements DevSessionService {
@@ -443,6 +446,60 @@ export class RealDevSessionService implements DevSessionService {
         return 'start';
     }
   }
+  
+  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void } {
+    this.logger.info('Starting dev session monitoring', { sessionId });
+    
+    // Start periodic monitoring
+    let intervalId: NodeJS.Timeout;
+    
+    try {
+      intervalId = setInterval(() => {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+          this.logger.warn('Session not found during monitoring', { sessionId });
+          return;
+        }
+        
+        // Send session status update
+        callback({
+          type: 'session_status',
+          data: {
+            sessionId,
+            status: session.status,
+            lastActivity: new Date().toISOString(),
+            liveReload: session.liveReload,
+            autoSync: session.autoSync,
+          },
+        });
+        
+        // Simulate some log events periodically
+        if (Math.random() > 0.7) { // 30% chance
+          callback({
+            type: 'log',
+            data: {
+              timestamp: new Date().toISOString(),
+              service: `dev-session-${sessionId}`,
+              level: 'info',
+              message: `Dev session activity update`,
+            },
+          });
+        }
+      }, 2000);
+      
+    } catch (error) {
+      this.logger.error('Error starting dev session monitoring', error as Error);
+    }
+    
+    return {
+      stop: () => {
+        if (intervalId) {
+          clearInterval(intervalId);
+          this.logger.info('Stopped dev session monitoring', { sessionId });
+        }
+      },
+    };
+  }
 }
 
 export class MockDevSessionService implements DevSessionService {
@@ -581,5 +638,44 @@ export class MockDevSessionService implements DevSessionService {
 
   async syncFiles(sessionId: string, files: { path: string; content: string }[]): Promise<void> {
     this.logger.info('Mock: Syncing files', { sessionId, fileCount: files.length });
+  }
+  
+  startMonitoring(sessionId: string, callback: (event: any) => void): { stop: () => void } {
+    this.logger.info('Mock: Starting dev session monitoring', { sessionId });
+    
+    // Mock monitoring with simulated events
+    const intervalId = setInterval(() => {
+      // Send mock session status update
+      callback({
+        type: 'session_status',
+        data: {
+          sessionId,
+          status: 'running',
+          lastActivity: new Date().toISOString(),
+          liveReload: true,
+          autoSync: true,
+        },
+      });
+      
+      // Occasionally send log events
+      if (Math.random() > 0.6) { // 40% chance
+        callback({
+          type: 'log',
+          data: {
+            timestamp: new Date().toISOString(),
+            service: `mock-dev-session-${sessionId}`,
+            level: 'info',
+            message: `Mock dev session log event`,
+          },
+        });
+      }
+    }, 2500);
+    
+    return {
+      stop: () => {
+        clearInterval(intervalId);
+        this.logger.info('Mock: Stopped dev session monitoring', { sessionId });
+      },
+    };
   }
 }

@@ -456,7 +456,19 @@ export type SSEDeploymentUpdateEvent = {
   };
 };
 
-export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent;
+export type SSEDevSessionStatusEvent = {
+  type: 'session_status';
+  data: {
+    sessionId: string;
+    status: string;
+    lastActivity: string;
+    liveReload?: boolean;
+    autoSync?: boolean;
+    logs?: string[];
+  };
+};
+
+export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent | SSEDevSessionStatusEvent;
 
 // Connection status for SSE
 export type SSEConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
