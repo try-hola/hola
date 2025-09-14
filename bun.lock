@@ -32,6 +32,10 @@
         "vitest": "^3.2.4",
       },
     },
+    "packages/compose": {
+      "name": "@hola/compose",
+      "version": "0.1.0",
+    },
     "packages/sdk": {
       "name": "@hola/sdk",
       "version": "0.1.0",
@@ -235,6 +239,8 @@
     "@eslint/plugin-kit": ["@eslint/plugin-kit@0.2.0", "", { "dependencies": { "levn": "^0.4.1" } }, "sha512-vH9PiIMMwvhCx31Af3HiGzsVNULDbyVkHXwlemn/B0TFj/00ho3y55efXrUZTfQipxoHC5u4xq6zblww1zm1Ig=="],
 
     "@hola/cli": ["@hola/cli@workspace:packages/cli"],
+
+    "@hola/compose": ["@hola/compose@workspace:packages/compose"],
 
     "@hola/sdk": ["@hola/sdk@workspace:packages/sdk"],
 
