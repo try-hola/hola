@@ -32,6 +32,10 @@ describe('JSdom & React Testing Library Validation', () => {
   it('should support @testing-library/react render function', () => {
     const { container } = render(<TestComponent />);
     
+    // Debug logging
+    console.log('Working test - container HTML:', container.innerHTML);
+    console.log('Working test - container firstChild:', container.firstChild);
+    
     // Verify that render function works without throwing errors
     expect(container).toBeDefined();
     expect(container.firstChild).toBeDefined();
