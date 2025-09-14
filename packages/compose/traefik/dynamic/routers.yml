@@ -1,0 +1,18 @@
+http:
+  middlewares:
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+  # Example HTTPS redirect router (disabled by default).
+  # Uncomment and set a concrete host to enable.
+  # routers:
+  #   hola-web-https-redirect:
+  #     rule: Host(`app.local.hola`)
+  #     entryPoints:
+  #       - web
+  #     middlewares:
+  #       - redirect-to-https
+  #     service: hola-web
+  #     tls: false

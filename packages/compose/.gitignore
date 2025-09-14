@@ -1,0 +1,6 @@
+# Local environment override
+.env
+
+# Runtime data
+logs/
+data/

@@ -1,0 +1,40 @@
+version: "3.9"
+
+# Local development overrides: build from monorepo, bind-mount sources,
+# and run Bun dev servers. This assumes ports 3000 (web) and 3001 (server).
+
+services:
+  traefik:
+    labels:
+      traefik.http.routers.traefik-https.tls: "false"
+      traefik.http.routers.traefik-https.entrypoints: web
+
+  server:
+    image: ghcr.io/oven-sh/bun:1
+    container_name: hola-server-dev
+    working_dir: /app/packages/server
+    command: ["bun", "run", "dev"]
+    volumes:
+      - ../..:/app:cached
+    environment:
+      - NODE_ENV=development
+    labels:
+      traefik.http.services.hola-server.loadbalancer.server.port: 3001
+      traefik.http.routers.hola-server-http.middlewares: ""
+      traefik.http.routers.hola-server-https.tls: "false"
+      traefik.http.routers.hola-server-https.entrypoints: web
+
+  web:
+    image: ghcr.io/oven-sh/bun:1
+    container_name: hola-web-dev
+    working_dir: /app/packages/web
+    command: ["bun", "dev", "--host", "0.0.0.0"]
+    volumes:
+      - ../..:/app:cached
+    environment:
+      - NODE_ENV=development
+    labels:
+      traefik.http.services.hola-web.loadbalancer.server.port: 3000
+      traefik.http.routers.hola-web-http.middlewares: ""
+      traefik.http.routers.hola-web-https.tls: "false"
+      traefik.http.routers.hola-web-https.entrypoints: web

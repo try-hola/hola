@@ -1,0 +1,19 @@
+{
+  "name": "@hola/compose",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Docker Compose stack for Hola (web, server, traefik)",
+  "type": "module",
+  "scripts": {
+    "install:stack": "./scripts/install.sh",
+    "up": "./scripts/up.sh",
+    "down": "./scripts/down.sh",
+    "restart": "./scripts/down.sh && ./scripts/up.sh",
+    "logs": "./scripts/logs.sh",
+    "status": "./scripts/status.sh",
+    "build": "echo 'nothing to build'",
+    "typecheck": "echo 'no types'",
+    "lint": "echo 'no lint'",
+    "test": "echo 'no tests'"
+  }
+}
