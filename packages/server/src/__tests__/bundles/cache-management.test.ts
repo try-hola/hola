@@ -5,7 +5,7 @@
  * in-use bundle protection, and retention policies.
  */
 
-import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach } from 'bun:test';
 import { getBundleCacheManager } from '../../services/core/bundle-cache';
 import type { BundleCacheManager } from '../../services/core/bundle-cache';
 

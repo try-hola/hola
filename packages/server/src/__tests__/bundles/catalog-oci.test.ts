@@ -33,7 +33,7 @@ describe('Catalog Refresh and OCI Integration', () => {
           method: 'POST',
         });
         
-        const result = await response.json();
+        await response.json();
         expect(response.ok).toBe(true);
       } catch (error) {
         console.warn('Refresh endpoint test skipped - server not available:', error);
@@ -52,22 +52,7 @@ describe('Catalog Refresh and OCI Integration', () => {
         Object.assign(catalogConfig, { catalogUrl: mockCatalogUrl });
 
         // Set up mock headers to test ETag behavior
-        const mockFetch = (url: string, options?: RequestInit) => {
-          if (url === mockCatalogUrl) {
-            const etag = '"test-etag-123"';
-            return Promise.resolve(new Response(JSON.stringify({
-              apps: [{ id: 'test-app', name: 'Test App' }]
-            }), {
-              status: 200,
-              headers: {
-                'ETag': etag,
-                'Last-Modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
-                'Content-Type': 'application/json',
-              },
-            }));
-          }
-          return fetch(url, options);
-        };
+        // Note: This mock fetch is prepared for future ETag testing implementation
 
         // Test catalog service with caching
         const { RealCatalogService } = await import('../../services/core/catalog');
@@ -93,20 +78,7 @@ describe('Catalog Refresh and OCI Integration', () => {
         const { getCatalogService } = await import('../../services/factory');
         const catalog = getCatalogService();
 
-        // Use a test OCI reference that should be publicly available
-        const testRef = 'ghcr.io/try-hola/oci-test';
-
-        // Mock a catalog entry with the real OCI ref
-        const mockCatalogData = {
-          apps: [{
-            id: 'oci-test',
-            name: 'OCI Test App',
-            versions: [{
-              version: 'latest',
-              refs: { oci: testRef }
-            }]
-          }]
-        };
+        // Note: Mock catalog data would be used for testing if needed
 
         // Temporarily override the catalog data without using any
         // external dependencies that might not be available in test environment
