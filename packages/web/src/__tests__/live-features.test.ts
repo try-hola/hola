@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { SSEEvent } from '@hola/shared';
+import type { SSEEvent, JobStatus, LogLevel, SSELogEvent, SSEJobUpdateEvent } from '@hola/shared';
 
 // Mock environment for testing
 const originalFetch = global.fetch;
@@ -94,7 +94,7 @@ describe('Real-Time Features - SSE Implementation', () => {
 
   it('should create EventSource with correct URL', () => {
     // This test just verifies the EventSource mock is working
-    const eventSource = new (global.EventSource as any)('ws://test.com/stream');
+    const eventSource = new (global.EventSource as typeof EventSource)('ws://test.com/stream');
     
     expect(eventSource).toBeDefined();
     expect(eventSource.url).toBe('ws://test.com/stream');
@@ -103,9 +103,9 @@ describe('Real-Time Features - SSE Implementation', () => {
   });
 
   it('should handle EventSource connection flow', () => {
-    const eventSource = new (global.EventSource as any)('ws://test.com/stream') as MockEventSource;
+    const eventSource = new (global.EventSource as typeof EventSource)('ws://test.com/stream') as unknown as MockEventSource;
     let opened = false;
-    let messagesReceived: string[] = [];
+    const messagesReceived: string[] = [];
     let errorOccurred = false;
     
     eventSource.onopen = () => { opened = true; };
@@ -174,8 +174,8 @@ describe('Real-Time Features - SSE Implementation', () => {
   });
 
   it('should handle multiple EventSource instances', () => {
-    const eventSource1 = new (global.EventSource as any)('ws://test1.com/stream');
-    const eventSource2 = new (global.EventSource as any)('ws://test2.com/stream');
+    new (global.EventSource as typeof EventSource)('ws://test1.com/stream');
+    new (global.EventSource as typeof EventSource)('ws://test2.com/stream');
     
     expect(mockEventSourceInstances).toHaveLength(2);
     expect(mockEventSourceInstances[0].url).toBe('ws://test1.com/stream');
@@ -183,8 +183,8 @@ describe('Real-Time Features - SSE Implementation', () => {
   });
 
   it('should simulate complete SSE event sequences', () => {
-    const eventSource = new (global.EventSource as any)('ws://test.com/stream') as MockEventSource;
-    const receivedEvents: SSEEvent[] = [];
+    const eventSource = new (global.EventSource as typeof EventSource)('ws://test.com/stream') as unknown as MockEventSource;
+    const receivedEvents: SSELogEvent[] = [];
     
     eventSource.onmessage = (event) => {
       receivedEvents.push(JSON.parse(event.data));
@@ -193,7 +193,7 @@ describe('Real-Time Features - SSE Implementation', () => {
     eventSource.simulateOpen();
     
     // Simulate a sequence of log events
-    const events = [
+    const events: SSELogEvent[] = [
       { type: 'log', data: { timestamp: '2024-01-01T00:00:01Z', service: 'app', level: 'info', message: 'Starting up' }},
       { type: 'log', data: { timestamp: '2024-01-01T00:00:02Z', service: 'app', level: 'info', message: 'Ready to serve' }},
       { type: 'log', data: { timestamp: '2024-01-01T00:00:03Z', service: 'app', level: 'warn', message: 'High memory usage' }}
@@ -211,8 +211,8 @@ describe('Real-Time Features - SSE Implementation', () => {
   });
 
   it('should simulate job progress sequences', () => {
-    const eventSource = new (global.EventSource as any)('ws://test.com/stream') as MockEventSource;
-    const receivedUpdates: any[] = [];
+    const eventSource = new (global.EventSource as typeof EventSource)('ws://test.com/stream') as unknown as MockEventSource;
+    const receivedUpdates: SSEJobUpdateEvent['data'][] = [];
     
     eventSource.onmessage = (event) => {
       const parsed = JSON.parse(event.data);
@@ -224,8 +224,8 @@ describe('Real-Time Features - SSE Implementation', () => {
     eventSource.simulateOpen();
     
     // Simulate job progress
-    const jobStates = [
-      { jobId: 'test-job', status: 'pending', progress: 0 },
+    const jobStates: SSEJobUpdateEvent['data'][] = [
+      { jobId: 'test-job', status: 'queued', progress: 0 },
       { jobId: 'test-job', status: 'running', progress: 25 },
       { jobId: 'test-job', status: 'running', progress: 50 },
       { jobId: 'test-job', status: 'running', progress: 75 },
@@ -244,7 +244,7 @@ describe('Real-Time Features - SSE Implementation', () => {
   });
 
   it('should handle mixed event types', () => {
-    const eventSource = new (global.EventSource as any)('ws://test.com/stream') as MockEventSource;
+    const eventSource = new (global.EventSource as typeof EventSource)('ws://test.com/stream') as unknown as MockEventSource;
     const receivedEvents: SSEEvent[] = [];
     
     eventSource.onmessage = (event) => {
@@ -272,7 +272,7 @@ describe('Real-Time Features - SSE Implementation', () => {
   // Test our helper utilities without React hooks
   it('should provide SSE event creation utilities', () => {
     // This would be our helper functions for creating test events
-    const createLogEvent = (message: string, level = 'info'): SSEEvent => ({
+    const createLogEvent = (message: string, level: LogLevel = 'info'): SSELogEvent => ({
       type: 'log',
       data: {
         timestamp: new Date().toISOString(),
@@ -281,8 +281,8 @@ describe('Real-Time Features - SSE Implementation', () => {
         message
       }
     });
-    
-    const createJobUpdateEvent = (jobId: string, status: string, progress?: number): SSEEvent => ({
+
+    const createJobUpdateEvent = (jobId: string, status: JobStatus, progress?: number): SSEJobUpdateEvent => ({
       type: 'job_update',
       data: {
         jobId,
@@ -296,7 +296,7 @@ describe('Real-Time Features - SSE Implementation', () => {
     expect(logEvent.data.level).toBe('warn');
     expect(logEvent.data.message).toBe('Test message');
     
-    const jobEvent = createJobUpdateEvent('job-123', 'running', 75);
+  const jobEvent = createJobUpdateEvent('job-123', 'running', 75);
     expect(jobEvent.type).toBe('job_update');
     expect(jobEvent.data.jobId).toBe('job-123');
     expect(jobEvent.data.progress).toBe(75);

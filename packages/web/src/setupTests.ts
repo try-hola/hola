@@ -1,6 +1,19 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import * as React from 'react';
+import type {
+  GetSummaryResponse,
+  HealthResponse,
+  GetCatalogAppsResponse,
+  GetCatalogAppVersionsResponse,
+  GetDeploymentsResponse,
+  CreateDraftResponse,
+  GetDraftResponse,
+  PatchDraftResponse,
+  ValidateDraftResponse,
+  PreflightResponse,
+  FinalizeDraftResponse,
+} from '@hola/shared';
 
 // Ensure React is available globally for hooks
 globalThis.React = React;
@@ -18,79 +31,152 @@ global.fetch = mockFetch as unknown as typeof fetch;
 // Export mockFetch for use in individual tests
 export { mockFetch };
 
-// Helper to create a proper Response-like object
-export const createMockResponse = (data: unknown, options: { status?: number; ok?: boolean; headers?: Record<string, string> } = {}) => ({
-  ok: options.ok ?? true,
-  status: options.status ?? 200,
-  headers: {
-    get: (name: string) => options.headers?.[name.toLowerCase()] || (name.toLowerCase() === 'content-type' ? 'application/json' : null),
-  },
-  json: async () => data
-});
+// Helper to create a proper Response-like object used by api.ts
+export const createMockResponse = (data: unknown, options: { status?: number; ok?: boolean; headers?: Record<string, string> } = {}) => {
+  const headers = options.headers || { 'content-type': 'application/json' };
+  const base = {
+    ok: options.ok ?? (options.status ? options.status >= 200 && options.status < 300 : true),
+    status: options.status ?? 200,
+    headers: {
+      get: (name: string) => headers[name.toLowerCase()] || (name.toLowerCase() === 'content-type' ? 'application/json' : null),
+    },
+    async json() {
+      return data;
+    },
+    async text() {
+      try { return JSON.stringify(data); } catch { return String(data); }
+    },
+  };
+  return {
+    ...base,
+    clone() {
+      // Return a shallow clone with the same data accessors
+      return createMockResponse(data, options);
+    },
+  } as unknown as Response;
+};
 
 // Default mock implementations for common API calls
-mockFetch.mockImplementation(async (url: string) => {
+mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) => {
   // Create base URL patterns to match
-  const urlStr = typeof url === 'string' ? url : url.toString();
+  const urlStr = typeof url === 'string' ? url : String(url);
+  const method = (init?.method || 'GET').toUpperCase();
   
   // Health endpoint
   if (urlStr.includes('/api/health')) {
-    return createMockResponse({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      version: '1.0.0'
-    });
+    const res: HealthResponse = { ok: true, ts: new Date().toISOString() };
+    return createMockResponse(res);
   }
   
   // Summary endpoint
   if (urlStr.includes('/api/summary')) {
-    return createMockResponse({
-      deployments: { total: 5, running: 3, stopped: 2 },
-      jobs: { total: 10, pending: 2, running: 1, completed: 7 },
-      notifications: { total: 3, unread: 1 }
-    });
+    const res: GetSummaryResponse = {
+      deploymentsCount: 5,
+      activeJobsCount: 1,
+      alertsCount: 0,
+      recentJobs: [],
+      system: { docker: { ok: true, version: '24.0.5' }, disk: { freeBytes: 50_000_000_000, totalBytes: 100_000_000_000 }, version: { hola: '1.0.0', compose: '2.28.0' } },
+    };
+    return createMockResponse(res);
   }
   
   // Catalog apps endpoint
-  if (urlStr.includes('/api/catalog/apps')) {
-    return createMockResponse({
+  if (urlStr.includes('/api/catalog/apps') && !urlStr.includes('/versions')) {
+    const res: GetCatalogAppsResponse = {
       items: [
         {
           id: 'nextcloud',
           name: 'Nextcloud',
-          category: 'Productivity',
           description: 'File sharing and collaboration platform',
           icon: 'https://example.com/nextcloud-icon.png',
-          verified: true
-        }
+          category: 'Productivity',
+          rating: 4.8,
+          downloads: 12345,
+          tags: ['files', 'collaboration'],
+          featured: true,
+        },
       ],
-      pagination: {
-        page: 1,
-        limit: 12,
-        total: 1,
-        totalPages: 1
-      }
-    });
+      page: 1,
+      limit: 12,
+      total: 1,
+    };
+    return createMockResponse(res);
   }
   
   // Catalog app versions endpoint
   if (urlStr.includes('/api/catalog/apps/') && urlStr.includes('/versions')) {
-    return createMockResponse({
+    const res: GetCatalogAppVersionsResponse = {
+      items: [
+        { version: '28.0.0', createdAt: '2024-01-15T00:00:00Z' },
+      ],
+      total: 1,
+    };
+    return createMockResponse(res);
+  }
+
+  // Deployments list
+  if (urlStr.endsWith('/api/deployments') || urlStr.includes('/api/deployments?')) {
+    const res: GetDeploymentsResponse = {
       items: [
         {
-          version: '28.0.0',
-          releaseDate: '2024-01-15',
-          changelog: 'Latest stable release',
-          recommended: true
-        }
+          id: 'dep-1',
+          name: 'Nextcloud',
+          app: 'nextcloud',
+          icon: '',
+          status: 'running',
+          ports: ['8080:80'],
+          lastUpdated: new Date().toISOString(),
+          url: 'http://localhost:8080',
+        },
       ],
-      pagination: {
-        page: 1,
-        limit: 10,
-        total: 1,
-        totalPages: 1
-      }
-    });
+      page: 1,
+      limit: 10,
+      total: 1,
+    };
+    return createMockResponse(res);
+  }
+
+  // Drafts
+  if (urlStr.endsWith('/api/drafts') && method === 'POST') {
+    const res: CreateDraftResponse = {
+      draftId: 'draft-1',
+      app: { id: 'nextcloud', name: 'Nextcloud', icon: '' },
+      systemEnv: [],
+      appEnv: [],
+      defaults: { ports: [], volumes: [] },
+    };
+    return createMockResponse(res);
+  }
+  const draftIdMatch = urlStr.match(/\/api\/drafts\/(.+?)(?:\/|$)/);
+  if (draftIdMatch && method === 'GET') {
+    const res: GetDraftResponse = {
+      draftId: draftIdMatch[1],
+      appId: 'nextcloud',
+      version: '28.0.0',
+      systemOverrides: {},
+      appEnv: [],
+      ports: [],
+      files: [],
+    };
+    return createMockResponse(res);
+  }
+  if (draftIdMatch && method === 'PATCH') {
+    const res: PatchDraftResponse = { ok: true, draft: {
+      draftId: draftIdMatch[1], appId: 'nextcloud', version: '28.0.0', systemOverrides: {}, appEnv: [], ports: [], files: []
+    } } as unknown as PatchDraftResponse; // minimal compliance
+    return createMockResponse(res);
+  }
+  if (draftIdMatch && urlStr.endsWith('/validate') && method === 'POST') {
+    const res: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
+    return createMockResponse(res);
+  }
+  if (draftIdMatch && urlStr.endsWith('/preflight') && method === 'POST') {
+    const res: PreflightResponse = { ok: true, checks: [] };
+    return createMockResponse(res);
+  }
+  if (draftIdMatch && urlStr.endsWith('/finalize') && method === 'POST') {
+    const res: FinalizeDraftResponse = { spec: { ok: true }, checksum: 'abc123' };
+    return createMockResponse(res);
   }
   
   // Default response for other endpoints
