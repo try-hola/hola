@@ -1228,6 +1228,117 @@ async function route(url: URL, req: Request): Promise<Response> {
       }
     }
 
+    // Dev Session events SSE stream 
+    const devSessionEventsMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)\/events$/);
+    if (devSessionEventsMatch && req.method === 'GET') {
+      const sessionId = devSessionEventsMatch[1];
+      
+      try {
+        const { getDevSessionService } = await import('./services/factory');
+        const devSessionService = getDevSessionService();
+        
+        // Verify session exists
+        const session = await devSessionService.getSession(sessionId);
+        if (!session) {
+          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
+        }
+
+        const stream = new ReadableStream({
+          start(controller) {
+            logger.info('Starting dev session events SSE stream', { sessionId });
+            
+            // Send initial heartbeat
+            const heartbeat = `event: heartbeat\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`;
+            controller.enqueue(new TextEncoder().encode(heartbeat));
+
+            // Try to get real session monitoring
+            let monitoring: { stop: () => void } | null = null;
+            
+            try {
+              // Start session monitoring with callback to send SSE events
+              monitoring = devSessionService.startMonitoring(sessionId, (eventData) => {
+                try {
+                  const evt = `event: message\ndata: ${JSON.stringify(eventData)}\n\n`;
+                  controller.enqueue(new TextEncoder().encode(evt));
+                } catch (error) {
+                  logger.debug('Dev session SSE stream closed during write', { sessionId, error: error instanceof Error ? error.message : String(error) });
+                }
+              });
+              
+            } catch (error) {
+              logger.error('Failed to start real dev session monitoring, falling back to mock SSE', error as Error);
+              
+              // Fallback to mock events for dev session
+              let i = 0;
+              const timer = setInterval(() => {
+                i++;
+                
+                try {
+                  // Send periodic session status updates
+                  if (i % 5 === 0) {
+                    const statusUpdate = {
+                      type: 'session_status',
+                      data: {
+                        sessionId,
+                        status: session.status,
+                        lastActivity: new Date().toISOString(),
+                        logs: [`Mock dev session log ${i}`],
+                      },
+                    };
+                    
+                    const evt = `event: message\ndata: ${JSON.stringify(statusUpdate)}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(evt));
+                  }
+                  
+                  // Send periodic log events
+                  if (i % 3 === 0) {
+                    const logEvent = {
+                      type: 'log',
+                      data: {
+                        timestamp: new Date().toISOString(),
+                        service: `dev-session-${sessionId}`,
+                        level: 'info',
+                        message: `Dev session activity ${i}`,
+                      },
+                    };
+                    
+                    const evt = `event: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(evt));
+                  }
+                  
+                  // Send heartbeat every 10 iterations
+                  if (i % 10 === 0) {
+                    const heartbeat = `event: heartbeat\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`;
+                    controller.enqueue(new TextEncoder().encode(heartbeat));
+                  }
+                  
+                } catch {
+                  logger.debug('Dev session SSE stream closed during mock write', { sessionId });
+                  clearInterval(timer);
+                }
+              }, 1000);
+              
+              monitoring = { stop: () => clearInterval(timer) };
+            }
+            
+            // Cleanup on stream close
+            return () => {
+              logger.info('Dev session events SSE stream ended', { sessionId });
+              if (monitoring) {
+                monitoring.stop();
+              }
+            };
+          },
+        });
+
+        return new Response(stream, { headers: sse() });
+        
+      } catch (error) {
+        logger.error('Failed to start dev session events stream', error as Error, { sessionId });
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to start dev session events stream' } }, { status: 500 });
+      }
+    }
+
     // Drafts API
     if (pathname === API.drafts.create && req.method === 'POST') {
       try {

@@ -128,6 +128,24 @@ export class SSETestHelper {
   }
 
   /**
+   * Send a dev session status event
+   */
+  static async sendDevSessionStatusEvent(data: {
+    sessionId: string;
+    status: string;
+    lastActivity?: string;
+    liveReload?: boolean;
+    autoSync?: boolean;
+    logs?: string[];
+  }) {
+    const eventData = SSEEventCreators.devSessionStatus(data);
+    await act(async () => {
+      eventSourceController.simulateMessageAll(eventData);
+      await waitForStateUpdate();
+    });
+  }
+
+  /**
    * Send a custom SSE event
    */
   static async sendCustomEvent(event: SSEEvent) {
