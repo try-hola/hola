@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { sdkAdapter } from '../utils/sdk-adapter';
 import { mockFetch, createMockResponse } from '../setupTests';
+import { createGetCatalogAppsResponseFixture, createCatalogAppFixture } from './fixtures';
+import type { GetCatalogAppsResponse } from '@hola/shared';
 
 // Test catalog API through SDK adapter directly
 describe('Catalog API - SDK Migration', () => {
@@ -11,33 +13,31 @@ describe('Catalog API - SDK Migration', () => {
   });
 
   it('should fetch catalog apps through SDK adapter', async () => {
-    // Mock catalog apps response
-    mockFetch.mockResolvedValueOnce(createMockResponse({
-      items: [
-        {
-          id: 'nextcloud',
-          name: 'Nextcloud',
-          category: 'Productivity',
-          description: 'File sharing platform',
-          icon: 'https://example.com/icon.png',
-          verified: true
-        }
-      ],
-      pagination: {
-        page: 1,
-        limit: 12,
-        total: 1,
-        totalPages: 1
-      }
-    }));
+    // Use fixture for consistent test data
+    const mockCatalogApp = createCatalogAppFixture({
+      id: 'nextcloud',
+      name: 'Nextcloud',
+      category: 'Productivity',
+      description: 'File sharing platform',
+      icon: 'https://example.com/icon.png'
+    });
 
-    const result = await sdkAdapter.catalog.apps({ page: 1, limit: 12 });
+    const mockResponse = createGetCatalogAppsResponseFixture(1, {
+      items: [mockCatalogApp]
+    });
+
+    mockFetch.mockResolvedValueOnce(createMockResponse(mockResponse));
+
+    const result: GetCatalogAppsResponse = await sdkAdapter.catalog.apps({ page: 1, limit: 12 });
 
     expect(result).toBeDefined();
     expect(result.items).toBeDefined();
     expect(Array.isArray(result.items)).toBe(true);
     expect(result.items.length).toBe(1);
     expect(result.items[0].id).toBe('nextcloud');
+    expect(result.page).toBe(1);
+    expect(result.limit).toBe(12);
+    expect(result.total).toBe(1);
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/catalog/apps?page=1&limit=12',

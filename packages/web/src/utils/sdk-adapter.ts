@@ -4,7 +4,7 @@
 import { HolaSdk } from '@hola/sdk';
 import type { 
   // Health and basic
-  HealthResponse, GetSummaryResponse,
+  HealthResponse, GetSummaryResponse, GetMeResponse,
   // Catalog types
   GetCatalogAppsResponse, GetCatalogAppResponse, GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
   // Draft types  
@@ -17,13 +17,14 @@ import type {
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   GetDeploymentHistoryResponse,
   // Job types
-  GetJobsResponse, GetJobResponse,
+  GetJobsResponse, GetJobResponse, GetLogsResponse,
   // Backup types  
-  GetBackupsResponse, GetBackupResponse,
+  GetBackupsResponse, GetBackupResponse, CreateBackupResponse, RestoreBackupResponse, DeleteBackupResponse,
   // Notification types
-  GetNotificationsResponse, NotificationItem,
+  GetNotificationsResponse, NotificationItem, PatchNotificationResponse, PostNotificationsActionResponse,
   // Settings types
-  GetSettingsResponse,
+  GetSettingsResponse, PatchSettingsRequest, PatchSettingsResponse,
+  GetBackupSettingsResponse, PatchBackupSettingsRequest, PatchBackupSettingsResponse,
   // System types
   GetSystemStatusResponse
 } from '@hola/shared';
@@ -273,7 +274,7 @@ export class SdkAdapter {
     return this.enhancedRequest('GET', '/api/health', () => this.sdk.get<HealthResponse>('/api/health'), undefined, false);
   }
 
-  me(): Promise<unknown> {
+  me(): Promise<GetMeResponse> {
     return this.getWithCache('/api/me', () => this.sdk.me());
   }
 
@@ -284,7 +285,7 @@ export class SdkAdapter {
   // System status
   system = {
     status: (): Promise<GetSystemStatusResponse> => 
-      this.getWithCache('/api/system/status', () => this.sdk.get('/api/system/status')),
+      this.getWithCache('/api/system/status', () => this.sdk.get<GetSystemStatusResponse>('/api/system/status')),
   };
 
   // Catalog with smart caching
@@ -292,22 +293,22 @@ export class SdkAdapter {
     apps: (params?: { query?: string; category?: string; page?: number; limit?: number }): Promise<GetCatalogAppsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/catalog/apps${query}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetCatalogAppsResponse>(path));
     },
     
     appById: (appId: string): Promise<GetCatalogAppResponse> => {
       const path = `/api/catalog/apps/${appId}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetCatalogAppResponse>(path));
     },
     
     versions: (appId: string): Promise<GetCatalogAppVersionsResponse> => {
       const path = `/api/catalog/apps/${appId}/versions`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetCatalogAppVersionsResponse>(path));
     },
     
     versionDetail: (appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse> => {
       const path = `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetCatalogAppVersionDetailResponse>(path));
     },
   };
 
@@ -397,7 +398,7 @@ export class SdkAdapter {
         this.sdk.deployments.action(deploymentId, action), action, false);
     },
     
-    logs: (deploymentId: string, params?: { since?: string; lines?: number }): Promise<unknown> => {
+    logs: (deploymentId: string, params?: { since?: string; lines?: number }): Promise<GetLogsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments/${deploymentId}/logs${query}`;
       // Don't cache logs
@@ -411,7 +412,7 @@ export class SdkAdapter {
     list: (params?: { deploymentId?: string; status?: string; page?: number; limit?: number }): Promise<GetJobsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/jobs${query}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetJobsResponse>(path));
     },
     
     byId: (jobId: string): Promise<GetJobResponse> => {
@@ -420,7 +421,7 @@ export class SdkAdapter {
       return this.enhancedRequest('GET', path, () => this.sdk.get<GetJobResponse>(path), undefined, false);
     },
     
-    logs: (jobId: string, params?: { since?: string; lines?: number }): Promise<unknown> => {
+    logs: (jobId: string, params?: { since?: string; lines?: number }): Promise<GetLogsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/jobs/${jobId}/logs${query}`;
       // Don't cache logs
@@ -434,27 +435,27 @@ export class SdkAdapter {
     list: (params?: { appId?: string; status?: string; page?: number; limit?: number }): Promise<GetBackupsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/backups${query}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetBackupsResponse>(path));
     },
     
     byId: (backupId: string): Promise<GetBackupResponse> => {
       const path = `/api/backups/${backupId}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetBackupResponse>(path));
     },
     
-    create: (data: { appId?: string }): Promise<unknown> => {
+    create: (data: { appId?: string }): Promise<CreateBackupResponse> => {
       const path = '/api/backups';
-      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+      return this.enhancedRequest('POST', path, () => this.sdk.post<CreateBackupResponse>(path, data), data, false);
     },
     
-    restore: (backupId: string, data?: { targetDeploymentId?: string }): Promise<unknown> => {
+    restore: (backupId: string, data?: { targetDeploymentId?: string }): Promise<RestoreBackupResponse> => {
       const path = `/api/backups/${backupId}/restore`;
-      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+      return this.enhancedRequest('POST', path, () => this.sdk.post<RestoreBackupResponse>(path, data), data, false);
     },
     
-    delete: (backupId: string): Promise<unknown> => {
+    delete: (backupId: string): Promise<DeleteBackupResponse> => {
       const path = `/api/backups/${backupId}`;
-      return this.enhancedRequest('DELETE', path, () => this.sdk.delete(path), undefined, false);
+      return this.enhancedRequest('DELETE', path, () => this.sdk.delete<DeleteBackupResponse>(path), undefined, false);
     },
   };
 
@@ -463,22 +464,22 @@ export class SdkAdapter {
     list: (params?: { filter?: string; page?: number; limit?: number }): Promise<GetNotificationsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/notifications${query}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetNotificationsResponse>(path));
     },
     
     byId: (id: string): Promise<NotificationItem> => {
       const path = `/api/notifications/${id}`;
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<NotificationItem>(path));
     },
     
-    update: (id: string, data: { read?: boolean; dismiss?: boolean }): Promise<unknown> => {
+    update: (id: string, data: { read?: boolean; dismiss?: boolean }): Promise<PatchNotificationResponse> => {
       const path = `/api/notifications/${id}`;
-      return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+      return this.enhancedRequest('PATCH', path, () => this.sdk.patch<PatchNotificationResponse>(path, data), data, true);
     },
     
-    actions: (data: { action: 'markAllRead' | 'dismissAll' }): Promise<unknown> => {
+    actions: (data: { action: 'markAllRead' | 'dismissAll' }): Promise<PostNotificationsActionResponse> => {
       const path = '/api/notifications/actions';
-      return this.enhancedRequest('POST', path, () => this.sdk.post(path, data), data, false);
+      return this.enhancedRequest('POST', path, () => this.sdk.post<PostNotificationsActionResponse>(path, data), data, false);
     },
   };
 
@@ -486,23 +487,23 @@ export class SdkAdapter {
   settings = {
     get: (): Promise<GetSettingsResponse> => {
       const path = '/api/settings';
-      return this.getWithCache(path, () => this.sdk.get(path));
+      return this.getWithCache(path, () => this.sdk.get<GetSettingsResponse>(path));
     },
     
-    update: (data: unknown): Promise<unknown> => {
+    update: (data: PatchSettingsRequest): Promise<PatchSettingsResponse> => {
       const path = '/api/settings';
-      return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+      return this.enhancedRequest('PATCH', path, () => this.sdk.patch<PatchSettingsResponse>(path, data), data, true);
     },
     
     backup: {
-      get: (): Promise<unknown> => {
+      get: (): Promise<GetBackupSettingsResponse> => {
         const path = '/api/settings/backup';
-        return this.getWithCache(path, () => this.sdk.get(path));
+        return this.getWithCache(path, () => this.sdk.get<GetBackupSettingsResponse>(path));
       },
       
-      update: (data: unknown): Promise<unknown> => {
+      update: (data: PatchBackupSettingsRequest): Promise<PatchBackupSettingsResponse> => {
         const path = '/api/settings/backup';
-        return this.enhancedRequest('PATCH', path, () => this.sdk.patch(path, data), data, true);
+        return this.enhancedRequest('PATCH', path, () => this.sdk.patch<PatchBackupSettingsResponse>(path, data), data, true);
       },
     },
   };
