@@ -59,6 +59,15 @@ Key entry points:
 - CLI entry: [`packages/cli/src/index.tsx`](packages/cli/src/index.tsx)
 - SDK entry: [`packages/sdk/src/index.ts`](packages/sdk/src/index.ts)
 
+## Packages Index
+
+- **@hola/web**: React + TypeScript SPA dashboard for managing deployments, jobs/logs, catalog, and settings. See `packages/web` → [README](packages/web/README.md).
+- **@hola/server**: Bun-based HTTP API implementing the shared contract, health/readiness, SSE streams, and docs at `/docs`/`/redoc`. See `packages/server` → [README](packages/server/README.md).
+- **@hola/shared**: Centralized API route constants and TypeScript models used across server, web, CLI, and SDK. See `packages/shared` → [README](packages/shared/README.md).
+- **@hola/cli**: Developer-focused React + Ink CLI for common workflows (deployments, drafts, logs). See `packages/cli` → [README](packages/cli/README.md).
+- **@hola/sdk**: Lightweight typed client for programmatic access to the Hola API (Node/scripts/integrations). See `packages/sdk` → [README](packages/sdk/README.md).
+- **@hola/compose**: Docker Compose stack wiring Traefik, web, and server for local or single-host setups. See `packages/compose` → [README](packages/compose/README.md).
+
 ## Tech Stack
 
 - Runtime/tooling: Bun 1.x (see `.bun-version`)
