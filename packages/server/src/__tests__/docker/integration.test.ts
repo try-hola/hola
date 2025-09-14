@@ -11,13 +11,14 @@ import type { GetSystemStatusResponse } from '@hola/shared';
 import { setupTestServer, teardownTestServer } from '../utils/server';
 
 const BASE_URL = 'http://localhost:3001';
-const TEST_PORT = 3010;
-const BASE_URL_REAL = `http://localhost:${TEST_PORT}`;
+const BASE_URL_REAL = 'http://localhost:3010';
+const TEST_PORT_MOCK = 3001;
+const TEST_PORT_REAL = 3010;
 const TEST_TIMEOUT = 30000;
 
 describe('Docker Service Integration', () => {
   beforeAll(async () => {
-    await setupTestServer();
+    await setupTestServer(TEST_PORT_MOCK);
   }, TEST_TIMEOUT);
 
   afterAll(async () => {
@@ -93,8 +94,13 @@ describe('Docker Service Integration', () => {
 
 describe('Real Docker Service Health Reporting', () => {
   beforeAll(async () => {
-    // Start a dedicated server with real docker flag enabled
-    await setupTestServer(TEST_PORT, {
+    // Ensure any previous server is fully stopped
+    await teardownTestServer();
+    // Wait a moment for cleanup
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Start a dedicated server with real docker flag enabled  
+    await setupTestServer(TEST_PORT_REAL, {
       HOLA_USE_REAL_DOCKER: 'true',
     });
   }, 30000);

@@ -13,11 +13,70 @@ Reliable, isolated tests with fakes-first strategy and consistent structure.
 - For server integration, start dev server with `&`, wait for `/healthz`, and cleanup.
 - No external network calls.
 
+## React Testing Environment (Web Package)
+
+### Critical Setup Requirements
+- **jsdom Environment**: Must be properly configured in `vitest.config.ts` with `environment: 'jsdom'`
+- **Setup Files**: Use `setupFiles: ['./src/setupTests.ts']` to configure test environment
+- **React Plugin**: Include `@vitejs/plugin-react` with explicit JSX configuration
+- **DOM Globals**: Ensure `document` and `window` are available via jsdom setup
+
+### React 18 StrictMode Compatibility
+- **Async Rendering**: Use `await waitFor()` for component updates, not synchronous expectations
+- **Double Execution**: Effects run twice in StrictMode - design hooks with stable dependencies
+- **Hook Dependencies**: Empty `[]` dependencies for basic fetchers, `useMemo` for cache keys with params
+
+### Common React Test Patterns
+```typescript
+// ✅ Correct async pattern
+test('should render component', async () => {
+  render(<MyComponent />);
+  await waitFor(() => {
+    expect(screen.getByText('Expected Text')).toBeInTheDocument();
+  });
+});
+
+// ❌ Incorrect synchronous expectation
+test('should render component', () => {
+  render(<MyComponent />);
+  expect(screen.getByText('Expected Text')).toBeInTheDocument(); // May fail
+});
+```
+
+## Server Testing Patterns
+
+### Service Health and Startup
+- **Health Check Timeouts**: Increase timeout for services that need external dependencies
+- **Service Mocking**: Use fakes when real services (Docker, databases) unavailable in CI
+- **Fail-Fast Testing**: Test that servers fail appropriately when real services enabled but unavailable
+- **Background Servers**: Always use `&` for server startup in tests, cleanup with `kill` or `pkill`
+
+### Environmental Dependencies
+- **Docker Tests**: May fail in CI without Docker daemon - ensure graceful fallback to mocks
+- **External Commands**: Mock system commands (`df`, `/proc/meminfo`) for consistent CI behavior
+- **Feature Flags**: Test both real and mock service configurations
+
+### Server Test Health Verification
+```bash
+# ✅ Correct server startup pattern
+cd packages/server && bun run dev &
+sleep 3
+curl http://localhost:3001/healthz || echo "Server not ready"
+# run tests
+kill %1  # cleanup
+```
+
 ## Do
 - Test error handling and edge cases.
 - Use realistic sample data aligned with `@hola/shared` types.
 - Keep tests deterministic; avoid arbitrary sleeps.
+- Configure jsdom properly for React component tests.
+- Use `await waitFor()` for React 18 async rendering.
+- Mock external dependencies consistently across environments.
 
 ## Don't
 - Mock deep internals; test public APIs.
 - Introduce flaky timers; poll for readiness.
+- Expect synchronous DOM updates in React 18.
+- Leave tests dependent on external services without fallbacks.
+- Use `document` or `window` without proper jsdom setup.

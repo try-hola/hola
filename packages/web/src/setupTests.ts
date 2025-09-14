@@ -204,25 +204,30 @@ afterEach(() => {
 });
 
 // Mock the browser APIs that might be used in components
-Object.defineProperty(window, 'matchMedia', {
-  writable: true,
-  value: vi.fn().mockImplementation((query: string) => ({
-    matches: false,
-    media: query,
-    onchange: null,
-    addListener: vi.fn(), // deprecated
-    removeListener: vi.fn(), // deprecated
-    addEventListener: vi.fn(),
-    removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })),
-});
+// Check if we're in a DOM environment (jsdom)
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(), // deprecated
+      removeListener: vi.fn(), // deprecated
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
 
 // Mock URL.createObjectURL for file download tests
-Object.defineProperty(URL, 'createObjectURL', {
-  writable: true,
-  value: vi.fn(() => 'mock-url'),
-});
+if (typeof URL !== 'undefined') {
+  Object.defineProperty(URL, 'createObjectURL', {
+    writable: true,
+    value: vi.fn(() => 'mock-url'),
+  });
+}
 
 Object.defineProperty(URL, 'revokeObjectURL', {
   writable: true,

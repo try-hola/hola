@@ -34,3 +34,6 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 ## Testing & Dev
 - Start with `bun run dev &`, verify `/healthz` before tests, and ensure cleanup.
 - Prefer integration tests through HTTP; use fakes for services at boundaries.
+- **Health Check Timeouts**: Increase timeouts for services requiring external dependencies (Docker, databases).
+- **Service Availability**: Handle graceful fallback when real services unavailable in CI environments.
+- **Background Process Management**: Always use `&` for server startup in tests, cleanup with `kill %1` or `pkill`.
