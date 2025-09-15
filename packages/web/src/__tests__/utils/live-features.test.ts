@@ -236,8 +236,8 @@ describe('Real-Time Features - SSE Implementation', () => {
       eventSource.simulateMessage(JSON.stringify({ type: 'job_update', data: state }));
     });
     
-    expect(receivedUpdates).toHaveLength(5);
-    expect(receivedUpdates[0].status).toBe('pending');
+  expect(receivedUpdates).toHaveLength(5);
+  expect(receivedUpdates[0].status).toBe('queued');
     expect(receivedUpdates[1].progress).toBe(25);
     expect(receivedUpdates[4].status).toBe('completed');
     expect(receivedUpdates[4].finishedAt).toBeDefined();

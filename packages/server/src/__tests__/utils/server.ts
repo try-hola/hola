@@ -8,8 +8,8 @@
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 
-let serverProcess: ChildProcess | null = null;
-let serverPid: number | null = null;
+// Support multiple concurrent servers keyed by port to avoid cross-suite interference
+const serverProcesses = new Map<number, ChildProcess>();
 
 /**
  * Start the server in background and capture PID
@@ -18,14 +18,14 @@ let serverPid: number | null = null;
  * @param env - Additional environment variables
  */
 export async function startServer(port: number = 3001, env: Record<string, string> = {}): Promise<void> {
-  if (serverProcess) {
-    throw new Error('Server is already running. Call stopServer() first.');
+  if (serverProcesses.has(port)) {
+    throw new Error(`Server is already running on port ${port}. Call stopServer(${port}) first.`);
   }
 
   console.log(`Starting server with \`bun run dev\` on port ${port}...`);
   
   // Start server process in background
-  serverProcess = spawn('bun', ['run', 'dev'], {
+  const proc = spawn('bun', ['run', 'dev'], {
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -35,8 +35,8 @@ export async function startServer(port: number = 3001, env: Record<string, strin
     stdio: 'ignore', // Suppress server output in tests
     detached: true, // Run in background
   });
-
-  serverPid = serverProcess.pid ?? null;
+  serverProcesses.set(port, proc);
+  const serverPid = proc.pid ?? null;
   console.log(`Server started with PID: ${serverPid}`);
 
   // Wait for server to be healthy before returning
@@ -76,20 +76,31 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
  * Kill the server process
  * Handles cleanup gracefully
  */
-export async function stopServer(): Promise<void> {
-  if (serverProcess && serverPid) {
-    console.log(`Stopping server (PID: ${serverPid})...`);
-    
+export async function stopServer(port?: number): Promise<void> {
+  // Stop a specific port if provided, otherwise stop all
+  const stopOne = (p: number, proc: ChildProcess) => {
+    const pid = proc.pid ?? null;
+    if (!pid) return;
+    console.log(`Stopping server on port ${p} (PID: ${pid})...`);
     try {
-      // Kill the process and its children
-      process.kill(serverPid, 'SIGTERM');
+      process.kill(pid, 'SIGTERM');
       console.log('Server stopped successfully');
     } catch (error) {
       console.warn('Error stopping server:', error);
     } finally {
-      serverProcess = null;
-      serverPid = null;
+      serverProcesses.delete(p);
     }
+  };
+
+  if (typeof port === 'number') {
+    const proc = serverProcesses.get(port);
+    if (proc) stopOne(port, proc);
+    return;
+  }
+
+  // Stop all running servers
+  for (const [p, proc] of Array.from(serverProcesses.entries())) {
+    stopOne(p, proc);
   }
 }
 
@@ -152,11 +163,11 @@ export async function setupTestServer(port: number = 3001, env: Record<string, s
  * Centralized server cleanup for contract tests
  * Only stops server if we started it (respects opt-out flag)
  */
-export async function teardownTestServer(): Promise<void> {
+export async function teardownTestServer(port?: number): Promise<void> {
   if (shouldSkipServerStart()) {
     console.log('Skipping server teardown (HOLA_TEST_SKIP_SERVER_START=true)');
     return;
   }
 
-  await stopServer();
+  await stopServer(port);
 }

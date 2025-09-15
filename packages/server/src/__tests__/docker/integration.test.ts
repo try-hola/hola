@@ -22,7 +22,7 @@ describe('Docker Service Integration', () => {
   }, TEST_TIMEOUT);
 
   afterAll(async () => {
-    await teardownTestServer();
+    await teardownTestServer(TEST_PORT_MOCK);
   });
 
   describe('Docker Graceful Degradation', () => {
@@ -94,11 +94,6 @@ describe('Docker Service Integration', () => {
 
 describe('Real Docker Service Health Reporting', () => {
   beforeAll(async () => {
-    // Ensure any previous server is fully stopped
-    await teardownTestServer();
-    // Wait a moment for cleanup
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
     // Start a dedicated server with real docker flag enabled  
     await setupTestServer(TEST_PORT_REAL, {
       HOLA_USE_REAL_DOCKER: 'true',
@@ -106,7 +101,7 @@ describe('Real Docker Service Health Reporting', () => {
   }, 30000);
 
   afterAll(async () => {
-    await teardownTestServer();
+    await teardownTestServer(TEST_PORT_REAL);
   });
 
   it('exposes feature flag useRealDocker=true in system config', async () => {

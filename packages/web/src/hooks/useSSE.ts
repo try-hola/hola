@@ -56,16 +56,30 @@ const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & Pick<S
 export function useSSE(
   url: string | null,
   onEvent: (event: SSEEvent) => void,
-  options: SSEOptions = {}
+  options?: SSEOptions
+): SSEState & { connect: () => void; disconnect: () => void; isConnected: boolean; events: SSEEvent[] };
+export function useSSE(
+  url: string | null,
+  options?: SSEOptions
+): SSEState & { connect: () => void; disconnect: () => void; isConnected: boolean; events: SSEEvent[] };
+export function useSSE(
+  url: string | null,
+  onEventOrOptions?: ((event: SSEEvent) => void) | SSEOptions,
+  maybeOptions?: SSEOptions
 ): SSEState & {
   connect: () => void;
   disconnect: () => void;
   isConnected: boolean;
+  events: SSEEvent[];
 } {
+  const providedOnEvent = typeof onEventOrOptions === 'function' ? onEventOrOptions as (event: SSEEvent) => void : undefined;
+  const resolvedOptions = React.useMemo(() => (
+    (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) ?? {}
+  ), [onEventOrOptions, maybeOptions]);
   const config = React.useMemo(() => ({
     ...DEFAULT_OPTIONS,
-    ...options,
-  }), [options]);
+    ...resolvedOptions,
+  }), [resolvedOptions]);
 
   const [state, setState] = React.useState<SSEState>({
     connectionState: 'disconnected',
@@ -74,6 +88,8 @@ export function useSSE(
     reconnectAttempt: 0,
   });
 
+  const [events, setEvents] = React.useState<SSEEvent[]>([]);
+
   // Refs for managing connection lifecycle
   const eventSourceRef = React.useRef<EventSource | null>(null);
   const reconnectTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -81,11 +97,11 @@ export function useSSE(
   const heartbeatIntervalRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = React.useRef(true);
   const urlRef = React.useRef(url);
-  const onEventRef = React.useRef(onEvent);
+  const onEventRef = React.useRef<((event: SSEEvent) => void) | undefined>(providedOnEvent);
 
   // Update refs when props change
   urlRef.current = url;
-  onEventRef.current = onEvent;
+  onEventRef.current = providedOnEvent;
 
   // Cleanup timeouts
   const clearTimeouts = React.useCallback(() => {
@@ -182,8 +198,10 @@ export function useSSE(
         lastEvent: sseEvent,
         error: null,
       }));
-
-      onEventRef.current(sseEvent);
+      setEvents(prev => [...prev, sseEvent]);
+      if (onEventRef.current) {
+        onEventRef.current(sseEvent);
+      }
 
       // Reset heartbeat timeout when we receive any message
       if (heartbeatTimeoutRef.current) {
@@ -313,6 +331,7 @@ export function useSSE(
     connect,
     disconnect,
     isConnected: state.connectionState === 'connected',
+    events,
   };
 }
 
