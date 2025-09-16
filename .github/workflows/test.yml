@@ -28,31 +28,13 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Start server in background
-        run: |
-          cd packages/server
-          nohup bun run dev > server.log 2>&1 & echo $! > ../..//server.pid
-
-      - name: Wait for server healthz
-        run: |
-          for i in {1..60}; do
-            if curl -sSf http://localhost:3001/healthz > /dev/null; then
-              echo "Server is healthy";
-              exit 0;
-            fi;
-            echo "Waiting for server... ($i)";
-            sleep 1;
-          done;
-          echo "Server failed to become healthy in time";
-          echo "==== server.log (last 200 lines) ====";
-          tail -n 200 packages/server/server.log || true;
-          exit 1
-
-      - name: Run tests across packages
+      - name: Run web and cli tests
         env:
           HOLA_ENABLE_DEV_API: "true"
           HOLA_USE_REAL_DOCKER: "false"
-        run: bun run --filter './packages/*' test
+        run: |
+          bun run --filter './packages/web' test
+          bun run --filter './packages/cli' test
 
       - name: Run server contract tests
         run: |
@@ -67,11 +49,4 @@ jobs:
           path: |
             packages/server/server.log
             server.pid
-
-      - name: Stop background server
-        if: always()
-        run: |
-          if [ -f server.pid ]; then
-            kill $(cat server.pid) || true;
-            rm -f server.pid;
-          fi
+          if-no-files-found: ignore
