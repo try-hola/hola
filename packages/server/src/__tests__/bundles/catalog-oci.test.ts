@@ -47,32 +47,36 @@ describe('Catalog Refresh and OCI Integration', () => {
     test('should honor ETag and Last-Modified headers', async () => {
       // Mock a catalog service to test caching headers
       try {
-        // Use a mock URL that doesn't require external network access
-        const mockCatalogUrl = 'http://localhost:9999/mock-catalog'; // Local mock endpoint
+        const { setupTestServer, teardownTestServer } = await import('../utils/bun-server');
+        await setupTestServer(3002);
+        
+        // Use a local mock endpoint served by our test server for ETag behavior
+        const mockCatalogUrl = 'http://localhost:3002/api/dev/mock-catalog';
         Object.assign(catalogConfig, { catalogUrl: mockCatalogUrl });
 
-        // Set up mock headers to test ETag behavior
-        // Note: This mock fetch is prepared for future ETag testing implementation
+        // First, warm up by fetching without cache headers
+        {
+          const res = await fetch(mockCatalogUrl);
+          expect(res.ok).toBe(true);
+          const etag = res.headers.get('etag');
+          const lastModified = res.headers.get('last-modified');
+          expect(etag).toBeTruthy();
+          expect(lastModified).toBeTruthy();
+        }
 
         // Test catalog service with caching
         const { RealCatalogService } = await import('../../services/core/catalog');
         const catalogService = new RealCatalogService();
 
-        // First refresh should fail gracefully (expected since localhost:9999 won't exist)
-        try {
-          await catalogService.refresh(true);
-        } catch (error) {
-          // Expected to fail, which is fine for this test
-        }
+        // First refresh should fetch and cache
+        await catalogService.refresh(true);
 
-        // Second refresh should also fail gracefully
-        try {
-          await catalogService.refresh(true);
-        } catch (error) {
-          // Expected to fail, which is fine for this test
-        }
+        // Second refresh should be a 304 via ETag/Last-Modified and still succeed
+        await catalogService.refresh(true);
 
         expect(true).toBe(true); // Test passes if no errors
+        
+        await teardownTestServer();
       } catch (error) {
         console.warn('ETag test skipped:', error);
         expect(true).toBe(true);

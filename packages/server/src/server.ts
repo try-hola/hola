@@ -211,6 +211,11 @@ function sse(headers?: HeadersInit) {
   return h;
 }
 
+// Mock catalog constants for local ETag/Last-Modified testing
+const MOCK_CATALOG_DATA = { apps: [] } as const;
+const MOCK_CATALOG_ETAG = 'W/"mock-catalog-1"';
+const MOCK_CATALOG_LAST_MODIFIED = new Date().toUTCString();
+
 // Router
 async function route(url: URL, req: Request): Promise<Response> {
   const { pathname, searchParams } = url;
@@ -232,6 +237,50 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === '/metrics' && req.method === 'GET') {
     return healthMiddleware.metricsEndpoint();
+  }
+
+  // Dev: Mock catalog endpoint with ETag + Last-Modified support
+  if (pathname === '/api/dev/mock-catalog' && req.method === 'GET') {
+    const inm = req.headers.get('if-none-match');
+    const ims = req.headers.get('if-modified-since');
+
+    // If-None-Match takes precedence
+    if (inm && inm === MOCK_CATALOG_ETAG) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          ETag: MOCK_CATALOG_ETAG,
+          'Last-Modified': MOCK_CATALOG_LAST_MODIFIED,
+          'Cache-Control': 'public, max-age=0, must-revalidate',
+        },
+      });
+    }
+
+    // Fallback to If-Modified-Since logic
+    if (ims) {
+      const since = Date.parse(ims);
+      const lm = Date.parse(MOCK_CATALOG_LAST_MODIFIED);
+      if (!Number.isNaN(since) && !Number.isNaN(lm) && since >= lm) {
+        return new Response(null, {
+          status: 304,
+          headers: {
+            ETag: MOCK_CATALOG_ETAG,
+            'Last-Modified': MOCK_CATALOG_LAST_MODIFIED,
+            'Cache-Control': 'public, max-age=0, must-revalidate',
+          },
+        });
+      }
+    }
+
+    return new Response(JSON.stringify(MOCK_CATALOG_DATA), {
+      status: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        ETag: MOCK_CATALOG_ETAG,
+        'Last-Modified': MOCK_CATALOG_LAST_MODIFIED,
+        'Cache-Control': 'public, max-age=0, must-revalidate',
+      },
+    });
   }
 
   // System: Feature flags and service info
