@@ -48,10 +48,8 @@ const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & Pick<S
 };
 
 /**
- * Hook for managing Server-Sent Events (SSE) connections with auto-reconnection,
- * heartbeat monitoring, and error handling.
- * 
- * This follows StrictMode-compatible patterns established in the project.
+ * Fixed Hook for managing Server-Sent Events (SSE) connections with auto-reconnection,
+ * heartbeat monitoring, and error handling. This version eliminates circular dependencies.
  */
 export function useSSE(
   url: string | null,
@@ -132,13 +130,8 @@ export function useSSE(
     return delay + Math.random() * 1000;
   }, [reconnectDelay, maxReconnectDelay]);
 
-  // Handle connection errors
-  const handleError = useCallback((errorMessage: string) => {
-    if (!mountedRef.current) return;
-
-    console.error('SSE error:', errorMessage);
-
-    // Close current connection
+  // Disconnect SSE
+  const disconnect = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
@@ -146,81 +139,38 @@ export function useSSE(
 
     clearTimeouts();
 
-    setState(prev => ({
-      ...prev,
-      connectionState: 'error',
-      error: errorMessage,
-    }));
-
-    // Attempt reconnection if enabled and within limits
-    setState(prev => {
-      if (reconnect && prev.reconnectAttempt < reconnectAttempts) {
-        const delay = getReconnectDelay(prev.reconnectAttempt);
-        
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current && urlRef.current) {
-            // Reset to connecting state to trigger auto-connect effect
-            setState(connectPrev => ({
-              ...connectPrev,
-              connectionState: 'connecting',
-              error: null,
-            }));
-          }
-        }, delay);
-
-        return {
-          ...prev,
-          reconnectAttempt: prev.reconnectAttempt + 1,
-        };
-      } else {
-        return {
-          ...prev,
-          connectionState: 'disconnected',
-        };
-      }
-    });
-  }, [reconnect, reconnectAttempts, getReconnectDelay, clearTimeouts]);
-
-  // Handle SSE message events
-  const handleMessage = useCallback((event: MessageEvent) => {
-    if (!mountedRef.current) return;
-
-    try {
-      const sseEvent: SSEEvent = JSON.parse(event.data);
-      
-      // Filter events if types are specified
-      if (eventTypes.length > 0 && !eventTypes.includes(sseEvent.type)) {
-        return;
-      }
-
+    if (mountedRef.current) {
       setState(prev => ({
         ...prev,
-        lastEvent: sseEvent,
+        connectionState: 'disconnected',
         error: null,
-      }));
-      setEvents(prev => [...prev, sseEvent]);
-      if (onEventRef.current) {
-        onEventRef.current(sseEvent);
-      }
-
-      // Reset heartbeat timeout when we receive any message
-      if (heartbeatTimeoutRef.current) {
-        clearTimeout(heartbeatTimeoutRef.current);
-      }
-      heartbeatTimeoutRef.current = setTimeout(() => {
-        if (!mountedRef.current) return;
-        console.warn('SSE heartbeat timeout');
-        handleError('Heartbeat timeout');
-      }, heartbeatTimeout);
-
-    } catch (error) {
-      console.error('Failed to parse SSE event:', error);
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to parse event',
+        reconnectAttempt: 0,
       }));
     }
-  }, [eventTypes, heartbeatTimeout, handleError]);
+  }, [clearTimeouts]);
+
+  // Schedule reconnection without circular dependencies
+  const scheduleReconnection = useCallback((attempt: number) => {
+    if (!reconnect || attempt >= reconnectAttempts || !mountedRef.current) {
+      setState(prev => ({
+        ...prev,
+        connectionState: 'disconnected',
+      }));
+      return;
+    }
+
+    const delay = getReconnectDelay(attempt);
+    reconnectTimeoutRef.current = setTimeout(() => {
+      if (!mountedRef.current || !urlRef.current) return;
+      
+      setState(prev => ({
+        ...prev,
+        connectionState: 'connecting',
+        error: null,
+        reconnectAttempt: attempt + 1,
+      }));
+    }, delay);
+  }, [reconnect, reconnectAttempts, getReconnectDelay]);
 
   // Establish SSE connection
   const connect = useCallback(() => {
@@ -259,39 +209,100 @@ export function useSSE(
         // Start heartbeat monitoring
         heartbeatIntervalRef.current = setInterval(() => {
           // The heartbeat is monitored by expecting regular messages
-          // If no message is received within heartbeatTimeout, handleError will be called
+          // If no message is received within heartbeatTimeout, error handler will be called
         }, heartbeatInterval);
       };
 
-      eventSource.onmessage = handleMessage;
+      eventSource.onmessage = (event: MessageEvent) => {
+        if (!mountedRef.current) return;
+
+        try {
+          const sseEvent: SSEEvent = JSON.parse(event.data);
+          
+          // Filter events if types are specified
+          if (eventTypes.length > 0 && !eventTypes.includes(sseEvent.type)) {
+            return;
+          }
+
+          setState(prev => ({
+            ...prev,
+            lastEvent: sseEvent,
+            error: null,
+          }));
+          setEvents(prev => [...prev, sseEvent]);
+          if (onEventRef.current) {
+            onEventRef.current(sseEvent);
+          }
+
+          // Reset heartbeat timeout when we receive any message
+          if (heartbeatTimeoutRef.current) {
+            clearTimeout(heartbeatTimeoutRef.current);
+          }
+          heartbeatTimeoutRef.current = setTimeout(() => {
+            if (!mountedRef.current) return;
+            console.warn('SSE heartbeat timeout');
+            // Handle heartbeat timeout as connection error
+            if (eventSourceRef.current) {
+              eventSourceRef.current.close();
+              eventSourceRef.current = null;
+            }
+            setState(prev => {
+              const nextAttempt = prev.reconnectAttempt + 1;
+              scheduleReconnection(nextAttempt);
+              return {
+                ...prev,
+                connectionState: 'error',
+                error: 'Heartbeat timeout',
+                reconnectAttempt: nextAttempt,
+              };
+            });
+          }, heartbeatTimeout);
+
+        } catch (error) {
+          console.error('Failed to parse SSE event:', error);
+          setState(prev => ({
+            ...prev,
+            error: error instanceof Error ? error.message : 'Failed to parse event',
+          }));
+        }
+      };
 
       eventSource.onerror = () => {
-        handleError('Connection error');
+        if (!mountedRef.current) return;
+        console.error('SSE connection error');
+
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+
+        clearTimeouts();
+
+        setState(prev => {
+          const nextAttempt = prev.reconnectAttempt + 1;
+          scheduleReconnection(nextAttempt);
+          return {
+            ...prev,
+            connectionState: 'error',
+            error: 'Connection error',
+            reconnectAttempt: nextAttempt,
+          };
+        });
       };
 
     } catch (error) {
-      handleError(error instanceof Error ? error.message : 'Failed to connect');
+      setState(prev => {
+        const nextAttempt = prev.reconnectAttempt + 1;
+        scheduleReconnection(nextAttempt);
+        return {
+          ...prev,
+          connectionState: 'error',
+          error: error instanceof Error ? error.message : 'Failed to connect',
+          reconnectAttempt: nextAttempt,
+        };
+      });
     }
-  }, [heartbeatInterval, eventSourceFactory, handleMessage, handleError, clearTimeouts]);
-
-  // Disconnect SSE
-  const disconnect = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
-    clearTimeouts();
-
-    if (mountedRef.current) {
-      setState(prev => ({
-        ...prev,
-        connectionState: 'disconnected',
-        error: null,
-        reconnectAttempt: 0,
-      }));
-    }
-  }, [clearTimeouts]);
+  }, [heartbeatInterval, eventSourceFactory, eventTypes, heartbeatTimeout, clearTimeouts, scheduleReconnection]);
 
   // Auto-connect when URL is provided
   useEffect(() => {
@@ -306,11 +317,15 @@ export function useSSE(
     };
   }, [url, connect, disconnect]);
 
-  // Handle state change to connecting (for reconnection)
+  // Handle reconnection when state changes to connecting (for reconnection attempts)
   useEffect(() => {
     if (state.connectionState === 'connecting' && state.reconnectAttempt > 0 && url) {
-      // This is a reconnection attempt - call connect directly
-      connect();
+      // This is a reconnection attempt - call connect
+      const timeoutId = setTimeout(() => {
+        connect();
+      }, 100); // Small delay to prevent race conditions
+
+      return () => clearTimeout(timeoutId);
     }
   }, [state.connectionState, state.reconnectAttempt, url, connect]);
 
@@ -328,68 +343,5 @@ export function useSSE(
     disconnect,
     isConnected: state.connectionState === 'connected',
     events,
-  };
-}
-
-/**
- * Hook for real-time logs via SSE with polling fallback.
- * Integrates with existing LogsViewer component patterns.
- */
-export function useLogsSSE(
-  deploymentId?: string,
-  jobId?: string,
-  options: SSEOptions = {}
-): {
-  logs: Array<{ timestamp: string; service: string; level: string; message: string }>;
-  connectionState: SSEConnectionState;
-  error: string | null;
-  isConnected: boolean;
-  clearLogs: () => void;
-} {
-  const [logs, setLogs] = useState<Array<{ 
-    timestamp: string; 
-    service: string; 
-    level: string; 
-    message: string; 
-  }>>([]);
-
-  // Determine SSE URL
-  const sseUrl = useMemo(() => {
-    if (jobId) {
-      // Use jobs stream endpoint
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      return `${baseUrl}/api/jobs/${jobId}/logs/stream`;
-    } else if (deploymentId) {
-      // Use deployments stream endpoint
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-      return `${baseUrl}/api/deployments/${deploymentId}/logs/stream`;
-    }
-    return null;
-  }, [jobId, deploymentId]);
-
-  // Handle incoming SSE events
-  const handleSSEEvent = useCallback((event: SSEEvent) => {
-    if (event.type === 'log') {
-      setLogs(prev => [...prev, event.data]);
-    }
-  }, []);
-
-  // Use SSE hook with log event filtering
-  const sseState = useSSE(sseUrl, handleSSEEvent, {
-    ...options,
-    eventTypes: ['log'],
-  });
-
-  // Clear logs function
-  const clearLogs = useCallback(() => {
-    setLogs([]);
-  }, []);
-
-  return {
-    logs,
-    connectionState: sseState.connectionState,
-    error: sseState.error,
-    isConnected: sseState.isConnected,
-    clearLogs,
   };
 }

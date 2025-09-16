@@ -1,6 +1,5 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
-import * as React from 'react';
 import type {
   GetSummaryResponse,
   HealthResponse,
@@ -15,14 +14,7 @@ import type {
   FinalizeDraftResponse,
 } from '@hola/shared';
 
-// Ensure React is available globally for hooks
-globalThis.React = React;
-
-// Also ensure React.useState is available directly  
-if (!globalThis.React || !globalThis.React.useState) {
-  console.error('React not properly initialized in test setup');
-  globalThis.React = React;
-}
+// Do not inject React globally; rely on automatic JSX runtime and imports
 
 // Mock fetch globally for tests with proper response handling
 const mockFetch = vi.fn();
@@ -80,25 +72,69 @@ mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) 
     return createMockResponse(res);
   }
   
-  // Catalog apps endpoint
+  // Catalog apps endpoint with filtering and pagination for tests
   if (urlStr.includes('/api/catalog/apps') && !urlStr.includes('/versions')) {
+    const urlObj = new URL(urlStr, 'http://localhost');
+    const category = urlObj.searchParams.get('category') || undefined;
+    const query = urlObj.searchParams.get('query') || undefined;
+    const page = Number(urlObj.searchParams.get('page') || '1');
+    const limit = Number(urlObj.searchParams.get('limit') || '12');
+
+    const catalog = [
+      {
+        id: 'nextcloud',
+        name: 'Nextcloud',
+        description: 'File sharing and collaboration platform',
+        icon: 'https://example.com/nextcloud-icon.png',
+        category: 'Productivity',
+        rating: 4.8,
+        downloads: 12345,
+        tags: ['files', 'collaboration'],
+        featured: true,
+      },
+      {
+        id: 'plex',
+        name: 'Plex',
+        description: 'Media server',
+        icon: 'https://example.com/plex-icon.png',
+        category: 'Media',
+        rating: 4.6,
+        downloads: 54321,
+        tags: ['media', 'streaming'],
+        featured: false,
+      },
+      {
+        id: 'jellyfin',
+        name: 'Jellyfin',
+        description: 'Open-source media system',
+        icon: 'https://example.com/jellyfin-icon.png',
+        category: 'Media',
+        rating: 4.5,
+        downloads: 22334,
+        tags: ['media', 'streaming'],
+        featured: false,
+      },
+    ];
+
+    let filtered = catalog;
+    if (category) {
+      filtered = filtered.filter(app => app.category === category);
+    }
+    if (query) {
+      const q = query.toLowerCase();
+      filtered = filtered.filter(app => app.name.toLowerCase().includes(q) || app.id.toLowerCase().includes(q));
+    }
+
+    const total = filtered.length;
+    const start = (page - 1) * limit;
+    const end = start + limit;
+    const items = filtered.slice(start, end);
+
     const res: GetCatalogAppsResponse = {
-      items: [
-        {
-          id: 'nextcloud',
-          name: 'Nextcloud',
-          description: 'File sharing and collaboration platform',
-          icon: 'https://example.com/nextcloud-icon.png',
-          category: 'Productivity',
-          rating: 4.8,
-          downloads: 12345,
-          tags: ['files', 'collaboration'],
-          featured: true,
-        },
-      ],
-      page: 1,
-      limit: 12,
-      total: 1,
+      items,
+      page,
+      limit,
+      total,
     };
     return createMockResponse(res);
   }

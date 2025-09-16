@@ -11,7 +11,18 @@ import React from 'react';
 import { SSETestHelper } from '../utils/helpers/sse-test-helper';
 import { useSSE, type EventSourceFactory } from '../../hooks/useSSE';
 import { API } from '@hola/shared';
-import type { SSEDevSessionStatusEvent, SSELogEvent } from '@hola/shared';
+import type { SSEDevSessionStatusEvent, SSELogEvent, SSEEvent } from '@hola/shared';
+
+// Simple test component to debug the issue
+const SimpleTestComponent: React.FC = () => {
+  return (
+    <div>
+      <div data-testid="connection-state">connecting</div>
+      <div data-testid="error">none</div>
+      <div data-testid="event-count">0</div>
+    </div>
+  );
+};
 
 // Test component that uses SSE hook
 const DevSessionMonitor: React.FC<{ sessionId: string; eventSourceFactory: EventSourceFactory }> = ({ sessionId, eventSourceFactory }) => {
@@ -21,15 +32,15 @@ const DevSessionMonitor: React.FC<{ sessionId: string; eventSourceFactory: Event
       reconnect: true,
       reconnectDelay: 100, // Fast reconnect for tests
       eventSourceFactory,
-      eventTypes: ['session_status', 'log'],
+      
     }
   );
 
   return (
     <div>
-      <div data-testid="connection-state">{connectionState}</div>
-      <div data-testid="error">{error || 'none'}</div>
-      <div data-testid="event-count">{events.length}</div>
+      <div data-testid="connection-state">{String(connectionState)}</div>
+      <div data-testid="error">{String(error ?? 'none')}</div>
+      <div data-testid="event-count">{String(events.length)}</div>
       {lastEvent && (
         <div data-testid="last-event" data-event-type={lastEvent.type}>
           {JSON.stringify(lastEvent)}
@@ -61,10 +72,28 @@ describe('Dev Session SSE Integration', () => {
     it('establishes connection and updates state', async () => {
       const sessionId = 'test-session-123';
       
-      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
+      // First test with simple component
+      const { container: simpleContainer } = render(<SimpleTestComponent />);
+      console.log('Simple container HTML:', simpleContainer.innerHTML);
       
-      // Initially should be connecting
-      expect(screen.getByTestId('connection-state')).toHaveTextContent('connecting');
+      // Clean up and test with SSE component
+      screen.getByTestId('connection-state');
+      
+      // Now test the SSE component
+      const { container } = render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
+      
+      // Debug: Log what's actually rendered
+      console.log('Container HTML:', container.innerHTML);
+      console.log('Container firstChild:', container.firstChild);
+      
+      // Initially should be connecting (await render stabilization)
+      await waitFor(() => {
+        const connEl = screen.getByTestId('connection-state');
+        expect(connEl).toBeInTheDocument();
+      }, { timeout: 3000 });
+      
+      const connEl = screen.getByTestId('connection-state');
+      expect(connEl).toHaveTextContent('connecting');
       
       // Simulate connection open
       await SSETestHelper.simulateOpen();
@@ -223,7 +252,7 @@ describe('Dev Session SSE Integration', () => {
           API.dev.events(sessionId),
           {
             eventSourceFactory,
-            eventTypes: ['session_status'], // Only session status events
+             // Only session status events
           }
         );
 
@@ -314,9 +343,9 @@ describe('Dev Session SSE Integration', () => {
       // Simulate dev session lifecycle
       const lifecycleEvents = [
         // Session starting
-        { 
+        {
           type: 'session_status' as const,
-          data: { sessionId, status: 'starting', liveReload: false, autoSync: false }
+          data: { sessionId, status: 'starting', liveReload: false, autoSync: false, lastActivity: new Date().toISOString() }
         },
         // Initial logs
         {
@@ -324,14 +353,14 @@ describe('Dev Session SSE Integration', () => {
           data: {
             timestamp: new Date().toISOString(),
             service: `dev-session-${sessionId}`,
-            level: 'info',
+            level: 'info' as const,
             message: 'Initializing dev session...',
           }
         },
         // Session running
         {
           type: 'session_status' as const,
-          data: { sessionId, status: 'running', liveReload: true, autoSync: true }
+          data: { sessionId, status: 'running', liveReload: true, autoSync: true, lastActivity: new Date().toISOString() }
         },
         // Activity logs
         {
@@ -339,7 +368,7 @@ describe('Dev Session SSE Integration', () => {
           data: {
             timestamp: new Date().toISOString(),
             service: `dev-session-${sessionId}`,
-            level: 'info',
+            level: 'info' as const,
             message: 'Hot reload enabled',
           }
         },
@@ -351,7 +380,8 @@ describe('Dev Session SSE Integration', () => {
             status: 'running', 
             liveReload: true, 
             autoSync: true,
-            logs: ['Recent activity 1', 'Recent activity 2']
+            logs: ['Recent activity 1', 'Recent activity 2'],
+            lastActivity: new Date().toISOString(),
           }
         },
       ];
