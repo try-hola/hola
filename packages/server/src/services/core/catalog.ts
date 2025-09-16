@@ -214,7 +214,22 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     if (this.cache.etag) headers['If-None-Match'] = this.cache.etag;
     if (this.cache.lastModified) headers['If-Modified-Since'] = this.cache.lastModified;
 
-    const res = await fetch(catalogConfig.catalogUrl, { headers });
+    // Apply a conservative timeout to avoid hanging during tests/environments with slow network
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    let res: Response;
+    try {
+      res = await fetch(catalogConfig.catalogUrl, { headers, signal: controller.signal });
+    } catch (err) {
+      // If aborted or failed, log and set empty catalog to avoid blocking callers
+      const msg = err instanceof Error ? err.message : String(err);
+      this.logger.warn('Catalog fetch failed; using empty catalog', { error: msg });
+      this.cache = { data: { apps: [] }, ts: Date.now() };
+      clearTimeout(timeout);
+      return;
+    } finally {
+      clearTimeout(timeout);
+    }
     if (res.status === 304 && this.cache.data) {
       this.logger.debug('Catalog not modified');
       this.cache.ts = Date.now();

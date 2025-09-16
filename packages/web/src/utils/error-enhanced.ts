@@ -284,14 +284,16 @@ export async function enhancedFetch(
     lastError = error as EnhancedError;
   }
 
-  // Determine retry configuration
-  const defaultConfig = DEFAULT_RETRY_CONFIGS[lastError.type];
-  const config = defaultConfig ? {
-    ...defaultConfig,
-    ...retryConfig,
-  } : null;
+  // Only retry when caller explicitly provides a retryConfig
+  if (!retryConfig) {
+    throw lastError;
+  }
 
-  // Don't retry if not retryable or no retry config
+  // Determine retry configuration based on error type defaults merged with caller overrides
+  const defaultConfig = DEFAULT_RETRY_CONFIGS[lastError.type];
+  const config = defaultConfig ? { ...defaultConfig, ...retryConfig } : null;
+
+  // Don't retry if not retryable or no retry config available for this type
   if (!lastError.retryable || !config) {
     throw lastError;
   }

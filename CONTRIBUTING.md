@@ -1,13 +1,17 @@
 # CONTRIBUTING.md
 
-Welcome to the Hola project! This guide will help you understand how to work with our monorepo structure using Yarn workspaces.
+Welcome to the Hola project! This guide explains how to work with our Bun-based monorepo.
 
 ## Project Structure
 
-This project is organized as a monorepo using Yarn workspaces with the following main components:
+This repository is a Bun workspaces monorepo with these primary packages:
 
-- **server**: Node.js/TypeScript API server
-- **client**: Node.js/TypeScript CLI application
+- `packages/server`: Bun/TypeScript HTTP API
+- `packages/web`: Vite + React + TypeScript SPA
+- `packages/shared`: Shared types/config and route contracts
+- `packages/cli`: Ink-based CLI for workflows
+- `packages/sdk`: Typed client for the API
+- `packages/compose`: Docker Compose stack for local/hosted runs
 
 ## Setting Up Development Environment
 
@@ -19,177 +23,118 @@ This project is organized as a monorepo using Yarn workspaces with the following
 
 2. Install dependencies for all workspaces:
    ```bash
-   yarn install
+   bun install
    ```
 
-## Yarn Workspace Commands
+## Bun Workspace Commands
 
 ### Working with Workspaces
 
-List all workspaces:
-```bash
-yarn workspaces info
-```
+- Run a script across all packages:
+  ```bash
+  bun run --filter './packages/*' <script>
+  ```
+- Run in a specific package (recommended):
+  ```bash
+  bun --cwd packages/<name> run <script>
+  ```
 
-Run a command in a specific workspace:
+Examples:
 ```bash
-yarn workspace <workspace-name> <command>
-```
-
-For example:
-```bash
-yarn workspace server start
-yarn workspace client dev
+bun --cwd packages/server run dev
+bun --cwd packages/web run dev
 ```
 
 ### Common Development Tasks
 
-#### Starting the Development Server
-
+#### Start Development
 ```bash
-# Start the server in development mode
-yarn workspace server dev
+# Run server and web together (root script)
+bun run dev
 
-# Start the client in development mode
-yarn workspace client dev
+# Or run individually
+bun --cwd packages/server run dev
+bun --cwd packages/web run dev
 ```
 
-#### Building the Project
-
+#### Build
 ```bash
-# Build all workspaces
-yarn workspaces run build
+# Build all packages
+bun run build
 
-# Build a specific workspace
-yarn workspace server build
+# Build a specific package
+bun --cwd packages/web run build
 ```
 
-#### Running Tests
-
-Run all tests:
+#### Tests
 ```bash
-bun test
-```
+# All packages (delegates to each package)
+bun run test
 
-Run tests for a specific workspace:
-```bash
-bun run --filter './packages/*' test
-# or specifically
-cd packages/server && bun test
-cd packages/web && bun test
-```
-
-Run tests from the workspace root:
-```bash
-# Web tests (using Vitest)
+# Web (Vitest)
 bun run test:web
+bun --cwd packages/web run test:watch
 
-# Server tests (using Bun's built-in test runner)
-cd packages/server && bun test
+# Server (Bun test runner)
+bun --cwd packages/server run test
 
-# Run tests in watch mode
-cd packages/web && bun test:watch
+# Focused examples
+bun test packages/server/src/__tests__/health/
+npx vitest run packages/web/src/__tests__/hooks/
 ```
 
-Run specific test files or patterns:
+#### Linting & Type Checking
 ```bash
-# Run a specific test file
-bun test packages/server/src/__tests__/health/infrastructure.test.ts
-
-# Run tests in a specific domain
-bun test packages/server/src/__tests__/auth/
-bun test packages/web/src/__tests__/hooks/
-```
-
-#### Linting
-
-```bash
-# Lint all workspaces
+# All packages
 bun run lint
+bun run typecheck
 
-# Lint a specific workspace
-cd packages/server && bun run lint
-cd packages/web && bun run lint
+# Specific package
+bun --cwd packages/server run lint
+bun --cwd packages/web run typecheck
 ```
 
 ## Development Workflow
 
-1. Create a new branch for your feature or bugfix:
+1. Create a feature branch:
    ```bash
    git checkout -b feature/your-feature-name
    ```
-
-2. Make your changes, following our code organization principles:
-   - Keep related functionality in the same module
-   - Use TypeScript types and interfaces extensively
-   - Write tests for new functionality
-
-3. Run tests to ensure your changes don't break existing functionality:
+2. Make changes following repo conventions:
+   - Keep related code within the same feature/domain
+   - Prefer shared types from `@hola/shared`
+   - Add/adjust tests for new behavior
+3. Verify locally:
    ```bash
-   bun test
-   # or for a specific workspace
-   cd packages/server && bun test
-   cd packages/web && bun test
+   bun run lint && bun run typecheck && bun run test
    ```
-
-4. Lint your code:
-   ```bash
-   bun run lint
-   ```
-
-5. Commit your changes with a descriptive commit message
-
-6. Push your branch and create a pull request
+4. Commit with a clear, imperative message and open a PR.
 
 ## Testing Guidelines
 
-We organize tests by functional domains rather than implementation structure. Tests are grouped into logical feature areas for better maintainability and discoverability.
+Organize tests by functional domain rather than implementation details for discoverability and maintenance.
 
-### Test Organization
+**Server** (`packages/server/src/__tests__/`): health, auth, system, docker, jobs, bundles, drafts, deployments, dev-sessions, sse, utils.
 
-**Server Tests** (`packages/server/src/__tests__/`):
-- `health/` - Health endpoints, infrastructure, and observability
-- `auth/` - Authentication, authorization, and security
-- `system/` - System monitoring, status, and performance
-- `docker/` - Docker service integration and health reporting
-- `jobs/` - Job management, tracking, and structured logging
-- `bundles/` - Bundle cache, OCI integration, and catalog management
-- `drafts/` - Draft lifecycle and validation
-- `deployments/` - Deployment management and actions
-- `dev-sessions/` - Development session management
-- `sse/` - Server-Sent Events and real-time features
-- `utils/` - Test utilities and shared helpers
+**Web** (`packages/web/src/__tests__/`): hooks, components, pages, api, sse, utils.
 
-**Web Tests** (`packages/web/src/__tests__/`):
-- `hooks/` - React hooks and custom API hooks
-- `components/` - React component unit tests  
-- `pages/` - Page component integration tests
-- `api/` - API client and integration tests
-- `sse/` - SSE client-side functionality and real-time features
-- `utils/` - Test utilities, mocks, and fixtures
-
-### Test Patterns
-
-Follow these established patterns:
-1. Import dependencies and setup mocks first
-2. Import modules under test after mocking  
-3. Define test fixtures and setup in beforeEach()
-4. Write specific test cases with clear, descriptive assertions
-5. Use functional test names that describe behavior, not implementation details
-6. Group related tests in describe blocks by feature or scenario
+Patterns:
+1. Mock first; import after mocks
+2. Use fixtures/setup in `beforeEach`
+3. Assert behavior, not internals
+4. Use descriptive test names and `describe` by scenario
 
 ## Documentation Standards
 
-- Document public API endpoints in the OpenAPI spec at `/server/public/docs/openapi.yaml`
-- Add JSDoc comments to functions and classes
-- When adding comments, explain _why_ something is done rather than _what_ is being done
-- Keep README.md files updated in each workspace
+- Keep `README.md` in each package up-to-date
+- Add JSDoc to public functions/classes
+- Prefer explaining "why" in comments
 
 ## Getting Help
 
-If you have any questions or need help, please:
-- Check the existing documentation
-- Look at existing code for examples
-- Open an issue for larger discussions
+If you need assistance:
+- Check docs in `/docs` and package READMEs
+- Review similar code paths for patterns
+- Open an issue for design or larger questions
 
 Thank you for contributing to the Hola project!

@@ -9,11 +9,19 @@ export default defineConfig({
     include: ['**/*.tsx', '**/*.jsx'],
   })],
   test: {
+    pool: 'forks',
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.ts'],
     globals: true,
     // Add more specific test configuration
     css: false,
+    // Run in a single worker to reduce memory usage in CI/monorepo
+    poolOptions: {
+      forks: {
+        // Limit to a single forked worker to keep memory bounded
+        singleFork: true,
+      },
+    },
     deps: {
       // Use new optimizer configuration instead of deprecated inline
       optimizer: {

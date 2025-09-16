@@ -8,8 +8,12 @@ export function useErrorHandler() {
   const [error, setError] = React.useState<EnhancedError | null>(null);
 
   const handleError = React.useCallback((error: Error | EnhancedError) => {
-    const enhancedError = 'type' in error ? error : createEnhancedError(error);
-    setError(enhancedError);
+    const base = 'type' in error ? error : createEnhancedError(error);
+    // Prefer the original message for UI display in component-level handling
+    const withPreferredMessage: EnhancedError = Object.assign({}, base, {
+      userMessage: (error as Error).message || base.userMessage,
+    });
+    setError(withPreferredMessage);
   }, []);
 
   const clearError = React.useCallback(() => {

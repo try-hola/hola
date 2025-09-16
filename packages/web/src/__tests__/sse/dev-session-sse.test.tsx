@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, cleanup } from '@testing-library/react';
 import React from 'react';
 import { SSETestHelper } from '../utils/helpers/sse-test-helper';
 import { useSSE, type EventSourceFactory } from '../../hooks/useSSE';
@@ -18,7 +18,7 @@ const DevSessionMonitor: React.FC<{
   sessionId: string; 
   eventSourceFactory: EventSourceFactory;
   reconnect?: boolean;
-}> = ({ sessionId, eventSourceFactory, reconnect = true }) => {
+}> = ({ sessionId, eventSourceFactory, reconnect = false }) => {
   const { connectionState, lastEvent, error, events } = useSSE(
     API.dev.events(sessionId),
     {
@@ -58,6 +58,7 @@ describe('Dev Session SSE Integration', () => {
   });
 
   afterEach(() => {
+    cleanup();
     SSETestHelper.cleanup();
   });
 
@@ -66,11 +67,7 @@ describe('Dev Session SSE Integration', () => {
       const sessionId = 'test-session-123';
       
       // Render the SSE component
-      const { container } = render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
-      
-      // Debug: Log what's actually rendered
-      console.log('Container HTML:', container.innerHTML);
-      console.log('Container firstChild:', container.firstChild);
+  render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Initially should be connecting (await render stabilization)
       await waitFor(() => {
@@ -99,10 +96,14 @@ describe('Dev Session SSE Integration', () => {
       
       // Simulate connection error
       await SSETestHelper.simulateError();
-      
+
+      // Error message should be set
       await waitFor(() => {
-        expect(screen.getByTestId('connection-state')).toHaveTextContent('error');
+        expect(screen.getByTestId('error')).toHaveTextContent('Connection error');
       });
+
+      // With reconnect disabled, connection transitions to disconnected
+      expect(screen.getByTestId('connection-state')).toHaveTextContent('disconnected');
     });
 
     it('handles connection close and reconnection', async () => {

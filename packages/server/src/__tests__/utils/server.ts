@@ -5,7 +5,7 @@
  * Reduces flakiness and duplicated logic across test phases.
  */
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import type { ChildProcess } from 'child_process';
 
 // Support multiple concurrent servers keyed by port to avoid cross-suite interference
@@ -70,6 +70,28 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
   }
   
   throw new Error(`Server failed to become healthy within ${timeoutMs}ms`);
+}
+
+/**
+ * Attempt to terminate any process listening on the given port.
+ * Best-effort: sends SIGTERM first, then SIGKILL if still present.
+ */
+async function freePort(port: number): Promise<void> {
+  try {
+    // Find PIDs using lsof and send SIGTERM
+    execSync(
+      `bash -lc 'PIDS=$(lsof -ti :${port} || true); if [ -n "$PIDS" ]; then kill -TERM $PIDS || true; sleep 0.3; PIDS2=$(lsof -ti :${port} || true); if [ -n "$PIDS2" ]; then kill -KILL $PIDS2 || true; fi; fi'`,
+      { stdio: 'ignore' }
+    );
+  } catch {
+    // Ignore errors; we'll verify via health check below
+  }
+  // Wait briefly for port to be released
+  const start = Date.now();
+  while (Date.now() - start < 3000) {
+    if (!(await isServerRunning(port))) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 /**
@@ -149,10 +171,10 @@ export async function setupTestServer(port: number = 3001, env: Record<string, s
     return;
   }
 
-  // Check if server is already running
+  // Ensure we own the server on the target port to avoid cross-run interference
   if (await isServerRunning(port)) {
-    console.log(`Server already running on port ${port}, using existing instance`);
-    return;
+    console.log(`Port ${port} is already in use. Attempting to free it before tests...`);
+    await freePort(port);
   }
 
   // Start new server instance

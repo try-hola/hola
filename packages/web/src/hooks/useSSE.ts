@@ -73,13 +73,13 @@ export function useSSE(
   events: SSEEvent[];
 } {
   const providedOnEvent = typeof onEventOrOptions === 'function' ? onEventOrOptions as (event: SSEEvent) => void : undefined;
-  const resolvedOptions = useMemo(() => (
-    (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) ?? {}
-  ), [onEventOrOptions, maybeOptions]);
-  const config = useMemo(() => ({
+  const resolvedOptions = (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) ?? {};
+  const configRef = useRef<Required<Omit<SSEOptions, 'eventSourceFactory'>> & Pick<SSEOptions, 'eventSourceFactory'>>({
     ...DEFAULT_OPTIONS,
     ...resolvedOptions,
-  }), [resolvedOptions]);
+  });
+  // Update configRef on render; callbacks read from ref so no deps needed
+  configRef.current = { ...DEFAULT_OPTIONS, ...resolvedOptions };
 
   const initialConnectionState: SSEConnectionState = url ? 'connecting' : 'disconnected';
   const [state, setState] = useState<SSEState>({
@@ -121,16 +121,11 @@ export function useSSE(
   }, []);
 
   // Calculate reconnection delay with exponential backoff
-  const { reconnectDelay, maxReconnectDelay, heartbeatTimeout, heartbeatInterval, eventTypes, eventSourceFactory, reconnect, reconnectAttempts } = config;
-
   const getReconnectDelay = useCallback((attempt: number) => {
-    const delay = Math.min(
-      reconnectDelay * Math.pow(2, attempt),
-      maxReconnectDelay
-    );
-    // Add jitter to prevent thundering herd
+    const { reconnectDelay, maxReconnectDelay } = configRef.current;
+    const delay = Math.min(reconnectDelay * Math.pow(2, attempt), maxReconnectDelay);
     return delay + Math.random() * 1000;
-  }, [reconnectDelay, maxReconnectDelay]);
+  }, []);
 
   // Handle connection errors
   const handleError = useCallback((errorMessage: string) => {
@@ -154,6 +149,7 @@ export function useSSE(
 
     // Attempt reconnection if enabled and within limits
     setState(prev => {
+      const { reconnect, reconnectAttempts } = configRef.current;
       if (reconnect && prev.reconnectAttempt < reconnectAttempts) {
         const delay = getReconnectDelay(prev.reconnectAttempt);
         
@@ -179,7 +175,7 @@ export function useSSE(
         };
       }
     });
-  }, [reconnect, reconnectAttempts, getReconnectDelay, clearTimeouts]);
+  }, [getReconnectDelay, clearTimeouts]);
 
   // Handle SSE message events
   const handleMessage = useCallback((event: MessageEvent) => {
@@ -189,6 +185,7 @@ export function useSSE(
       const sseEvent: SSEEvent = JSON.parse(event.data);
       
       // Filter events if types are specified
+      const { eventTypes, heartbeatTimeout } = configRef.current;
       if (eventTypes.length > 0 && !eventTypes.includes(sseEvent.type)) {
         return;
       }
@@ -220,7 +217,7 @@ export function useSSE(
         error: error instanceof Error ? error.message : 'Failed to parse event',
       }));
     }
-  }, [eventTypes, heartbeatTimeout, handleError]);
+  }, [handleError]);
 
   // Establish SSE connection
   const connect = useCallback(() => {
@@ -241,6 +238,7 @@ export function useSSE(
 
     try {
       // Use injected factory or default EventSource
+      const { eventSourceFactory, heartbeatInterval } = configRef.current;
       const eventSource = eventSourceFactory 
         ? eventSourceFactory(urlRef.current)
         : new EventSource(urlRef.current);
@@ -272,7 +270,7 @@ export function useSSE(
     } catch (error) {
       handleError(error instanceof Error ? error.message : 'Failed to connect');
     }
-  }, [heartbeatInterval, eventSourceFactory, handleMessage, handleError, clearTimeouts]);
+  }, [handleMessage, handleError, clearTimeouts]);
 
   // Disconnect SSE
   const disconnect = useCallback(() => {
@@ -309,7 +307,6 @@ export function useSSE(
   // Handle state change to connecting (for reconnection)
   useEffect(() => {
     if (state.connectionState === 'connecting' && state.reconnectAttempt > 0 && url) {
-      // This is a reconnection attempt - call connect directly
       connect();
     }
   }, [state.connectionState, state.reconnectAttempt, url, connect]);

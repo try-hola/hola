@@ -74,6 +74,23 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
 }
 
 /**
+ * Attempt to terminate any process listening on the given port.
+ * Best-effort: sends SIGTERM first, then SIGKILL if still present.
+ */
+async function freePort(port: number): Promise<void> {
+  try {
+    await Bun.$`bash -lc 'PIDS=$(lsof -ti :${port} || true); if [ -n "$PIDS" ]; then kill -TERM $PIDS || true; sleep 0.3; PIDS2=$(lsof -ti :${port} || true); if [ -n "$PIDS2" ]; then kill -KILL $PIDS2 || true; fi; fi'`;
+  } catch {
+    // Ignore errors; we'll verify via health check below
+  }
+  const start = Date.now();
+  while (Date.now() - start < 3000) {
+    if (!(await isServerRunning(port))) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+/**
  * Kill the server process
  * Handles cleanup gracefully
  */
@@ -139,10 +156,10 @@ export async function setupTestServer(port: number = 3001, env: Record<string, s
     return;
   }
 
-  // Check if server is already running
+  // Ensure we own the server on the target port to avoid cross-run interference
   if (await isServerRunning(port)) {
-    console.log(`Server already running on port ${port}, using existing instance`);
-    return;
+    console.log(`Port ${port} is already in use. Attempting to free it before tests...`);
+    await freePort(port);
   }
 
   // Start new server instance

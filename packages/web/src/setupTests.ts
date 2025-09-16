@@ -1,4 +1,5 @@
 import { vi, beforeEach, afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import type {
   GetSummaryResponse,
@@ -237,6 +238,8 @@ beforeEach(() => {
 afterEach(() => {
   // Restore console.warn
   console.warn = originalConsoleWarn;
+  // Ensure all mounted components are unmounted between tests
+  cleanup();
 });
 
 // Mock the browser APIs that might be used in components
