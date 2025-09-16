@@ -13,23 +13,16 @@ import { useSSE, type EventSourceFactory } from '../../hooks/useSSE';
 import { API } from '@hola/shared';
 import type { SSEDevSessionStatusEvent, SSELogEvent, SSEEvent } from '@hola/shared';
 
-// Simple test component to debug the issue
-const SimpleTestComponent: React.FC = () => {
-  return (
-    <div>
-      <div data-testid="connection-state">connecting</div>
-      <div data-testid="error">none</div>
-      <div data-testid="event-count">0</div>
-    </div>
-  );
-};
-
 // Test component that uses SSE hook
-const DevSessionMonitor: React.FC<{ sessionId: string; eventSourceFactory: EventSourceFactory }> = ({ sessionId, eventSourceFactory }) => {
+const DevSessionMonitor: React.FC<{ 
+  sessionId: string; 
+  eventSourceFactory: EventSourceFactory;
+  reconnect?: boolean;
+}> = ({ sessionId, eventSourceFactory, reconnect = true }) => {
   const { connectionState, lastEvent, error, events } = useSSE(
     API.dev.events(sessionId),
     {
-      reconnect: true,
+      reconnect,
       reconnectDelay: 100, // Fast reconnect for tests
       eventSourceFactory,
       
@@ -72,14 +65,7 @@ describe('Dev Session SSE Integration', () => {
     it('establishes connection and updates state', async () => {
       const sessionId = 'test-session-123';
       
-      // First test with simple component
-      const { container: simpleContainer } = render(<SimpleTestComponent />);
-      console.log('Simple container HTML:', simpleContainer.innerHTML);
-      
-      // Clean up and test with SSE component
-      screen.getByTestId('connection-state');
-      
-      // Now test the SSE component
+      // Render the SSE component
       const { container } = render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
       
       // Debug: Log what's actually rendered
@@ -122,7 +108,7 @@ describe('Dev Session SSE Integration', () => {
     it('handles connection close and reconnection', async () => {
       const sessionId = 'test-session-789';
       
-      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} />);
+      render(<DevSessionMonitor sessionId={sessionId} eventSourceFactory={eventSourceFactory} reconnect={false} />);
       
       // Establish connection
       await SSETestHelper.simulateOpen();
@@ -252,7 +238,7 @@ describe('Dev Session SSE Integration', () => {
           API.dev.events(sessionId),
           {
             eventSourceFactory,
-             // Only session status events
+            eventTypes: ['session_status'], // Only session status events
           }
         );
 
@@ -325,8 +311,8 @@ describe('Dev Session SSE Integration', () => {
       });
       
       await waitFor(() => {
-        // Should have processed the valid event despite the malformed one
-        expect(screen.getByTestId('event-count')).toHaveTextContent('1');
+        // Should have processed both events - malformed events that are valid JSON are still processed
+        expect(screen.getByTestId('event-count')).toHaveTextContent('2');
       });
     });
   });

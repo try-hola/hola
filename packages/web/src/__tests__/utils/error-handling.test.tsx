@@ -8,9 +8,9 @@ import {
   calculateRetryDelay,
   NetworkStatus,
   enhancedFetch
-} from '../utils/error-enhanced';
-import { useErrorHandler } from '../hooks/useErrorHandler';
-import { ErrorBoundary } from '../components/ErrorBoundary';
+} from '../../utils/error-enhanced';
+import { useErrorHandler } from '../../hooks/useErrorHandler';
+import { ErrorBoundary } from '../../components/ErrorBoundary';
 import React from 'react';
 
 beforeEach(() => {

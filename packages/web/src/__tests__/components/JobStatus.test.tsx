@@ -1,6 +1,6 @@
 import { render, screen, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach } from 'vitest';
-import { JobStatus } from '../JobStatus';
+import { JobStatus } from '../../components/JobStatus';
 import type { Job } from '@hola/shared';
 
 function createJob(overrides: Partial<Job> = {}): Job {

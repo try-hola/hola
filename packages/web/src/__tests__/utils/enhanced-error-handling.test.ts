@@ -7,7 +7,7 @@ import {
   calculateRetryDelay,
   enhancedFetch,
   NetworkStatus
-} from '../utils/error-enhanced';
+} from '../../utils/error-enhanced';
 
 // Mock fetch with proper typing
 const mockFetch = vi.fn();

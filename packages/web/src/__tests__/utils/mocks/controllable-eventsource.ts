@@ -69,6 +69,10 @@ class ControllableEventSourceImpl implements ControllableEventSourceInstance {
 
   simulateClose(): void {
     this.readyState = 2; // CLOSED
+    // Trigger error handler to simulate connection loss
+    if (this.onerror) {
+      this.onerror(new Event('error'));
+    }
   }
 }
 

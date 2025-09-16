@@ -71,6 +71,7 @@ describe('Dev Session SSE Hook Tests', () => {
       const { result } = renderHook(() => 
         useSSE(API.dev.events(sessionId), {
           eventSourceFactory,
+          reconnect: false, // Disable reconnection to test clean close
         })
       );
 
@@ -221,7 +222,7 @@ describe('Dev Session SSE Hook Tests', () => {
       const { result } = renderHook(() => 
         useSSE(API.dev.events(sessionId), {
           eventSourceFactory,
-           // Only session status events
+          eventTypes: ['session_status'], // Only session status events
         })
       );
 

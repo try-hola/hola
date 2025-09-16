@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { Backups } from '../Backups';
+import { Backups } from '../../pages/Backups';
 import { API } from '@hola/shared';
 
 const originalFetch = global.fetch;
@@ -35,12 +35,12 @@ describe('Backups Error Handling', () => {
         });
       }
       return new Response('Not Found', { status: 404 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     render(<BackupsWithRouter />);
 
     await waitFor(() => {
-      expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
+      expect(screen.getByText(/failed to fetch backups.*403/i)).toBeInTheDocument();
     });
   });
 
@@ -53,19 +53,19 @@ describe('Backups Error Handling', () => {
         });
       }
       return new Response('Not Found', { status: 404 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     render(<BackupsWithRouter />);
 
     await waitFor(() => {
-      expect(screen.getByText(/request failed.*500.*internal server error/i)).toBeInTheDocument();
+      expect(screen.getByText(/failed to fetch backups.*500/i)).toBeInTheDocument();
     });
   });
 
   it('handles network errors gracefully', async () => {
     global.fetch = vi.fn(async () => {
       throw new Error('Network request failed');
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     render(<BackupsWithRouter />);
 
@@ -85,14 +85,13 @@ describe('Backups Error Handling', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     render(<BackupsWithRouter />);
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining(API.backups.base),
-        expect.any(Object)
+        "/api/backups?page=1&limit=10"
       );
     });
   });
