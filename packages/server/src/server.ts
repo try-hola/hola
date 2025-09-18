@@ -1463,7 +1463,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         const { getDraftService } = await import('./services/factory');
         const draftService = getDraftService();
         const draftId = draftPreflightMatch[1];
-        const result = await draftService.preflightChecks(draftId);
+        const result = await draftService.preflightCheck(draftId);
         return json(result);
       } catch (error) {
         logger.error('Failed to run draft preflight checks', error as Error);
