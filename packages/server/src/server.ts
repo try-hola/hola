@@ -411,99 +411,108 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Drafts
-  if (pathname === API.drafts.create && req.method === 'POST') {
-    const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
-    const payload: CreateDraftResponse = {
-      draftId: crypto.randomUUID(),
-      app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
-      systemEnv: [
-        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-      ],
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      defaults: {
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
-      },
-    };
-    return json(payload);
-  }
+  // ===== LEGACY/STUB DRAFT ROUTES =====
+  // These routes provide mock responses when Phase 7 Dev API is disabled
+  if (!featureFlags.enableDevApi) {
+    // Draft creation (legacy stub)
+    if (pathname === API.drafts.create && req.method === 'POST') {
+      const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+      const payload: CreateDraftResponse = {
+        draftId: crypto.randomUUID(),
+        app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
+        systemEnv: [
+          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+        ],
+        appEnv: [
+          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+        ],
+        defaults: {
+          ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+          volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
+        },
+      };
+      return json(payload);
+    }
 
-  const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
-  if (draftMatch && req.method === 'GET') {
-    const draftId = draftMatch[1];
-    const payload: GetDraftResponse = {
-      draftId,
-      appId: 'nextcloud',
-      version: '1.0.0',
-      systemOverrides: {},
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-      composeOverride: '',
-      files: [],
-    };
-    return json(payload);
-  }
-
-  if (draftMatch && req.method === 'PATCH') {
-    const payload: PatchDraftResponse = {
-      ok: true,
-      draft: {
-        draftId: draftMatch[1],
+    // Draft by ID operations (legacy stubs)
+    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+    if (draftMatch && req.method === 'GET') {
+      const draftId = draftMatch[1];
+      const payload: GetDraftResponse = {
+        draftId,
         appId: 'nextcloud',
         version: '1.0.0',
         systemOverrides: {},
-        appEnv: [],
-        ports: [],
+        appEnv: [
+          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+        ],
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
         composeOverride: '',
         files: [],
-      },
-    };
-    return json(payload);
-  }
+      };
+      return json(payload);
+    }
 
-  const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
-  if (draftUploadsMatch && req.method === 'POST') {
-    const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
-    return json(payload);
-  }
+    if (draftMatch && req.method === 'PATCH') {
+      const payload: PatchDraftResponse = {
+        ok: true,
+        draft: {
+          draftId: draftMatch[1],
+          appId: 'nextcloud',
+          version: '1.0.0',
+          systemOverrides: {},
+          appEnv: [],
+          ports: [],
+          composeOverride: '',
+          files: [],
+        },
+      };
+      return json(payload);
+    }
 
-  const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
-  if (draftUploadByIdMatch && req.method === 'DELETE') {
-    const payload: DeleteDraftFileResponse = { ok: true };
-    return json(payload);
-  }
+    // Draft uploads (legacy stubs)
+    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+    if (draftUploadsMatch && req.method === 'POST') {
+      const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
+      return json(payload);
+    }
 
-  const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
-  if (draftValidateMatch && req.method === 'POST') {
-    const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
-    return json(payload);
-  }
+    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+    if (draftUploadByIdMatch && req.method === 'DELETE') {
+      const payload: DeleteDraftFileResponse = { ok: true };
+      return json(payload);
+    }
 
-  const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
-  if (draftPreflightMatch && req.method === 'POST') {
-    const payload: PreflightResponse = {
-      ok: true,
-      checks: [
-        { name: 'env', status: 'pass' },
-        { name: 'docker', status: 'pass' },
-        { name: 'disk', status: 'warn', detail: 'Low disk space' },
-      ],
-    };
-    return json(payload);
-  }
+    // Draft validation (legacy stub)
+    const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
+    if (draftValidateMatch && req.method === 'POST') {
+      const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
+      return json(payload);
+    }
 
-  const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
-  if (draftFinalizeMatch && req.method === 'POST') {
-    const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
-    return json(payload);
+    // Draft preflight (legacy stub)
+    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+    if (draftPreflightMatch && req.method === 'POST') {
+      const payload: PreflightResponse = {
+        ok: true,
+        checks: [
+          { name: 'env', status: 'pass' },
+          { name: 'docker', status: 'pass' },
+          { name: 'disk', status: 'warn', detail: 'Low disk space' },
+        ],
+      };
+      return json(payload);
+    }
+
+    // Draft finalization (legacy stub)
+    const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
+    if (draftFinalizeMatch && req.method === 'POST') {
+      const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
+      return json(payload);
+    }
   }
 
   // Deployments
@@ -1128,10 +1137,10 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   // ===== PHASE 7 API ENDPOINTS =====
-  
+  // Real service implementations gated by enableDevApi feature flag
   // Check if Phase 7 API is enabled
   if (!featureFlags.enableDevApi) {
-    // Skip Phase 7 endpoints if not enabled
+    // Skip Phase 7 endpoints if not enabled - fall back to legacy/stub handlers above
   } else {
     
     // Dev Sessions API
@@ -1412,6 +1421,53 @@ async function route(url: URL, req: Request): Promise<Response> {
       } catch (error) {
         logger.error('Failed to finalize draft', error as Error);
         return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to finalize draft' } }, { status: 500 });
+      }
+    }
+
+    // Draft uploads
+    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+    if (draftUploadsMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftUploadsMatch[1];
+        // Get file from request - in real implementation this would handle file upload
+        const body = await req.json();
+        const result = await draftService.uploadFile(draftId, body);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to upload draft file', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload draft file' } }, { status: 500 });
+      }
+    }
+
+    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+    if (draftUploadByIdMatch && req.method === 'DELETE') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftUploadByIdMatch[1];
+        const uploadId = draftUploadByIdMatch[2];
+        await draftService.deleteFile(draftId, uploadId);
+        return json({ ok: true });
+      } catch (error) {
+        logger.error('Failed to delete draft file', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete draft file' } }, { status: 500 });
+      }
+    }
+
+    // Draft preflight
+    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+    if (draftPreflightMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftPreflightMatch[1];
+        const result = await draftService.preflightChecks(draftId);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to run draft preflight checks', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to run draft preflight checks' } }, { status: 500 });
       }
     }
 
