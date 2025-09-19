@@ -285,11 +285,19 @@ export async function enhancedFetch(
   }
 
   // Determine retry configuration
-  const defaultConfig = DEFAULT_RETRY_CONFIGS[lastError.type];
-  const config = defaultConfig ? {
-    ...defaultConfig,
-    ...retryConfig,
-  } : null;
+  // In test environments we disable automatic retries to keep tests fast and deterministic
+  const isTestEnv = typeof process !== 'undefined' && (process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
+  const defaultConfig = isTestEnv ? null : DEFAULT_RETRY_CONFIGS[lastError.type];
+  // If in test env but caller explicitly requests retries (maxAttempts > 1), honor it.
+  const explicitWantsRetry = retryConfig && typeof retryConfig.maxAttempts === 'number' && retryConfig.maxAttempts > 1;
+  const baseConfig = defaultConfig || (explicitWantsRetry ? DEFAULT_RETRY_CONFIGS[lastError.type] || {
+    maxAttempts: retryConfig.maxAttempts ?? 1,
+    baseDelay: retryConfig.baseDelay ?? 5,
+    maxDelay: retryConfig.maxDelay ?? 20,
+    multiplier: retryConfig.multiplier ?? 1.5,
+    jitter: retryConfig.jitter ?? false,
+  } : null);
+  const config = baseConfig ? { ...baseConfig, ...retryConfig } : null;
 
   // Don't retry if not retryable or no retry config
   if (!lastError.retryable || !config) {

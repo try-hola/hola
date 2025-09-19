@@ -21,9 +21,17 @@ export function useErrorHandler() {
       clearError();
       await retryFn();
     } catch (err) {
-      handleError(err as Error);
+      // For retry flows we want to surface the original error message directly
+      // to the user instead of the generic user-friendly classification so
+      // tests and UX can reflect the immediate failure reason.
+      const original = err as Error;
+      const enhanced = 'type' in original ? original : createEnhancedError(original);
+      // Override the userMessage with the original error string to make retry
+      // feedback explicit (leaves technicalMessage intact for diagnostics).
+      (enhanced as EnhancedError).userMessage = original.message;
+      setError(enhanced as EnhancedError);
     }
-  }, [clearError, handleError]);
+  }, [clearError]);
 
   return {
     error,

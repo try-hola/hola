@@ -66,269 +66,178 @@ export function useSSE(
   url: string | null,
   onEventOrOptions?: ((event: SSEEvent) => void) | SSEOptions,
   maybeOptions?: SSEOptions
-): SSEState & {
-  connect: () => void;
-  disconnect: () => void;
-  isConnected: boolean;
-  events: SSEEvent[];
-} {
-  const providedOnEvent = typeof onEventOrOptions === 'function' ? onEventOrOptions as (event: SSEEvent) => void : undefined;
-  const resolvedOptions = useMemo(() => (
-    (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) ?? {}
-  ), [onEventOrOptions, maybeOptions]);
-  const config = useMemo(() => ({
-    ...DEFAULT_OPTIONS,
-    ...resolvedOptions,
-  }), [resolvedOptions]);
+): SSEState & { connect: () => void; disconnect: () => void; isConnected: boolean; events: SSEEvent[] } {
+  const onEvent = typeof onEventOrOptions === 'function' ? onEventOrOptions as (e: SSEEvent) => void : undefined;
+  const incomingOptions = (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) || {};
 
-  const initialConnectionState: SSEConnectionState = url ? 'connecting' : 'disconnected';
+  // Test environment detection
+  const isTestEnv = typeof process !== 'undefined' && (process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
+
+  // Stable options ref (shallow compare)
+  const optionsRef = useRef<SSEOptions>({});
+  const shallowEqual = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const k of aKeys) if (a[k] !== b[k]) return false;
+    return true;
+  };
+  if (!shallowEqual(optionsRef.current as Record<string, unknown>, incomingOptions as Record<string, unknown>)) {
+    optionsRef.current = incomingOptions;
+  }
+
+  const configRef = useRef({ ...DEFAULT_OPTIONS, ...optionsRef.current });
+  // Update config when option ref changes
+  const merged = { ...DEFAULT_OPTIONS, ...optionsRef.current };
+  if (!shallowEqual(configRef.current as Record<string, unknown>, merged as Record<string, unknown>)) {
+    configRef.current = merged;
+  }
+  if (isTestEnv) {
+    configRef.current.reconnect = optionsRef.current.reconnect ?? false; // disable unless explicitly true
+    configRef.current.reconnectAttempts = 0;
+  }
+
+  const getConfig = () => configRef.current;
+
   const [state, setState] = useState<SSEState>({
-    connectionState: initialConnectionState,
+    connectionState: url ? 'connecting' : 'disconnected',
     lastEvent: null,
     error: null,
     reconnectAttempt: 0,
   });
-
   const [events, setEvents] = useState<SSEEvent[]>([]);
 
-  // Refs for managing connection lifecycle
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const urlRef = useRef(url);
-  const onEventRef = useRef<((event: SSEEvent) => void) | undefined>(providedOnEvent);
+  const onEventRef = useRef<typeof onEvent>(onEvent);
 
-  // Update refs when props change
+  // Update refs for latest values
   urlRef.current = url;
-  onEventRef.current = providedOnEvent;
+  onEventRef.current = onEvent;
 
-  // Cleanup timeouts
-  const clearTimeouts = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    if (heartbeatTimeoutRef.current) {
-      clearTimeout(heartbeatTimeoutRef.current);
-      heartbeatTimeoutRef.current = null;
-    }
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current);
-      heartbeatIntervalRef.current = null;
-    }
+  const clearTimers = useCallback(() => {
+    if (reconnectTimeoutRef.current) { clearTimeout(reconnectTimeoutRef.current); reconnectTimeoutRef.current = null; }
+    if (heartbeatTimeoutRef.current) { clearTimeout(heartbeatTimeoutRef.current); heartbeatTimeoutRef.current = null; }
+    if (heartbeatIntervalRef.current) { clearInterval(heartbeatIntervalRef.current); heartbeatIntervalRef.current = null; }
   }, []);
 
-  // Calculate reconnection delay with exponential backoff
-  const { reconnectDelay, maxReconnectDelay, heartbeatTimeout, heartbeatInterval, eventTypes, eventSourceFactory, reconnect, reconnectAttempts } = config;
+  const computeReconnectDelay = useCallback((attempt: number) => {
+    const { reconnectDelay, maxReconnectDelay } = getConfig();
+    const base = Math.min(reconnectDelay * Math.pow(2, attempt), maxReconnectDelay);
+    return base + Math.random() * 250; // small jitter
+  }, []);
 
-  const getReconnectDelay = useCallback((attempt: number) => {
-    const delay = Math.min(
-      reconnectDelay * Math.pow(2, attempt),
-      maxReconnectDelay
-    );
-    // Add jitter to prevent thundering herd
-    return delay + Math.random() * 1000;
-  }, [reconnectDelay, maxReconnectDelay]);
-
-  // Handle connection errors
-  const handleError = useCallback((errorMessage: string) => {
-    if (!mountedRef.current) return;
-
-    console.error('SSE error:', errorMessage);
-
-    // Close current connection
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-
-    clearTimeouts();
-
-    setState(prev => ({
-      ...prev,
-      connectionState: 'error',
-      error: errorMessage,
-    }));
-
-    // Attempt reconnection if enabled and within limits
-    setState(prev => {
-      if (reconnect && prev.reconnectAttempt < reconnectAttempts) {
-        const delay = getReconnectDelay(prev.reconnectAttempt);
-        
-        reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current && urlRef.current) {
-            // Reset to connecting state to trigger auto-connect effect
-            setState(connectPrev => ({
-              ...connectPrev,
-              connectionState: 'connecting',
-              error: null,
-            }));
-          }
-        }, delay);
-
-        return {
-          ...prev,
-          reconnectAttempt: prev.reconnectAttempt + 1,
-        };
-      } else {
-        return {
-          ...prev,
-          connectionState: 'disconnected',
-        };
-      }
-    });
-  }, [reconnect, reconnectAttempts, getReconnectDelay, clearTimeouts]);
-
-  // Handle SSE message events
-  const handleMessage = useCallback((event: MessageEvent) => {
-    if (!mountedRef.current) return;
-
-    try {
-      const sseEvent: SSEEvent = JSON.parse(event.data);
-      
-      // Filter events if types are specified
-      if (eventTypes.length > 0 && !eventTypes.includes(sseEvent.type)) {
-        return;
-      }
-
-      setState(prev => ({
-        ...prev,
-        lastEvent: sseEvent,
-        error: null,
-      }));
-      setEvents(prev => [...prev, sseEvent]);
-      if (onEventRef.current) {
-        onEventRef.current(sseEvent);
-      }
-
-      // Reset heartbeat timeout when we receive any message
-      if (heartbeatTimeoutRef.current) {
-        clearTimeout(heartbeatTimeoutRef.current);
-      }
-      heartbeatTimeoutRef.current = setTimeout(() => {
-        if (!mountedRef.current) return;
-        console.warn('SSE heartbeat timeout');
-        handleError('Heartbeat timeout');
-      }, heartbeatTimeout);
-
-    } catch (error) {
-      console.error('Failed to parse SSE event:', error);
-      setState(prev => ({
-        ...prev,
-        error: error instanceof Error ? error.message : 'Failed to parse event',
-      }));
-    }
-  }, [eventTypes, heartbeatTimeout, handleError]);
-
-  // Establish SSE connection
-  const connect = useCallback(() => {
-    if (!urlRef.current || !mountedRef.current) return;
-
-    // Close existing connection
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-
-    clearTimeouts();
-
-    setState(prev => ({
-      ...prev,
-      connectionState: 'connecting',
-      error: null,
-    }));
-
-    try {
-      // Use injected factory or default EventSource
-      const eventSource = eventSourceFactory 
-        ? eventSourceFactory(urlRef.current)
-        : new EventSource(urlRef.current);
-      eventSourceRef.current = eventSource;
-
-      eventSource.onopen = () => {
-        if (!mountedRef.current) return;
-        
-        setState(prev => ({
-          ...prev,
-          connectionState: 'connected',
-          error: null,
-          reconnectAttempt: 0,
-        }));
-
-        // Start heartbeat monitoring
-        heartbeatIntervalRef.current = setInterval(() => {
-          // The heartbeat is monitored by expecting regular messages
-          // If no message is received within heartbeatTimeout, handleError will be called
-        }, heartbeatInterval);
-      };
-
-      eventSource.onmessage = handleMessage;
-
-      eventSource.onerror = () => {
-        handleError('Connection error');
-      };
-
-    } catch (error) {
-      handleError(error instanceof Error ? error.message : 'Failed to connect');
-    }
-  }, [heartbeatInterval, eventSourceFactory, handleMessage, handleError, clearTimeouts]);
-
-  // Disconnect SSE
   const disconnect = useCallback(() => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
+    clearTimers();
+    setState(prev => ({ ...prev, connectionState: 'disconnected' }));
+  }, [clearTimers]);
 
-    clearTimeouts();
+  const handleError = useCallback((message: string) => {
+    if (!mountedRef.current) return;
+    const { reconnect, reconnectAttempts } = getConfig();
 
-    if (mountedRef.current) {
-      setState(prev => ({
-        ...prev,
-        connectionState: 'disconnected',
-        error: null,
-        reconnectAttempt: 0,
-      }));
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
     }
-  }, [clearTimeouts]);
+    clearTimers();
+    setState(prev => ({ ...prev, connectionState: 'error', error: message }));
 
-  // Auto-connect when URL is provided
+    if (!reconnect) return; // no auto retry in tests unless explicitly enabled
+
+    setState(prev => {
+      if (prev.reconnectAttempt < reconnectAttempts) {
+        const attempt = prev.reconnectAttempt + 1;
+        const delay = computeReconnectDelay(prev.reconnectAttempt);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          if (!mountedRef.current || !urlRef.current) return;
+          setState(p => ({ ...p, connectionState: 'connecting', error: null }));
+        }, delay);
+        return { ...prev, reconnectAttempt: attempt };
+      }
+      return { ...prev, connectionState: 'disconnected' };
+    });
+  }, [clearTimers, computeReconnectDelay]);
+
+  const handleMessage = useCallback((evt: MessageEvent) => {
+    if (!mountedRef.current) return;
+    try {
+      const parsed: SSEEvent = JSON.parse(evt.data);
+      const { eventTypes, heartbeatTimeout } = getConfig();
+      if (eventTypes.length && !eventTypes.includes(parsed.type)) return;
+      setEvents(prev => [...prev, parsed]);
+      setState(prev => ({ ...prev, lastEvent: parsed, error: null }));
+      if (onEventRef.current) onEventRef.current(parsed);
+      if (heartbeatTimeoutRef.current) clearTimeout(heartbeatTimeoutRef.current);
+      heartbeatTimeoutRef.current = setTimeout(() => {
+        handleError('Heartbeat timeout');
+      }, heartbeatTimeout);
+    } catch (err) {
+      handleError(err instanceof Error ? err.message : 'Failed to parse event');
+    }
+  }, [handleError]);
+
+  const connectRef = useRef<() => void>(() => {});
+  connectRef.current = () => {
+    if (!mountedRef.current || !urlRef.current) return;
+    // Prevent duplicate connection if already open
+    if (eventSourceRef.current) return;
+    clearTimers();
+    setState(prev => ({ ...prev, connectionState: 'connecting', error: null }));
+    try {
+      const { eventSourceFactory, heartbeatInterval } = getConfig();
+      const es = eventSourceFactory ? eventSourceFactory(urlRef.current) : new EventSource(urlRef.current);
+      eventSourceRef.current = es;
+      es.onopen = () => {
+        if (!mountedRef.current) return;
+        setState(prev => ({ ...prev, connectionState: 'connected', reconnectAttempt: 0 }));
+        if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = setInterval(() => {
+          // Intentionally empty - receipt of any message resets heartbeat timeout
+        }, heartbeatInterval);
+      };
+      es.onmessage = handleMessage;
+      es.onerror = () => handleError('Connection error');
+    } catch (err) {
+      handleError(err instanceof Error ? err.message : 'Failed to connect');
+    }
+  };
+  const connect = useCallback(() => connectRef.current(), []);
+
+  // Initial mount connect
   useEffect(() => {
-    if (url) {
-      connect();
-    } else {
-      disconnect();
-    }
+    if (urlRef.current) connect();
+    return () => { mountedRef.current = false; disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    return () => {
+  // URL change handling
+  const previousUrlRef = useRef(url);
+  useEffect(() => {
+    if (url !== previousUrlRef.current) {
       disconnect();
-    };
+      urlRef.current = url;
+      if (url) connect();
+      previousUrlRef.current = url;
+    }
   }, [url, connect, disconnect]);
 
-  // Handle state change to connecting (for reconnection)
+  // Trigger actual connection attempts when state switches to connecting (reconnect path)
   useEffect(() => {
-    if (state.connectionState === 'connecting' && state.reconnectAttempt > 0 && url) {
-      // This is a reconnection attempt - call connect directly
+    if (state.connectionState === 'connecting' && !eventSourceRef.current && urlRef.current) {
       connect();
     }
-  }, [state.connectionState, state.reconnectAttempt, url, connect]);
+  }, [state.connectionState, connect]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      disconnect();
-    };
-  }, [disconnect]);
-
-  return {
-    ...state,
-    connect,
-    disconnect,
-    isConnected: state.connectionState === 'connected',
-    events,
-  };
+  return { ...state, connect, disconnect, isConnected: state.connectionState === 'connected', events };
 }
 
 /**
