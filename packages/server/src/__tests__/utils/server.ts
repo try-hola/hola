@@ -22,18 +22,20 @@ export async function startServer(port: number = 3001, env: Record<string, strin
     throw new Error(`Server is already running on port ${port}. Call stopServer(${port}) first.`);
   }
 
-  console.log(`Starting server with \`bun run dev\` on port ${port}...`);
+  console.log(`Starting server with \`bun run dev\` on port ${port} (cwd=packages/server)...`);
   
   // Start server process in background
   const proc = spawn('bun', ['run', 'dev'], {
-    cwd: process.cwd(),
+    // Ensure we execute the server package's dev script, NOT the root concurrent script
+    cwd: `${process.cwd()}/packages/server`,
     env: {
       ...process.env,
       PORT: String(port),
-      ...env, // Allow custom environment variables
+      enableDevApi: 'true',
+      ...env, // Allow custom environment variables / overrides
     },
-    stdio: 'ignore', // Suppress server output in tests
-    detached: true, // Run in background
+    stdio: 'ignore',
+    detached: true,
   });
   serverProcesses.set(port, proc);
   const serverPid = proc.pid ?? null;

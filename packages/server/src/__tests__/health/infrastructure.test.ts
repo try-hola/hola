@@ -248,13 +248,19 @@ describe('Health and Infrastructure', () => {
       
       // Memory metrics might be empty if not yet collected, which is acceptable
       if (Object.keys(memoryMetrics).length > 0) {
-        // If memory metrics are present, validate their structure
-        expect(memoryMetrics).toHaveProperty('heap_used');
-        expect(memoryMetrics).toHaveProperty('heap_total');
-        expect(typeof memoryMetrics.heap_used).toBe('number');
-        expect(typeof memoryMetrics.heap_total).toBe('number');
-        expect(memoryMetrics.heap_used).toBeGreaterThan(0);
-        expect(memoryMetrics.heap_total).toBeGreaterThan(0);
+        // Keys are currently emitted in the form type=heap_used, type=heap_total, etc.
+        const hasHeapUsed = Object.prototype.hasOwnProperty.call(memoryMetrics, 'type=heap_used');
+        const hasHeapTotal = Object.prototype.hasOwnProperty.call(memoryMetrics, 'type=heap_total');
+        expect(hasHeapUsed).toBe(true);
+        expect(hasHeapTotal).toBe(true);
+        if (hasHeapUsed) {
+          expect(typeof memoryMetrics['type=heap_used']).toBe('number');
+          expect(memoryMetrics['type=heap_used']).toBeGreaterThan(0);
+        }
+        if (hasHeapTotal) {
+          expect(typeof memoryMetrics['type=heap_total']).toBe('number');
+          expect(memoryMetrics['type=heap_total']).toBeGreaterThan(0);
+        }
       } else {
         // Empty memory metrics object is acceptable - metrics collection might be lazy
         console.log('Memory metrics not yet populated - this is acceptable');
