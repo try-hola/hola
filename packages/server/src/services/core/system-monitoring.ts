@@ -456,6 +456,8 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
  */
 export class MockSystemMonitoringService implements SystemMonitoringService {
   private logger = getLogger().child({ service: 'MockSystemMonitoringService' });
+  private listeners = new Set<(status: SystemStatus) => void>();
+  private overrideStatus: SystemStatus | null = null;
 
   async getDiskUsage(): Promise<DiskUsage> {
     this.logger.debug('Mock disk usage requested');
@@ -522,6 +524,9 @@ export class MockSystemMonitoringService implements SystemMonitoringService {
   }
 
   async getSystemStatus(): Promise<SystemStatus> {
+    if (this.overrideStatus) {
+      return this.overrideStatus;
+    }
     this.logger.debug('Mock system status requested');
     return {
       docker: { ok: true, version: '24.0.7' },
@@ -537,13 +542,14 @@ export class MockSystemMonitoringService implements SystemMonitoringService {
 
   startMonitoring(callback: (status: SystemStatus) => void): { stop: () => void } {
     this.logger.debug('Mock system monitoring started');
-    
-    // Send initial status
-    this.getSystemStatus().then(callback);
-    
+    this.listeners.add(callback);
+
+    this.getSystemStatus().then(status => callback(status));
+
     return {
       stop: () => {
         this.logger.debug('Mock system monitoring stopped');
+        this.listeners.delete(callback);
       },
     };
   }
@@ -553,5 +559,12 @@ export class MockSystemMonitoringService implements SystemMonitoringService {
       healthy: true,
       lastCheck: new Date(),
     };
+  }
+
+  emitTestStatus(status: SystemStatus): void {
+    this.overrideStatus = status;
+    for (const listener of this.listeners) {
+      listener(status);
+    }
   }
 }

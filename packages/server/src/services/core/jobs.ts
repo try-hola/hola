@@ -242,6 +242,7 @@ export class MockJobService implements JobService {
   private logger = getLogger().child({ service: 'MockJobService' });
   private bus = new Bus<string, JobUpdate>();
   private jobs = new Map<string, SharedJob>();
+  private timers = new Map<string, NodeJS.Timeout>();
 
   async createJob(params: CreateJobParams): Promise<SharedJob> {
     const id = crypto.randomUUID();
@@ -256,6 +257,10 @@ export class MockJobService implements JobService {
     this.jobs.set(id, job);
     // Simulate progress
     let p = 0;
+    if (process.env.NODE_ENV === 'test') {
+      return job;
+    }
+
     const timer = setInterval(() => {
       const j = this.jobs.get(id);
       if (!j) return clearInterval(timer);
@@ -269,8 +274,10 @@ export class MockJobService implements JobService {
         j.finishedAt = new Date().toISOString();
         this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt: j.finishedAt });
         clearInterval(timer);
+        this.timers.delete(id);
       }
     }, 1000);
+    this.timers.set(id, timer);
     return job;
   }
 
@@ -280,6 +287,11 @@ export class MockJobService implements JobService {
       j.status = 'failed';
       j.finishedAt = new Date().toISOString();
       this.bus.emit(id, { id, status: 'failed', finishedAt: j.finishedAt });
+    }
+    const timer = this.timers.get(id);
+    if (timer) {
+      clearInterval(timer);
+      this.timers.delete(id);
     }
   }
 
@@ -301,5 +313,26 @@ export class MockJobService implements JobService {
 
   async healthCheck(): Promise<ServiceHealth> {
     return { healthy: true, lastCheck: new Date() };
+  }
+
+  emitTestUpdate(jobId: string, update: JobUpdate): void {
+    const job = this.jobs.get(jobId);
+    if (job) {
+      job.status = update.status;
+      if (typeof update.progress === 'number') {
+        job.progress = update.progress;
+      }
+      if (update.finishedAt) {
+        job.finishedAt = update.finishedAt;
+      }
+    }
+    this.bus.emit(jobId, update);
+  }
+
+  clearTimers(): void {
+    for (const timer of this.timers.values()) {
+      clearInterval(timer);
+    }
+    this.timers.clear();
   }
 }
