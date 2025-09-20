@@ -100,7 +100,7 @@ HOLA_ENABLE_DEV_API=true bun test src/__tests__/drafts/management.test.ts
 
 ### Directory Structure
 
-```
+```text
 packages/server/src/__tests__/
 ├── helpers/
 │   └── test-environment.ts      # Standardized test environment
@@ -135,8 +135,8 @@ Test API endpoints and service interactions:
 import { setupTestEnvironment, teardownTestEnvironment, makeTestRequest } from '../helpers/test-environment';
 
 describe('API Integration', () => {
-  beforeAll(() => setupTestEnvironment());
-  afterAll(() => teardownTestEnvironment());
+  beforeAll(async () => { await setupTestEnvironment(); });
+  afterAll(async () => { await teardownTestEnvironment(); });
 
   test('should handle POST requests', async () => {
     const response = await makeTestRequest('/api/deployments', {
@@ -159,16 +159,18 @@ For scenarios requiring actual service dependencies, use the test Docker Compose
 ```bash
 # Start isolated test environment
 cd packages/server
-docker-compose -f test-docker-compose.yml up -d
+docker compose -f test-docker-compose.yml up -d
 
 # Run integration tests
 bun test src/__tests__/integration/
 
 # Cleanup
-docker-compose -f test-docker-compose.yml down -v
+docker compose -f test-docker-compose.yml down -v
 ```
 
 **Note**: This should only be used for special integration scenarios. The in-process approach is preferred for most tests.
+
+If Docker is unavailable, either skip these tests (e.g., `it.skip`/tag filters) or rely on helpers that auto‑detect and skip when `HOLA_USE_REAL_DOCKER` is `false`.
 
 ### CI/CD Integration
 

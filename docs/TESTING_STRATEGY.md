@@ -10,12 +10,12 @@ The Hola platform uses a **standardized in-process test environment** that elimi
 - **In-Process Execution**: Tests run directly within the test process, eliminating external dependencies
 - **No Background Processes**: No `bun run dev &`, `kill %1`, or `pkill` patterns
 - **Port Conflict Prevention**: No real network ports used during testing
-- **Deterministic Environment**: Each test gets fresh, predictable state
+- **Isolated Environment**: Each test file gets fresh, predictable state (server state is reset between tests)
 
 ### ✅ Performance Optimized
 - **Fast Startup**: < 100ms test environment initialization
 - **Concurrent Safe**: Multiple test files can run in parallel
-- **Memory Efficient**: Shared server instance across tests in a file
+- **Memory Efficient**: Shared server instance per worker, with state reset between tests
 - **No Network Overhead**: Direct function calls instead of HTTP round-trips
 
 ### ✅ Developer Experience
@@ -30,7 +30,7 @@ The Hola platform uses a **standardized in-process test environment** that elimi
 
 ```typescript
 // Standard test setup pattern
-import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+import { setupTestEnvironment, teardownTestEnvironment, makeTestRequest } from '../helpers/test-environment';
 
 describe('Feature Tests', () => {
   beforeAll(async () => {
@@ -43,7 +43,10 @@ describe('Feature Tests', () => {
     await teardownTestEnvironment();
   });
   
-  // Tests run in isolated in-process environment
+  test('should work reliably', async () => {
+    const response = await makeTestRequest('/api/health');
+    expect(response.status).toBe(200);
+  });
 });
 ```
 
@@ -81,7 +84,7 @@ bun run test:env:integration
 
 ### Directory Structure
 
-```
+```text
 packages/
 ├── server/src/__tests__/
 │   ├── helpers/
@@ -110,6 +113,8 @@ services:
 
 **Note**: Docker Compose testing should only be used for special integration scenarios. The in-process approach is preferred for most tests.
 
+If Docker is unavailable, either skip these tests (e.g., `it.skip`/tag filters) or rely on helpers that auto‑detect and skip when `HOLA_USE_REAL_DOCKER` is `false`.
+
 ## CI/CD Integration
 
 GitHub Actions workflow uses the standardized environment:
@@ -118,7 +123,7 @@ GitHub Actions workflow uses the standardized environment:
 - name: Test
   env:
     HOLA_USE_REAL_DOCKER: "false"
-  run: bun run test
+  run: bun test
 ```
 
 All tests use the same in-process environment locally and in CI, ensuring consistent behavior.
