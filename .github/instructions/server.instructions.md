@@ -35,11 +35,11 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - **Add development-specific middleware**: Use feature flags on standard endpoints instead of separate dev infrastructure.
 
 ## Testing & Dev
-- Start with `bun run dev &`, verify `/healthz` before tests, and ensure cleanup.
-- Prefer integration tests through HTTP; use fakes for services at boundaries.
+- **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
+- Prefer integration tests through standardized test environment; use fakes for services at boundaries.
 - **Health Check Timeouts**: Increase timeouts for services requiring external dependencies (Docker, databases).
 - **Service Availability**: Handle graceful fallback when real services unavailable in CI environments.
-- **Background Process Management**: Always use `&` for server startup in tests, cleanup with `kill %1` or `pkill`.
+- **No Background Processes**: Never use `bun run dev &` patterns - use in-process testing exclusively.
 
 ## API Evolution & Cleanup
 - **Endpoint Retirement**: When removing API endpoints, clean ALL references: tests, web components, CLI commands, SSE events, shared types.
