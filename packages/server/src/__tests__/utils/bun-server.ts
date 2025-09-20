@@ -4,6 +4,7 @@ export async function setupTestServer(port: number = 3001, env: Record<string, s
   if (port) {
     process.env.PORT = String(port);
   }
+
   Object.assign(process.env, env);
   await setupInProcessServer();
 }

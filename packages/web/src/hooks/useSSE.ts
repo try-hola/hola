@@ -21,6 +21,7 @@ export function useSSE(
   maybeOptions?: SSEOptions
 ): SSEState & { connect: () => void; disconnect: () => void; isConnected: boolean; events: SSEEvent[] } {
   const externalListener = typeof onEventOrOptions === 'function' ? onEventOrOptions : undefined;
+
   const resolvedOptions = useMemo(
     () => (typeof onEventOrOptions === 'function' ? maybeOptions : onEventOrOptions) || {},
     [onEventOrOptions, maybeOptions]
