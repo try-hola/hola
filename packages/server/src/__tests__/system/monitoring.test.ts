@@ -12,10 +12,74 @@ import type {
   GetSummaryResponse,
   SystemHealthResponse
 } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from '../utils/server';
+import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
+import { getSystemMonitoringService } from '../../services/factory';
+import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
 
-const BASE_URL = 'http://localhost:3001';
-const TEST_TIMEOUT = 30000;
+const BASE_URL = TEST_BASE_URL;
+const TEST_TIMEOUT = 8000;
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+
+async function readMatchingSSEEvent(
+  response: Response,
+  predicate: (event: { type?: string; data?: unknown }) => boolean,
+  timeoutMs = 2000
+): Promise<{ type?: string; data?: unknown }> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Response body is not readable');
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return new Promise<{ type?: string; data?: unknown }>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reader.cancel();
+      reject(new Error(`Timed out after ${timeoutMs}ms waiting for SSE event`));
+    }, timeoutMs);
+
+    const processChunk = async (): Promise<void> => {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          clearTimeout(timeout);
+          reject(new Error('Stream closed before event received'));
+          return;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        if (parts.length > 1) {
+          const chunk = parts.shift();
+          buffer = parts.join('\n\n');
+          if (chunk) {
+            const lines = chunk.split('\n');
+            const dataLine = lines.find(line => line.startsWith('data:'));
+            if (dataLine) {
+              try {
+                const parsed = JSON.parse(dataLine.replace('data:', '').trim());
+                const event = parsed as { type?: string; data?: unknown };
+                if (predicate(event)) {
+                  reader.cancel().catch(() => {});
+                  clearTimeout(timeout);
+                  resolve(event);
+                  return;
+                }
+              } catch (error) {
+                clearTimeout(timeout);
+                reject(error);
+                return;
+              }
+            }
+          }
+        }
+        processChunk();
+      } catch (error) {
+        clearTimeout(timeout);
+        reject(error);
+      }
+    };
+
+    processChunk();
+  });
+}
 
 describe('System Monitoring', () => {
   beforeAll(async () => {
@@ -124,6 +188,33 @@ describe('System Monitoring', () => {
       expect(response.headers.get('content-type')).toContain('text/event-stream');
       expect(response.headers.get('cache-control')).toBe('no-cache');
       expect(response.headers.get('connection')).toBe('keep-alive');
+
+      const eventPromise = readMatchingSSEEvent(
+        response,
+        evt => evt.type === 'system_update' && typeof evt.data === 'object' && (evt.data as { version?: { hola?: string } }).version?.hola === '1.0.0-test',
+        6000
+      );
+      const monitoring = getSystemMonitoringService() as MockSystemMonitoringService;
+      await tick();
+      monitoring.emitTestStatus({
+        docker: { ok: true, version: 'test' },
+        disk: {
+          freeBytes: 40 * 1024 * 1024 * 1024,
+          totalBytes: 100 * 1024 * 1024 * 1024,
+        },
+        version: { hola: '1.0.0-test', compose: '2.0.0-test' },
+        oras: { ok: true, version: '1.0.0' },
+        authentik: { ok: true },
+      });
+
+      const evt = await eventPromise;
+      expect(evt).toBeDefined();
+      expect(evt.type).toBe('system_update');
+      expect(evt.data).toMatchObject({
+        docker: { ok: true },
+        version: { hola: '1.0.0-test', compose: '2.0.0-test' },
+      });
+
     }, TEST_TIMEOUT);
   });
 

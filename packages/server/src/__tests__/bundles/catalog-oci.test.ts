@@ -69,7 +69,7 @@ describe('Catalog Refresh and OCI Integration', () => {
         console.warn('ETag test skipped:', error);
         expect(true).toBe(true);
       }
-    });
+    }, 15000); // Allow extra time for two network fetches + potential latency
   });
 
   describe('Real OCI Integration Tests', () => {

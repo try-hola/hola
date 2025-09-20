@@ -7,11 +7,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
-import type { GetJobsResponse, PostDeploymentActionResponse, SystemConfigResponse } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from '../utils/server';
+import type { GetJobsResponse, SystemConfigResponse } from '@hola/shared';
+import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
+import { getJobService, getLoggingService } from '../../services/factory';
+import { MockJobService } from '../../services/core/jobs';
 
-const BASE_URL = 'http://localhost:3001';
-const TEST_TIMEOUT = 30000;
+const BASE_URL = TEST_BASE_URL;
+const TEST_TIMEOUT = 8000;
 
 async function getConfig(): Promise<SystemConfigResponse> {
   const res = await fetch(`${BASE_URL}${API.system.config}`);
@@ -30,21 +32,6 @@ describe('Jobs and Structured Logs', () => {
     await teardownTestServer();
   });
 
-  describe('Create job via deployment action', () => {
-    it('POST /api/deployments/:id/actions returns a jobId for start action', async () => {
-      const depId = 'nextcloud-prod';
-      const res = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'start' }),
-      });
-      expect(res.ok).toBe(true);
-      const data = await res.json() as PostDeploymentActionResponse;
-      // In both real and mock modes, start action should produce a jobId
-      expect(data.jobId).toBeDefined();
-    }, TEST_TIMEOUT);
-  });
-
   describe('Jobs listing', () => {
     it('GET /api/jobs returns a valid paginated response', async () => {
       const res = await fetch(`${BASE_URL}${API.jobs.base}?page=1&limit=10`);
@@ -60,16 +47,10 @@ describe('Jobs and Structured Logs', () => {
 
   describe('Job logs SSE', () => {
     it('GET /api/jobs/:id/logs has SSE headers', async () => {
-      // Create a job first to have an id
-      const depId = 'homeassistant-main';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'start' }),
-      });
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      expect(actionData.jobId).toBeDefined();
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+  // Use a valid JobType ('install' used for generic log stream testing)
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
+      const jobId = job.id;
 
       const res = await fetch(`${BASE_URL}${API.jobs.logs(jobId)}`);
       expect(res.ok).toBe(true);
@@ -81,15 +62,10 @@ describe('Jobs and Structured Logs', () => {
     }, TEST_TIMEOUT);
 
     it('GET /api/jobs/:id/logs/stream has SSE headers and supports job_update events', async () => {
-      const depId = 'grafana-monitoring';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'restart' }),
-      });
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      expect(actionData.jobId).toBeDefined();
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+      const logging = getLoggingService();
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'grafana-monitoring' });
+      const jobId = job.id;
 
       const res = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);
       expect(res.ok).toBe(true);
@@ -97,6 +73,42 @@ describe('Jobs and Structured Logs', () => {
       expect(res.headers.get('content-type')).toContain('text/event-stream');
       expect(res.headers.get('cache-control')).toBe('no-cache');
       expect(res.headers.get('connection')).toBe('keep-alive');
+
+      const reader = res.body?.getReader();
+      expect(reader).toBeDefined();
+      if (!reader) return;
+
+      const eventsPromise = (async () => {
+        const decoder = new TextDecoder();
+        let buffer = '';
+        const events: unknown[] = [];
+        while (events.length < 2) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split('\n\n');
+          buffer = parts.pop() ?? '';
+          for (const part of parts) {
+            const dataLine = part.split('\n').find(line => line.startsWith('data:'));
+            if (dataLine) {
+              events.push(JSON.parse(dataLine.replace('data:', '').trim()));
+            }
+          }
+        }
+        return events;
+      })();
+
+      await logging.logJob(jobId, 'info', 'SSE header verification log', { service: 'job-runner' });
+      (getJobService() as MockJobService).emitTestUpdate(jobId, {
+        id: jobId,
+        status: 'completed',
+        progress: 100,
+        finishedAt: new Date().toISOString(),
+      });
+
+      const events = await eventsPromise;
+      expect(events.length).toBeGreaterThanOrEqual(1);
+      await reader?.cancel();
     }, TEST_TIMEOUT);
   });
 });

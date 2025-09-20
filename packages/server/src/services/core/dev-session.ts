@@ -505,6 +505,8 @@ export class RealDevSessionService implements DevSessionService {
 
 export class MockDevSessionService implements DevSessionService {
   private logger = getLogger().child({ service: 'MockDevSessionService' });
+  private listeners = new Map<string, Set<(event: SSEEvent) => void>>();
+  private timers = new Map<string, NodeJS.Timeout>();
 
   async healthCheck(): Promise<ServiceHealth> {
     return {
@@ -643,40 +645,62 @@ export class MockDevSessionService implements DevSessionService {
   
   startMonitoring(sessionId: string, callback: (event: SSEEvent) => void): { stop: () => void } {
     this.logger.info('Mock: Starting dev session monitoring', { sessionId });
-    
-    // Mock monitoring with simulated events
-    const intervalId = setInterval(() => {
-      // Send mock session status update
-      callback({
-        type: 'session_status',
-        data: {
-          sessionId,
-          status: 'running',
-          lastActivity: new Date().toISOString(),
-          liveReload: true,
-          autoSync: true,
-        },
-      });
-      
-      // Occasionally send log events
-      if (Math.random() > 0.6) { // 40% chance
-        callback({
+
+    if (!this.listeners.has(sessionId)) {
+      this.listeners.set(sessionId, new Set());
+    }
+    const listeners = this.listeners.get(sessionId)!;
+    listeners.add(callback);
+
+    callback({
+      type: 'session_status',
+      data: {
+        sessionId,
+        status: 'running',
+        lastActivity: new Date().toISOString(),
+        liveReload: true,
+        autoSync: true,
+      },
+    });
+
+    if (!this.timers.has(sessionId) && process.env.NODE_ENV !== 'test') {
+      const timer = setInterval(() => {
+        this.emitTestEvent(sessionId, {
           type: 'log',
           data: {
             timestamp: new Date().toISOString(),
             service: `mock-dev-session-${sessionId}`,
             level: 'info',
-            message: `Mock dev session log event`,
+            message: 'Mock dev session activity',
           },
         });
-      }
-    }, 2500);
-    
+      }, 5000);
+      this.timers.set(sessionId, timer);
+    }
+
     return {
       stop: () => {
-        clearInterval(intervalId);
+        listeners.delete(callback);
+        if (listeners.size === 0) {
+          this.listeners.delete(sessionId);
+          const timer = this.timers.get(sessionId);
+          if (timer) {
+            clearInterval(timer);
+            this.timers.delete(sessionId);
+          }
+        }
         this.logger.info('Mock: Stopped dev session monitoring', { sessionId });
       },
     };
+  }
+
+  emitTestEvent(sessionId: string, event: SSEEvent): void {
+    const listeners = this.listeners.get(sessionId);
+    if (!listeners || listeners.size === 0) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener(event);
+    }
   }
 }

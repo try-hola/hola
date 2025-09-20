@@ -1,0 +1,20 @@
+# Act configuration for Hola Bun monorepo
+
+# Use the medium-sized Ubuntu image for better compatibility with Bun
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# Enable verbose output for debugging
+--verbose
+
+# Bind the workspace directory to make file changes persistent
+--bind
+
+# Set environment variables for local testing
+--env HOLA_ENABLE_DEV_API=true
+--env HOLA_USE_REAL_DOCKER=false
+
+# Use the host's Docker daemon (since we're in a dev container)
+--use-gitignore=false
+
+# Don't pull images automatically to speed up runs
+--pull=false

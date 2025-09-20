@@ -218,6 +218,58 @@ bun run build             # ⚠️  Verify build succeeds
 - ❌ `console.log` in production code - use proper error handling or logging
 - ❌ Type assertions with `as any` - use proper type guards instead
 - ❌ Missing return types on functions - explicitly type function returns
+- ❌ **Method name mismatches** - always verify service interface method names
+- ❌ **Interface method calls** - check method signatures before calling service methods
+
+### Type Safety & Service Interface Verification
+**🚨 CRITICAL: Always verify service interfaces before implementing**
+
+When implementing new service calls or adding Phase 7 endpoints:
+
+1. **Check Service Interface First**:
+```bash
+# Always examine the service interface before calling methods
+grep -n "interface.*Service" packages/server/src/services/core/*.ts
+```
+
+2. **Verify Method Names**:
+```typescript
+// ❌ WRONG - calling method without checking interface
+const result = await draftService.preflightChecks(draftId); // Method might not exist
+
+// ✅ CORRECT - check interface first
+// Look at packages/server/src/services/core/draft.ts line 49:
+// preflightCheck(draftId: string): Promise<EnhancedPreflightResponse>;
+const result = await draftService.preflightCheck(draftId);
+```
+
+3. **Common Interface Verification Pattern**:
+```typescript
+// Before implementing any service call:
+// 1. Open the service interface file
+// 2. Find the exact method name and signature
+// 3. Use the exact method name in your code
+// 4. Match parameter types and return types
+
+// Example for DraftService:
+import type { DraftService } from './services/core/draft';
+// Check interface: async preflightCheck(draftId: string): Promise<EnhancedPreflightResponse>
+const result = await draftService.preflightCheck(draftId);
+```
+
+4. **Pre-Commit Interface Verification**:
+```bash
+# MANDATORY: Run typecheck after any service method calls
+bun run typecheck
+# Look for errors like: "Property 'methodName' does not exist on type 'ServiceName'"
+# Fix by checking the actual interface definition
+```
+
+**Common Service Interface Patterns**:
+- `DraftService`: `preflightCheck` (singular), `validateDraft`, `finalizeDraft`  
+- `ValidationService`: `validateCompose`, `preflightCheck`
+- `DeploymentService`: `createFromDraft`, `getDeployment`, `rollback`
+- Always check `packages/server/src/services/core/` for exact method signatures
 
 ### Fixing Linting Errors
 ```bash
@@ -251,12 +303,14 @@ curl http://localhost:3001/healthz || echo "Server not ready"
 
 **Development Flow**:
 1. **🚨 CODE QUALITY FIRST - NON-NEGOTIABLE**: ALWAYS run linting and type checking before committing - work is incomplete if linting fails
-2. Define types in `packages/shared/src/index.ts`
-3. Implement API endpoints in `packages/server/`
-4. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
-5. Build UI components in `packages/web/` using the API hooks
-6. Test integration between frontend and backend
-7. **🚨 FINAL CHECK - MANDATORY**: Ensure linting, type checking, and tests pass 100% before committing - NO EXCEPTIONS
+2. **🔍 VERIFY SERVICE INTERFACES**: Before calling any service methods, check interface definitions in `packages/server/src/services/core/`
+3. Define types in `packages/shared/src/index.ts`
+4. Implement API endpoints in `packages/server/`
+5. **🚨 TYPECHECK AFTER SERVICE CALLS**: Run `bun run typecheck` immediately after adding any service method calls
+6. Create StrictMode-compatible hooks using proven patterns from `useWorkingApi.ts` 
+7. Build UI components in `packages/web/` using the API hooks
+8. Test integration between frontend and backend
+9. **🚨 FINAL CHECK - MANDATORY**: Ensure linting, type checking, and tests pass 100% before committing - NO EXCEPTIONS
 
 **Testing API Integration**:
 - Always start the server in background mode when testing API calls

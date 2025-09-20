@@ -45,6 +45,7 @@ export interface CatalogService {
 export class RealCatalogService implements CatalogService, HealthCheckable {
   private logger = getLogger().child({ service: 'RealCatalogService' });
   private cache: { data: RemoteCatalog | null; ts: number; etag?: string; lastModified?: string } = { data: null, ts: 0 };
+  private inflight?: Promise<void>;
 
   async healthCheck(): Promise<ServiceHealth> {
     try {
@@ -202,6 +203,12 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
   }
 
   private async loadRemoteCatalog(): Promise<void> {
+    // De-duplicate concurrent fetches
+    if (this.inflight) {
+      await this.inflight;
+      return;
+    }
+
     if (!catalogConfig.catalogUrl) {
       // Without a URL, treat as healthy but empty; callers will fallback if needed
       this.logger.info('No catalog URL configured; real catalog is inert');
@@ -209,25 +216,54 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       return;
     }
 
-    this.logger.info('Fetching remote catalog', { url: catalogConfig.catalogUrl });
-    const headers: Record<string, string> = {};
-    if (this.cache.etag) headers['If-None-Match'] = this.cache.etag;
-    if (this.cache.lastModified) headers['If-Modified-Since'] = this.cache.lastModified;
+    this.inflight = (async () => {
+      this.logger.info('Fetching remote catalog', { url: catalogConfig.catalogUrl });
+      const headers: Record<string, string> = {};
+      if (this.cache.etag) headers['If-None-Match'] = this.cache.etag;
+      if (this.cache.lastModified) headers['If-Modified-Since'] = this.cache.lastModified;
 
-    const res = await fetch(catalogConfig.catalogUrl, { headers });
-    if (res.status === 304 && this.cache.data) {
-      this.logger.debug('Catalog not modified');
-      this.cache.ts = Date.now();
-      return;
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), catalogConfig.fetchTimeoutMs || 3000);
+      try {
+        const res = await fetch(catalogConfig.catalogUrl!, { headers, signal: controller.signal });
+        if (res.status === 304 && this.cache.data) {
+          this.logger.debug('Catalog not modified');
+          this.cache.ts = Date.now();
+          return;
+        }
+        if (!res.ok) throw new Error(`Catalog fetch failed: ${res.status}`);
+        const data = (await res.json()) as RemoteCatalog;
+        this.cache = {
+          data,
+            ts: Date.now(),
+            etag: res.headers.get('etag') || undefined,
+            lastModified: res.headers.get('last-modified') || undefined,
+        };
+      } catch (error) {
+        if ((error instanceof Error && error.name === 'AbortError') || (error instanceof Error && error.message.includes('aborted'))) {
+          this.logger.warn('Catalog fetch aborted (timeout)', { timeoutMs: catalogConfig.fetchTimeoutMs });
+          // If we have existing cache, treat as not modified
+          if (this.cache.data) {
+            this.cache.ts = Date.now();
+            return;
+          }
+        }
+        // Re-throw for outer callers when no cache exists
+        if (!this.cache.data) {
+          throw error instanceof Error ? error : new Error(String(error));
+        }
+        this.logger.warn('Catalog fetch failed; retaining prior cache', { error: error instanceof Error ? error.message : String(error) });
+        this.cache.ts = Date.now();
+      } finally {
+        clearTimeout(tid);
+      }
+    })();
+
+    try {
+      await this.inflight;
+    } finally {
+      this.inflight = undefined;
     }
-    if (!res.ok) throw new Error(`Catalog fetch failed: ${res.status}`);
-    const data = (await res.json()) as RemoteCatalog;
-    this.cache = {
-      data,
-      ts: Date.now(),
-      etag: res.headers.get('etag') || undefined,
-      lastModified: res.headers.get('last-modified') || undefined,
-    };
   }
 
   private mapApp(app: RemoteCatalog['apps'][number]): CatalogApp {

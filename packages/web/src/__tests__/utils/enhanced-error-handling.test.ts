@@ -214,10 +214,11 @@ describe('Enhanced Error Handling - Phase 3.2', () => {
           json: () => Promise.resolve({ data: 'success' })
         });
 
+      // Provide explicit retry config; test env disables default retries so we force attempts here
       const response = await enhancedFetch('https://example.com/api', {}, {
         maxAttempts: 2,
-        baseDelay: 10, // Very short delay for testing
-        maxDelay: 20,
+        baseDelay: 1,
+        maxDelay: 5,
         multiplier: 1,
         jitter: false
       });

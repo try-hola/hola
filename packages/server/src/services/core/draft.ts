@@ -426,6 +426,8 @@ export class RealDraftService implements DraftService {
 
 export class MockDraftService implements DraftService {
   private logger = getLogger().child({ service: 'MockDraftService' });
+  private drafts = new Map<string, Draft>();
+  private draftFiles = new Map<string, Map<string, DraftFile & { content?: Buffer }>>();
 
   async healthCheck(): Promise<ServiceHealth> {
     return {
@@ -437,65 +439,65 @@ export class MockDraftService implements DraftService {
   async createDraft(request: CreateDraftRequest): Promise<CreateDraftResponse> {
     const draftId = crypto.randomUUID();
     this.logger.info('Mock: Creating draft', { draftId, request });
+    const draft: Draft = {
+      draftId,
+      appId: request.appId,
+      version: request.version,
+      systemOverrides: {},
+      appEnv: [ { key: 'APP_PORT', value: '8080', isSecret: false, description: 'Application port' } ],
+      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+      composeOverride: '',
+      files: [],
+    };
+    this.drafts.set(draftId, draft);
+    this.draftFiles.set(draftId, new Map());
 
     return {
       draftId,
-      app: {
-        id: request.appId,
-        name: 'Mock App',
-        icon: '📦',
-      },
+      app: { id: request.appId, name: 'Mock App', icon: '📦' },
       systemEnv: [
         { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
         { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
       ],
-      appEnv: [
-        { key: 'APP_PORT', value: '8080', isSecret: false, description: 'Application port' },
-      ],
-      defaults: {
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
-      },
+      appEnv: draft.appEnv,
+      defaults: { ports: draft.ports, volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }] },
     };
   }
 
   async getDraft(draftId: string): Promise<GetDraftResponse> {
     this.logger.info('Mock: Getting draft', { draftId });
-
-    return {
-      draftId,
-      appId: 'mock-app',
-      version: '1.0.0',
-      systemOverrides: {},
-      appEnv: [
-        { key: 'APP_PORT', value: '8080', isSecret: false, description: 'Application port' },
-      ],
-      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-      composeOverride: '',
-      files: [],
-    };
+    const draft = this.drafts.get(draftId);
+    if (!draft) {
+      throw new Error(`Draft not found: ${draftId}`);
+    }
+    const files = Array.from(this.draftFiles.get(draftId)?.values() || []).map(f => ({
+      uploadId: f.uploadId,
+      name: f.name,
+      size: f.size,
+      kind: f.kind,
+    }));
+    return { ...draft, files };
   }
 
   async updateDraft(draftId: string, patch: PatchDraftRequest): Promise<PatchDraftResponse> {
     this.logger.info('Mock: Updating draft', { draftId, patch });
-
-    return {
-      ok: true,
-      draft: {
-        draftId,
-        appId: 'mock-app',
-        version: '1.0.0',
-        systemOverrides: patch.systemOverrides || {},
-        appEnv: patch.appEnv || [],
-        ports: patch.ports || [],
-        composeOverride: patch.composeOverride || '',
-        files: [],
-      },
-    };
+    const existing = this.drafts.get(draftId);
+    if (!existing) throw new Error(`Draft not found: ${draftId}`);
+    const updated: Draft = { ...existing, ...patch } as Draft;
+    this.drafts.set(draftId, updated);
+    const files = Array.from(this.draftFiles.get(draftId)?.values() || []).map(f => ({
+      uploadId: f.uploadId,
+      name: f.name,
+      size: f.size,
+      kind: f.kind,
+    }));
+    return { ok: true, draft: { ...updated, files } };
   }
 
   async deleteDraft(draftId: string): Promise<void> {
     this.logger.info('Mock: Deleting draft', { draftId });
+    this.drafts.delete(draftId);
+    this.draftFiles.delete(draftId);
   }
 
   async uploadFile(
@@ -503,13 +505,13 @@ export class MockDraftService implements DraftService {
     file: { name: string; content: Buffer; kind: DraftFile['kind']; path?: string }
   ): Promise<UploadDraftFileResponse> {
     this.logger.info('Mock: Uploading file', { draftId, fileName: file.name, kind: file.kind });
-
-    return {
-      uploadId: crypto.randomUUID(),
-      name: file.name,
-      size: file.content.length,
-      kind: file.kind,
-    };
+    const draft = this.drafts.get(draftId);
+    if (!draft) throw new Error(`Draft not found: ${draftId}`);
+    let files = this.draftFiles.get(draftId);
+    if (!files) { files = new Map(); this.draftFiles.set(draftId, files); }
+    const uploadId = crypto.randomUUID();
+    files.set(uploadId, { uploadId, name: file.name, size: file.content.length, kind: file.kind, path: file.path });
+    return { uploadId, name: file.name, size: file.content.length, kind: file.kind };
   }
 
   async deleteFile(draftId: string, uploadId: string): Promise<DeleteDraftFileResponse> {
@@ -545,11 +547,9 @@ export class MockDraftService implements DraftService {
 
   async finalizeDraft(draftId: string): Promise<FinalizeDraftResponse> {
     this.logger.info('Mock: Finalizing draft', { draftId });
-
-    return {
-      spec: { services: {}, finalizedAt: new Date().toISOString() },
-      checksum: crypto.randomUUID(),
-    };
+    const draft = this.drafts.get(draftId);
+    if (!draft) throw new Error(`Draft not found: ${draftId}`);
+    return { spec: { draftId: draft.draftId, appId: draft.appId, finalizedAt: new Date().toISOString() }, checksum: crypto.randomUUID() };
   }
 
   async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults }> {

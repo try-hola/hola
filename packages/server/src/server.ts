@@ -55,9 +55,11 @@ import {
 // Phase 0: Infrastructure imports
 import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
+import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
 import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService, getDeploymentService } from './services/factory';
+import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
 // import { createErrorMappingMiddleware } from './middleware/error-mapping';
@@ -111,6 +113,9 @@ import { initializeDevelopmentEnvironment } from './config/development';
 
 // Phase 0: Initialize infrastructure with fail-fast validation
 const logger = getLogger().child({ service: 'HolaServer' });
+const shouldAutoStart = process.env.HOLA_DISABLE_AUTOSTART !== 'true';
+
+const backgroundTimers: Array<() => void> = [];
 
 async function initializeInfrastructure() {
   initializeLogger(appConfig.logLevel, appConfig.logFormat);
@@ -123,7 +128,10 @@ async function initializeInfrastructure() {
     console.error('❌ Server startup failed:');
     console.error(error instanceof Error ? error.message : String(error));
     console.error('');
-    process.exit(1);
+    if (shouldAutoStart) {
+      process.exit(1);
+    }
+    throw error instanceof Error ? error : new Error(String(error));
   }
 
   // Phase 0: Startup messaging
@@ -200,15 +208,6 @@ function getIdentity(req: Request): GetMeResponse | null {
     roles: ['user'],
     capabilities: ['read:system', 'read:deployments']
   };
-}
-
-// SSE helper
-function sse(headers?: HeadersInit) {
-  const h = new Headers(headers);
-  h.set('content-type', 'text/event-stream');
-  h.set('cache-control', 'no-cache');
-  h.set('connection', 'keep-alive');
-  return h;
 }
 
 // Router
@@ -411,100 +410,135 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Drafts
-  if (pathname === API.drafts.create && req.method === 'POST') {
-    const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
-    const payload: CreateDraftResponse = {
-      draftId: crypto.randomUUID(),
-      app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
-      systemEnv: [
-        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-      ],
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      defaults: {
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
-      },
-    };
-    return json(payload);
-  }
+  // ===== LEGACY/STUB DRAFT ROUTES =====
+  // These routes provide mock responses when Phase 7 Dev API is disabled
+  if (!featureFlags.enableDevApi) {
+    // Draft creation (legacy stub)
+    if (pathname === API.drafts.create && req.method === 'POST') {
+      const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+      const payload: CreateDraftResponse = {
+        draftId: crypto.randomUUID(),
+        app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
+        systemEnv: [
+          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+        ],
+        appEnv: [
+          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+        ],
+        defaults: {
+          ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+          volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
+        },
+      };
+      return json(payload);
+    }
 
-  const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
-  if (draftMatch && req.method === 'GET') {
-    const draftId = draftMatch[1];
-    const payload: GetDraftResponse = {
-      draftId,
-      appId: 'nextcloud',
-      version: '1.0.0',
-      systemOverrides: {},
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-      composeOverride: '',
-      files: [],
-    };
-    return json(payload);
-  }
-
-  if (draftMatch && req.method === 'PATCH') {
-    const payload: PatchDraftResponse = {
-      ok: true,
-      draft: {
-        draftId: draftMatch[1],
+    // Draft by ID operations (legacy stubs)
+    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+    if (draftMatch && req.method === 'GET') {
+      const draftId = draftMatch[1];
+      const payload: GetDraftResponse = {
+        draftId,
         appId: 'nextcloud',
         version: '1.0.0',
         systemOverrides: {},
-        appEnv: [],
-        ports: [],
+        appEnv: [
+          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+        ],
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
         composeOverride: '',
         files: [],
-      },
-    };
-    return json(payload);
+      };
+      return json(payload);
+    }
+
+    if (draftMatch && req.method === 'PATCH') {
+      const payload: PatchDraftResponse = {
+        ok: true,
+        draft: {
+          draftId: draftMatch[1],
+          appId: 'nextcloud',
+          version: '1.0.0',
+          systemOverrides: {},
+          appEnv: [],
+          ports: [],
+          composeOverride: '',
+          files: [],
+        },
+      };
+      return json(payload);
+    }
+
+    // Draft uploads (legacy stubs)
+    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+    if (draftUploadsMatch && req.method === 'POST') {
+      const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
+      return json(payload);
+    }
+
+    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+    if (draftUploadByIdMatch && req.method === 'DELETE') {
+      const payload: DeleteDraftFileResponse = { ok: true };
+      return json(payload);
+    }
+
+    // Draft validation (legacy stub)
+    const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
+    if (draftValidateMatch && req.method === 'POST') {
+      const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
+      return json(payload);
+    }
+
+    // Draft preflight (legacy stub)
+    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+    if (draftPreflightMatch && req.method === 'POST') {
+      const payload: PreflightResponse = {
+        ok: true,
+        checks: [
+          { name: 'env', status: 'pass' },
+          { name: 'docker', status: 'pass' },
+          { name: 'disk', status: 'warn', detail: 'Low disk space' },
+        ],
+      };
+      return json(payload);
+    }
+
+    // Draft finalization (legacy stub)
+    const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
+    if (draftFinalizeMatch && req.method === 'POST') {
+      const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
+      return json(payload);
+    }
   }
 
-  const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
-  if (draftUploadsMatch && req.method === 'POST') {
-    const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
-    return json(payload);
+  // ===== PHASE 7 DEV API (feature gated) =====
+  // Minimal mock implementations to satisfy contract tests when enableDevApi=true
+  if (featureFlags.enableDevApi) {
+    // Validation compose endpoint (mock)
+    if (pathname === API.validation.compose && req.method === 'POST') {
+      try {
+        const body = await req.json().catch(() => ({} as ValidationComposeRequest));
+        // Very lightweight synthetic validation: flag empty composeYaml
+        const errors = !body.composeYaml || body.composeYaml.trim().length === 0
+          ? [{ field: 'composeYaml', message: 'Compose is empty' }]
+          : [];
+        const payload: ValidationComposeResponse = {
+          ok: errors.length === 0,
+            errors,
+            warnings: [],
+        };
+        return json(payload);
+      } catch {
+        return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
+      }
+    }
+
+    // Dev session endpoints moved to Phase 7 section below - using real service implementations
   }
 
-  const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
-  if (draftUploadByIdMatch && req.method === 'DELETE') {
-    const payload: DeleteDraftFileResponse = { ok: true };
-    return json(payload);
-  }
-
-  const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
-  if (draftValidateMatch && req.method === 'POST') {
-    const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
-    return json(payload);
-  }
-
-  const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
-  if (draftPreflightMatch && req.method === 'POST') {
-    const payload: PreflightResponse = {
-      ok: true,
-      checks: [
-        { name: 'env', status: 'pass' },
-        { name: 'docker', status: 'pass' },
-        { name: 'disk', status: 'warn', detail: 'Low disk space' },
-      ],
-    };
-    return json(payload);
-  }
-
-  const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
-  if (draftFinalizeMatch && req.method === 'POST') {
-    const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
-    return json(payload);
-  }
 
   // Deployments
   if (pathname === API.deployments.base && req.method === 'GET') {
@@ -572,6 +606,20 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Deployment rollback
+  const deploymentRollbackMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/rollback$/);
+  if (deploymentRollbackMatch && req.method === 'POST') {
+    // const deploymentId = deploymentRollbackMatch[1]; // not needed for mock response
+    // Accept optional targetReleaseId but ignore in mock
+    await req.json().catch(() => ({}));
+    const payload: RollbackResponse = {
+      jobId: crypto.randomUUID(),
+      targetReleaseId: 'previous-release',
+      previousReleaseId: 'older-release'
+    };
+    return json(payload);
+  }
+
   const deploymentHistoryMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/history$/);
   if (deploymentHistoryMatch && req.method === 'GET') {
     const deploymentId = deploymentHistoryMatch[1];
@@ -588,75 +636,92 @@ async function route(url: URL, req: Request): Promise<Response> {
   // Logs SSE (deployment)
   const deploymentLogsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs$/);
   if (deploymentLogsMatch && req.method === 'GET') {
-    const stream = new ReadableStream({
-      start(controller) {
+    const stream = createSSEStream({
+      logger,
+      onSubscribe(controller) {
         let i = 0;
-        const timer = setInterval(() => {
-          i++;
-          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: ['nextcloud','postgres','redis'][i%3], level: ['info','warn','error','debug'][i%4], message: 'Log line ' + i })}\n\n`;
-          controller.enqueue(new TextEncoder().encode(evt));
+        const services = ['nextcloud', 'postgres', 'redis'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
+        controller.heartbeat();
+        const interval = setInterval(() => {
+          i += 1;
+          controller.send({
+            type: 'log',
+            data: {
+              timestamp: new Date().toISOString(),
+              service: services[i % services.length],
+              level: levels[i % levels.length],
+              message: `Log line ${i}`,
+            },
+          });
           if (i % 8 === 0) {
-            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+            controller.heartbeat();
           }
-          // keep alive
         }, 1000);
-        // Close after 60s in stub
-        setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
-      }
+        const closer = setTimeout(() => {
+          controller.close();
+        }, 60000);
+        return () => {
+          clearInterval(interval);
+          clearTimeout(closer);
+        };
+      },
     });
-    return new Response(stream, { headers: sse() });
+    return new Response(stream, { headers: createSSEHeaders() });
   }
 
   // Logs SSE Stream (deployment) - new endpoint for real-time logs
   const deploymentLogsStreamMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs\/stream$/);
   if (deploymentLogsStreamMatch && req.method === 'GET') {
     const deploymentId = deploymentLogsStreamMatch[1];
-    const stream = new ReadableStream({
-      start(controller) {
+    const stream = createSSEStream({
+      logger,
+      onSubscribe(controller) {
         let i = 0;
-        const timer = setInterval(() => {
-          i++;
-          
-          // Send log events
-          const logEvent = {
+        const services = ['nextcloud', 'postgres', 'redis'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
+        const messages = ['Starting service', 'Processing request', 'Cache operation', 'Database query'];
+        controller.heartbeat();
+        const interval = setInterval(() => {
+          i += 1;
+          controller.send({
             type: 'log',
             data: {
               timestamp: new Date().toISOString(),
-              service: ['nextcloud', 'postgres', 'redis'][i % 3],
-              level: ['info', 'warn', 'error', 'debug'][i % 4],
-              message: `Deployment ${deploymentId} log entry ${i}: ${['Starting service', 'Processing request', 'Cache operation', 'Database query'][i % 4]}`
-            }
-          };
-          
-          const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
-          controller.enqueue(new TextEncoder().encode(evt));
-          
-          // Occasional deployment status updates
+              service: services[i % services.length],
+              level: levels[i % levels.length],
+              message: `Deployment ${deploymentId} log entry ${i}: ${messages[i % messages.length]}`,
+            },
+          });
+
           if (i % 15 === 0) {
-            const deploymentUpdate = {
+            controller.send({
               type: 'deployment_update',
               data: {
                 deploymentId,
                 status: 'running',
                 uptime: `${Math.floor(i / 60)}m ${i % 60}s`,
-                lastUpdated: new Date().toISOString()
-              }
-            };
-            const deploymentEvt = `id: ${i}-dep\nevent: message\ndata: ${JSON.stringify(deploymentUpdate)}\n\n`;
-            controller.enqueue(new TextEncoder().encode(deploymentEvt));
+                lastUpdated: new Date().toISOString(),
+              },
+            });
           }
-          
-          // Heartbeat
+
           if (i % 30 === 0) {
-            controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+            controller.heartbeat();
           }
         }, 2000);
-        
-        // Close after 300s in development
-        setTimeout(() => { clearInterval(timer); controller.close(); }, 300000);
-      }
+
+        const closer = setTimeout(() => {
+          controller.close();
+        }, 300000);
+
+        return () => {
+          clearInterval(interval);
+          clearTimeout(closer);
+        };
+      },
     });
-    return new Response(stream, { headers: sse() });
+    return new Response(stream, { headers: createSSEHeaders() });
   }
 
   // Jobs + logs SSE
@@ -717,59 +782,62 @@ async function route(url: URL, req: Request): Promise<Response> {
     const jobId = jobLogsMatch[1];
     try {
       const logging = getLoggingService();
-      const stream = new ReadableStream({
-        start(controller) {
-          let isStreamClosed = false;
-          
-          // Helper function to safely enqueue data
-          const safeEnqueue = (data: string) => {
-            if (!isStreamClosed) {
-              try {
-                controller.enqueue(new TextEncoder().encode(data));
-              } catch (error) {
-                // Stream was closed, mark it and stop trying to write
-                isStreamClosed = true;
-                logger.debug('Job logs SSE stream closed during write', { jobId, error: error instanceof Error ? error.message : String(error) });
-              }
-            }
-          };
-          
-          const sub = logging.onLog({ kind: 'job', id: jobId }, (entry) => {
-            const evt = `event: message\ndata: ${JSON.stringify({ type: 'log', data: { timestamp: entry.timestamp, service: entry.service, level: entry.level, message: entry.message } })}\n\n`;
-            safeEnqueue(evt);
+      const stream = createSSEStream({
+        logger,
+        onSubscribe(controller) {
+          controller.heartbeat();
+          const sub = logging.onLog({ kind: 'job', id: jobId }, entry => {
+            controller.send({
+              type: 'log',
+              data: {
+                timestamp: entry.timestamp,
+                service: entry.service,
+                level: entry.level,
+                message: entry.message,
+              },
+            });
           });
-          
-          // Heartbeats
-          const hb = setInterval(() => {
-            safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
-          }, 15000);
-          
-          // Emit initial heartbeat
-          safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
-          
-          // Cleanup
-          return () => { 
-            isStreamClosed = true;
-            sub.unsubscribe(); 
-            clearInterval(hb); 
+
+          return () => {
+            sub.unsubscribe();
           };
-        }
+        },
       });
-      return new Response(stream, { headers: sse() });
+      return new Response(stream, { headers: createSSEHeaders() });
     } catch {
-      const stream = new ReadableStream({
-        start(controller) {
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
+      const stream = createSSEStream({
+        logger,
+        onSubscribe(controller) {
           let i = 0;
-          const timer = setInterval(() => {
-            i++;
-            const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify({ timestamp: new Date().toISOString(), service: 'job', level: ['info','warn','error','debug'][i%4], message: 'Job log ' + i })}\n\n`;
-            controller.enqueue(new TextEncoder().encode(evt));
-            if (i % 8 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+          controller.heartbeat();
+          const interval = setInterval(() => {
+            i += 1;
+            controller.send({
+              type: 'log',
+              data: {
+                timestamp: new Date().toISOString(),
+                service: 'job',
+                level: levels[i % levels.length],
+                message: `Job log ${i}`,
+              },
+            });
+            if (i % 8 === 0) {
+              controller.heartbeat();
+            }
           }, 1000);
-          setTimeout(() => { clearInterval(timer); controller.close(); }, 60000);
-        }
+
+          const closer = setTimeout(() => {
+            controller.close();
+          }, 60000);
+
+          return () => {
+            clearInterval(interval);
+            clearTimeout(closer);
+          };
+        },
       });
-      return new Response(stream, { headers: sse() });
+      return new Response(stream, { headers: createSSEHeaders() });
     }
   }
 
@@ -780,82 +848,91 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const logging = getLoggingService();
       const jobService = getJobService();
-      const stream = new ReadableStream({
-        start(controller) {
-          let isStreamClosed = false;
-          
-          // Helper function to safely enqueue data
-          const safeEnqueue = (data: string) => {
-            if (!isStreamClosed) {
-              try {
-                controller.enqueue(new TextEncoder().encode(data));
-              } catch (error) {
-                // Stream was closed, mark it and stop trying to write
-                isStreamClosed = true;
-                logger.debug('SSE stream closed during write', { jobId, error: error instanceof Error ? error.message : String(error) });
-              }
-            }
-          };
-          
-          // Subscribe to logs
-          const sub = logging.onLog({ kind: 'job', id: jobId }, (entry) => {
-            const evt = { type: 'log', data: { timestamp: entry.timestamp, service: entry.service, level: entry.level, message: entry.message } };
-            safeEnqueue(`event: message\ndata: ${JSON.stringify(evt)}\n\n`);
+      const stream = createSSEStream({
+        logger,
+        onSubscribe(controller) {
+          controller.heartbeat();
+          const sub = logging.onLog({ kind: 'job', id: jobId }, entry => {
+            controller.send({
+              type: 'log',
+              data: {
+                timestamp: entry.timestamp,
+                service: entry.service,
+                level: entry.level,
+                message: entry.message,
+              },
+            });
           });
-          
-          // Subscribe to job updates
-          const upd = jobService.onJobUpdate(jobId, (update) => {
-            const evt = { type: 'job_update', data: { jobId, status: update.status, progress: update.progress, finishedAt: update.finishedAt } };
-            safeEnqueue(`event: message\ndata: ${JSON.stringify(evt)}\n\n`);
+
+          const upd = jobService.onJobUpdate(jobId, update => {
+            controller.send({
+              type: 'job_update',
+              data: {
+                jobId,
+                status: update.status,
+                progress: update.progress,
+                finishedAt: update.finishedAt,
+              },
+            });
           });
-          
-          // Heartbeats
-          const hb = setInterval(() => {
-            safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
-          }, 15000);
-          
-          // Initial heartbeat
-          safeEnqueue(`event: heartbeat\ndata: {}\n\n`);
-          
-          return () => { 
-            isStreamClosed = true;
-            sub.unsubscribe(); 
-            upd.unsubscribe(); 
-            clearInterval(hb); 
+
+          return () => {
+            sub.unsubscribe();
+            upd.unsubscribe();
           };
-        }
+        },
       });
-      return new Response(stream, { headers: sse() });
+      return new Response(stream, { headers: createSSEHeaders() });
     } catch {
-      // Fallback to previous simulated stream
-      const stream = new ReadableStream({
-        start(controller) {
+  const levels: LogLevel[] = ['info', 'warn', 'debug'];
+      const stream = createSSEStream({
+        logger,
+        onSubscribe(controller) {
           let i = 0;
           let progress = 0;
-          const timer = setInterval(() => {
-            i++;
-            progress = Math.min(progress + Math.random() * 5, 100);
-            const logEvent = {
+          controller.heartbeat();
+          const interval = setInterval(() => {
+            i += 1;
+            progress = Math.min(progress + 5, 100);
+            controller.send({
               type: 'log',
               data: {
                 timestamp: new Date().toISOString(),
                 service: 'job-runner',
-                level: ['info', 'warn', 'debug'][i % 3],
-                message: `Job ${jobId} step ${i}`
-              }
-            };
-            controller.enqueue(new TextEncoder().encode(`id: ${i}\nevent: message\ndata: ${JSON.stringify(logEvent)}\n\n`));
+                level: levels[i % levels.length],
+                message: `Job ${jobId} step ${i}`,
+              },
+            });
             if (i % 5 === 0) {
-              const jobUpdate = { type: 'job_update', data: { jobId, status: progress >= 100 ? 'completed' : 'running', progress: Math.floor(progress), ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {}) } };
-              controller.enqueue(new TextEncoder().encode(`id: ${i}-job\nevent: message\ndata: ${JSON.stringify(jobUpdate)}\n\n`));
-              if (progress >= 100) { setTimeout(() => { clearInterval(timer); controller.close(); }, 5000); }
+              controller.send({
+                type: 'job_update',
+                data: {
+                  jobId,
+                  status: progress >= 100 ? 'completed' : 'running',
+                  progress,
+                  ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {}),
+                },
+              });
+              if (progress >= 100) {
+                controller.close();
+              }
             }
-            if (i % 20 === 0) controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
+            if (i % 20 === 0) {
+              controller.heartbeat();
+            }
           }, 1500);
-          setTimeout(() => { clearInterval(timer); controller.close(); }, 200000);
-        }
+
+          const closer = setTimeout(() => {
+            controller.close();
+          }, 200000);
+
+          return () => {
+            clearInterval(interval);
+            clearTimeout(closer);
+          };
+        },
       });
-      return new Response(stream, { headers: sse() });
+      return new Response(stream, { headers: createSSEHeaders() });
     }
   }
 
@@ -1048,90 +1125,70 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // System Status SSE Stream - Phase 4: Real-time system updates with monitoring service
   if (pathname === '/api/system/status/stream' && req.method === 'GET') {
-    const stream = new ReadableStream({
-      start(controller) {
-        let monitoring: { stop: () => void } | null = null;
-        
+    const stream = createSSEStream({
+      logger,
+      heartbeatIntervalMs: 5000,
+      onSubscribe(controller) {
+        controller.heartbeat();
         try {
-          // Phase 4: Use real system monitoring service
           const systemMonitoringService = getSystemMonitoringService();
-          
-          // Start monitoring with callback to send SSE events
-          monitoring = systemMonitoringService.startMonitoring((systemStatus) => {
-            const systemUpdate = {
+          const monitoring = systemMonitoringService.startMonitoring(systemStatus => {
+            controller.send({
               type: 'system_update',
               data: systemStatus,
-            };
-            
-            const evt = `event: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
-            controller.enqueue(new TextEncoder().encode(evt));
-          }, 5000); // Update every 5 seconds
-          
+            });
+          }, 5000);
+
+          return () => {
+            monitoring.stop();
+          };
         } catch (error) {
           logger.error('Failed to start real system monitoring, falling back to mock SSE', error as Error);
-          
-          // Fallback to mock implementation
           let i = 0;
-          const timer = setInterval(() => {
-            i++;
-            
-            // Occasionally send system updates
-            if (i % 10 === 0) {
-              const systemUpdate = {
+          const interval = setInterval(() => {
+            i += 1;
+            if (i % 2 === 0) {
+              controller.send({
                 type: 'system_update',
                 data: {
-                  docker: { 
-                    ok: true, 
-                    version: '24.0.5' 
+                  docker: {
+                    ok: true,
+                    version: '24.0.5',
                   },
-                  disk: { 
-                    freeBytes: Math.floor(50_000_000_000 - (i * 1000000)), // Slowly decreasing
-                    totalBytes: 100_000_000_000 
+                  disk: {
+                    freeBytes: Math.max(0, 50_000_000_000 - i * 1_000_000),
+                    totalBytes: 100_000_000_000,
                   },
-                  version: { 
-                    hola: '1.0.0', 
-                    compose: '2.20.0' 
+                  version: {
+                    hola: '1.0.0',
+                    compose: '2.20.0',
                   },
-                  oras: { 
-                    ok: true, 
-                    version: '1.1.0' 
+                  oras: {
+                    ok: true,
+                    version: '1.1.0',
                   },
-                  authentik: { 
-                    ok: Math.random() > 0.1 // Occasionally false to simulate issues
-                  }
-                }
-              };
-              
-              const evt = `id: ${i}\nevent: message\ndata: ${JSON.stringify(systemUpdate)}\n\n`;
-              controller.enqueue(new TextEncoder().encode(evt));
+                  authentik: {
+                    ok: (i % 5) !== 0,
+                  },
+                },
+              });
             }
-            
-            // Heartbeat
-            if (i % 30 === 0) {
-              controller.enqueue(new TextEncoder().encode(`event: heartbeat\ndata: {}\n\n`));
-            }
-          }, 5000); // Every 5 seconds
-          
-          // Store timer for cleanup
-          monitoring = { stop: () => clearInterval(timer) };
+          }, 5000);
+
+          return () => {
+            clearInterval(interval);
+          };
         }
-        
-        // Cleanup on stream close
-        return () => {
-          if (monitoring) {
-            monitoring.stop();
-          }
-        };
-      }
+      },
     });
-    return new Response(stream, { headers: sse() });
+    return new Response(stream, { headers: createSSEHeaders() });
   }
 
   // ===== PHASE 7 API ENDPOINTS =====
-  
+  // Real service implementations gated by enableDevApi feature flag
   // Check if Phase 7 API is enabled
   if (!featureFlags.enableDevApi) {
-    // Skip Phase 7 endpoints if not enabled
+    // Skip Phase 7 endpoints if not enabled - fall back to legacy/stub handlers above
   } else {
     
     // Dev Sessions API
@@ -1243,95 +1300,62 @@ async function route(url: URL, req: Request): Promise<Response> {
           return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
         }
 
-        const stream = new ReadableStream({
-          start(controller) {
+        const stream = createSSEStream({
+          logger,
+          heartbeatIntervalMs: 10000,
+          onSubscribe(controller) {
             logger.info('Starting dev session events SSE stream', { sessionId });
-            
-            // Send initial heartbeat
-            const heartbeat = `event: heartbeat\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`;
-            controller.enqueue(new TextEncoder().encode(heartbeat));
+            controller.heartbeat({ timestamp: new Date().toISOString() });
+            let stopMonitoring: (() => void) | null = null;
 
-            // Try to get real session monitoring
-            let monitoring: { stop: () => void } | null = null;
-            
             try {
-              // Start session monitoring with callback to send SSE events
-              monitoring = devSessionService.startMonitoring(sessionId, (eventData) => {
-                try {
-                  const evt = `event: message\ndata: ${JSON.stringify(eventData)}\n\n`;
-                  controller.enqueue(new TextEncoder().encode(evt));
-                } catch (error) {
-                  logger.debug('Dev session SSE stream closed during write', { sessionId, error: error instanceof Error ? error.message : String(error) });
-                }
+              const monitoring = devSessionService.startMonitoring(sessionId, eventData => {
+                controller.send(eventData);
               });
-              
+              stopMonitoring = () => monitoring.stop();
             } catch (error) {
               logger.error('Failed to start real dev session monitoring, falling back to mock SSE', error as Error);
-              
-              // Fallback to mock events for dev session
               let i = 0;
-              const timer = setInterval(() => {
-                i++;
-                
-                try {
-                  // Send periodic session status updates
-                  if (i % 5 === 0) {
-                    const statusUpdate = {
-                      type: 'session_status',
-                      data: {
-                        sessionId,
-                        status: session.status,
-                        lastActivity: new Date().toISOString(),
-                        logs: [`Mock dev session log ${i}`],
-                      },
-                    };
-                    
-                    const evt = `event: message\ndata: ${JSON.stringify(statusUpdate)}\n\n`;
-                    controller.enqueue(new TextEncoder().encode(evt));
-                  }
-                  
-                  // Send periodic log events
-                  if (i % 3 === 0) {
-                    const logEvent = {
-                      type: 'log',
-                      data: {
-                        timestamp: new Date().toISOString(),
-                        service: `dev-session-${sessionId}`,
-                        level: 'info',
-                        message: `Dev session activity ${i}`,
-                      },
-                    };
-                    
-                    const evt = `event: message\ndata: ${JSON.stringify(logEvent)}\n\n`;
-                    controller.enqueue(new TextEncoder().encode(evt));
-                  }
-                  
-                  // Send heartbeat every 10 iterations
-                  if (i % 10 === 0) {
-                    const heartbeat = `event: heartbeat\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`;
-                    controller.enqueue(new TextEncoder().encode(heartbeat));
-                  }
-                  
-                } catch {
-                  logger.debug('Dev session SSE stream closed during mock write', { sessionId });
-                  clearInterval(timer);
+              const interval = setInterval(() => {
+                i += 1;
+                if (i % 5 === 0) {
+                  controller.send({
+                    type: 'session_status',
+                    data: {
+                      sessionId,
+                      status: session.status,
+                      lastActivity: new Date().toISOString(),
+                      logs: [`Mock dev session log ${i}`],
+                    },
+                  });
+                }
+
+                if (i % 3 === 0) {
+                  controller.send({
+                    type: 'log',
+                    data: {
+                      timestamp: new Date().toISOString(),
+                      service: `dev-session-${sessionId}`,
+                      level: 'info',
+                      message: `Dev session activity ${i}`,
+                    },
+                  });
                 }
               }, 1000);
-              
-              monitoring = { stop: () => clearInterval(timer) };
+
+              stopMonitoring = () => {
+                clearInterval(interval);
+              };
             }
-            
-            // Cleanup on stream close
+
             return () => {
               logger.info('Dev session events SSE stream ended', { sessionId });
-              if (monitoring) {
-                monitoring.stop();
-              }
+              stopMonitoring?.();
             };
           },
         });
 
-        return new Response(stream, { headers: sse() });
+        return new Response(stream, { headers: createSSEHeaders() });
         
       } catch (error) {
         logger.error('Failed to start dev session events stream', error as Error, { sessionId });
@@ -1412,6 +1436,53 @@ async function route(url: URL, req: Request): Promise<Response> {
       } catch (error) {
         logger.error('Failed to finalize draft', error as Error);
         return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to finalize draft' } }, { status: 500 });
+      }
+    }
+
+    // Draft uploads
+    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+    if (draftUploadsMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftUploadsMatch[1];
+        // Get file from request - in real implementation this would handle file upload
+        const body = await req.json();
+        const result = await draftService.uploadFile(draftId, body);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to upload draft file', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload draft file' } }, { status: 500 });
+      }
+    }
+
+    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+    if (draftUploadByIdMatch && req.method === 'DELETE') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftUploadByIdMatch[1];
+        const uploadId = draftUploadByIdMatch[2];
+        await draftService.deleteFile(draftId, uploadId);
+        return json({ ok: true });
+      } catch (error) {
+        logger.error('Failed to delete draft file', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete draft file' } }, { status: 500 });
+      }
+    }
+
+    // Draft preflight
+    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+    if (draftPreflightMatch && req.method === 'POST') {
+      try {
+        const { getDraftService } = await import('./services/factory');
+        const draftService = getDraftService();
+        const draftId = draftPreflightMatch[1];
+        const result = await draftService.preflightCheck(draftId);
+        return json(result);
+      } catch (error) {
+        logger.error('Failed to run draft preflight checks', error as Error);
+        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to run draft preflight checks' } }, { status: 500 });
       }
     }
 
@@ -1697,105 +1768,179 @@ async function route(url: URL, req: Request): Promise<Response> {
   return notFound();
 }
 
-const server = Bun.serve({
-  port: PORT,
-  async fetch(req) {
-    const pre = handlePreflight(req);
-    if (pre) return withCors(pre);
+export async function handleRequest(req: Request): Promise<Response> {
+  const pre = handlePreflight(req);
+  if (pre) return withCors(pre);
 
-    const url = new URL(req.url);
-    
-    // Phase 0: Apply request middleware first, then auth, then API monitoring
-    const response = await requestMiddleware(req, async () => {
-      // Phase 3: Apply auth middleware  
-      return await authMiddleware(req, async () => {
-        // Apply API monitoring middleware
-        const apiMonitoringMiddleware = createApiMonitoringMiddleware();
-        return await apiMonitoringMiddleware(req, async () => {
-          return await route(url, req);
-        });
+  const url = new URL(req.url);
+  const apiMonitoringMiddleware = createApiMonitoringMiddleware();
+
+  const response = await requestMiddleware(req, async () => {
+    return authMiddleware(req, async () => {
+      return apiMonitoringMiddleware(req, async () => {
+        return route(url, req);
       });
     });
-    
-    return withCors(response);
-  },
-});
+  });
 
-logger.info('Hola server started successfully', {
-  port: server.port,
-  apiBase: `http://localhost:${server.port}${API.base}`,
-  systemEndpoints: {
-    healthz: `http://localhost:${server.port}/healthz`,
-    readyz: `http://localhost:${server.port}/readyz`,
-    metrics: `http://localhost:${server.port}/metrics`,
-    config: `http://localhost:${server.port}/api/system/config`,
-    health: `http://localhost:${server.port}/api/system/health`,
-  },
-});
-
-// Initialize development environment
-initializeDevelopmentEnvironment();
-
-// Phase 0: Graceful shutdown handling
-process.on('SIGTERM', () => {
-  logger.info('Received SIGTERM, shutting down gracefully');
-  shutdownServices();
-  process.exit(0);
-});
-
-process.on('SIGINT', () => {
-  logger.info('Received SIGINT, shutting down gracefully');
-  shutdownServices();
-  process.exit(0);
-});
-
-// Initialize periodic tasks for mock data enhancement
-if (config.USE_MOCK_DATA) {
-  console.log('[server] Starting mock data enhancement tasks...');
-  
-  // Update system health occasionally
-  setInterval(() => {
-    updateSystemHealth();
-  }, 30000); // Every 30 seconds
-  
-  // Generate notifications for job events
-  setInterval(() => {
-    generateJobNotifications();
-  }, 10000); // Every 10 seconds
-  
-  // Schedule automatic backups occasionally
-  setInterval(() => {
-    scheduleAutomaticBackups();
-  }, 60000); // Every minute
-  
-  console.log('[server] Mock data enhancement tasks started');
+  return withCors(response);
 }
 
-// Initialize periodic catalog refresh
-const initializeCatalogRefresh = async () => {
+let server: ReturnType<typeof Bun.serve> | null = null;
+
+async function startCatalogRefresh(): Promise<() => void> {
   try {
     const { getCatalogService } = await import('./services/factory');
     const catalog = getCatalogService();
-    
-    // Initial refresh on startup
+
     await catalog.refresh(false);
     logger.info('Initial catalog refresh completed');
-    
-    // Schedule periodic refresh
-    setInterval(async () => {
+
+    const timer = setInterval(async () => {
       try {
         await catalog.refresh(false);
         logger.debug('Periodic catalog refresh completed');
       } catch (error) {
         logger.warn('Periodic catalog refresh failed', { error: error instanceof Error ? error.message : String(error) });
       }
-    }, 300000); // Every 5 minutes (300000ms)
-    
+    }, 300000);
+
     logger.info('Catalog periodic refresh initialized');
+    return () => clearInterval(timer);
   } catch (error) {
     logger.warn('Failed to initialize catalog refresh', { error: error instanceof Error ? error.message : String(error) });
+    return () => {};
   }
-};
+}
 
-// Start catalog refresh in background
-initializeCatalogRefresh();
+function startMockDataEnhancements(): () => void {
+  if (!config.USE_MOCK_DATA) {
+    return () => {};
+  }
+
+  console.log('[server] Starting mock data enhancement tasks...');
+  const healthTimer = setInterval(() => {
+    updateSystemHealth();
+  }, 30000);
+
+  const notificationsTimer = setInterval(() => {
+    generateJobNotifications();
+  }, 10000);
+
+  const backupsTimer = setInterval(() => {
+    scheduleAutomaticBackups();
+  }, 60000);
+
+  console.log('[server] Mock data enhancement tasks started');
+
+  return () => {
+    clearInterval(healthTimer);
+    clearInterval(notificationsTimer);
+    clearInterval(backupsTimer);
+  };
+}
+
+async function startBackgroundTasks(): Promise<void> {
+  if (backgroundTimers.length > 0) {
+    return;
+  }
+
+  const mockCleanup = startMockDataEnhancements();
+  backgroundTimers.push(mockCleanup);
+
+  const catalogCleanup = await startCatalogRefresh();
+  backgroundTimers.push(catalogCleanup);
+}
+
+function stopBackgroundTasks(): void {
+  while (backgroundTimers.length) {
+    const cleanup = backgroundTimers.pop();
+    try {
+      cleanup?.();
+    } catch (error) {
+      logger.warn('Background task cleanup failed', { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+async function startServer(): Promise<void> {
+  if (server) return;
+
+  server = Bun.serve({
+    port: PORT,
+    fetch: handleRequest,
+  });
+
+  logger.info('Hola server started successfully', {
+    port: server.port,
+    apiBase: `http://localhost:${server.port}${API.base}`,
+    systemEndpoints: {
+      healthz: `http://localhost:${server.port}/healthz`,
+      readyz: `http://localhost:${server.port}/readyz`,
+      metrics: `http://localhost:${server.port}/metrics`,
+      config: `http://localhost:${server.port}/api/system/config`,
+      health: `http://localhost:${server.port}/api/system/health`,
+    },
+  });
+
+  initializeDevelopmentEnvironment();
+  await startBackgroundTasks();
+
+  const shutdown = () => {
+    if (!server) return;
+    logger.info('Shutting down Hola server');
+    stopBackgroundTasks();
+    shutdownServices();
+    server?.stop();
+    server = null;
+  };
+
+  process.on('SIGTERM', () => {
+    logger.info('Received SIGTERM, shutting down gracefully');
+    shutdown();
+    process.exit(0);
+  });
+
+  process.on('SIGINT', () => {
+    logger.info('Received SIGINT, shutting down gracefully');
+    shutdown();
+    process.exit(0);
+  });
+}
+
+if (shouldAutoStart) {
+  startServer().catch(error => {
+    logger.error('Failed to start server', error instanceof Error ? error : undefined);
+    process.exit(1);
+  });
+}
+
+export interface InProcessAppOptions {
+  enableBackgroundTasks?: boolean;
+  resetServicesOnClose?: boolean;
+}
+
+export async function createInProcessApp(options: InProcessAppOptions = {}): Promise<{ fetch: typeof handleRequest; close: () => Promise<void> }> {
+  const { enableBackgroundTasks = false, resetServicesOnClose = true } = options;
+
+  if (shouldAutoStart) {
+    // In auto-start mode we don't control lifecycle here
+    return {
+      fetch: handleRequest,
+      close: async () => {},
+    };
+  }
+  if (enableBackgroundTasks) {
+    await startBackgroundTasks();
+  }
+
+  return {
+    fetch: handleRequest,
+    close: async () => {
+      stopBackgroundTasks();
+      if (resetServicesOnClose) {
+        shutdownServices();
+      }
+    },
+  };
+}

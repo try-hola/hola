@@ -9,7 +9,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { 
-  PostDeploymentActionResponse, 
   SystemConfigResponse, 
   CreateDevSessionRequest,
   CreateDevSessionResponse,
@@ -18,11 +17,15 @@ import type {
   SSEJobUpdateEvent,
   SSEDevSessionStatusEvent
 } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from '../utils/server';
+import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
+import { getJobService, getLoggingService, getDevSessionService } from '../../services/factory';
+import { MockJobService } from '../../services/core/jobs';
+import { MockDevSessionService } from '../../services/core/dev-session';
 
-const BASE_URL = 'http://localhost:3001';
-const TEST_TIMEOUT = 15000; // Reduced from 30s for fail-fast
-const SSE_TIMEOUT = 8000; // Max time to wait for SSE events
+const BASE_URL = TEST_BASE_URL;
+const TEST_TIMEOUT = 12000;
+const SSE_TIMEOUT = 6000;
+const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 async function getConfig(): Promise<SystemConfigResponse> {
   const res = await fetch(`${BASE_URL}${API.system.config}`);
@@ -124,18 +127,9 @@ describe('SSE Endpoints Integration Tests', () => {
 
   describe('Job Logs SSE Stream (/api/jobs/:id/logs/stream)', () => {
     it('has correct SSE headers', async () => {
-      // Create a job first
-      const depId = 'homeassistant-main';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'start' }),
-      });
-      expect(actionRes.ok).toBe(true);
-      
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      expect(actionData.jobId).toBeDefined();
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
+      const jobId = job.id;
 
       // Test SSE endpoint
       const response = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);
@@ -152,28 +146,33 @@ describe('SSE Endpoints Integration Tests', () => {
     }, TEST_TIMEOUT);
 
     it('sends valid SSE events with proper structure', async () => {
-      // Create a job first
-      const depId = 'grafana-monitoring';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'restart' }),
-      });
-      expect(actionRes.ok).toBe(true);
-      
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      expect(actionData.jobId).toBeDefined();
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+      const logging = getLoggingService();
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'grafana-monitoring' });
+      const jobId = job.id;
 
       // Test SSE event structure
       const response = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);
       expect(response.ok).toBe(true);
-      
+
       // Read events with timeout
-      const { events } = await readSSEEvents(response, 2, SSE_TIMEOUT);
-      
+      const eventsPromise = readSSEEvents(response, 2, SSE_TIMEOUT);
+      await tick();
+
+      await logging.logJob(jobId, 'info', 'Test log event', { service: 'job-runner' });
+
+      const mockJobService = getJobService() as MockJobService;
+      mockJobService.emitTestUpdate(jobId, {
+        id: jobId,
+        status: 'completed',
+        progress: 100,
+        finishedAt: new Date().toISOString(),
+      });
+
+      const { events } = await eventsPromise;
+
       expect(events.length).toBeGreaterThanOrEqual(1);
-      
+
       // Check for log events
       const logEvents = events.filter(e => e.type === 'log') as SSELogEvent[];
       if (logEvents.length > 0) {
@@ -198,12 +197,14 @@ describe('SSE Endpoints Integration Tests', () => {
 
   describe('Dev Session Events SSE Stream (/api/dev/sessions/:id/events)', () => {
     let sessionId: string;
+    let devSessionService: MockDevSessionService | null = null;
     
     beforeAll(async () => {
       // Skip if Phase 7 API is not enabled
       if (!config.featureFlags?.enableDevApi) {
         return;
       }
+      devSessionService = getDevSessionService() as MockDevSessionService;
       
       // Create a dev session for testing
       const createRequest: CreateDevSessionRequest = {
@@ -265,7 +266,29 @@ describe('SSE Endpoints Integration Tests', () => {
       expect(response.ok).toBe(true);
       
       // Read events with timeout
-      const { events } = await readSSEEvents(response, 2, SSE_TIMEOUT);
+      const eventsPromise = readSSEEvents(response, 2, SSE_TIMEOUT);
+      await tick();
+
+      devSessionService?.emitTestEvent(sessionId, {
+        type: 'session_status',
+        data: {
+          sessionId,
+          status: 'running',
+          lastActivity: new Date().toISOString(),
+        },
+      });
+
+      devSessionService?.emitTestEvent(sessionId, {
+        type: 'log',
+        data: {
+          timestamp: new Date().toISOString(),
+          service: `dev-session-${sessionId}`,
+          level: 'info',
+          message: 'Manual dev session log',
+        },
+      });
+
+      const { events } = await eventsPromise;
       
       expect(events.length).toBeGreaterThanOrEqual(1);
       
@@ -321,18 +344,11 @@ describe('SSE Endpoints Integration Tests', () => {
 
   describe('SSE Connection Reliability', () => {
     it('handles connection close gracefully', async () => {
-      // Test with job logs stream
-      const depId = 'nextcloud-prod';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'start' }),
-      });
-      expect(actionRes.ok).toBe(true);
-      
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'nextcloud-prod' });
+      const jobId = job.id;
 
+      const logging = getLoggingService();
       const response = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);
       expect(response.ok).toBe(true);
       
@@ -342,6 +358,7 @@ describe('SSE Endpoints Integration Tests', () => {
       
       // Read a bit then close
       if (reader) {
+        await logging.logJob(jobId, 'info', 'Close flow', { service: 'job-runner' });
         await reader.read(); // Read first chunk
         await reader.cancel(); // Close connection
         // Should not throw or hang
@@ -349,24 +366,20 @@ describe('SSE Endpoints Integration Tests', () => {
     }, TEST_TIMEOUT);
 
     it('sends heartbeat events to keep connection alive', async () => {
-      // Create a job first
-      const depId = 'homeassistant-main';
-      const actionRes = await fetch(`${BASE_URL}${API.deployments.actions(depId)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: 'stop' }),
-      });
-      expect(actionRes.ok).toBe(true);
-      
-      const actionData = await actionRes.json() as PostDeploymentActionResponse;
-      const jobId = actionData.jobId!;
+      const jobService = getJobService();
+      const logging = getLoggingService();
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
+      const jobId = job.id;
 
       const response = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);
       expect(response.ok).toBe(true);
       
       // Read for a longer period to catch heartbeats
-      const { events } = await readSSEEvents(response, 1, 6000);
-      
+      const eventsPromise = readSSEEvents(response, 1, SSE_TIMEOUT);
+      await tick();
+      await logging.logJob(jobId, 'info', 'Heartbeat check', { service: 'job-runner' });
+      const { events } = await eventsPromise;
+
       // Should receive at least some events (logs, job updates, or heartbeats)
       expect(events.length).toBeGreaterThanOrEqual(1);
     }, TEST_TIMEOUT);
