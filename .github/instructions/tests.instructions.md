@@ -7,11 +7,11 @@ applyTo: "/packages/**/__tests__/**"
 ## Purpose
 Reliable, isolated tests with fakes-first strategy and consistent structure.
 
-## Core Rules
+## Core Rules  
 - Fakes over mocks: simple in-memory fakes implementing same interface in `__tests__/fakes/`.
 - Organize by feature; only import `@hola/shared` across packages.
-- For server integration, start dev server with `&`, wait for `/healthz`, and cleanup.
-- No external network calls.
+- **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
+- No external network calls or background processes.
 
 ## React Testing Environment (Web Package)
 
@@ -56,14 +56,26 @@ test('should render component', () => {
 - **External Commands**: Mock system commands (`df`, `/proc/meminfo`) for consistent CI behavior
 - **Feature Flags**: Test both real and mock service configurations
 
-### Server Test Health Verification
-```bash
-# ✅ Correct server startup pattern
-cd packages/server && bun run dev &
-sleep 3
-curl http://localhost:3001/healthz || echo "Server not ready"
-# run tests
-kill %1  # cleanup
+### Standardized Test Environment
+
+**Use the standardized test environment for all server tests:**
+
+```typescript
+import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+
+describe('My Tests', () => {
+  beforeAll(async () => {
+    await setupTestEnvironment({
+      env: { HOLA_USE_REAL_DOCKER: 'false' }
+    });
+  });
+
+  afterAll(async () => {
+    await teardownTestEnvironment();
+  });
+  
+  // Tests run in-process with no background servers
+});
 ```
 
 ## Do
@@ -72,15 +84,15 @@ kill %1  # cleanup
 - Keep tests deterministic; avoid arbitrary sleeps.
 - Configure jsdom properly for React component tests.
 - Use `await waitFor()` for React 18 async rendering.
-- Mock external dependencies consistently across environments.
+- **Use standardized test environment**: Always import from `helpers/test-environment` for server tests.
 - **Remove tests for deprecated APIs**: When endpoints are removed, delete all associated test files completely.
 
 ## Don't
 - Mock deep internals; test public APIs.
 - Introduce flaky timers; poll for readiness.
 - Expect synchronous DOM updates in React 18.
-- Leave tests dependent on external services without fallbacks.
 - Use `document` or `window` without proper jsdom setup.
+- **Use background processes**: No `bun run dev &`, `kill %1`, or `pkill` patterns.
 - **Test removed API endpoints**: Delete tests for `/api/dev/*` and other deprecated endpoints completely.
 - **Leave orphaned test files**: When cleaning up APIs, remove ALL related test files, not just failing assertions.
 - **Test deprecated SSE events**: Remove SSE test helpers and event handlers for removed functionality.

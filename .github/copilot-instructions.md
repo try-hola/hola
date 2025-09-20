@@ -283,22 +283,18 @@ cd packages/web && npx eslint . --fix   # Auto-fix web package
 
 **Development Server**:
 ```bash
-# CRITICAL: Always start server in background for testing and integration work
-cd packages/server && bun run dev &    # Start server in background with &
-sleep 3                                # Wait for server to start
-curl http://localhost:3001/healthz     # Test server is running
-kill %1                                # Stop background server when done
+# CRITICAL: Use standardized test environment for testing and integration work
+# Import from helpers/test-environment for reliable in-process testing
 
-# Alternative: Use pkill for cleanup
-pkill -f "bun run dev"                 # Kill any remaining bun dev processes
+# For development server (NOT for testing):
+cd packages/server && bun run dev    # Development server for manual testing
 
-# For API testing with feature flags
-HOLA_USE_REAL_DOCKER=true bun run dev & # Enable specific features
-# Always verify server health before running tests
-curl http://localhost:3001/healthz || echo "Server not ready"
+# NEVER use background processes for automated testing
+# ALWAYS use in-process test environment from helpers/test-environment
 
-# NEVER run server without & when testing - it will block terminal
-# ALWAYS verify server is running before running tests against it
+# For API testing with feature flags (manual development only)
+HOLA_USE_REAL_DOCKER=true bun run dev  # Enable specific features for development
+# Always use in-process testing for automated tests
 ```
 
 **Development Flow**:
@@ -313,13 +309,11 @@ curl http://localhost:3001/healthz || echo "Server not ready"
 9. **🚨 FINAL CHECK - MANDATORY**: Ensure linting, type checking, and tests pass 100% before committing - NO EXCEPTIONS
 
 **Testing API Integration**:
-- Always start the server in background mode when testing API calls
-- Use `cd packages/server && bun run dev &` (with ampersand) for background execution
-- Wait 3-5 seconds for server startup before running tests
-- Test endpoints with curl before running test suites to verify connectivity
-- Use `kill %1` or `pkill -f "bun run dev"` to stop background processes when done
-- Verify server health with `/healthz` endpoint before running contract tests
-- For feature testing, set environment variables before starting server
+- **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing
+- **No background processes**: Never use `bun run dev &` or `kill %1` patterns in automated tests  
+- **In-process testing**: All tests run through standardized test environment for speed and reliability
+- **Feature flag testing**: Set environment variables in test setup, not external processes
+- **Manual testing**: Only use development server (`bun run dev`) for manual API exploration, never in automated tests
 
 ## Architecture Patterns
 
@@ -497,21 +491,32 @@ import type { SomeType } from '@hola/shared';
 - Easier onboarding for new developers with fewer API patterns to learn
 
 ### Server Development & Testing
-**Background Process Management**:
-- **ALWAYS** use `&` (ampersand) when starting servers for testing
-- **NEVER** run `bun run dev` without `&` in testing scenarios - it blocks the terminal
-- Wait 3-5 seconds after starting server before running tests
-- Verify server health with `curl http://localhost:3001/healthz` before proceeding
-- Use `kill %1` or `pkill -f "bun run dev"` for cleanup
+**Server Development & Testing**:
+- **Standardized Test Environment**: Always use `helpers/test-environment` for server tests
+- **In-Process Testing**: All tests run in-process for speed, reliability, and isolation
+- **No Background Processes**: Never use `bun run dev &`, `kill %1`, or `pkill` patterns in tests
+- **Feature Flag Testing**: Set environment variables in test setup, not external server processes
+- **Health Verification**: In-process tests don't need health checks - they're always ready
 
 **Feature Flag Testing**:
 ```bash
-# Start server with specific feature flags enabled
-HOLA_USE_REAL_DOCKER=true HOLA_USE_REAL_DATABASE=true bun run dev &
-sleep 3
-curl http://localhost:3001/api/system/health  # Verify services are healthy
-bun test __tests__/phase4-contract.test.ts    # Run tests
-kill %1  # Cleanup
+# ✅ Correct: Use standardized test environment  
+import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+
+beforeAll(async () => {
+  await setupTestEnvironment({
+    env: {
+      HOLA_USE_REAL_DOCKER: 'true',
+      HOLA_USE_REAL_DATABASE: 'true'
+    }
+  });
+});
+
+afterAll(async () => {
+  await teardownTestEnvironment();
+});
+
+// Tests run in-process with configured environment
 ```
 
 **Health Verification Pattern**:

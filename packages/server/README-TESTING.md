@@ -1,157 +1,309 @@
 # Server Testing Guide
 
-## Contract Tests
+## Standardized Test Environment
 
-Contract tests verify that the server API matches the expected interface and behavior across different phases of development. These tests run against a real server instance to ensure end-to-end functionality.
+The server uses a **standardized in-process test environment** that eliminates brittle background process management and provides reliable, fast tests.
 
-### Running Contract Tests
+### Key Benefits
 
-#### Local Development
+- ✅ **No Background Processes**: Tests run in-process without external servers
+- ✅ **No Port Conflicts**: No real network ports used, preventing conflicts  
+- ✅ **Fast Execution**: Direct function calls instead of HTTP round-trips
+- ✅ **Reliable Cleanup**: Automatic cleanup prevents test interference
+- ✅ **Isolated Environment**: Each test gets fresh, predictable state
 
-Contract tests automatically start and stop the server as needed:
+## Test Environment Setup
 
-```bash
-# Run all contract tests
-cd packages/server
-bun test src/__tests__/phase*.test.ts
-
-# Run specific phase tests
-bun test src/__tests__/phase4-contract.test.ts
-bun test src/__tests__/phase0-contract.test.ts
-
-# Run with timeout for slower systems
-bun test --timeout=60000 src/__tests__/phase*.test.ts
-```
-
-#### CI/CD Environment
-
-In CI, the server is started in the background before tests run:
-
-```bash
-# Server is started by CI workflow
-cd packages/server 
-nohup bun run dev > server.log 2>&1 & echo $! > server.pid
-
-# Wait for health check
-for i in {1..60}; do
-  if curl -sSf http://localhost:3001/healthz > /dev/null; then
-    echo "Server is healthy"
-    exit 0
-  fi
-  sleep 1
-done
-
-# Run tests
-bun test
-```
-
-### Test Server Management
-
-Contract tests use the `test-server.ts` utility which provides:
-
-#### Automatic Server Detection
-- Tests check if a server is already running on port 3001
-- If found, tests use the existing server (common in CI)
-- If not found, tests start their own server instance
-
-#### Background Server Management
-- Servers are started in background using `Bun.spawn`
-- Health checks ensure server is ready before tests proceed
-- Automatic cleanup stops servers after tests complete
-
-#### Example Usage
+All tests should use the standardized test environment helper:
 
 ```typescript
-import { createTestServer, isServerRunning } from '../utils/test-server';
+import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
 
-describe('My Contract Tests', () => {
-  let testServer: TestServerManager | null = null;
-
+describe('My Feature Tests', () => {
   beforeAll(async () => {
-    // Check if server is already running (e.g., in CI)
-    if (await isServerRunning()) {
-      console.log('Using existing server for contract tests');
-      return;
-    }
-
-    // Start server for local testing
-    console.log('Starting test server for contract tests');
-    testServer = createTestServer();
-    await testServer.start();
-  }, 30000);
-
-  afterAll(async () => {
-    if (testServer) {
-      await testServer.stop();
-      testServer = null;
-    }
+    await setupTestEnvironment({
+      env: {
+        HOLA_USE_REAL_DOCKER: 'false',
+        HOLA_USE_REAL_DATABASE: 'false',
+      }
+    });
   });
 
+  afterAll(async () => {
+    await teardownTestEnvironment();
+  });
+
+  test('should work reliably', async () => {
+    const response = await fetch('/api/health');
+    expect(response.status).toBe(200);
+  });
+});
+```
+
+### Feature-Specific Test Environments
+
+For common testing scenarios, use pre-configured environments:
+
+```typescript
+import { setupFeatureTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+
+describe('Draft Management Tests', () => {
+  beforeAll(async () => {
+    // Pre-configured for draft testing with proper feature flags
+    await setupFeatureTestEnvironment('drafts');
+  });
+
+  afterAll(async () => {
+    await teardownTestEnvironment();
+  });
+  
   // Your tests here...
 });
 ```
 
-### Environment Variables
+Available feature environments:
+- `'drafts'` - Draft creation and validation
+- `'deployments'` - Deployment management
+- `'docker'` - Docker integration testing  
+- `'auth'` - Authentication testing
+- `'system'` - System monitoring testing
 
-Contract tests support feature flags for testing different configurations:
+## Running Tests
 
-```bash
-# Test with real Docker integration
-HOLA_USE_REAL_DOCKER=true bun test phase4-contract.test.ts
-
-# Test with development API enabled
-HOLA_ENABLE_DEV_API=true bun test phase0-contract.test.ts
-```
-
-### Troubleshooting
-
-#### Server Won't Start
-1. Check if port 3001 is already in use: `lsof -i :3001`
-2. Increase timeout in test configuration
-3. Check server logs for startup errors
-
-#### Tests Timeout
-1. Ensure server is healthy: `curl http://localhost:3001/healthz`
-2. Increase test timeout: `bun test --timeout=60000`
-3. Check network connectivity and firewall settings
-
-#### Server Not Cleaning Up
-1. Check for hanging processes: `ps aux | grep bun`
-2. Kill manually if needed: `pkill -f "bun run dev"`
-3. Verify cleanup logic in test afterAll hooks
-
-### Best Practices
-
-1. **Always use the test-server utility** for contract tests that need a server
-2. **Set appropriate timeouts** for test suites (30+ seconds for contract tests)
-3. **Check server health** before running test assertions
-4. **Clean up properly** in afterAll hooks to prevent resource leaks
-5. **Test both CI and local scenarios** to ensure compatibility
-
-### Local Development Workflow
+### Standard Test Execution
 
 ```bash
-# Standard development workflow
+# Run all tests
 cd packages/server
+bun test
 
-# Start development server (optional - tests can start their own)
-bun run dev &
+# Run specific test files
+bun test src/__tests__/drafts/management.test.ts
 
-# Run contract tests (will detect existing server)
-bun test src/__tests__/phase4-contract.test.ts
-
-# Stop development server
-kill %1
+# Run with custom timeout for complex tests
+bun test --timeout=30000
 ```
 
-### Integration with CI
+### Feature Flag Testing
 
-The CI workflow in `.github/workflows/test.yml` demonstrates the recommended pattern:
+Test different configurations using environment variables:
 
-1. Start server in background with logging
-2. Wait for health check to pass
-3. Run all tests including contract tests
-4. Upload logs on failure
-5. Clean up server process
+```bash
+# Test with real Docker integration (requires Docker)
+HOLA_USE_REAL_DOCKER=true bun test src/__tests__/docker/integration.test.ts
 
-This ensures consistent behavior between local development and CI environments.
+# Test with development API enabled  
+HOLA_ENABLE_DEV_API=true bun test src/__tests__/drafts/management.test.ts
+```
+
+## Test Organization
+
+### Directory Structure
+
+```
+packages/server/src/__tests__/
+├── helpers/
+│   └── test-environment.ts      # Standardized test environment
+├── auth/                        # Authentication tests
+├── deployments/                 # Deployment management tests
+├── docker/                      # Docker integration tests
+├── drafts/                      # Draft lifecycle tests
+├── jobs/                        # Job management tests
+└── system/                      # System monitoring tests
+```
+
+### Test Patterns
+
+#### Unit Tests
+Test individual functions and components:
+
+```typescript
+import { someFunction } from '../../services/my-service';
+
+describe('MyService', () => {
+  test('should process data correctly', () => {
+    const result = someFunction(testData);
+    expect(result).toEqual(expectedResult);
+  });
+});
+```
+
+#### Integration Tests  
+Test API endpoints and service interactions:
+
+```typescript
+import { setupTestEnvironment, teardownTestEnvironment, makeTestRequest } from '../helpers/test-environment';
+
+describe('API Integration', () => {
+  beforeAll(() => setupTestEnvironment());
+  afterAll(() => teardownTestEnvironment());
+
+  test('should handle POST requests', async () => {
+    const response = await makeTestRequest('/api/deployments', {
+      method: 'POST',
+      body: JSON.stringify(requestData),
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    expect(response.status).toBe(201);
+  });
+});
+```
+
+## Advanced Testing Scenarios
+
+### Docker Compose for Integration Testing
+
+For scenarios requiring actual service dependencies, use the test Docker Compose:
+
+```bash
+# Start isolated test environment
+cd packages/server
+docker-compose -f test-docker-compose.yml up -d
+
+# Run integration tests
+bun test src/__tests__/integration/
+
+# Cleanup
+docker-compose -f test-docker-compose.yml down -v
+```
+
+**Note**: This should only be used for special integration scenarios. The in-process approach is preferred for most tests.
+
+### CI/CD Integration
+
+The GitHub Actions workflow automatically runs tests:
+
+```yaml
+- name: Test
+  env:
+    HOLA_USE_REAL_DOCKER: "false"
+  run: bun run test
+```
+
+All tests use the standardized in-process environment, ensuring consistent behavior between local development and CI.
+
+## Best Practices
+
+### Do ✅
+
+1. **Always use standardized test environment** - Import from `helpers/test-environment`
+2. **Set appropriate timeouts** - Use 30+ seconds for complex integration tests
+3. **Clean up properly** - Always call `teardownTestEnvironment()` in `afterAll`
+4. **Test both success and error cases** - Verify error handling works correctly
+5. **Use feature-specific environments** - Leverage pre-configured setups when possible
+
+### Don't ❌
+
+1. **❌ NEVER use background processes** - No `bun run dev &` or `kill %1` patterns
+2. **❌ Don't rely on external ports** - Use in-process testing exclusively
+3. **❌ Don't skip cleanup** - Always teardown test environment to prevent leaks
+4. **❌ Don't hardcode URLs** - Use relative paths that work with test environment
+5. **❌ Don't test removed functionality** - Remove tests for deprecated APIs completely
+
+### Error Handling
+
+All test utilities include proper error handling:
+
+```typescript
+test('should handle service errors gracefully', async () => {
+  // Test error responses
+  const response = await makeTestRequest('/api/invalid-endpoint');
+  expect(response.status).toBe(404);
+  
+  const error = await response.json();
+  expect(error).toHaveProperty('error');
+  expect(error.error).toHaveProperty('code');
+  expect(error.error).toHaveProperty('message');
+});
+```
+
+### Performance Considerations
+
+The in-process test environment provides excellent performance:
+
+- **Fast startup**: No external process spawning (< 100ms)
+- **Concurrent safe**: Multiple test files can run in parallel
+- **Memory efficient**: Shared server instance across tests
+- **No network overhead**: Direct function calls instead of HTTP
+
+## Troubleshooting
+
+### Common Issues
+
+#### Tests fail with "Test server not started"
+**Solution**: Ensure `setupTestEnvironment()` is called in `beforeAll()`
+
+#### Port already in use errors
+**Solution**: This shouldn't happen with in-process testing. Check for background processes.
+
+#### Tests fail in CI but pass locally
+**Solution**: Verify environment variables are consistent. Use `HOLA_USE_REAL_*=false` in CI.
+
+#### Memory leaks between tests
+**Solution**: Always call `teardownTestEnvironment()` and check for hanging promises.
+
+### Debugging
+
+Enable debug logging for test troubleshooting:
+
+```bash
+DEBUG=hola:test bun test
+```
+
+### Migration from Old Patterns
+
+If you find tests using old patterns, update them:
+
+```typescript
+// ❌ Old brittle pattern
+cd packages/server && bun run dev &
+sleep 3
+curl http://localhost:3001/healthz
+bun test
+kill %1
+
+// ✅ New standardized pattern  
+import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+
+beforeAll(() => setupTestEnvironment());
+afterAll(() => teardownTestEnvironment());
+```
+
+## Migration Guide
+
+### Updating Existing Tests
+
+1. **Replace imports**:
+   ```typescript
+   // Old
+   import { setupTestServer, teardownTestServer } from '../utils/bun-server';
+   
+   // New  
+   import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+   ```
+
+2. **Update setup calls**:
+   ```typescript
+   // Old
+   await setupTestServer(3001, { HOLA_USE_REAL_DOCKER: 'false' });
+   
+   // New
+   await setupTestEnvironment({ env: { HOLA_USE_REAL_DOCKER: 'false' } });
+   ```
+
+3. **Use feature environments when possible**:
+   ```typescript
+   // Instead of manual env setup
+   await setupTestEnvironment({ 
+     env: { 
+       HOLA_ENABLE_DEV_API: 'true',
+       HOLA_USE_REAL_DRAFTS: 'false' 
+     } 
+   });
+   
+   // Use pre-configured feature environment
+   await setupFeatureTestEnvironment('drafts');
+   ```
+
+The standardized test environment ensures reliable, fast tests that work consistently across all development and CI environments.

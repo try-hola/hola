@@ -1,0 +1,75 @@
+version: "3.9"
+
+# Test Environment Docker Compose
+# 
+# Provides isolated services for integration testing when needed.
+# Most tests use in-process approach, but this is available for
+# scenarios requiring actual service dependencies.
+
+x-test-common: &test-common
+  networks:
+    - hola-test
+  restart: "no"
+
+services:
+  # Test database (SQLite in-memory for speed)
+  test-database:
+    <<: *test-common
+    image: alpine:latest
+    container_name: hola-test-database
+    command: ["sh", "-c", "while true; do sleep 30; done"]
+    tmpfs:
+      - /data:noexec,nosuid,size=100m
+    environment:
+      - TEST_MODE=true
+
+  # Test server with isolated dependencies
+  test-server:
+    <<: *test-common
+    image: ghcr.io/oven-sh/bun:1
+    container_name: hola-test-server
+    working_dir: /app/packages/server
+    command: ["bun", "run", "dev"]
+    ports:
+      - "0:3001"  # Dynamic port allocation to avoid conflicts
+    volumes:
+      - ../..:/app:cached
+    environment:
+      - NODE_ENV=test
+      - HOLA_TEST_MODE=true
+      - HOLA_USE_REAL_DOCKER=false
+      - HOLA_USE_REAL_DATABASE=false
+      - HOLA_DISABLE_AUTOSTART=true
+    depends_on:
+      - test-database
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Test web frontend (if needed for e2e tests)
+  test-web:
+    <<: *test-common
+    image: ghcr.io/oven-sh/bun:1
+    container_name: hola-test-web
+    working_dir: /app/packages/web
+    command: ["bun", "dev", "--host", "0.0.0.0"]
+    ports:
+      - "0:3000"  # Dynamic port allocation
+    volumes:
+      - ../..:/app:cached
+    environment:
+      - NODE_ENV=test
+      - VITE_API_BASE_URL=http://test-server:3001
+    depends_on:
+      - test-server
+
+networks:
+  hola-test:
+    name: hola-test
+    driver: bridge
+
+# Note: This docker-compose is for special integration scenarios only.
+# Most tests should use the in-process test environment for speed and reliability.
