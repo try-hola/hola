@@ -1,0 +1,174 @@
+HOLA Product Requirements & Architecture
+========================================
+
+1. Vision
+---------
+Hola streamlines the discovery, deployment, and lifecycle management of self-hosted applications for home lab enthusiasts. It provides an approachable web experience, a scriptable CLI, and automated backend services so hobbyists can install, customize, monitor, and maintain apps with confidence while retaining full control of their infrastructure.
+
+2. Goals
+--------
+### Business Goals
+- Reach 1,000 active users within six months of launch and capture roughly 10% of the home lab enthusiast market in year one.
+- Cultivate an open-source community with at least 50 contributors during the first year.
+- Establish monetization (premium features or support) by month 12.
+
+### User Goals
+- Enable low-friction app installs, updates, and lifecycle management.
+- Provide a secure, centralized dashboard with health, notifications, and backups.
+- Deliver a curated, well-documented app catalog with ratings and one-click installs.
+- Offer automation for backup, restore, and migration workflows.
+
+### Non-Goals
+- Hosting or providing third-party infrastructure.
+- Enterprise multi-tenant SaaS support.
+- Deep app development tooling beyond deployment and configuration management.
+
+3. Target Users & Personas
+--------------------------
+- **Alex – Home Lab Enthusiast (Intermediate):** Wants discovery, painless installs, timely updates, and health monitoring.
+- **Jamie – Newcomer (Beginner):** Needs guided onboarding, clear explanations, and easy rollback mechanisms.
+- **Morgan – Power User (Advanced):** Requires granular configuration (env, ports, volumes), automated backups, and integration hooks for existing tooling.
+
+4. Product Scope & Functional Requirements
+-----------------------------------------
+### Platform Scope
+- Initial deployment support targets OrbStack; broader Docker environments arrive in later phases.
+- HTTPS/TLS termination via Traefik is mandatory before public launch.
+- Works in single-node home lab environments sized for 1–10 users and roughly 5–50 applications.
+
+### Onboarding & First-Time Experience
+- Installation via script or container with prerequisite checks.
+- First launch presents a welcome screen, admin account creation, optional tutorial, and guided first install.
+- Local authentication (backed by Authentik) with password reset, validation, and clear error messaging.
+
+### App Catalog & Install Flow
+- Responsive catalog with search, filters, and enriched app detail pages.
+- Install wizard backed by the Draft workflow:
+  - Environment variable editing with validation metadata.
+  - Compose override upload with syntax validation.
+  - Additional file uploads (config, secrets) with list management.
+  - Advanced options for ports, volumes, and other runtime parameters.
+  - Real-time validation, asynchronous preflight checks, and summary confirmation prior to deployment.
+  - Progress indicators and actionable error handling.
+- Deployments persisted as jobs with SSE-powered status streaming.
+
+### Post-Deployment Management
+- Dashboard lists deployments with status, lifecycle controls (start, stop, restart, update, uninstall), and access to metrics and logs.
+- Change Drafts extend Drafts for post-deploy edits with generation-based versioning, diffs, validation, preflight, and apply/rollback flows (in-place vs blue/green strategies).
+- Deployment history retains immutable snapshots with user attribution for audit purposes.
+
+### Backups & Restores
+- Scheduled backups stored as `tar.gz` archives under `~/.hola/backups` with retention of seven per deployment.
+- Restore and migration tooling available per deployment with clear status reporting.
+
+### Notifications & Monitoring
+- In-app and optional email notifications covering updates, errors, and backup results with snooze/dismiss actions.
+- Health dashboards and logs accessible per deployment; offline mode permits management of existing apps without connectivity.
+
+### Advanced & Edge-Case Handling
+- Handles port conflicts, disk space issues, and validation errors with guided remediation.
+- Secrets redaction in diffs/logs and preservation of unchanged secrets across generations.
+- Concurrency guard preventing simultaneous submitted drafts per deployment.
+
+### CLI Experience
+- React+Ink CLI (`@hola/cli`) mirrors web workflows for automation: draft lifecycle, validation, finalize, deploy, job watch, and dev sessions.
+- Commands emphasize scriptability, colored output, and non-zero exit codes on failures.
+- Future expansion includes bundle scaffolding, packaging, registry push, logs, watch, and cleanup operations.
+
+5. System Architecture Overview
+-------------------------------
+### Deployment Model
+- Delivered as a Docker Compose stack including Hola API (Node.js/TypeScript), React SPA frontend, Traefik reverse proxy, and Authentik identity provider.
+- Hola services bind-mount `/var/run/docker.sock` to orchestrate Docker Compose deployments.
+
+### Core Components
+- **Frontend:** React SPA (Vite build) served via the backend or static hosting.
+- **Backend API:** TypeScript Node.js services orchestrating catalog management, OCI pulls via ORAS CLI, bundle processing, job handling, backups, metrics, Authentik integration, and Docker Compose operations.
+- **Storage Layout:** `~/.hola` hosts deployments, sqlite catalog/index, encrypted secrets store, job logs, and deployment state snapshots.
+- **Runtime:** Docker engine with Compose v2; deployment-specific project names prevent conflicts.
+- **Ingress & Auth:** Traefik terminates HTTPS and forwards requests; Authentik provides authentication/SSO via forward-auth or OIDC.
+
+### Data & Configuration
+- Catalog metadata maintained in sqlite with full-text search.
+- Generational deployment storage under `~/.hola/apps/<appId>/deployments/<deploymentId>/generations/...` with immutable config snapshots and a `current` pointer.
+- Secrets stored locally with encryption at rest; CLI and UI hide secret values in diffs/logs.
+- Backups prune to seven retained archives per deployment.
+
+### Key Domain Models
+- **Draft:** Captures pre-deployment customization (env, overrides, files, advanced options, validation state, status).
+- **Upload:** Metadata for temporary files associated with drafts (compose overrides, additional files).
+- **ChangeDraft:** Extends Draft for live deployments with base generation, strategy (in-place/blue-green), and upgrade metadata.
+- **Deployment History Entry:** Generation-based changelog with timestamps, user, summary, and related job/draft IDs.
+
+### API Surface (Representative)
+- Draft lifecycle: `POST/GET/PATCH/DELETE /api/drafts/:draftId`, validation, preflight, finalize, and deployment creation.
+- Change management: `POST/GET/PATCH /api/deployments/:deploymentId/drafts`, validate, preflight, finalize, apply, rollback, diff, history.
+- Jobs: creation endpoints return `jobId` and stream updates via SSE.
+- Catalog, bundles, backups, and additional endpoints remain consistent with existing architecture docs.
+
+### Realtime & SSE
+- SSE endpoints provide job log streaming (`/api/jobs/:id/logs/stream`) and dev session events (`/api/dev/sessions/:id/events`).
+- Events include `log`, `job_update`, `session_status`, and `heartbeat` aligned with the shared `SSEEvent` union type.
+- Server sends heartbeats and manages backpressure; client SDK/CLI provide automatic reconnection with exponential backoff and testing helpers for deterministic behavior.
+
+### Observability & Security
+- Metrics: counts of drafts/change drafts, validation outcomes, job durations, rollback count, HTTP metrics via Prometheus, request duration histograms.
+- Logging: structured JSON logs with correlation IDs, user attribution, and secret redaction.
+- Auth model: Authentik identity for UI/CLI, with API key middleware planned for server MVP endpoints; future RBAC via Authentik groups.
+- Validation and preflight guardrails ensure safe config changes and detect drift (base generation mismatch).
+
+6. Server Architecture Roadmap
+------------------------------
+- **Phase 0 – Foundations:** Bun runtime with Hono framework, config/env validation, error handling (problem+json), logging, CORS, health/version endpoints, OpenAPI scaffolding, Docker packaging, and CI integration.
+- **Phase 1 – MVP:** Deployments CRUD persisted via Drizzle+SQLite, API key auth for mutating endpoints, SSE logs endpoint, Prometheus metrics, seeding, and automated tests across service/repository/API layers.
+- **Phase 2 – Hardening:** Cursor pagination, filtering, idempotency, rate limiting, contract and E2E tests, auto-running migrations, and structured error codes.
+- **Phase 3 – Integrations:** Background jobs leveraging Bun workers, webhook delivery, secrets abstraction, feature flags, and RBAC groundwork.
+- **Phase 4 – Productionization:** Health checks, graceful shutdown, SQLite backup/restore with Postgres migration plan, security hardening, load testing, and operational runbooks.
+
+7. CLI Architecture & Roadmap
+-----------------------------
+- **Package:** `packages/cli` built with TypeScript, React, Ink; distributed via bin wrapper (`hola`). Depends on `@hola/sdk` and `@hola/shared` for shared contracts.
+- **Tooling:** Bun-driven dev (`bun src/index.tsx`), `bun build` to Node-target ESM, strict TypeScript config, linting, and forthcoming tests (unit, Ink UI, contract).
+- **Command Surface (Phase 1):** `deploy run`, granular draft/validate/finalize actions, job watch, SSE streaming with `eventsource-parser`, optional JSON output.
+- **Phase 2 Enhancements:** `bundle init/dev/validate/pack/push/deploy/logs/watch/clean` with file watching (chokidar), Traefik-aware validation, hotkeys, and fallback behaviors when dev APIs are disabled.
+- **Runtime Expectations:** Clear status line UI, `<Static>` log rendering, keyboard shortcuts, environment variables (`HOLA_API_URL`, `HOLA_TOKEN`, dev flags), and robust error handling for network/auth failures.
+
+8. Monorepo Structure & Tooling
+-------------------------------
+- Bun workspaces layout:
+  - `packages/web` – React/Vite SPA.
+  - `packages/server` – Bun REST API.
+  - `packages/shared` – shared configs and types.
+  - `packages/cli` (new) – Ink-based CLI.
+- Root scripts: `bun install`, `bun run dev` (web + server), plus package-specific dev/build/lint/typecheck commands.
+- Vite dev server proxies `/api` to backend during development.
+- CI (`.github/workflows/ci-bun.yml`) installs Bun and runs lint/typecheck/build across filtered packages.
+
+9. Operational & Platform Considerations
+----------------------------------------
+- Packaging: Dockerized services with ORAS CLI for OCI artifact pulls; deploy scripts in `deploy/` (compose file, `.env` template, install script).
+- Auth & Ingress: Traefik handles TLS, Authentik supplies identity headers; CLI supports token-based auth.
+- Storage Hygiene: Encrypted secrets file, job logs, generation snapshots; ensure WAL mode for SQLite when concurrency grows.
+- Backups: Automated rotation, retention of seven archives per deployment, restore tooling integrated into UI and CLI.
+- Reliability: SSE heartbeat, reconnection strategy, concurrency guards, and base-generation conflict detection.
+- Accessibility: High-contrast UI, responsive design, keyboard navigation, and screen reader support.
+
+10. Success Metrics & Tracking
+------------------------------
+- **User Metrics:** Active users, apps per user, onboarding completion, satisfaction (NPS/surveys).
+- **Business Metrics:** Growth, retention, community engagement (stars, contributors), premium revenue.
+- **Technical Metrics:** Deployment duration, uptime (>99.5%), failure rate (<2%), backup success rate.
+- **Tracking Plan:** Instrument signups/logins, catalog interactions, deployment lifecycle, backups, notifications, and error logging.
+
+11. Questions & Unknowns
+------------------------
+1. **Auth Alignment:** How should Authentik-based identity integrate with the server MVP’s API key security without duplicating effort? Is API key auth temporary or complementary (e.g., CLI uses API keys, UI uses Authentik)?
+2. **Platform Support Timeline:** What is the roadmap for extending beyond OrbStack to generic Docker hosts, and are there environment-specific constraints we must design around now?
+3. **Catalog Source of Truth:** Where do catalog definitions originate (internal repo, community submissions, registry)? What is the governance process for updates, reviews, and trust?
+4. **Email Notifications:** Which email provider or SMTP configuration will power outbound notifications, and how is configuration surfaced in the install wizard?
+5. **Backup Storage Limits:** Are there retention policies or storage quotas beyond “seven per deployment,” and how do we alert users about insufficient disk space?
+6. **Secrets Management Roadmap:** What is the timeline for integrating external secret stores (e.g., Vault) or syncing with Authentik? Are there compliance requirements that influence encryption choices?
+7. **CLI Distribution:** Will the CLI be published globally (npm/brew) or remain workspace-only? Should we support Windows/WSL out of the gate?
+8. **Dev Session Feature Flag:** What are the activation criteria and default state for developer endpoints? How does the product behave in environments where dev APIs remain disabled long term?
+9. **Telemetry & Privacy:** What optional analytics, if any, will be collected, and how will user consent be gathered/configured?
+10. **Premium Feature Definition:** Which features are candidates for monetization versus free tier, and do any current requirements depend on premium functionality being available at launch?
