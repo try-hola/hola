@@ -111,22 +111,6 @@ import {
 import { developmentToolsEndpoints, createApiMonitoringMiddleware } from './config/development-api';
 import { initializeDevelopmentEnvironment } from './config/development';
 
-// In-memory dev session store (very lightweight mock used when enableDevApi=true)
-type InMemoryDevSession = {
-  id: string;
-  sessionId: string; // alias
-  draftId: string;
-  name?: string;
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  createdAt: string;
-  lastActivity: string;
-  liveReload: boolean;
-  autoSync: boolean;
-  logs: Array<{ timestamp: string; level: string; message: string; service?: string }>;
-};
-
-const devSessionStore: { sessions: InMemoryDevSession[] } = { sessions: [] };
-
 // Phase 0: Initialize infrastructure with fail-fast validation
 const logger = getLogger().child({ service: 'HolaServer' });
 const shouldAutoStart = process.env.HOLA_DISABLE_AUTOSTART !== 'true';
@@ -552,75 +536,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       }
     }
 
-    // Create dev session
-    if (pathname === API.dev.sessions && req.method === 'POST') {
-      try {
-        const body = await req.json().catch(() => ({}));
-        const draftId = body.draftId || crypto.randomUUID();
-        const sessionId = crypto.randomUUID();
-        const now = new Date().toISOString();
-        const session: InMemoryDevSession = {
-          id: sessionId,
-          sessionId,
-          draftId,
-          name: body.name,
-          status: 'starting',
-          createdAt: now,
-          lastActivity: now,
-          liveReload: body.settings?.liveReload ?? true,
-          autoSync: body.settings?.autoSync ?? true,
-          logs: [],
-        };
-        devSessionStore.sessions.push(session);
-        // Transition to running immediately for mock
-        session.status = 'running';
-        return json({ sessionId, draftId, jobId: undefined });
-      } catch {
-        return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
-      }
-    }
-
-    // List dev sessions
-    if (pathname === API.dev.sessions && req.method === 'GET') {
-      const page = Number(searchParams.get('page')) || 1;
-      const limit = Number(searchParams.get('limit')) || 20;
-      const start = (page - 1) * limit;
-      const items = devSessionStore.sessions.slice(start, start + limit).map(s => ({
-        id: s.id,
-        name: s.name,
-        draftId: s.draftId,
-        status: s.status,
-        previewUrl: undefined,
-        createdAt: s.createdAt,
-        lastActivity: s.lastActivity,
-        liveReload: s.liveReload,
-        autoSync: s.autoSync,
-      }));
-      return json({ items, page, limit, total: devSessionStore.sessions.length });
-    }
-
-    // Get dev session by ID
-    const devSessionMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)$/);
-    if (devSessionMatch && req.method === 'GET') {
-      const id = devSessionMatch[1];
-      const session = devSessionStore.sessions.find(s => s.id === id);
-      if (!session) return notFound();
-      return json({
-        id: session.id,
-        sessionId: session.sessionId,
-        name: session.name,
-        deploymentId: undefined,
-        draftId: session.draftId,
-        status: session.status,
-        previewUrl: undefined,
-        port: undefined,
-        createdAt: session.createdAt,
-        lastActivity: session.lastActivity,
-        liveReload: session.liveReload,
-        autoSync: session.autoSync,
-        logs: session.logs,
-      });
-    }
+    // Dev session endpoints moved to Phase 7 section below - using real service implementations
   }
 
 
