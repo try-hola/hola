@@ -45,12 +45,12 @@ export interface Services {
 /**
  * Environment types for service selection
  */
-export type ServiceEnvironment = 'test' | 'production';
+export type ServiceEnvironment = 'test' | 'development' | 'production';
 
 /**
  * Create services based on environment
  * 
- * @param env - Environment to create services for ('test' or 'production')
+ * @param env - Environment to create services for ('test', 'development', or 'production')
  * @returns Complete service collection
  */
 export function createServices(env: ServiceEnvironment): Services {
@@ -74,6 +74,40 @@ export function createServices(env: ServiceEnvironment): Services {
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
       deployments: new MockDeploymentService(),
+    };
+  }
+  
+  if (env === 'development') {
+    // Mixed services for development: real services where possible, mocks for external dependencies
+    const storage = new RealStorageService();
+    const database = new RealDatabaseService(storage);
+    const authService = new RealAuthService(false); // Auth disabled in development by default
+    const docker = new MockDockerService(); // Use mock Docker for safety in development
+    const systemMonitoring = new RealSystemMonitoringService();
+    
+    // Create logging service with storage dependency
+    const logging = new RealLoggingService(storage);
+    
+    // Create jobs service with database and logging dependencies
+    const jobs = new RealJobService(database, logging);
+    
+    const catalog = new RealCatalogService();
+    
+    return {
+      storage,
+      config: new RealConfigService(storage),
+      database,
+      databaseConfig: new RealDatabaseConfigService(database),
+      auth: authService,
+      docker,
+      systemMonitoring,
+      logging,
+      jobs,
+      catalog,
+      bundles: new RealBundleService(),
+      drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring)),
+      validation: new RealValidationService(docker, systemMonitoring),
+      deployments: new RealDeploymentService(storage, jobs, docker),
     };
   }
   
@@ -123,6 +157,11 @@ export function detectEnvironment(): ServiceEnvironment {
       process.env.VITEST === 'true' || 
       process.env.HOLA_DISABLE_AUTOSTART === 'true') {
     return 'test';
+  }
+  
+  // Check if we're in development environment
+  if (process.env.NODE_ENV === 'development') {
+    return 'development';
   }
   
   return 'production';
