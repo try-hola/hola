@@ -41,3 +41,7 @@ packages/*/coverage
 
 # Misc
 *.local
+
+# TypeScript build info
+**/tsconfig.tsbuildinfo
+.tsbuildinfo
