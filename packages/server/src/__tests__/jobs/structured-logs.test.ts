@@ -48,7 +48,8 @@ describe('Jobs and Structured Logs', () => {
   describe('Job logs SSE', () => {
     it('GET /api/jobs/:id/logs has SSE headers', async () => {
       const jobService = getJobService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'homeassistant-main' });
+  // Use a valid JobType ('install' used for generic log stream testing)
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
       const jobId = job.id;
 
       const res = await fetch(`${BASE_URL}${API.jobs.logs(jobId)}`);
@@ -63,7 +64,7 @@ describe('Jobs and Structured Logs', () => {
     it('GET /api/jobs/:id/logs/stream has SSE headers and supports job_update events', async () => {
       const jobService = getJobService();
       const logging = getLoggingService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'grafana-monitoring' });
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'grafana-monitoring' });
       const jobId = job.id;
 
       const res = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);

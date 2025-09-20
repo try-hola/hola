@@ -55,6 +55,7 @@ import {
 // Phase 0: Infrastructure imports
 import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
+import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
 import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService, getDeploymentService } from './services/factory';
@@ -724,7 +725,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       onSubscribe(controller) {
         let i = 0;
         const services = ['nextcloud', 'postgres', 'redis'];
-        const levels = ['info', 'warn', 'error', 'debug'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
         controller.heartbeat();
         const interval = setInterval(() => {
           i += 1;
@@ -762,7 +763,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       onSubscribe(controller) {
         let i = 0;
         const services = ['nextcloud', 'postgres', 'redis'];
-        const levels = ['info', 'warn', 'error', 'debug'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
         const messages = ['Starting service', 'Processing request', 'Cache operation', 'Database query'];
         controller.heartbeat();
         const interval = setInterval(() => {
@@ -888,7 +889,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return new Response(stream, { headers: createSSEHeaders() });
     } catch {
-      const levels = ['info', 'warn', 'error', 'debug'];
+  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
       const stream = createSSEStream({
         logger,
         onSubscribe(controller) {
@@ -967,7 +968,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return new Response(stream, { headers: createSSEHeaders() });
     } catch {
-      const levels = ['info', 'warn', 'debug'];
+  const levels: LogLevel[] = ['info', 'warn', 'debug'];
       const stream = createSSEStream({
         logger,
         onSubscribe(controller) {

@@ -128,7 +128,7 @@ describe('SSE Endpoints Integration Tests', () => {
   describe('Job Logs SSE Stream (/api/jobs/:id/logs/stream)', () => {
     it('has correct SSE headers', async () => {
       const jobService = getJobService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'homeassistant-main' });
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
       const jobId = job.id;
 
       // Test SSE endpoint
@@ -148,7 +148,7 @@ describe('SSE Endpoints Integration Tests', () => {
     it('sends valid SSE events with proper structure', async () => {
       const jobService = getJobService();
       const logging = getLoggingService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'grafana-monitoring' });
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'grafana-monitoring' });
       const jobId = job.id;
 
       // Test SSE event structure
@@ -345,7 +345,7 @@ describe('SSE Endpoints Integration Tests', () => {
   describe('SSE Connection Reliability', () => {
     it('handles connection close gracefully', async () => {
       const jobService = getJobService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'nextcloud-prod' });
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'nextcloud-prod' });
       const jobId = job.id;
 
       const logging = getLoggingService();
@@ -368,7 +368,7 @@ describe('SSE Endpoints Integration Tests', () => {
     it('sends heartbeat events to keep connection alive', async () => {
       const jobService = getJobService();
       const logging = getLoggingService();
-      const job = await jobService.createJob({ type: 'deploy', deploymentId: 'homeassistant-main' });
+  const job = await jobService.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
       const jobId = job.id;
 
       const response = await fetch(`${BASE_URL}${API.jobs.logsStream(jobId)}`);

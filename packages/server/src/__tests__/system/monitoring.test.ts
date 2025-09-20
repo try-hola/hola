@@ -30,7 +30,7 @@ async function readMatchingSSEEvent(
   const decoder = new TextDecoder();
   let buffer = '';
 
-  return new Promise<unknown>((resolve, reject) => {
+  return new Promise<{ type?: string; data?: unknown }>((resolve, reject) => {
     const timeout = setTimeout(() => {
       reader.cancel();
       reject(new Error(`Timed out after ${timeoutMs}ms waiting for SSE event`));
