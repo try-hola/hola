@@ -11,7 +11,8 @@ Reliable, isolated tests with fakes-first strategy and simplified service manage
 - Fakes over mocks: simple in-memory fakes implementing same interface in `__tests__/fakes/`.
 - Organize by feature; only import `@hola/shared` across packages.
 - **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
-- **Simplified services**: Tests automatically use all mock services, no configuration needed.
+- **Environment-based testing**: Test environment automatically uses all mock services via environment detection.
+- **3-Environment System**: test (all mocks), development (mixed), production (all real) - tests always run in test mode.
 - No external network calls or background processes.
 
 ## React Testing Environment (Web Package)

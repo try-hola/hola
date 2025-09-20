@@ -530,12 +530,15 @@ afterAll(async () => {
 
 ### Service Implementation Patterns
 
-**Simplified Service Factory**:
+**Environment-Based Service Factory**:
 
-- Environment-based service selection: 'test' uses all mocks, 'production' uses all real services
-- No complex health monitoring, feature flags, or automatic fallback
+- **3 Environment Modes**: Replaced complex feature flag matrix with simple environment-based selection
+  - **Test** (`NODE_ENV=test`, `VITEST=true`, or `HOLA_DISABLE_AUTOSTART=true`): All mock services for reliable testing
+  - **Development** (`NODE_ENV=development`): Mixed real/mock services with safe defaults (mock Docker)
+  - **Production** (default): All real services for full functionality
 - Simple `getServices()` and `resetServices()` API for all service access
-- Services are instantiated based on environment detection (NODE_ENV, VITEST, HOLA_DISABLE_AUTOSTART)
+- Environment detection automatically selects appropriate service implementations
+- No complex health monitoring or automatic fallback patterns
 
 **Service Access Pattern**:
 
@@ -547,26 +550,35 @@ const services = getServices();
 const result = await services.storage.readFile('config.json');
 ```
 
-**Minimal Feature Flags**:
+**Environment Configuration System**:
 
-- Only `useAuth` and `useObservability` flags remain
-- All service selection is handled by environment detection
-- No complex configuration matrix or service-specific flags
+- **Consolidated Configuration**: Replaced 15+ feature flags with 3 predictable environment modes
+- **Clear Defaults**: Each environment has security-appropriate and functionality-appropriate defaults
+- **Override Support**: Development and production allow specific overrides via environment variables:
+  - `HOLA_USE_AUTH=true/false` - Override authentication setting
+  - `HOLA_USE_OBSERVABILITY=true/false` - Override observability/metrics setting
+- **Test Isolation**: Test environment ignores overrides to ensure consistent test behavior
+
+**Environment-Specific Behavior**:
+- Test: `useAuth=false`, `useObservability=false`, `enableDevApi=true`, `useRealServices=false`
+- Development: `useAuth=false`, `useObservability=false`, `enableDevApi=true`, `useRealServices=true` (mixed services)
+- Production: `useAuth=true`, `useObservability=true`, `enableDevApi=false`, `useRealServices=true`
 
 ## Testing Strategies
 
-**Simplified Testing Approach**:
+**Environment-Based Testing**:
 
-- Use environment-based service selection for predictable test behavior
-- Test environment automatically uses all mock services
-- No need to configure complex feature flags or health monitoring
-- Simple `resetServices()` call between tests ensures clean state
+- **Predictable Behavior**: Test environment automatically selects all mock services
+- **No Configuration Needed**: Environment detection handles service selection automatically
+- **Clean State Management**: Simple `resetServices()` call between tests ensures clean state
+- **Isolation**: Test environment ignores production overrides for consistent behavior
 
 **Service Testing**:
 
-- All services work predictably in their respective environments
-- Mock services provide consistent behavior for reliable testing
-- Real services are only used in production with no fallback complexity
+- **Environment Consistency**: All services work predictably in their respective environments
+- **Mock Reliability**: Mock services provide consistent behavior for reliable testing
+- **Production Simplicity**: Real services used in production without complex fallback logic
+- **Development Safety**: Development environment uses safe defaults (mock Docker, real storage)
 
 **Integration Testing**:
 - Start test servers with background processes
