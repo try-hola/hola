@@ -23,7 +23,7 @@ describe('Docker Monitoring via System Status', () => {
     await setupTestServer();
     const services = getServices();
     const svc = services.systemMonitoring;
-    if (!('emitTestStatus' in (svc as unknown))) {
+    if (!('emitTestStatus' in (svc as object))) {
       // Not a mock; environment misconfigured — soft-skip
       monitoringService = undefined as unknown as MockSystemMonitoringService;
       return;
