@@ -193,8 +193,8 @@ export function createAuthMiddleware() {
     
     // Get auth service and authenticate
     try {
-      const services = getServices();
-      const authResult = await services.auth.authenticate(token, {
+      const { auth } = getServices();
+      const authResult = await auth.authenticate(token, {
         path,
         method,
         userAgent: req.headers.get('user-agent') || undefined,
@@ -225,7 +225,7 @@ export function createAuthMiddleware() {
       
       // Check if principal has required capability for this endpoint
       const requiredCapability = getRequiredCapability(path, method);
-      if (requiredCapability && !getAuthService().hasCapability(authResult.principal, requiredCapability)) {
+      if (requiredCapability && !auth.hasCapability(authResult.principal, requiredCapability)) {
         logger.warn('Insufficient capabilities', { 
           path, 
           method, 

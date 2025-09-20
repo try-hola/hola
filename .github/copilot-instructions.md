@@ -526,13 +526,16 @@ afterAll(async () => {
 - Verify specific service health before testing their endpoints
 
 ### Service Implementation Patterns
+
 **Simplified Service Factory**:
+
 - Environment-based service selection: 'test' uses all mocks, 'production' uses all real services
 - No complex health monitoring, feature flags, or automatic fallback
 - Simple `getServices()` and `resetServices()` API for all service access
 - Services are instantiated based on environment detection (NODE_ENV, VITEST, HOLA_DISABLE_AUTOSTART)
 
 **Service Access Pattern**:
+
 ```typescript
 import { getServices } from './services/simple-factory';
 
@@ -542,18 +545,22 @@ const result = await services.storage.readFile('config.json');
 ```
 
 **Minimal Feature Flags**:
+
 - Only `useAuth` and `useObservability` flags remain
 - All service selection is handled by environment detection
 - No complex configuration matrix or service-specific flags
 
-### Testing Strategies
+## Testing Strategies
+
 **Simplified Testing Approach**:
+
 - Use environment-based service selection for predictable test behavior
 - Test environment automatically uses all mock services
 - No need to configure complex feature flags or health monitoring
 - Simple `resetServices()` call between tests ensures clean state
 
 **Service Testing**:
+
 - All services work predictably in their respective environments
 - Mock services provide consistent behavior for reliable testing
 - Real services are only used in production with no fallback complexity

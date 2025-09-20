@@ -64,10 +64,10 @@ export class RealJobService implements JobService {
   private maxRetries = Number(process.env.HOLA_JOBS_MAX_RETRIES || 0);
   private baseBackoffMs = Number(process.env.HOLA_JOBS_BACKOFF_MS || 500);
 
-  constructor(db?: DatabaseService, logging?: LoggingService) {
-    this.db = db ?? getServices().database;
+  constructor(db: DatabaseService, logging: LoggingService) {
+    this.db = db;
     this.repo = new DatabaseJobRepository(this.db);
-    this.logging = logging ?? getServices().logging;
+    this.logging = logging;
   }
 
   private enqueue(id: string) {

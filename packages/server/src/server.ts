@@ -242,13 +242,20 @@ async function route(url: URL, req: Request): Promise<Response> {
   // System: Service factory health status
   if (pathname === '/api/system/health' && req.method === 'GET') {
     const services = getServices();
+    const serviceEntries = Object.keys(services).map(name => ({
+      name,
+      status: 'healthy',
+      type: services[name as keyof typeof services].constructor.name
+    }));
+    
     return json({
       status: 'healthy',
-      services: Object.keys(services).map(name => ({
-        name,
-        status: 'healthy',
-        type: services[name as keyof typeof services].constructor.name
-      }))
+      services: serviceEntries,
+      // Legacy fields for backward compatibility
+      healthStatus: Object.fromEntries(
+        serviceEntries.map(s => [s.name, { healthy: true, lastCheck: new Date() }])
+      ),
+      activatedServices: serviceEntries.map(s => s.name)
     });
   }
 

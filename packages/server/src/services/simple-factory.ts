@@ -83,7 +83,13 @@ export function createServices(env: ServiceEnvironment): Services {
   const authService = new RealAuthService(true);
   const docker = new RealDockerService();
   const systemMonitoring = new RealSystemMonitoringService();
-  const jobs = new RealJobService();
+  
+  // Create logging service with storage dependency
+  const logging = new RealLoggingService(storage);
+  
+  // Create jobs service with database and logging dependencies
+  const jobs = new RealJobService(database, logging);
+  
   const catalog = new RealCatalogService();
   
   // Set up auth provider for real auth service
@@ -98,7 +104,7 @@ export function createServices(env: ServiceEnvironment): Services {
     auth: authService,
     docker,
     systemMonitoring,
-    logging: new RealLoggingService(),
+    logging,
     jobs,
     catalog,
     bundles: new RealBundleService(),

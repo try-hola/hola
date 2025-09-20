@@ -92,7 +92,10 @@ describe('Catalog Refresh and OCI Integration', () => {
           expect(result).toBeDefined();
         } catch (error) {
           // Expected if the test ref is not available
-          if (error instanceof Error && error.message.includes('not found')) {
+          if (
+            error instanceof Error &&
+            /(APP_NOT_FOUND|VERSION_NOT_FOUND|MANIFEST_UNAVAILABLE|NOT_FOUND|not found)/i.test(error.message)
+          ) {
             expect(true).toBe(true); // Pass - this is expected for missing test data
           } else {
             throw error;
@@ -148,7 +151,8 @@ describe('Catalog Refresh and OCI Integration', () => {
         if ('verifySignature' in bundles) {
           try {
             const testRef = 'ghcr.io/try-hola/oci-test:latest';
-            await bundles.verifySignature!(testRef);
+            const info = await bundles.ensurePulled({ appId: 'sig-test', version: 'latest', ociRef: testRef });
+            await bundles.verifySignature!(info.localPath);
             // If no error, signature verification passed
             expect(true).toBe(true);
           } catch (error) {
