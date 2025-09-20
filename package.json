@@ -17,7 +17,12 @@
     "dev:web": "bun --cwd packages/web dev",
     "dev:server": "bun --cwd packages/server dev",
     "dev": "bunx --bun concurrently -n server,web -c blue,green \"bun --cwd packages/server dev\" \"bun --cwd packages/web dev\"",
-    "clean": "git clean -fdX && git reset --hard"
+    "clean": "git clean -fdX && git reset --hard",
+    "ci:local": "act -W .github/workflows/ci-local.yml push",
+    "ci:local:dryrun": "act -W .github/workflows/ci-local.yml push -n",
+    "ci:local:full": "act push",
+    "ci:local:pr": "act pull_request",
+    "ci:local:list": "act --list"
   },
   "packageManager": "bun@1.1.34",
   "resolutions": {

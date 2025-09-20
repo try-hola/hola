@@ -1,0 +1,5 @@
+# Platform mappings for act
+# Maps GitHub Actions runner labels to Docker images
+ubuntu-latest=catthehacker/ubuntu:act-latest
+ubuntu-22.04=catthehacker/ubuntu:act-22.04
+ubuntu-20.04=catthehacker/ubuntu:act-20.04
