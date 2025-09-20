@@ -21,12 +21,14 @@ export async function startServer(port: number = 3001, env: Record<string, strin
     return; // already started under this process context
   }
 
-  console.log(`Starting server with \`bun run dev\` on port ${port}...`);
+  // Resolve bun executable path robustly to avoid ENOENT in CI where PATH might differ.
+  const resolvedBunPath = resolveBunPath();
+  console.log(`Starting server with \`${resolvedBunPath} run dev\` on port ${port}...`);
   
   // Start server process in background
   const debug = process.env.HOLA_DEBUG_TEST_SERVER === 'true';
   serverProcess = Bun.spawn([
-    'bun',
+    resolvedBunPath,
     'run',
     'dev',
   ], {
@@ -47,6 +49,36 @@ export async function startServer(port: number = 3001, env: Record<string, strin
 
   // Wait for server to be healthy before returning
   await waitForHealthz(15000, port);
+}
+
+/**
+ * Resolve bun executable path with multiple fallbacks.
+ * Order:
+ * 1. HOLA_TEST_BUN_PATH (explicit override for tests)
+ * 2. BUN_BIN (common variable some environments export)
+ * 3. Bun.which('bun')
+ * 4. If current process is bun (process.argv[0] / Bun.version available), use process.execPath
+ * Throws if none found.
+ */
+function resolveBunPath(): string {
+  const fromEnv = process.env.HOLA_TEST_BUN_PATH || process.env.BUN_BIN;
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  try {
+    const which = Bun.which?.('bun');
+    if (which) return which;
+  } catch {
+    // ignore
+  }
+
+  // Bun exposes process.execPath pointing to bun binary when executing under bun
+  if (typeof Bun !== 'undefined' && 'version' in Bun && process.execPath) {
+    return process.execPath;
+  }
+
+  throw new Error('Unable to resolve bun executable path. Set HOLA_TEST_BUN_PATH to override.');
 }
 
 /**
