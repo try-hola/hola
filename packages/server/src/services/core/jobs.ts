@@ -6,12 +6,10 @@
  */
 
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
-import { getDatabaseService } from '../factory';
+import type { HealthCheckable, ServiceHealth } from './types';
 import type { DatabaseService } from './database';
 import { DatabaseJobRepository, type JobRepository, type JobEntity } from './repositories';
 import type { LoggingService } from './logging';
-import { getLoggingService } from '../factory';
 import type { Job as SharedJob, JobStatus as SharedJobStatus, JobType as SharedJobType } from '@hola/shared';
 
 // Simple in-process pub-sub for job updates
@@ -65,10 +63,10 @@ export class RealJobService implements JobService {
   private maxRetries = Number(process.env.HOLA_JOBS_MAX_RETRIES || 0);
   private baseBackoffMs = Number(process.env.HOLA_JOBS_BACKOFF_MS || 500);
 
-  constructor(db?: DatabaseService, logging?: LoggingService) {
-    this.db = db ?? getDatabaseService();
+  constructor(db: DatabaseService, logging: LoggingService) {
+    this.db = db;
     this.repo = new DatabaseJobRepository(this.db);
-    this.logging = logging ?? getLoggingService();
+    this.logging = logging;
   }
 
   private enqueue(id: string) {

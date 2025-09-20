@@ -7,7 +7,7 @@
 
 import { Database } from 'bun:sqlite';
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
+import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 
 // SQLite parameter type

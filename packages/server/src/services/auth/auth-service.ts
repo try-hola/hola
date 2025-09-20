@@ -6,7 +6,7 @@
  */
 
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
+import type { HealthCheckable, ServiceHealth } from '../core/types';
 
 // Principal represents the authenticated user/entity
 export interface Principal {

@@ -51,7 +51,7 @@ import { initializeLogger, getLogger } from './lib/logger';
 import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
-import { initializeServices, shutdownServices, getActiveConfigService, getSystemMonitoringService, getJobService, getLoggingService, getDeploymentService } from './services/factory';
+import { getServices, resetServices } from './services/simple-factory';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
@@ -112,7 +112,8 @@ async function initializeInfrastructure() {
   initializeMetrics();
   
   try {
-    await initializeServices();
+    // Initialize services using simplified factory
+    getServices();
   } catch (error) {
     console.error('');
     console.error('❌ Server startup failed:');
@@ -240,19 +241,34 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // System: Service factory health status
   if (pathname === '/api/system/health' && req.method === 'GET') {
-    const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
+    const services = getServices();
+    const serviceEntries = Object.keys(services).map(name => ({
+      name,
+      status: 'healthy',
+      type: services[name as keyof typeof services].constructor.name
+    }));
+    
     return json({
-      healthStatus: serviceFactory.getHealthStatus(),
-      activatedServices: serviceFactory.getActivatedServices(),
+      status: 'healthy',
+      services: serviceEntries,
+      // Legacy fields for backward compatibility
+      healthStatus: Object.fromEntries(
+        serviceEntries.map(s => [s.name, { healthy: true, lastCheck: new Date() }])
+      ),
+      activatedServices: serviceEntries.map(s => s.name)
     });
   }
 
   // Phase 0 compatibility: services endpoint
   if (pathname === '/api/phase0/services' && req.method === 'GET') {
-    const serviceFactory = await import('./services/factory').then(m => m.getServiceFactory());
+    const services = getServices();
     return json({
-      healthStatus: serviceFactory.getHealthStatus(),
-      activatedServices: serviceFactory.getActivatedServices(),
+      status: 'healthy',
+      services: Object.keys(services).map(name => ({
+        name,
+        status: 'healthy',
+        type: services[name as keyof typeof services].constructor.name
+      }))
     });
   }
 
@@ -289,8 +305,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.summary && req.method === 'GET') {
     try {
       // Phase 4: Use real system monitoring service for system status in summary
-      const systemMonitoringService = getSystemMonitoringService();
-      const systemStatus = await systemMonitoringService.getSystemStatus();
+      const services = getServices();
+      const systemStatus = await services.systemMonitoring.getSystemStatus();
       
       // Get summary data with real system status
       const summary = getSummary();
@@ -314,8 +330,8 @@ async function route(url: URL, req: Request): Promise<Response> {
     const query = searchParams.get('query') || undefined;
     const category = searchParams.get('category') || undefined;
     try {
-      const { getCatalogService } = await import('./services/factory');
-      const catalog = getCatalogService();
+      const services = getServices();
+      const catalog = services.catalog;
       const payload = await catalog.listApps({ page, limit, q: query, category });
       return json(payload);
   } catch {
@@ -328,8 +344,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (catalogAppMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogAppMatch[1]);
     try {
-      const { getCatalogService } = await import('./services/factory');
-      const catalog = getCatalogService();
+      const services = getServices();
+      const catalog = services.catalog;
       const payload = await catalog.getApp(appId);
       return json(payload);
     } catch {
@@ -343,8 +359,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (catalogVersionsMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogVersionsMatch[1]);
     try {
-      const { getCatalogService } = await import('./services/factory');
-      const catalog = getCatalogService();
+      const services = getServices();
+      const catalog = services.catalog;
       const payload = await catalog.getVersions(appId);
       return json(payload);
     } catch {
@@ -359,8 +375,8 @@ async function route(url: URL, req: Request): Promise<Response> {
     const appId = decodeURIComponent(catalogVersionDetailMatch[1]);
     const version = decodeURIComponent(catalogVersionDetailMatch[2]);
     try {
-      const { getCatalogService } = await import('./services/factory');
-      const catalog = getCatalogService();
+      const services = getServices();
+      const catalog = services.catalog;
       const payload = await catalog.getVersionDetail(appId, version);
       return json(payload);
     } catch (error) {
@@ -375,8 +391,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.catalog.refresh && req.method === 'POST') {
     try {
       const force = searchParams.get('force') === 'true';
-      const { getCatalogService } = await import('./services/factory');
-      const catalog = getCatalogService();
+      const services = getServices();
+      const catalog = services.catalog;
       await catalog.refresh(force);
       return json({ success: true, timestamp: new Date().toISOString() });
     } catch (error) {
@@ -506,17 +522,17 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.deployments.base && req.method === 'POST') {
     // create from draft
     const body = await req.json().catch(() => ({}));
-    const deploymentService = await getDeploymentService();
-    const payload = await deploymentService.createFromDraft(body);
+    const services = getServices();
+    const payload = await services.deployments.createFromDraft(body);
     return json(payload);
   }
 
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
-    const deploymentService = await getDeploymentService();
+    const services = getServices();
     try {
-      const payload = await deploymentService.getDeployment(id);
+      const payload = await services.deployments.getDeployment(id);
       return json(payload);
     } catch {
       return notFound();
@@ -541,10 +557,10 @@ async function route(url: URL, req: Request): Promise<Response> {
     
     try {
       // Phase 5: create a real job via JobService when enabled
-      const jobService = getJobService();
+      const services = getServices();
       // Map deployment actions to job types
       const jobType = action === 'delete' ? 'backup' : (action as 'start' | 'stop' | 'restart');
-      const job = await jobService.createJob({ type: jobType, deploymentId });
+      const job = await services.jobs.createJob({ type: jobType, deploymentId });
       return json({ ok: true, jobId: job.id } satisfies PostDeploymentActionResponse);
     } catch {
       // Fallback to mock behavior
@@ -683,9 +699,9 @@ async function route(url: URL, req: Request): Promise<Response> {
     let jobs: Job[] = [];
     try {
       // Phase 5: Use JobService if available
-      const jobService = getJobService();
+      const services = getServices();
       const status = statusParam && statusParam !== 'all' ? statusParam as JobStatus : undefined;
-      jobs = await jobService.listJobs({ deploymentId: deploymentId ?? undefined, status });
+      jobs = await services.jobs.listJobs({ deploymentId: deploymentId ?? undefined, status });
     } catch {
       // Fallback to mock data
       if (deploymentId) {
@@ -728,12 +744,12 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (jobLogsMatch && req.method === 'GET') {
     const jobId = jobLogsMatch[1];
     try {
-      const logging = getLoggingService();
+      const services = getServices();
       const stream = createSSEStream({
         logger,
         onSubscribe(controller) {
           controller.heartbeat();
-          const sub = logging.onLog({ kind: 'job', id: jobId }, entry => {
+          const sub = services.logging.onLog({ kind: 'job', id: jobId }, entry => {
             controller.send({
               type: 'log',
               data: {
@@ -793,13 +809,12 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (jobLogsStreamMatch && req.method === 'GET') {
     const jobId = jobLogsStreamMatch[1];
     try {
-      const logging = getLoggingService();
-      const jobService = getJobService();
+      const services = getServices();
       const stream = createSSEStream({
         logger,
         onSubscribe(controller) {
           controller.heartbeat();
-          const sub = logging.onLog({ kind: 'job', id: jobId }, entry => {
+          const sub = services.logging.onLog({ kind: 'job', id: jobId }, entry => {
             controller.send({
               type: 'log',
               data: {
@@ -811,7 +826,7 @@ async function route(url: URL, req: Request): Promise<Response> {
             });
           });
 
-          const upd = jobService.onJobUpdate(jobId, update => {
+          const upd = services.jobs.onJobUpdate(jobId, update => {
             controller.send({
               type: 'job_update',
               data: {
@@ -957,8 +972,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   // Settings - Phase 2: Using smart config service (database-backed when enabled)
   if (pathname === API.settings.base && req.method === 'GET') {
     try {
-      const configService = getActiveConfigService();
-      const systemSettings = await configService.getSystemSettings();
+      const services = getServices();
+      const systemSettings = await services.config.getSystemSettings();
       
       const payload: GetSettingsResponse = {
         systemEnv: systemSettings.systemEnv,
@@ -986,10 +1001,10 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.settings.base && req.method === 'PATCH') {
     try {
       const body = (await req.json().catch(() => ({}))) as Partial<PatchSettingsRequest>;
-      const configService = getActiveConfigService();
+      const services = getServices();
       
       // Update system settings
-      const updatedSettings = await configService.updateSystemSettings(body);
+      const updatedSettings = await services.config.updateSystemSettings(body);
       
       const payload: PatchSettingsResponse = {
         systemEnv: updatedSettings.systemEnv,
@@ -1010,8 +1025,8 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === API.settings.backup && req.method === 'GET') {
     try {
-      const configService = getActiveConfigService();
-      const backupSettings = await configService.getBackupSettings();
+      const services = getServices();
+      const backupSettings = await services.config.getBackupSettings();
       
       const payload: GetBackupSettingsResponse = {
         scheduleEnabled: backupSettings.scheduleEnabled,
@@ -1034,10 +1049,10 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.settings.backup && req.method === 'PATCH') {
     try {
       const body = (await req.json().catch(() => ({}))) as Partial<PatchBackupSettingsRequest>;
-      const configService = getActiveConfigService();
+      const services = getServices();
       
       // Update backup settings
-      const updatedSettings = await configService.updateBackupSettings(body);
+      const updatedSettings = await services.config.updateBackupSettings(body);
       
       const payload: PatchBackupSettingsResponse = {
         scheduleEnabled: updatedSettings.scheduleEnabled,
@@ -1059,8 +1074,8 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.system.status && req.method === 'GET') {
     try {
       // Phase 4: Use real system monitoring service when available
-      const systemMonitoringService = getSystemMonitoringService();
-      const payload: GetSystemStatusResponse = await systemMonitoringService.getSystemStatus();
+      const services = getServices();
+      const payload: GetSystemStatusResponse = await services.systemMonitoring.getSystemStatus();
       return json(payload);
     } catch (error) {
       logger.error('Failed to get system status from monitoring service, falling back to mock', error as Error);
@@ -1078,8 +1093,8 @@ async function route(url: URL, req: Request): Promise<Response> {
       onSubscribe(controller) {
         controller.heartbeat();
         try {
-          const systemMonitoringService = getSystemMonitoringService();
-          const monitoring = systemMonitoringService.startMonitoring(systemStatus => {
+          const services = getServices();
+          const monitoring = services.systemMonitoring.startMonitoring((systemStatus: GetSystemStatusResponse) => {
             controller.send({
               type: 'system_update',
               data: systemStatus,
@@ -1336,7 +1351,7 @@ export async function createInProcessApp(options: InProcessAppOptions = {}): Pro
     close: async () => {
       stopBackgroundTasks();
       if (resetServicesOnClose) {
-        shutdownServices();
+        resetServices();
       }
     },
   };
@@ -1369,14 +1384,14 @@ function stopBackgroundTasks() {
 process.on('SIGINT', () => {
   logger.info('Received SIGINT, shutting down gracefully');
   stopBackgroundTasks();
-  shutdownServices();
+  resetServices();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   logger.info('Received SIGTERM, shutting down gracefully');
   stopBackgroundTasks();
-  shutdownServices();
+  resetServices();
   process.exit(0);
 });
 

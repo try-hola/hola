@@ -1,5 +1,5 @@
 import { getLogger } from '../../lib/logger';
-import type { ServiceHealth, HealthCheckable } from '../factory';
+import type { ServiceHealth, HealthCheckable } from './types';
 import { catalogConfig } from '../../config/catalog';
 import { parseComposeDefaults, mergeDefaults } from './compose-parser';
 import type {
@@ -114,8 +114,8 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     if (!ref) throw new Error('NO_OCI_REF');
 
     // Lazy import to avoid circular deps at module load
-    const { getBundleService } = await import('../factory');
-    const bundles = getBundleService();
+    const { getServices } = await import('../simple-factory');
+    const bundles = getServices().bundles;
 
     // Pull and validate bundle
     const info = await bundles.ensurePulled({ appId, version, ociRef: ref });

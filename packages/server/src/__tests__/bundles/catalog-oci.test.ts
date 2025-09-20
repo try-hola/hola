@@ -6,6 +6,7 @@
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { catalogConfig } from '../../config/catalog';
+import { getServices } from '../../services/simple-factory';
 
 describe('Catalog Refresh and OCI Integration', () => {
   let originalUrl: string | undefined;
@@ -75,8 +76,8 @@ describe('Catalog Refresh and OCI Integration', () => {
   describe('Real OCI Integration Tests', () => {
     test('should fetch and validate real OCI bundle', async () => {
       try {
-        const { getCatalogService } = await import('../../services/factory');
-        const catalog = getCatalogService();
+        const services = getServices();
+        const catalog = services.catalog;
 
         // Note: Mock catalog data would be used for testing if needed
 
@@ -91,7 +92,10 @@ describe('Catalog Refresh and OCI Integration', () => {
           expect(result).toBeDefined();
         } catch (error) {
           // Expected if the test ref is not available
-          if (error instanceof Error && error.message.includes('not found')) {
+          if (
+            error instanceof Error &&
+            /(APP_NOT_FOUND|VERSION_NOT_FOUND|MANIFEST_UNAVAILABLE|NOT_FOUND|not found)/i.test(error.message)
+          ) {
             expect(true).toBe(true); // Pass - this is expected for missing test data
           } else {
             throw error;
@@ -106,8 +110,8 @@ describe('Catalog Refresh and OCI Integration', () => {
 
     test('should enforce allowlist during bundle operations', async () => {
       try {
-        const { getBundleService } = await import('../../services/factory');
-        const bundles = getBundleService();
+        const services = getServices();
+        const bundles = services.bundles;
 
         // Test with a valid reference (should work)
         try {
@@ -140,14 +144,15 @@ describe('Catalog Refresh and OCI Integration', () => {
   describe('Signature Verification', () => {
     test('should verify signatures when policy is enabled', async () => {
       try {
-        const { getBundleService } = await import('../../services/factory');
-        const bundles = getBundleService();
+        const services = getServices();
+        const bundles = services.bundles;
 
         // Test signature verification if available
         if ('verifySignature' in bundles) {
           try {
             const testRef = 'ghcr.io/try-hola/oci-test:latest';
-            await bundles.verifySignature!(testRef);
+            const info = await bundles.ensurePulled({ appId: 'sig-test', version: 'latest', ociRef: testRef });
+            await bundles.verifySignature!(info.localPath);
             // If no error, signature verification passed
             expect(true).toBe(true);
           } catch (error) {

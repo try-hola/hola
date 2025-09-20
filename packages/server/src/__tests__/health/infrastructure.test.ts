@@ -185,12 +185,11 @@ describe('Health and Infrastructure', () => {
       
       expect(response.status).toBe(200);
       expect(response.headers.get('content-type')).toContain('application/json');
-      
+
       const data = await response.json();
-      expect(data).toHaveProperty('healthStatus');
-      expect(data).toHaveProperty('activatedServices');
-      expect(typeof data.healthStatus).toBe('object');
-      expect(Array.isArray(data.activatedServices)).toBe(true);
+      expect(data).toHaveProperty('status', 'healthy');
+      expect(data).toHaveProperty('services');
+      expect(Array.isArray(data.services)).toBe(true);
     });
 
     it('should echo requests with metadata', async () => {

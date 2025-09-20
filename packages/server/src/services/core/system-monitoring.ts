@@ -11,7 +11,7 @@ import { statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getLogger } from '../../lib/logger';
-import type { ServiceHealth, HealthCheckable } from '../factory';
+import type { ServiceHealth, HealthCheckable } from './types';
 // Note: avoid static import of getDockerService to prevent circular deps; use dynamic import where needed
 import type { SystemStatus } from '@hola/shared';
 
@@ -211,8 +211,8 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
     try {
       this.logger.debug('Checking Docker via DockerService');
       // Lazy import to avoid circular dependency with factory
-      const { getDockerService } = await import('../factory');
-      const dockerService = getDockerService();
+      const { getServices } = await import('../simple-factory');
+      const dockerService = getServices().docker;
       const info = await dockerService.getDockerInfo();
 
       // Prefer server version if available, else client version

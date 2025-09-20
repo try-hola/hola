@@ -18,7 +18,7 @@ import type {
 } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
+import type { HealthCheckable, ServiceHealth } from './types';
 import type { DockerService } from './docker';
 import type { SystemMonitoringService } from './system-monitoring';
 import { parse as parseYAML } from 'yaml';

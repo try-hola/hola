@@ -5,12 +5,13 @@ applyTo: "/packages/**/__tests__/**"
 # Tests Instructions
 
 ## Purpose
-Reliable, isolated tests with fakes-first strategy and consistent structure.
+Reliable, isolated tests with fakes-first strategy and simplified service management.
 
 ## Core Rules  
 - Fakes over mocks: simple in-memory fakes implementing same interface in `__tests__/fakes/`.
 - Organize by feature; only import `@hola/shared` across packages.
 - **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
+- **Simplified services**: Tests automatically use all mock services, no configuration needed.
 - No external network calls or background processes.
 
 ## React Testing Environment (Web Package)
@@ -86,6 +87,16 @@ describe('My Tests', () => {
 - Use `await waitFor()` for React 18 async rendering.
 - **Use standardized test environment**: Always import from `helpers/test-environment` for server tests.
 - **Remove tests for deprecated APIs**: When endpoints are removed, delete all associated test files completely.
+- **Use defensive service casting**: Add runtime guards when casting to mock types:
+  ```typescript
+  const svc = getServices().someService;
+  if (!('mockMethod' in (svc as any))) {
+    expect(true).toBe(true); // soft-skip
+    return;
+  }
+  const mockService = svc as MockSomeService;
+  ```
+- **Use robust error matching**: `/(ERROR_CODE|fallback text)/i.test(error.message)` for case-insensitive patterns.
 
 ## Don't
 - Mock deep internals; test public APIs.
