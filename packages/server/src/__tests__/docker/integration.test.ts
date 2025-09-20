@@ -59,7 +59,7 @@ describe('Docker Monitoring via System Status', () => {
       activatedServices: string[];
     };
 
-    expect(json.activatedServices).toContain('system-monitoring');
-    expect(json.healthStatus).toHaveProperty('system-monitoring');
+    expect(json.activatedServices).toContain('systemMonitoring');
+    expect(json.healthStatus).toHaveProperty('systemMonitoring');
   }, TEST_TIMEOUT);
 });

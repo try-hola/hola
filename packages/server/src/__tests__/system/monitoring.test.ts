@@ -171,10 +171,10 @@ describe('System Monitoring', () => {
       const healthStatus = data.healthStatus;
       
       // System monitoring service should be present
-      expect(services).toContain('system-monitoring');
-      expect(healthStatus).toHaveProperty('system-monitoring');
-      expect(typeof healthStatus['system-monitoring'].healthy).toBe('boolean');
-      expect(healthStatus['system-monitoring'].lastCheck).toBeDefined();
+      expect(services).toContain('systemMonitoring');
+      expect(healthStatus).toHaveProperty('systemMonitoring');
+      expect(typeof healthStatus['systemMonitoring'].healthy).toBe('boolean');
+      expect(healthStatus['systemMonitoring'].lastCheck).toBeDefined();
     }, TEST_TIMEOUT);
   });
 
