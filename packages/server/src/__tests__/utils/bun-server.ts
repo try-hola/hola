@@ -56,29 +56,54 @@ export async function startServer(port: number = 3001, env: Record<string, strin
  * Order:
  * 1. HOLA_TEST_BUN_PATH (explicit override for tests)
  * 2. BUN_BIN (common variable some environments export)
- * 3. Bun.which('bun')
- * 4. If current process is bun (process.argv[0] / Bun.version available), use process.execPath
+ * 3. process.execPath (if we are already running under Bun)
+ * 4. Bun.which('bun')
+ * Each candidate must exist & be executable. Provides debug logging when HOLA_DEBUG_TEST_SERVER.
  * Throws if none found.
  */
 function resolveBunPath(): string {
-  const fromEnv = process.env.HOLA_TEST_BUN_PATH || process.env.BUN_BIN;
-  if (fromEnv) {
-    return fromEnv;
+  const debug = process.env.HOLA_DEBUG_TEST_SERVER === 'true';
+  const candidates: Array<{ source: string; path: string | undefined }> = [];
+
+  const envOverride = process.env.HOLA_TEST_BUN_PATH;
+  if (envOverride) candidates.push({ source: 'HOLA_TEST_BUN_PATH', path: envOverride });
+
+  const bunBin = process.env.BUN_BIN;
+  if (bunBin) candidates.push({ source: 'BUN_BIN', path: bunBin });
+
+  if (typeof Bun !== 'undefined' && 'version' in Bun && process.execPath) {
+    candidates.push({ source: 'process.execPath', path: process.execPath });
   }
 
   try {
     const which = Bun.which?.('bun');
-    if (which) return which;
+    if (which) candidates.push({ source: 'Bun.which', path: which });
   } catch {
     // ignore
   }
 
-  // Bun exposes process.execPath pointing to bun binary when executing under bun
-  if (typeof Bun !== 'undefined' && 'version' in Bun && process.execPath) {
-    return process.execPath;
+  // Deduplicate by path keeping first occurrence
+  const seen = new Set<string>();
+  const unique = candidates.filter(c => {
+    if (!c.path) return false;
+    if (seen.has(c.path)) return false;
+    seen.add(c.path);
+    return true;
+  });
+
+  for (const candidate of unique) {
+    try {
+      if (candidate.path && Bun.file(candidate.path).size >= 0) { // existence check
+        if (debug) console.log(`[bun-server] Using bun binary from ${candidate.source}: ${candidate.path}`);
+        return candidate.path;
+      }
+    } catch {
+      // not accessible, continue
+      if (debug) console.log(`[bun-server] Candidate not accessible (${candidate.source}): ${candidate.path}`);
+    }
   }
 
-  throw new Error('Unable to resolve bun executable path. Set HOLA_TEST_BUN_PATH to override.');
+  throw new Error('Unable to resolve bun executable path. Provide HOLA_TEST_BUN_PATH pointing to bun binary.');
 }
 
 /**
