@@ -16,7 +16,7 @@ const BASE_URL = TEST_BASE_URL;
 const TEST_TIMEOUT = 8000;
 
 async function getConfig(): Promise<SystemConfigResponse> {
-  const res = await fetch(`${BASE_URL}${API.system.config}`);
+  const res = await fetch(`${BASE_URL}${API.system.health}`);
   if (!res.ok) throw new Error(`Failed to get config: ${res.status}`);
   return res.json() as Promise<SystemConfigResponse>;
 }

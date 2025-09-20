@@ -12,6 +12,7 @@ React + TypeScript SPA using Tailwind. Consume APIs via `@hola/shared` with Stri
 - Hooks must be StrictMode-compatible: stable `useCallback([])` fetchers, `useMemo` cache keys, and global cache when applicable.
 - No `any`; maintain strict typing and separate type imports (`import type { ... }`).
 - Tailwind for styles; avoid ad-hoc inline styles except dynamic cases.
+- **NO DEV API REFERENCES**: Never reference `/api/dev/*` endpoints or `API.dev` routes - these are permanently removed.
 
 ## Hook Pattern
 - Empty dependency fetcher for simple loads; parameterized hooks derive a stable `cacheKey` with `useMemo` and include it in dependencies.
@@ -24,6 +25,12 @@ React + TypeScript SPA using Tailwind. Consume APIs via `@hola/shared` with Stri
 - **StrictMode Effects**: Design hooks with stable dependencies; effects execute twice in development.
 - **Multiple React Copies**: Workspace dependencies can cause hook failures - ensure single React instance.
 
+## Component & Test Cleanup
+- **Deprecated API Cleanup**: When removing API endpoints, delete all related: page components, test files, SSE event handlers.
+- **Development Components**: Remove development-specific dashboards and debug pages when APIs are simplified.
+- **Test File Removal**: Don't leave orphaned test files testing removed functionality - delete completely.
+- **SSE Event Cleanup**: Update SSE event type unions and remove handlers for deprecated event types.
+
 ## Do
 - Centralize API calls in `src/utils` and hooks in `src/hooks`.
 - Keep components presentational; pages orchestrate data and actions.
@@ -33,3 +40,6 @@ React + TypeScript SPA using Tailwind. Consume APIs via `@hola/shared` with Stri
 - Put unstable refs in dependency arrays causing loops.
 - Duplicate models or bypass shared types.
 - Leave `console.log` in production code.
+- **Create development-specific UI components**: Use feature flags on standard components instead.
+- **Hardcode `/api/dev/*` endpoints**: All development functionality must use standard API patterns.
+- **Test removed API endpoints**: When APIs are deprecated, remove associated tests completely.

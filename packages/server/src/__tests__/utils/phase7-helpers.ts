@@ -55,7 +55,6 @@ export interface FeatureFlags {
   useRealDrafts: boolean;
   useRealValidation: boolean;
   useRealDeployments: boolean;
-  useRealDevSessions: boolean;
 }
 
 export interface SystemConfig {

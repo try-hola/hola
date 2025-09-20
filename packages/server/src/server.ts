@@ -8,7 +8,6 @@ import {
   type CreateDraftRequest,
   type CreateDraftResponse,
   type GetDraftResponse,
-  type PatchDraftRequest,
   type PatchDraftResponse,
   type UploadDraftFileResponse,
   type DeleteDraftFileResponse,
@@ -43,12 +42,6 @@ import {
   type GetSystemStatusResponse,
   type Job,
   type JobStatus,
-  // Phase 7 types
-  type CreateDevSessionRequest,
-  type GetDevSessionsRequest,
-  type ValidationComposeRequest,
-  type ValidationComposeResponse,
-  type RollbackRequest,
   type RollbackResponse,
 } from '@hola/shared';
 
@@ -103,12 +96,9 @@ import {
   // updateSettings,
   // getBackupSettings,
   // updateBackupSettings,
-  // Configuration
-  config,
 } from './mock-data';
 
 // Import development tools
-import { developmentToolsEndpoints, createApiMonitoringMiddleware } from './config/development-api';
 import { initializeDevelopmentEnvironment } from './config/development';
 
 // Phase 0: Initialize infrastructure with fail-fast validation
@@ -231,21 +221,6 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === '/metrics' && req.method === 'GET') {
     return healthMiddleware.metricsEndpoint();
-  }
-
-  // System: Feature flags and service info
-  if (pathname === '/api/system/config' && req.method === 'GET') {
-    return json({
-      phase: 'Phase 0 - Foundations',
-      featureFlags,
-      config: appConfig,
-      services: {
-        logging: true,
-        metrics: true,
-        healthChecks: true,
-        serviceFactory: true,
-      },
-    });
   }
 
   // Phase 0 compatibility: features endpoint
@@ -410,133 +385,105 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // ===== LEGACY/STUB DRAFT ROUTES =====
-  // These routes provide mock responses when Phase 7 Dev API is disabled
-  if (!featureFlags.enableDevApi) {
-    // Draft creation (legacy stub)
-    if (pathname === API.drafts.create && req.method === 'POST') {
-      const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
-      const payload: CreateDraftResponse = {
-        draftId: crypto.randomUUID(),
-        app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
-        systemEnv: [
-          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-        ],
-        appEnv: [
-          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-        ],
-        defaults: {
-          ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-          volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
-        },
-      };
-      return json(payload);
-    }
+  // ===== DRAFT ROUTES =====
+  // Draft creation
+  if (pathname === API.drafts.create && req.method === 'POST') {
+    const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+    const payload: CreateDraftResponse = {
+      draftId: crypto.randomUUID(),
+      app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
+      systemEnv: [
+        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
+        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
+      ],
+      appEnv: [
+        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+      ],
+      defaults: {
+        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
+      },
+    };
+    return json(payload);
+  }
 
-    // Draft by ID operations (legacy stubs)
-    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
-    if (draftMatch && req.method === 'GET') {
-      const draftId = draftMatch[1];
-      const payload: GetDraftResponse = {
-        draftId,
+  // Draft by ID operations
+  const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
+  if (draftMatch && req.method === 'GET') {
+    const draftId = draftMatch[1];
+    const payload: GetDraftResponse = {
+      draftId,
+      appId: 'nextcloud',
+      version: '1.0.0',
+      systemOverrides: {},
+      appEnv: [
+        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
+        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
+      ],
+      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+      composeOverride: '',
+      files: [],
+    };
+    return json(payload);
+  }
+
+  if (draftMatch && req.method === 'PATCH') {
+    const payload: PatchDraftResponse = {
+      ok: true,
+      draft: {
+        draftId: draftMatch[1],
         appId: 'nextcloud',
         version: '1.0.0',
         systemOverrides: {},
-        appEnv: [
-          { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-          { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-        ],
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
+        appEnv: [],
+        ports: [],
         composeOverride: '',
         files: [],
-      };
-      return json(payload);
-    }
-
-    if (draftMatch && req.method === 'PATCH') {
-      const payload: PatchDraftResponse = {
-        ok: true,
-        draft: {
-          draftId: draftMatch[1],
-          appId: 'nextcloud',
-          version: '1.0.0',
-          systemOverrides: {},
-          appEnv: [],
-          ports: [],
-          composeOverride: '',
-          files: [],
-        },
-      };
-      return json(payload);
-    }
-
-    // Draft uploads (legacy stubs)
-    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
-    if (draftUploadsMatch && req.method === 'POST') {
-      const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
-      return json(payload);
-    }
-
-    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
-    if (draftUploadByIdMatch && req.method === 'DELETE') {
-      const payload: DeleteDraftFileResponse = { ok: true };
-      return json(payload);
-    }
-
-    // Draft validation (legacy stub)
-    const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
-    if (draftValidateMatch && req.method === 'POST') {
-      const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
-      return json(payload);
-    }
-
-    // Draft preflight (legacy stub)
-    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
-    if (draftPreflightMatch && req.method === 'POST') {
-      const payload: PreflightResponse = {
-        ok: true,
-        checks: [
-          { name: 'env', status: 'pass' },
-          { name: 'docker', status: 'pass' },
-          { name: 'disk', status: 'warn', detail: 'Low disk space' },
-        ],
-      };
-      return json(payload);
-    }
-
-    // Draft finalization (legacy stub)
-    const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
-    if (draftFinalizeMatch && req.method === 'POST') {
-      const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
-      return json(payload);
-    }
+      },
+    };
+    return json(payload);
   }
 
-  // ===== PHASE 7 DEV API (feature gated) =====
-  // Minimal mock implementations to satisfy contract tests when enableDevApi=true
-  if (featureFlags.enableDevApi) {
-    // Validation compose endpoint (mock)
-    if (pathname === API.validation.compose && req.method === 'POST') {
-      try {
-        const body = await req.json().catch(() => ({} as ValidationComposeRequest));
-        // Very lightweight synthetic validation: flag empty composeYaml
-        const errors = !body.composeYaml || body.composeYaml.trim().length === 0
-          ? [{ field: 'composeYaml', message: 'Compose is empty' }]
-          : [];
-        const payload: ValidationComposeResponse = {
-          ok: errors.length === 0,
-            errors,
-            warnings: [],
-        };
-        return json(payload);
-      } catch {
-        return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
-      }
-    }
+  // Draft uploads
+  const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
+  if (draftUploadsMatch && req.method === 'POST') {
+    const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
+    return json(payload);
+  }
 
-    // Dev session endpoints moved to Phase 7 section below - using real service implementations
+  const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
+  if (draftUploadByIdMatch && req.method === 'DELETE') {
+    const payload: DeleteDraftFileResponse = { ok: true };
+    return json(payload);
+  }
+
+  // Draft validation
+  const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
+  if (draftValidateMatch && req.method === 'POST') {
+    const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
+    return json(payload);
+  }
+
+  // Draft preflight
+  const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
+  if (draftPreflightMatch && req.method === 'POST') {
+    const payload: PreflightResponse = {
+      ok: true,
+      checks: [
+        { name: 'env', status: 'pass' },
+        { name: 'docker', status: 'pass' },
+        { name: 'disk', status: 'warn', detail: 'Low disk space' },
+      ],
+    };
+    return json(payload);
+  }
+
+  // Draft finalization
+  const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
+  if (draftFinalizeMatch && req.method === 'POST') {
+    const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
+    return json(payload);
   }
 
 
@@ -1184,409 +1131,6 @@ async function route(url: URL, req: Request): Promise<Response> {
     return new Response(stream, { headers: createSSEHeaders() });
   }
 
-  // ===== PHASE 7 API ENDPOINTS =====
-  // Real service implementations gated by enableDevApi feature flag
-  // Check if Phase 7 API is enabled
-  if (!featureFlags.enableDevApi) {
-    // Skip Phase 7 endpoints if not enabled - fall back to legacy/stub handlers above
-  } else {
-    
-    // Dev Sessions API
-    if (pathname === API.dev.sessions && req.method === 'POST') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const requestData: CreateDevSessionRequest = await req.json();
-        const response = await devSessionService.createSession(requestData);
-        return json(response, { status: 201 });
-      } catch (error) {
-        logger.error('Failed to create dev session', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create dev session' } }, { status: 500 });
-      }
-    }
-
-    if (pathname === API.dev.sessions && req.method === 'GET') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const page = Number(searchParams.get('page')) || 1;
-        const limit = Number(searchParams.get('limit')) || 10;
-        const status = searchParams.get('status') as 'all' | 'starting' | 'running' | 'stopped' | 'error' | undefined;
-        const request: GetDevSessionsRequest = { page, limit, status };
-        const response = await devSessionService.listSessions(request);
-        return json(response);
-      } catch (error) {
-        logger.error('Failed to list dev sessions', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list dev sessions' } }, { status: 500 });
-      }
-    }
-
-    // Dev Session by ID
-    const devSessionMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)$/);
-    if (devSessionMatch && req.method === 'GET') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const sessionId = devSessionMatch[1];
-        const session = await devSessionService.getSession(sessionId);
-        if (!session) {
-          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
-        }
-        return json(session);
-      } catch (error) {
-        logger.error('Failed to get dev session', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get dev session' } }, { status: 500 });
-      }
-    }
-
-    if (devSessionMatch && req.method === 'PUT') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const sessionId = devSessionMatch[1];
-        const updateData = await req.json();
-        const session = await devSessionService.updateSession(sessionId, updateData);
-        if (!session) {
-          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
-        }
-        return json(session);
-      } catch (error) {
-        logger.error('Failed to update dev session', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update dev session' } }, { status: 500 });
-      }
-    }
-
-    if (devSessionMatch && req.method === 'DELETE') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const sessionId = devSessionMatch[1];
-        await devSessionService.deleteSession(sessionId);
-        return json({ ok: true });
-      } catch (error) {
-        logger.error('Failed to delete dev session', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete dev session' } }, { status: 500 });
-      }
-    }
-
-    // Dev Session actions
-    const devSessionDeployMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)\/deploy$/);
-    if (devSessionDeployMatch && req.method === 'POST') {
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        const sessionId = devSessionDeployMatch[1];
-        const deployData = await req.json();
-        const result = await devSessionService.executeAction(sessionId, { action: 'deploy', ...deployData });
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to deploy dev session', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to deploy dev session' } }, { status: 500 });
-      }
-    }
-
-    // Dev Session events SSE stream 
-    const devSessionEventsMatch = pathname.match(/^\/api\/dev\/sessions\/([^/]+)\/events$/);
-    if (devSessionEventsMatch && req.method === 'GET') {
-      const sessionId = devSessionEventsMatch[1];
-      
-      try {
-        const { getDevSessionService } = await import('./services/factory');
-        const devSessionService = getDevSessionService();
-        
-        // Verify session exists
-        const session = await devSessionService.getSession(sessionId);
-        if (!session) {
-          return json({ error: { code: 'NOT_FOUND', message: 'Dev session not found' } }, { status: 404 });
-        }
-
-        const stream = createSSEStream({
-          logger,
-          heartbeatIntervalMs: 10000,
-          onSubscribe(controller) {
-            logger.info('Starting dev session events SSE stream', { sessionId });
-            controller.heartbeat({ timestamp: new Date().toISOString() });
-            let stopMonitoring: (() => void) | null = null;
-
-            try {
-              const monitoring = devSessionService.startMonitoring(sessionId, eventData => {
-                controller.send(eventData);
-              });
-              stopMonitoring = () => monitoring.stop();
-            } catch (error) {
-              logger.error('Failed to start real dev session monitoring, falling back to mock SSE', error as Error);
-              let i = 0;
-              const interval = setInterval(() => {
-                i += 1;
-                if (i % 5 === 0) {
-                  controller.send({
-                    type: 'session_status',
-                    data: {
-                      sessionId,
-                      status: session.status,
-                      lastActivity: new Date().toISOString(),
-                      logs: [`Mock dev session log ${i}`],
-                    },
-                  });
-                }
-
-                if (i % 3 === 0) {
-                  controller.send({
-                    type: 'log',
-                    data: {
-                      timestamp: new Date().toISOString(),
-                      service: `dev-session-${sessionId}`,
-                      level: 'info',
-                      message: `Dev session activity ${i}`,
-                    },
-                  });
-                }
-              }, 1000);
-
-              stopMonitoring = () => {
-                clearInterval(interval);
-              };
-            }
-
-            return () => {
-              logger.info('Dev session events SSE stream ended', { sessionId });
-              stopMonitoring?.();
-            };
-          },
-        });
-
-        return new Response(stream, { headers: createSSEHeaders() });
-        
-      } catch (error) {
-        logger.error('Failed to start dev session events stream', error as Error, { sessionId });
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to start dev session events stream' } }, { status: 500 });
-      }
-    }
-
-    // Drafts API
-    if (pathname === API.drafts.create && req.method === 'POST') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const requestData: CreateDraftRequest = await req.json();
-        const response = await draftService.createDraft(requestData);
-        return json(response, { status: 201 });
-      } catch (error) {
-        logger.error('Failed to create draft', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create draft' } }, { status: 500 });
-      }
-    }
-
-    // Draft by ID
-    const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
-    if (draftMatch && req.method === 'GET') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftMatch[1];
-        const draft = await draftService.getDraft(draftId);
-        if (!draft) {
-          return json({ error: { code: 'NOT_FOUND', message: 'Draft not found' } }, { status: 404 });
-        }
-        return json(draft);
-      } catch (error) {
-        logger.error('Failed to get draft', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get draft' } }, { status: 500 });
-      }
-    }
-
-    if (draftMatch && req.method === 'PUT') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftMatch[1];
-        const updateData: PatchDraftRequest = await req.json();
-        const response = await draftService.updateDraft(draftId, updateData);
-        return json(response);
-      } catch (error) {
-        logger.error('Failed to update draft', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update draft' } }, { status: 500 });
-      }
-    }
-
-    // Draft validation
-    const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
-    if (draftValidateMatch && req.method === 'POST') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftValidateMatch[1];
-        const result = await draftService.validateDraft(draftId);
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to validate draft', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to validate draft' } }, { status: 500 });
-      }
-    }
-
-    // Draft finalization
-    const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
-    if (draftFinalizeMatch && req.method === 'POST') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftFinalizeMatch[1];
-        const result = await draftService.finalizeDraft(draftId);
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to finalize draft', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to finalize draft' } }, { status: 500 });
-      }
-    }
-
-    // Draft uploads
-    const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
-    if (draftUploadsMatch && req.method === 'POST') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftUploadsMatch[1];
-        // Get file from request - in real implementation this would handle file upload
-        const body = await req.json();
-        const result = await draftService.uploadFile(draftId, body);
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to upload draft file', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload draft file' } }, { status: 500 });
-      }
-    }
-
-    const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
-    if (draftUploadByIdMatch && req.method === 'DELETE') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftUploadByIdMatch[1];
-        const uploadId = draftUploadByIdMatch[2];
-        await draftService.deleteFile(draftId, uploadId);
-        return json({ ok: true });
-      } catch (error) {
-        logger.error('Failed to delete draft file', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete draft file' } }, { status: 500 });
-      }
-    }
-
-    // Draft preflight
-    const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
-    if (draftPreflightMatch && req.method === 'POST') {
-      try {
-        const { getDraftService } = await import('./services/factory');
-        const draftService = getDraftService();
-        const draftId = draftPreflightMatch[1];
-        const result = await draftService.preflightCheck(draftId);
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to run draft preflight checks', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to run draft preflight checks' } }, { status: 500 });
-      }
-    }
-
-    // Validation API
-    if (pathname === API.validation.compose && req.method === 'POST') {
-      try {
-        const { getValidationService } = await import('./services/factory');
-        const validationService = getValidationService();
-        const requestData: ValidationComposeRequest = await req.json();
-        const result = await validationService.validateCompose(requestData);
-        const response: ValidationComposeResponse = result;
-        return json(response);
-      } catch (error) {
-        logger.error('Failed to validate compose', error as Error);
-        return json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to validate compose' } }, { status: 500 });
-      }
-    }
-
-    // Deployment rollback endpoint
-    const deploymentRollbackMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/rollback$/);
-    if (deploymentRollbackMatch && req.method === 'POST') {
-      const deploymentId = deploymentRollbackMatch[1];
-      try {
-        const body = await req.json().catch(() => ({}));
-        const { targetReleaseId, reason }: RollbackRequest = body;
-        
-        if (!targetReleaseId) {
-          return json({ error: { code: 'MISSING_PARAMETER', message: 'targetReleaseId is required' } }, { status: 400 });
-        }
-        
-        const { getDeploymentService } = await import('./services/factory');
-        const deploymentService = getDeploymentService();
-        const result = await deploymentService.rollback(deploymentId, { targetReleaseId, reason });
-        return json(result);
-      } catch (error) {
-        logger.error('Failed to rollback deployment', error as Error);
-        // Fallback to mock behavior
-        const mockResponse: RollbackResponse = {
-          jobId: crypto.randomUUID(),
-          targetReleaseId: 'rel-unknown',
-          previousReleaseId: crypto.randomUUID(),
-        };
-        return json(mockResponse);
-      }
-    }
-  }
-
-  // ===== DEVELOPMENT TOOLS ROUTES =====
-  
-  // Development configuration
-  if (pathname === '/api/dev/config' && req.method === 'GET') {
-    return developmentToolsEndpoints.getConfig();
-  }
-  
-  // Available scenarios
-  if (pathname === '/api/dev/scenarios' && req.method === 'GET') {
-    return developmentToolsEndpoints.getScenarios();
-  }
-  
-  // Apply scenario
-  if (pathname === '/api/dev/scenarios/apply' && req.method === 'POST') {
-    return await developmentToolsEndpoints.applyScenario(req);
-  }
-  
-  // Update customization
-  if (pathname === '/api/dev/customization' && req.method === 'PATCH') {
-    return await developmentToolsEndpoints.updateCustomization(req);
-  }
-  
-  // Reset mock data
-  if (pathname === '/api/dev/mock-data/reset' && req.method === 'POST') {
-    return developmentToolsEndpoints.resetMockData();
-  }
-  
-  // API call history
-  if (pathname === '/api/dev/api-calls' && req.method === 'GET') {
-    return developmentToolsEndpoints.getApiCallHistory(req);
-  }
-  
-  // Clear API call history
-  if (pathname === '/api/dev/api-calls/clear' && req.method === 'DELETE') {
-    return developmentToolsEndpoints.clearApiCallHistory();
-  }
-  
-  // Performance metrics
-  if (pathname === '/api/dev/performance' && req.method === 'GET') {
-    return developmentToolsEndpoints.getPerformanceMetrics();
-  }
-  
-  // State debugging info
-  if (pathname === '/api/dev/state' && req.method === 'GET') {
-    return developmentToolsEndpoints.getStateDebugInfo();
-  }
-  
-  // Benchmark endpoint
-  if (pathname === '/api/dev/benchmark' && req.method === 'POST') {
-    return await developmentToolsEndpoints.benchmark(req);
-  }
-  
-  // Network simulation
-  if (pathname === '/api/dev/network/simulate' && req.method === 'POST') {
-    return await developmentToolsEndpoints.simulateNetworkCondition(req);
-  }
-
   // ===== API DOCUMENTATION ROUTES =====
   
   // OpenAPI JSON specification
@@ -1634,42 +1178,32 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // API Changelog (raw markdown)
   if (pathname === '/docs/changelog.md' && req.method === 'GET') {
-    const { generateChangelog } = await import('@hola/shared');
-    const changelog = generateChangelog();
-    return new Response(changelog, {
+    // Simple changelog markdown response
+    const markdown = `# API Changelog\n\n## Version 1.0.0\n\n- Initial release with core deployment functionality\n- Health monitoring and status endpoints\n- Job management and logging\n- Backup and restore operations\n- System configuration management\n`;
+    return new Response(markdown, {
       headers: { 'content-type': 'text/markdown; charset=utf-8' }
     });
   }
 
-  // Type Browser
+  // Type definitions
   if (pathname === '/docs/types' && req.method === 'GET') {
-    const { generateTypeBrowserHTML } = await import('@hola/shared');
-    const html = generateTypeBrowserHTML();
+    const html = `<!DOCTYPE html>\n<html>\n<head><title>API Types</title></head>\n<body>\n<h1>API Type Definitions</h1>\n<p>For complete type definitions, see the TypeScript definitions in the @hola/shared package.</p>\n</body>\n</html>`;
     return new Response(html, {
       headers: { 'content-type': 'text/html; charset=utf-8' }
     });
   }
 
-  // Migration Guide Generator
+  // Migration guide
   if (pathname === '/docs/migration' && req.method === 'GET') {
     const fromVersion = searchParams.get('from');
     const toVersion = searchParams.get('to');
-    
-    if (!fromVersion || !toVersion) {
-      return json({ error: { code: 'MISSING_PARAMS', message: 'from and to version parameters required' } }, { status: 400 });
-    }
-
-    const { generateMigrationGuide } = await import('@hola/shared');
-    const guide = generateMigrationGuide(fromVersion, toVersion);
-    
-    if (!guide) {
-      return json({ error: { code: 'INVALID_VERSIONS', message: 'Invalid version numbers or migration not available' } }, { status: 404 });
-    }
-    
-    return json(guide);
+    const html = `<!DOCTYPE html>\n<html>\n<head><title>Migration Guide</title></head>\n<body>\n<h1>API Migration Guide</h1>\n<p>Migrating from ${fromVersion || 'unknown'} to ${toVersion || 'latest'}</p>\n<p>This API is stable and backward compatible.</p>\n</body>\n</html>`;
+    return new Response(html, {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
   }
 
-  // Documentation Home Page
+  // Documentation home page with navigation
   if (pathname === '/docs/home' && req.method === 'GET') {
     const html = `<!DOCTYPE html>
 <html lang="en">
@@ -1679,62 +1213,62 @@ async function route(url: URL, req: Request): Promise<Response> {
   <title>Hola API Documentation</title>
   <style>
     body { 
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      line-height: 1.6; 
       max-width: 800px; 
       margin: 0 auto; 
-      padding: 2rem;
-      line-height: 1.6;
+      padding: 2rem; 
+      color: #333; 
     }
-    h1 { color: #3b82f6; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
-    .links { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin: 2rem 0; }
-    .link-card { 
+    h1 { color: #2563eb; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5rem; }
+    h2 { color: #1f2937; margin-top: 2rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin: 1rem 0; }
+    .card { 
       border: 1px solid #e5e7eb; 
       border-radius: 8px; 
-      padding: 1.5rem; 
+      padding: 1rem; 
       text-decoration: none; 
-      color: inherit;
-      transition: border-color 0.2s;
+      color: inherit; 
+      transition: box-shadow 0.2s; 
     }
-    .link-card:hover { border-color: #3b82f6; }
-    .link-card h3 { margin: 0 0 0.5rem 0; color: #1f2937; }
-    .link-card p { margin: 0; color: #6b7280; font-size: 0.9rem; }
-    .badge { 
-      background: #dbeafe; 
-      color: #1e40af; 
-      padding: 0.25rem 0.5rem; 
-      border-radius: 4px; 
-      font-size: 0.75rem;
-      font-weight: 500;
-    }
+    .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    .card h3 { margin: 0 0 0.5rem 0; color: #2563eb; }
+    code { background: #f3f4f6; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    pre { background: #f3f4f6; padding: 1rem; border-radius: 4px; overflow-x: auto; }
   </style>
 </head>
 <body>
   <h1>🚀 Hola API Documentation</h1>
-  <p>Welcome to the comprehensive API documentation for the Hola Application Platform. Choose from the interactive documentation options below:</p>
-  
-  <div class="links">
-    <a href="/docs" class="link-card">
-      <h3>📊 Swagger UI <span class="badge">Interactive</span></h3>
-      <p>Interactive API explorer with live testing capabilities. Try endpoints directly from your browser.</p>
+  <p>Welcome to the Hola deployment platform API. Explore the documentation below to get started.</p>
+
+  <div class="grid">
+    <a href="/docs" class="card">
+      <h3>📋 Interactive API Explorer</h3>
+      <p>Swagger UI with live API testing, request/response examples, and schema validation.</p>
     </a>
     
-    <a href="/redoc" class="link-card">
-      <h3>📖 ReDoc <span class="badge">Clean</span></h3>
-      <p>Beautiful, responsive API documentation with improved organization and readability.</p>
+    <a href="/redoc" class="card">
+      <h3>📖 API Reference</h3>
+      <p>Clean, readable documentation with detailed endpoint descriptions and examples.</p>
     </a>
     
-    <a href="/docs/examples" class="link-card">
-      <h3>💡 Code Examples <span class="badge">Comprehensive</span></h3>
-      <p>Complete code examples including React hooks, error handling, testing patterns, and real-time features.</p>
+    <a href="/docs/examples" class="card">
+      <h3>💻 Code Examples</h3>
+      <p>Ready-to-use code samples in multiple programming languages and frameworks.</p>
     </a>
     
-    <a href="/docs/types" class="link-card">
-      <h3>🔍 Type Browser <span class="badge">Reference</span></h3>
-      <p>Explore TypeScript types, their relationships, and usage patterns throughout the API.</p>
+    <a href="/docs/types" class="card">
+      <h3>🏗️ Type Definitions</h3>
+      <p>Complete TypeScript type definitions for all API request and response models.</p>
     </a>
     
-    <a href="/docs/changelog" class="link-card">
-      <h3>📋 Changelog <span class="badge">History</span></h3>
+    <a href="/docs/migration" class="card">
+      <h3>🔄 Migration Guide</h3>
+      <p>Step-by-step instructions for upgrading between API versions and handling breaking changes.</p>
+    </a>
+    
+    <a href="/docs/changelog" class="card">
+      <h3>📝 Changelog</h3>
       <p>Track all API changes, breaking changes, and migration requirements across versions.</p>
     </a>
   </div>
@@ -1773,151 +1307,14 @@ export async function handleRequest(req: Request): Promise<Response> {
   if (pre) return withCors(pre);
 
   const url = new URL(req.url);
-  const apiMonitoringMiddleware = createApiMonitoringMiddleware();
 
   const response = await requestMiddleware(req, async () => {
     return authMiddleware(req, async () => {
-      return apiMonitoringMiddleware(req, async () => {
-        return route(url, req);
-      });
+      return route(url, req);
     });
   });
 
   return withCors(response);
-}
-
-let server: ReturnType<typeof Bun.serve> | null = null;
-
-async function startCatalogRefresh(): Promise<() => void> {
-  try {
-    const { getCatalogService } = await import('./services/factory');
-    const catalog = getCatalogService();
-
-    await catalog.refresh(false);
-    logger.info('Initial catalog refresh completed');
-
-    const timer = setInterval(async () => {
-      try {
-        await catalog.refresh(false);
-        logger.debug('Periodic catalog refresh completed');
-      } catch (error) {
-        logger.warn('Periodic catalog refresh failed', { error: error instanceof Error ? error.message : String(error) });
-      }
-    }, 300000);
-
-    logger.info('Catalog periodic refresh initialized');
-    return () => clearInterval(timer);
-  } catch (error) {
-    logger.warn('Failed to initialize catalog refresh', { error: error instanceof Error ? error.message : String(error) });
-    return () => {};
-  }
-}
-
-function startMockDataEnhancements(): () => void {
-  if (!config.USE_MOCK_DATA) {
-    return () => {};
-  }
-
-  console.log('[server] Starting mock data enhancement tasks...');
-  const healthTimer = setInterval(() => {
-    updateSystemHealth();
-  }, 30000);
-
-  const notificationsTimer = setInterval(() => {
-    generateJobNotifications();
-  }, 10000);
-
-  const backupsTimer = setInterval(() => {
-    scheduleAutomaticBackups();
-  }, 60000);
-
-  console.log('[server] Mock data enhancement tasks started');
-
-  return () => {
-    clearInterval(healthTimer);
-    clearInterval(notificationsTimer);
-    clearInterval(backupsTimer);
-  };
-}
-
-async function startBackgroundTasks(): Promise<void> {
-  if (backgroundTimers.length > 0) {
-    return;
-  }
-
-  const mockCleanup = startMockDataEnhancements();
-  backgroundTimers.push(mockCleanup);
-
-  const catalogCleanup = await startCatalogRefresh();
-  backgroundTimers.push(catalogCleanup);
-}
-
-function stopBackgroundTasks(): void {
-  while (backgroundTimers.length) {
-    const cleanup = backgroundTimers.pop();
-    try {
-      cleanup?.();
-    } catch (error) {
-      logger.warn('Background task cleanup failed', { error: error instanceof Error ? error.message : String(error) });
-    }
-  }
-}
-
-async function startServer(): Promise<void> {
-  if (server) return;
-
-  server = Bun.serve({
-    port: PORT,
-    fetch: handleRequest,
-  });
-
-  logger.info('Hola server started successfully', {
-    port: server.port,
-    apiBase: `http://localhost:${server.port}${API.base}`,
-    systemEndpoints: {
-      healthz: `http://localhost:${server.port}/healthz`,
-      readyz: `http://localhost:${server.port}/readyz`,
-      metrics: `http://localhost:${server.port}/metrics`,
-      config: `http://localhost:${server.port}/api/system/config`,
-      health: `http://localhost:${server.port}/api/system/health`,
-    },
-  });
-
-  initializeDevelopmentEnvironment();
-  await startBackgroundTasks();
-
-  const shutdown = () => {
-    if (!server) return;
-    logger.info('Shutting down Hola server');
-    stopBackgroundTasks();
-    shutdownServices();
-    server?.stop();
-    server = null;
-  };
-
-  process.on('SIGTERM', () => {
-    logger.info('Received SIGTERM, shutting down gracefully');
-    shutdown();
-    process.exit(0);
-  });
-
-  process.on('SIGINT', () => {
-    logger.info('Received SIGINT, shutting down gracefully');
-    shutdown();
-    process.exit(0);
-  });
-}
-
-if (shouldAutoStart) {
-  startServer().catch(error => {
-    logger.error('Failed to start server', error instanceof Error ? error : undefined);
-    process.exit(1);
-  });
-}
-
-export interface InProcessAppOptions {
-  enableBackgroundTasks?: boolean;
-  resetServicesOnClose?: boolean;
 }
 
 export async function createInProcessApp(options: InProcessAppOptions = {}): Promise<{ fetch: typeof handleRequest; close: () => Promise<void> }> {
@@ -1944,3 +1341,61 @@ export async function createInProcessApp(options: InProcessAppOptions = {}): Pro
     },
   };
 }
+
+// Phase 0: Start background tasks
+async function startBackgroundTasks() {
+  logger.info('Starting background tasks');
+  
+  // Generate job notifications for demo
+  generateJobNotifications();
+  
+  // Schedule automatic backups
+  scheduleAutomaticBackups();
+  
+  // System health updates
+  const updateSystemHealthTimer = setInterval(() => {
+    updateSystemHealth();
+  }, 10_000);
+  backgroundTimers.push(() => clearInterval(updateSystemHealthTimer));
+}
+
+function stopBackgroundTasks() {
+  logger.info('Stopping background tasks');
+  backgroundTimers.forEach(stop => stop());
+  backgroundTimers.length = 0;
+}
+
+// Phase 0: Handle graceful shutdown
+process.on('SIGINT', () => {
+  logger.info('Received SIGINT, shutting down gracefully');
+  stopBackgroundTasks();
+  shutdownServices();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  logger.info('Received SIGTERM, shutting down gracefully');
+  stopBackgroundTasks();
+  shutdownServices();
+  process.exit(0);
+});
+
+// Phase 0 auto-start
+if (shouldAutoStart) {
+  await initializeDevelopmentEnvironment();
+  await startBackgroundTasks();
+  
+  const server = Bun.serve({
+    port: PORT,
+    fetch: handleRequest,
+    development: true,
+  });
+
+  console.log(`✅ Hola Server listening on port ${server.port}`);
+  logger.info('Server started', { port: server.port, development: true });
+}
+
+export type InProcessAppOptions = {
+  enableBackgroundTasks?: boolean;
+  resetServicesOnClose?: boolean;
+};

@@ -30,7 +30,6 @@ jobs:
 
       - name: Test
         env:
-          HOLA_ENABLE_DEV_API: "true"
           HOLA_USE_REAL_DOCKER: "false"
         run: bun run test
 

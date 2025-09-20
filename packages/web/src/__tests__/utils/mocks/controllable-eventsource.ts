@@ -187,19 +187,4 @@ export const SSEEventCreators = {
       lastUpdated: data.lastUpdated || new Date().toISOString(),
     },
   }),
-
-  devSessionStatus: (data: {
-    sessionId: string;
-    status: string;
-    lastActivity?: string;
-    liveReload?: boolean;
-    autoSync?: boolean;
-    logs?: string[];
-  }) => createSSEEventData({
-    type: 'session_status',
-    data: {
-      ...data,
-      lastActivity: data.lastActivity || new Date().toISOString(),
-    },
-  }),
 };

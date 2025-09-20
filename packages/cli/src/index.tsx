@@ -21,9 +21,9 @@ prog
   .option('--traefik', 'Traefik mode flag', false)
   .option('--no-deploy', 'Validate only, do not deploy', false)
   .option('--no-stream', 'Do not stream SSE during deploy', false)
-  .action(async (opts) => {
-    const { runBundleDev } = await load(import('./commands/bundle/dev'));
-    await runBundleDev(opts);
+  .action(async () => {
+    console.log('Dev mode is not yet implemented. Use "hola bundle validate" and "hola bundle deploy" instead.');
+    process.exitCode = 1;
   });
 
 // bundle validate
@@ -55,7 +55,7 @@ prog
 // Fallback banner when no args
 if (process.argv.length <= 2) {
   // Minimal banner when no args
-  console.log('Hola CLI ready. Try: hola bundle dev -p ./bundle --app-id app123 --version dev');
+  console.log('Hola CLI ready. Try: hola bundle validate -p ./bundle or hola bundle deploy -p ./bundle');
 } else {
   prog.parse(process.argv);
 }

@@ -68,26 +68,9 @@ export const API = {
   system: {
     status: '/api/system/status',
     health: '/api/system/health',
-    config: '/api/system/config',
     healthz: '/healthz',
     readyz: '/readyz',
     metrics: '/metrics',
-  },
-  // Developer/Phase 7 additive endpoints (feature-flagged)
-  dev: {
-    sessions: '/api/dev/sessions',
-    sessionById: (id: string) => `/api/dev/sessions/${id}`,
-    sync: (id: string) => `/api/dev/sessions/${id}/sync`,
-    deploy: (id: string) => `/api/dev/sessions/${id}/deploy`,
-    status: (id: string) => `/api/dev/sessions/${id}/status`,
-    events: (id: string) => `/api/dev/sessions/${id}/events`, // SSE
-  },
-  validation: {
-    compose: '/api/validation/compose',
-  },
-  bundles: {
-    import: '/api/bundles/import',
-    register: '/api/bundles/register',
   },
 } as const;
 
@@ -456,19 +439,7 @@ export type SSEDeploymentUpdateEvent = {
   };
 };
 
-export type SSEDevSessionStatusEvent = {
-  type: 'session_status';
-  data: {
-    sessionId: string;
-    status: string;
-    lastActivity: string;
-    liveReload?: boolean;
-    autoSync?: boolean;
-    logs?: string[];
-  };
-};
-
-export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent | SSEDevSessionStatusEvent;
+export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent;
 
 // Connection status for SSE
 export type SSEConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -610,10 +581,10 @@ export type MetricsResponse = {
 export * from './docs';
 
 // ------------------------------------------------------
-// Phase 7 additive endpoint types (dev sessions, validation helpers)
+// Phase 7 core types - simplified for production use
 // ------------------------------------------------------
 
-// Validation report (coarse shape to start; server may enrich later)
+// Validation report for internal use
 export type ValidationIssue = { field?: string; message: string; code?: string };
 export type ValidationReport = {
   ok: boolean;
@@ -624,132 +595,7 @@ export type ValidationReport = {
   images?: Array<{ name: string; tag?: string; digest?: string; pullable?: boolean }>;
 };
 
-export type ValidationComposeRequest = {
-  composeYaml: string;
-  overrides?: string[];
-  env?: Record<string, string>;
-  secrets?: Record<string, string>;
-};
-export type ValidationComposeResponse = ValidationReport;
 
-// Dev sessions
-export type DevSession = {
-  id: string;
-  sessionId: string; // alias of id
-  name?: string;
-  deploymentId?: string;
-  draftId: string;
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  previewUrl?: string;
-  port?: number;
-  createdAt: string;
-  lastActivity: string;
-  expiresAt?: string;
-  liveReload: boolean;
-  autoSync: boolean;
-  logs: LogEntry[];
-};
-
-export type DevSessionListItem = {
-  id: string;
-  name?: string;
-  draftId: string;
-  status: 'starting' | 'running' | 'stopped' | 'error';
-  previewUrl?: string;
-  createdAt: string;
-  lastActivity: string;
-  liveReload: boolean;
-  autoSync: boolean;
-};
-
-export type CreateDevSessionRequest = {
-  deploymentId?: string;
-  draftId?: string; // Make optional for backward compatibility
-  name?: string;
-  appId?: string;
-  version?: string;
-  mode?: 'upload' | 'ref';
-  ref?: string;
-  autoStart?: boolean;
-  settings?: {
-    liveReload?: boolean;
-    autoSync?: boolean;
-    logLevel?: 'debug' | 'info' | 'warn' | 'error';
-    port?: number;
-    environment?: Record<string, string>;
-  };
-  options?: Record<string, unknown>;
-};
-export type CreateDevSessionResponse = {
-  sessionId: string;
-  draftId?: string; // For backward compatibility
-  jobId?: string;
-};
-
-export type GetDevSessionsRequest = {
-  status?: 'all' | 'starting' | 'running' | 'stopped' | 'error';
-  draftId?: string;
-  page?: number;
-  limit?: number;
-};
-
-export type GetDevSessionsResponse = {
-  items: DevSessionListItem[];
-  page: number;
-  limit: number;
-  total: number;
-};
-
-export type GetDevSessionResponse = DevSession;
-
-export type PatchDevSessionRequest = {
-  name?: string;
-  liveReload?: boolean;
-  autoSync?: boolean;
-};
-
-export type PatchDevSessionResponse = {
-  ok: boolean;
-};
-
-export type PostDevSessionActionRequest = {
-  action: 'start' | 'stop' | 'restart' | 'refresh';
-};
-
-export type PostDevSessionActionResponse = {
-  ok: boolean;
-  jobId?: string;
-};
-
-export type DevSessionSettings = {
-  liveReload: boolean;
-  autoSync: boolean;
-  logLevel: 'debug' | 'info' | 'warn' | 'error';
-  port: number;
-  environment: Record<string, string>;
-  volumes: string[];
-  syncIgnore: string[];
-};
-
-export type DevSyncDeltaFile = { path: string; op: 'add' | 'change' | 'delete'; contentBase64?: string };
-export type DevSyncDeltaRequest = { files: DevSyncDeltaFile[] };
-export type DevSyncDeltaResponse = { ok: boolean; draftId: string; validation?: ValidationReport; stats?: { added: number; changed: number; deleted: number; bytes: number } };
-
-export type DevDeployRequest = { stream?: boolean };
-export type DevDeployResponse = { ok: boolean; jobId?: string; releaseId?: string };
-
-export type DevSessionState = 'idle' | 'validating' | 'finalizing' | 'deploying' | 'error';
-export type GetDevSessionStatusResponse = {
-  state: DevSessionState;
-  lastJobId?: string;
-  validationReport?: ValidationReport;
-  activeReleaseId?: string;
-  lastError?: string;
-};
-
-// Bundle import helper
-export type BundleImportRequest = { ref?: string };
-export type BundleImportResponse = { appId: string; version: string; draftId: string };
 
 // ------------------------------------------------------
 // Phase 7 Core Types - Deployment Lifecycle

@@ -16,8 +16,6 @@ import type {
   PostDeploymentActionResponse,
   RollbackRequest,
   RollbackResponse,
-  ValidationComposeRequest,
-  ValidationComposeResponse,
 } from '@hola/shared';
 import { setupTestServer, teardownTestServer } from '../utils/bun-server';
 import { makeRequest } from '../utils/phase7-helpers';
@@ -51,36 +49,6 @@ describe('Deployment Management', () => {
     delete process.env.HOLA_USE_REAL_DEPLOYMENTS;
     delete process.env.HOLA_USE_REAL_VALIDATION;
     delete process.env.HOLA_USE_REAL_DRAFTS;
-  });
-
-  describe('Validation Service', () => {
-    test('should validate compose configuration', async () => {
-      const request: ValidationComposeRequest = {
-        composeYaml: `
-version: '3.8'
-services:
-  web:
-    image: nginx:latest
-    ports:
-      - "8080:80"
-    environment:
-      - ENV=production
-        `,
-        env: { ENV: 'production' }
-      };
-
-      const response = await makeRequest<ValidationComposeResponse>({
-        method: 'POST',
-        url: `${baseURL}/api/validation/compose`,
-        body: request
-      });
-
-      expect(response.success).toBe(true);
-      expect(response.data).toBeDefined();
-      expect(typeof response.data!.ok).toBe('boolean');
-      expect(Array.isArray(response.data!.errors)).toBe(true);
-      expect(Array.isArray(response.data!.warnings)).toBe(true);
-    });
   });
 
   describe('Deployment Lifecycle', () => {

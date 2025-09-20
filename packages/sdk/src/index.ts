@@ -5,23 +5,12 @@ import {
   PatchDraftRequest, PatchDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   ValidateDraftResponse, FinalizeDraftResponse,
-  // Phase 7 Validation types
-  ValidationComposeRequest, ValidationComposeResponse,
   // Phase 7 Deployment types
   CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
   PatchDeploymentRequest, PatchDeploymentResponse, 
   PostDeploymentActionRequest, PostDeploymentActionResponse,
-  RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
-  // Phase 7 Dev Session types
-  CreateDevSessionRequest, CreateDevSessionResponse, 
-  GetDevSessionsRequest, GetDevSessionsResponse, GetDevSessionResponse,
-  PatchDevSessionRequest, PatchDevSessionResponse,
-  PostDevSessionActionRequest, PostDevSessionActionResponse,
-  DevSyncDeltaRequest, DevSyncDeltaResponse, DevDeployRequest, DevDeployResponse, 
-  GetDevSessionStatusResponse,
-  // Other existing types
-  BundleImportRequest, BundleImportResponse, SystemConfigResponse 
+  RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse
 } from '@hola/shared';
 
 export type SdkInitOptions = {
@@ -121,35 +110,11 @@ export class HolaSdk {
     logs: (jobId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.jobs.logs(jobId)}${buildQuery(qs)}`),
   };
 
-  // --- Phase 7 additive helpers (feature-flagged) ---
-
-  validation = {
-    compose: (body: ValidationComposeRequest) => this.post<ValidationComposeResponse>(API.validation.compose, body),
-  };
-
-  bundles = {
-    import: (body: BundleImportRequest) => this.post<BundleImportResponse>(API.bundles.import, body),
-    register: (body: { ref: string; metadata?: Record<string, unknown> }) => this.post<{ ok: boolean }>(API.bundles.register, body),
-  };
-
-  dev = {
-    sessions: {
-      create: (body: CreateDevSessionRequest) => this.post<CreateDevSessionResponse>(API.dev.sessions, body),
-      list: (qs?: GetDevSessionsRequest) => this.get<GetDevSessionsResponse>(`${API.dev.sessions}${buildQuery(qs)}`),
-      byId: (id: string) => this.get<GetDevSessionResponse>(API.dev.sessionById(id)),
-      update: (id: string, body: PatchDevSessionRequest) => this.patch<PatchDevSessionResponse>(API.dev.sessionById(id), body),
-      delete: (id: string) => this.delete<{ ok: boolean }>(API.dev.sessionById(id)),
-      action: (id: string, action: PostDevSessionActionRequest) => this.post<PostDevSessionActionResponse>(API.dev.sessionById(id) + '/actions', action),
-      status: (id: string) => this.get<GetDevSessionStatusResponse>(API.dev.status(id)),
-      deploy: (id: string, body?: DevDeployRequest) => this.post<DevDeployResponse>(API.dev.deploy(id), body),
-      sync: (id: string, body: DevSyncDeltaRequest) => this.patch<DevSyncDeltaResponse>(API.dev.sync(id), body),
-      logs: (id: string, qs?: { since?: string; limit?: number }) => this.get(`${API.dev.sessionById(id)}/logs${buildQuery(qs)}`),
-      // events: SSE consumer will use API.dev.events(id)
-    },
-  };
+  // --- Core deployment functionality ---
 
   system = {
-    config: () => this.get<SystemConfigResponse>(API.system.config),
+    status: () => this.get(API.system.status),
+    health: () => this.get(API.system.health),
   };
 }
 

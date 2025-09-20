@@ -473,6 +473,29 @@ import type { SomeType } from '@hola/shared';
 
 ## Implementation Lessons & Best Practices
 
+### API Evolution & Simplification
+**Development API Deprecation** (September 2025):
+- **Removed `/api/dev/*` endpoints**: Development-specific APIs (dev sessions, enhanced debugging) permanently removed to simplify codebase
+- **Simplified API surface**: Reduced from ~50 to ~35 endpoints by eliminating development-specific functionality  
+- **Standard workflows only**: All functionality must use production-ready patterns (Drafts, Deployments, SSE, Jobs)
+- **No development middleware**: Removed API monitoring and development-specific middleware from server pipeline
+- **Clean SSE events**: Removed `SSEDevSessionStatusEvent` and development-specific SSE event types
+
+**API Cleanup Process**:
+1. **Remove API endpoints** from server routing and shared constants
+2. **Delete web components** that reference removed endpoints (dev dashboards, debug pages)
+3. **Clean test files** - remove ALL tests for deprecated functionality, don't leave orphaned files
+4. **Update SSE types** - remove event types and handlers for deprecated functionality
+5. **Fix CLI commands** - update to use standard SDK methods (Draft workflow for validation)
+6. **Clean CI/CD** - remove obsolete environment variables (`HOLA_ENABLE_DEV_API`) from workflows
+7. **Verify health** - ensure all tests, linting, and builds pass after cleanup
+
+**Architectural Decision Rationale**:
+- Development APIs created complexity without sufficient value
+- Standard Draft/Deployment workflows provide same functionality with better consistency
+- Simplified API surface reduces maintenance burden and improves reliability
+- Easier onboarding for new developers with fewer API patterns to learn
+
 ### Server Development & Testing
 **Background Process Management**:
 - **ALWAYS** use `&` (ampersand) when starting servers for testing

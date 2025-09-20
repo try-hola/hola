@@ -34,7 +34,6 @@ import { RealBundleService, MockBundleService, type BundleService } from './core
 import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
 import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
-import { RealDevSessionService, MockDevSessionService, type DevSessionService } from './core/dev-session';
 
 export interface ServiceHealth {
   healthy: boolean;
@@ -403,13 +402,12 @@ export async function initializeServices(): Promise<void> {
     logger.warn('Bundle service registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
   }
   
-  // Phase 7: Draft, Validation, Deployment, and Dev Session services
-  logger.info('Registering Phase 7 services: Drafts, Validation, Deployments, Dev Sessions');
+  // Phase 7: Draft, Validation, Deployment services
+  logger.info('Registering Phase 7 services: Drafts, Validation, Deployments');
   try {
     getDraftService();
     getValidationService();
     getDeploymentService();
-    getDevSessionService();
     logger.info('Phase 7 services registered successfully');
   } catch (error) {
     logger.warn('Phase 7 services registration failed, will use mocks', { error: error instanceof Error ? error.message : 'Unknown error' });
@@ -776,24 +774,5 @@ export function getDeploymentService(): DeploymentService {
     ),
     featureFlag: 'useRealDeployments',
     healthCheckInterval: 60_000,
-  });
-}
-
-export function getDevSessionService(): DevSessionService {
-  const factory = getServiceFactory();
-
-  const existing = factory.getService<DevSessionService>('dev-sessions');
-  if (existing) return existing;
-
-  return factory.createService<DevSessionService>({
-    name: 'dev-sessions',
-    mockImplementation: new MockDevSessionService(),
-    realImplementation: new RealDevSessionService(
-      getStorageService(),
-      getJobService(),
-      getDraftService()
-    ),
-    featureFlag: 'useRealDevSessions',
-    healthCheckInterval: 30_000,
   });
 }

@@ -73,6 +73,7 @@ kill %1  # cleanup
 - Configure jsdom properly for React component tests.
 - Use `await waitFor()` for React 18 async rendering.
 - Mock external dependencies consistently across environments.
+- **Remove tests for deprecated APIs**: When endpoints are removed, delete all associated test files completely.
 
 ## Don't
 - Mock deep internals; test public APIs.
@@ -80,3 +81,6 @@ kill %1  # cleanup
 - Expect synchronous DOM updates in React 18.
 - Leave tests dependent on external services without fallbacks.
 - Use `document` or `window` without proper jsdom setup.
+- **Test removed API endpoints**: Delete tests for `/api/dev/*` and other deprecated endpoints completely.
+- **Leave orphaned test files**: When cleaning up APIs, remove ALL related test files, not just failing assertions.
+- **Test deprecated SSE events**: Remove SSE test helpers and event handlers for removed functionality.

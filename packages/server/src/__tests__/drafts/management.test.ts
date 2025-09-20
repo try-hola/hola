@@ -113,7 +113,7 @@ describe('Draft Management', () => {
     };
 
     const updateResponse = await makeRequest<PatchDraftResponse>({
-      method: 'PUT',
+      method: 'PATCH',
       url: `${baseURL}/api/drafts/${draftId}`,
       body: updateRequest
     });

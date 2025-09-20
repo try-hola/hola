@@ -15,16 +15,19 @@ Type-only shared library: API route constants, request/response types, and docum
 - Exports: separate type exports from values to optimize treeshaking.
 
 ## Patterns To Follow
-- Route constants live under a single exported `API` object. New endpoints go under the correct namespace (`deployments`, `jobs`, `dev`, etc.).
+- Route constants live under a single exported `API` object. New endpoints go under the correct namespace (`deployments`, `jobs`, `system`, etc.).
 - Prefer string literal unions over `enum` for cross-package compatibility.
 - Reuse common helpers: `PageRequest`, `PageResponse<T>`, `ErrorResponse` instead of redefining.
 - Error shapes: `{ error: { code: string; message: string; details?: unknown } }` only.
 - Docs helpers (OpenAPI/Swagger/ReDoc generators) must be pure and not fetch or read files.
+- **API Evolution**: When removing endpoints, delete ALL references: routes, types, SSE events, request/response models.
 
 ## Anti-Patterns
 - Importing from `@hola/server` or `@hola/web`.
 - Adding environment-specific logic or referencing `process` or `Bun`.
 - Using `any`; prefer concrete types or `unknown` with type guards.
+- **Creating `API.dev` namespace**: Development endpoints are permanently deprecated.
+- **Leaving orphaned types**: When removing API endpoints, clean up all associated request/response types and SSE events.
 
 ## Quality Gates
 - Must compile under strict TS in all packages.

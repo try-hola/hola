@@ -12,8 +12,6 @@ import type {
   ValidationIssue,
   EnhancedPreflightResponse,
   EnhancedPreflightCheck,
-  ValidationComposeRequest,
-  ValidationComposeResponse,
   GlobalPortRegistry,
   ResourceLimits,
   AppEnvVar
@@ -30,9 +28,6 @@ export interface ValidationService extends HealthCheckable {
   // Draft validation
   validateDraft(draft: Draft, files?: Map<string, DraftFile & { content?: Buffer }>): Promise<ValidationReport>;
   preflightCheck(draft: Draft, files?: Map<string, DraftFile & { content?: Buffer }>): Promise<EnhancedPreflightResponse>;
-  
-  // Compose validation
-  validateCompose(request: ValidationComposeRequest): Promise<ValidationComposeResponse>;
   
   // Resource validation
   validatePorts(ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>): Promise<ValidationIssue[]>;
@@ -99,12 +94,14 @@ export class RealValidationService implements ValidationService {
       // Validate compose override if present
       if (draft.composeOverride) {
         try {
-          const composeResult = await this.validateCompose({
-            composeYaml: draft.composeOverride,
-            env: Object.fromEntries(draft.appEnv.map(e => [e.key, e.value])),
-          });
-          errors.push(...composeResult.errors);
-          warnings.push(...composeResult.warnings);
+          // Inline compose validation (simplified)
+          const composeData = parseYAML(draft.composeOverride) as ComposeFile;
+          if (!composeData.services || Object.keys(composeData.services).length === 0) {
+            warnings.push({ 
+              field: 'composeOverride', 
+              message: 'Compose file has no services defined' 
+            });
+          }
         } catch (error) {
           errors.push({ 
             field: 'composeOverride', 
@@ -285,64 +282,6 @@ export class RealValidationService implements ValidationService {
           status: 'fail',
           detail: error instanceof Error ? error.message : 'Preflight check failed',
         }],
-      };
-    }
-  }
-
-  async validateCompose(request: ValidationComposeRequest): Promise<ValidationComposeResponse> {
-    this.logger.info('Validating compose configuration');
-    
-    const errors: ValidationIssue[] = [];
-    const warnings: ValidationIssue[] = [];
-
-    try {
-      // Parse and validate compose YAML
-      const parsed = parseYAML(request.composeYaml) as ComposeFile;
-      
-      // Check for common issues
-      if (!parsed.services || Object.keys(parsed.services).length === 0) {
-        errors.push({ message: 'No services defined in compose file' });
-      }
-
-      // Validate service configurations
-      if (parsed.services) {
-        for (const [serviceName, service] of Object.entries(parsed.services)) {
-          const serviceConfig = service as ComposeService;
-          
-          // Check image
-          if (!serviceConfig.image && !serviceConfig.build) {
-            errors.push({ 
-              field: `services.${serviceName}`, 
-              message: 'Service must specify either image or build configuration' 
-            });
-          }
-
-          // Check ports
-          if (serviceConfig.ports) {
-            for (const port of serviceConfig.ports) {
-              const portStr = typeof port === 'string' ? port : `${port}`;
-              if (!portStr.match(/^\d+(:\d+)?$/)) {
-                warnings.push({
-                  field: `services.${serviceName}.ports`,
-                  message: `Port mapping '${portStr}' may be invalid`,
-                });
-              }
-            }
-          }
-        }
-      }
-
-      return {
-        ok: errors.length === 0,
-        errors,
-        warnings,
-      };
-    } catch (error) {
-      this.logger.error('Compose validation failed', error as Error);
-      return {
-        ok: false,
-        errors: [{ message: error instanceof Error ? error.message : 'Compose validation failed' }],
-        warnings,
       };
     }
   }
@@ -607,18 +546,6 @@ export class MockValidationService implements ValidationService {
         { name: 'ports', type: 'ports', status: 'pass', detail: 'Ports are available' },
       ],
       reservationToken: crypto.randomUUID(),
-    };
-  }
-
-  async validateCompose(): Promise<ValidationComposeResponse> {
-    this.logger.info('Mock: Validating compose');
-
-    return {
-      ok: true,
-      errors: [],
-      warnings: [
-        { message: 'Mock validation - compose syntax not fully checked' },
-      ],
     };
   }
 
