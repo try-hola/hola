@@ -109,7 +109,7 @@ describe('Authentication and Authorization', () => {
       const services = getServices();
       // Test service health if supported
       if ('healthCheck' in services.auth) {
-        const health = await (services.auth as any).healthCheck();
+        const health = await (services.auth as unknown as { healthCheck(): Promise<{ healthy: boolean; lastCheck: Date }> }).healthCheck();
         expect(health.healthy).toBe(true);
         expect(health.lastCheck).toBeInstanceOf(Date);
       }

@@ -526,55 +526,37 @@ afterAll(async () => {
 - Verify specific service health before testing their endpoints
 
 ### Service Implementation Patterns
-**Service Factory Integration**:
-- All real services must implement `HealthCheckable` interface
-- Use health monitoring for ongoing service health tracking
-- Register services with descriptive names and appropriate health check intervals
-- Test both healthy and unhealthy service states
+**Simplified Service Factory**:
+- Environment-based service selection: 'test' uses all mocks, 'production' uses all real services
+- No complex health monitoring, feature flags, or automatic fallback
+- Simple `getServices()` and `resetServices()` API for all service access
+- Services are instantiated based on environment detection (NODE_ENV, VITEST, HOLA_DISABLE_AUTOSTART)
 
-**Feature Flag Implementation - Fail-Fast Approach**:
-- Default all feature flags to `false` for safety
-- Use environment variables for activation (`HOLA_USE_REAL_*=true`)
-- **CRITICAL**: When a `USE_REAL` flag is enabled, the service MUST be healthy or startup fails
-- **NO automatic fallback** to mocks when real implementations are explicitly requested
-- **Fail-fast validation**: Real services are health-checked at startup before server starts
-- Provide clear error messages with remediation steps when real services fail
+**Service Access Pattern**:
+```typescript
+import { getServices } from './services/simple-factory';
 
-**Fail-Fast Error Handling**:
-- When `HOLA_USE_REAL_*=true` and the service fails: **throw an error and abort startup**
-- Error messages must include:
-  - Which dependency failed and why
-  - How to fix the real dependency (e.g., "install Docker")
-  - How to disable the flag to use mocks (`export HOLA_USE_REAL_DOCKER=false`)
-- **Never silently pivot** from real to mock implementations when real flag is enabled
-- Use structured logging with request correlation IDs
-- Implement timeout and retry logic for external commands during health checks
+// Get all services for current environment
+const services = getServices();
+const result = await services.storage.readFile('config.json');
+```
 
-**Service Startup Validation**:
-- Real services are validated before server startup via `validateRealServices()`
-- Health checks are performed on all enabled real services
-- Server startup fails immediately if any real service is unhealthy
-- Clear, actionable error messages guide operators to resolution
+**Minimal Feature Flags**:
+- Only `useAuth` and `useObservability` flags remain
+- All service selection is handled by environment detection
+- No complex configuration matrix or service-specific flags
 
 ### Testing Strategies
-**Contract Testing**:
-- Test both mock and real implementations against same contracts
-- Verify API compatibility across all phases
-- Use dedicated test servers with different feature flag configurations
-- Test fail-fast scenarios where real services are unavailable
+**Simplified Testing Approach**:
+- Use environment-based service selection for predictable test behavior
+- Test environment automatically uses all mock services
+- No need to configure complex feature flags or health monitoring
+- Simple `resetServices()` call between tests ensures clean state
 
 **Service Testing**:
-- Test service health checks and failure scenarios
-- **Test fail-fast behavior**: Verify server startup fails when real flag enabled but service unhealthy
-- Test feature flag activation and deactivation
-- Test error message clarity and actionability
-- Mock external dependencies appropriately
-
-**Fail-Fast Testing**:
-- Verify server fails to start when `HOLA_USE_REAL_*=true` but dependency unavailable
-- Test error messages include both fix and disable options
-- Confirm no silent fallback from real to mock when real flag enabled
-- Test startup validation catches service issues before server accepts requests
+- All services work predictably in their respective environments
+- Mock services provide consistent behavior for reliable testing
+- Real services are only used in production with no fallback complexity
 
 **Integration Testing**:
 - Start test servers with background processes
@@ -604,23 +586,17 @@ afterAll(async () => {
 - Handle permissions and disk space errors gracefully
 
 ### Monitoring & Observability
-**Health Check Implementation**:
-- Implement comprehensive health checks for all services
-- Include timestamps in health status responses
-- Test actual functionality, not just service availability
-- Aggregate health status in service factory
-
 **Structured Logging**:
 - Use request correlation IDs across all operations
-- Log service activation, fallback, and health events
+- Log service access and environment detection
 - Include relevant context in log messages
 - Use appropriate log levels (debug, info, warn, error)
 
 **Metrics Collection**:
-- Track service health status changes
+- Track basic service access patterns
 - Monitor API response times and error rates
-- Count service activations and fallbacks
 - Measure resource usage (memory, disk, CPU)
+- Simple metrics without complex health state tracking
 
 ### Progressive Deployment
 **Phase-by-Phase Implementation**:

@@ -1,38 +1,15 @@
 /**
- * Feature flags for progressive activation of real services
+ * Minimal feature flags for authentication and observability
  * 
- * Each flag controls whether to use real or mock implementations.
- * Default to false for safety; auto-fallback to mocks on health check failure.
+ * Simplified from complex service factory flags to only essential features.
  */
 
 export interface FeatureFlags {
-  useRealStorage: boolean;
-  useRealConfig: boolean;
-  useRealDatabase: boolean;
-  useRealDocker: boolean;
-  useRealJobs: boolean;
-  useRealCatalog: boolean;
-  useRealBundles: boolean;
-  useRealDrafts: boolean;
-  useRealValidation: boolean;
-  useRealDeployments: boolean;
-  useRealBackups: boolean;
   useAuth: boolean;
   useObservability: boolean; // enables metrics/tracing/exporters
 }
 
 export const defaultFeatureFlags: FeatureFlags = {
-  useRealStorage: false,
-  useRealConfig: false,
-  useRealDatabase: false,
-  useRealDocker: false,
-  useRealJobs: false,
-  useRealCatalog: false,
-  useRealBundles: false,
-  useRealDrafts: false,
-  useRealValidation: false,
-  useRealDeployments: false,
-  useRealBackups: false,
   useAuth: false,
   useObservability: false,
 };
@@ -42,17 +19,6 @@ export const defaultFeatureFlags: FeatureFlags = {
  */
 export function loadFeatureFlags(): FeatureFlags {
   return {
-    useRealStorage: process.env.HOLA_USE_REAL_STORAGE === 'true',
-    useRealConfig: process.env.HOLA_USE_REAL_CONFIG === 'true',
-    useRealDatabase: process.env.HOLA_USE_REAL_DATABASE === 'true',
-    useRealDocker: process.env.HOLA_USE_REAL_DOCKER === 'true',
-    useRealJobs: process.env.HOLA_USE_REAL_JOBS === 'true',
-    useRealCatalog: process.env.HOLA_USE_REAL_CATALOG === 'true',
-  useRealBundles: process.env.HOLA_USE_REAL_BUNDLES === 'true',
-    useRealDrafts: process.env.HOLA_USE_REAL_DRAFTS === 'true',
-    useRealValidation: process.env.HOLA_USE_REAL_VALIDATION === 'true',
-    useRealDeployments: process.env.HOLA_USE_REAL_DEPLOYMENTS === 'true',
-    useRealBackups: process.env.HOLA_USE_REAL_BACKUPS === 'true',
     useAuth: process.env.HOLA_USE_AUTH === 'true',
     useObservability: process.env.HOLA_USE_OBSERVABILITY === 'true',
   };

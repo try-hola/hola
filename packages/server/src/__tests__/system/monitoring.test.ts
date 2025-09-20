@@ -13,7 +13,7 @@ import type {
   SystemHealthResponse
 } from '@hola/shared';
 import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
-import { getServices, resetServices } from '../../services/simple-factory';
+import { getServices } from '../../services/simple-factory';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
 
 const BASE_URL = TEST_BASE_URL;

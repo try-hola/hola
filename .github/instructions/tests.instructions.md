@@ -5,12 +5,13 @@ applyTo: "/packages/**/__tests__/**"
 # Tests Instructions
 
 ## Purpose
-Reliable, isolated tests with fakes-first strategy and consistent structure.
+Reliable, isolated tests with fakes-first strategy and simplified service management.
 
 ## Core Rules  
 - Fakes over mocks: simple in-memory fakes implementing same interface in `__tests__/fakes/`.
 - Organize by feature; only import `@hola/shared` across packages.
 - **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
+- **Simplified services**: Tests automatically use all mock services, no configuration needed.
 - No external network calls or background processes.
 
 ## React Testing Environment (Web Package)

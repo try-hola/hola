@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
 import type { GetJobsResponse, SystemConfigResponse } from '@hola/shared';
 import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
-import { getServices, resetServices } from '../../services/simple-factory';
+import { getServices } from '../../services/simple-factory';
 import { MockJobService } from '../../services/core/jobs';
 
 const BASE_URL = TEST_BASE_URL;

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createServices, detectEnvironment, getServices, resetServices, type ServiceEnvironment } from '../../services/simple-factory';
+import { createServices, detectEnvironment, getServices, resetServices } from '../../services/simple-factory';
 
 describe('Simple Service Factory', () => {
   describe('createServices', () => {

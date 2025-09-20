@@ -1087,7 +1087,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         controller.heartbeat();
         try {
           const services = getServices();
-          const monitoring = services.systemMonitoring.startMonitoring((systemStatus: any) => {
+          const monitoring = services.systemMonitoring.startMonitoring((systemStatus: GetSystemStatusResponse) => {
             controller.send({
               type: 'system_update',
               data: systemStatus,
