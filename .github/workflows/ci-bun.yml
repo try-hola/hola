@@ -28,6 +28,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Test
+        env:
+          HOLA_ENABLE_DEV_API: "true"
+          HOLA_USE_REAL_DOCKER: "false"
+        run: bun run test
+
       - name: Build web
         run: bun --cwd packages/web run build
 
