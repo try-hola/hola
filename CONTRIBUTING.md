@@ -178,6 +178,80 @@ Follow these established patterns:
 5. Use functional test names that describe behavior, not implementation details
 6. Group related tests in describe blocks by feature or scenario
 
+## Code Review with CodeRabbit
+
+This repository uses CodeRabbit AI for automated code reviews. CodeRabbit provides context-aware code analysis, automated reviews on pull requests with actionable feedback, and integrates with 40+ linters and security tools.
+
+### What CodeRabbit Provides
+
+- **Assertive Review Profile**: Thorough reviews focusing on critical issues
+- **TypeScript Focus**: Specialized attention to type safety and API contracts
+- **Monorepo Awareness**: Package-specific review instructions
+- **Security Scanning**: GitLeaks for secrets detection
+- **Code Quality Tools**: ESLint, Hadolint (Docker), YAML/Markdown linting
+- **Knowledge Base**: Learns from our coding guidelines in `.github/copilot-instructions.md`
+
+### Package-Specific Reviews
+
+CodeRabbit provides tailored feedback for each package:
+
+- **`packages/web/`**: React patterns, hooks, performance, accessibility
+- **`packages/server/`**: API implementation, security, Bun patterns
+- **`packages/shared/`**: Type definitions, breaking changes, contracts
+- **`packages/cli/`**: CLI usability, error handling
+- **`packages/sdk/`**: API client implementation, documentation
+- **Tests**: Focus on fakes over mocks, isolation, edge cases
+
+### Working with CodeRabbit
+
+**In Pull Requests**, CodeRabbit automatically reviews all pull requests and provides:
+
+1. **High-level Summary**: What changed and why it matters
+2. **File-by-file Walkthrough**: Detailed breakdown of each change
+3. **Architecture Diagrams**: Visual flow of system changes
+4. **Inline Comments**: Specific feedback on code sections
+
+**Interacting with CodeRabbit** - You can chat with CodeRabbit in PR comments:
+
+```
+@coderabbitai Can you explain this function?
+@coderabbitai How does this change affect the API contract?
+@coderabbitai Generate unit tests for this component
+@coderabbitai Create documentation for this endpoint
+```
+
+**Review Commands**:
+- `@coderabbitai summary` - Generate/update PR summary
+- `@coderabbitai review` - Trigger a new review
+- `@coderabbitai help` - Show available commands
+
+### Best Practices for CodeRabbit
+
+**For Code Authors**:
+1. **Use Descriptive PR Titles**: CodeRabbit can auto-generate titles with `@coderabbitai` placeholder
+2. **Link Issues**: CodeRabbit verifies changes address linked issues
+3. **Small, Focused PRs**: Better reviews with clear scope
+4. **Draft PRs**: Use drafts for work-in-progress (reviews are skipped)
+
+**For Reviewers**:
+1. **Review CodeRabbit's Analysis**: Start with the high-level summary
+2. **Check Inline Comments**: Address or resolve AI feedback
+3. **Use Chat Feature**: Ask CodeRabbit questions about complex changes
+4. **Provide Feedback**: Teach CodeRabbit your team's preferences
+
+**Teaching CodeRabbit**: When CodeRabbit's suggestions don't match your preferences, reply to its comment with your preference. CodeRabbit learns and applies this to future reviews.
+
+### Troubleshooting CodeRabbit
+
+**CodeRabbit Not Reviewing**:
+1. Check repository access in [CodeRabbit settings](https://app.coderabbit.ai/settings/repositories)
+2. Verify PR is not a draft (if `auto_review.drafts: false`)
+3. Ensure PR has changes in included file patterns
+
+**Bot PRs**: CodeRabbit is configured to review pull requests from bots (including GitHub Actions, Dependabot, etc.). If you want to exclude specific bots, add their usernames to the `ignore_usernames` array in `.coderabbit.yaml`.
+
+**Configuration Updates**: To modify CodeRabbit's behavior, edit `.coderabbit.yaml` in the repository root. Changes take effect on the next PR.
+
 ## Documentation Standards
 
 - Document public API endpoints in the OpenAPI spec at `/server/public/docs/openapi.yaml`
@@ -190,6 +264,12 @@ Follow these established patterns:
 If you have any questions or need help, please:
 - Check the existing documentation
 - Look at existing code for examples
+- Ask CodeRabbit questions in PR comments using `@coderabbitai`
 - Open an issue for larger discussions
+
+For CodeRabbit-specific support:
+- **Documentation**: [docs.coderabbit.ai](https://docs.coderabbit.ai/)
+- **Discord**: [CodeRabbit Community](https://discord.gg/GsXnASn26c)
+- **Issues**: Create GitHub issues for configuration problems
 
 Thank you for contributing to the Hola project!

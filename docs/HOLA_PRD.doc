@@ -147,7 +147,41 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - Vite dev server proxies `/api` to backend during development.
 - CI (`.github/workflows/ci-bun.yml`) installs Bun and runs lint/typecheck/build across filtered packages.
 
-9. Operational & Platform Considerations
+9. Testing Strategy & Quality Assurance
+---------------------------------------
+### Standardized Test Environment
+The Hola platform employs a **standardized in-process test environment** that eliminates brittle background process management and provides reliable, fast tests across all components.
+
+#### Core Testing Principles
+- **Reliable Testing**: In-process execution eliminates external dependencies, background processes, and port conflicts. Each test file gets fresh, predictable state with server state reset between tests.
+- **Performance Optimized**: < 100ms test environment initialization, concurrent safe execution, memory efficient shared server instances per worker, and direct function calls instead of HTTP round-trips.
+- **Developer Experience**: Simple `bun test` setup, standardized helpers in `helpers/test-environment`, pre-configured feature environments, and automatic cleanup preventing test interference.
+
+#### Implementation Architecture
+Standard test setup pattern uses `setupTestEnvironment()` and `teardownTestEnvironment()` from `helpers/test-environment` with configurable environments for specific features (drafts, deployments, docker, auth, system monitoring).
+
+**Test Execution Commands:**
+- `bun test` - All components
+- `bun run test:server` / `bun run test:web` - Component-specific
+- `bun run test:server:watch` / `bun run test:web:watch` - Watch mode
+- `bun run test:env:integration` - Docker Compose integration (special scenarios only)
+
+#### Test Organization
+Directory structure places tests in `packages/*/src/__tests__/` with helpers in `helpers/test-environment.ts`. Feature-specific directories (auth, deployments, docker) organize tests logically. Integration testing via Docker Compose available for scenarios requiring actual service dependencies, with dynamic port allocation and auto-detection when `HOLA_USE_REAL_DOCKER=false`.
+
+#### CI/CD Integration
+GitHub Actions workflow uses the standardized environment with `HOLA_USE_REAL_DOCKER="false"` and `bun test`. All tests use the same in-process environment locally and in CI, ensuring consistent behavior.
+
+#### Quality Gates & Migration
+All tests must follow the standardized environment: import from helpers, no background processes (`&`, `kill`, `pkill` patterns), proper cleanup with `teardownTestEnvironment()`, feature flags in test setup, and comprehensive error handling. Legacy patterns using external server startup/cleanup have been deprecated in favor of the reliable in-process approach.
+
+**Benefits Achieved:**
+- Zero background processes and fast test execution (73 tests in ~150ms)
+- Reliable CI/CD with consistent local/CI behavior
+- Simple onboarding with immediate `bun test` functionality
+- Parallel safety and clear documentation with enforced patterns
+
+10. Operational & Platform Considerations
 ----------------------------------------
 - Packaging: Dockerized services with ORAS CLI for OCI artifact pulls; deploy scripts in `deploy/` (compose file, `.env` template, install script).
 - Auth & Ingress: Traefik handles TLS, Authentik supplies identity headers; CLI supports token-based auth.
@@ -156,14 +190,14 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - Reliability: SSE heartbeat, reconnection strategy, concurrency guards, and base-generation conflict detection.
 - Accessibility: High-contrast UI, responsive design, keyboard navigation, and screen reader support.
 
-10. Success Metrics & Tracking
+11. Success Metrics & Tracking
 ------------------------------
 - **User Metrics:** Active users, apps per user, onboarding completion, satisfaction (NPS/surveys).
 - **Business Metrics:** Growth, retention, community engagement (stars, contributors), premium revenue.
 - **Technical Metrics:** Deployment duration, uptime (>99.5%), failure rate (<2%), backup success rate.
 - **Tracking Plan:** Instrument signups/logins, catalog interactions, deployment lifecycle, backups, notifications, and error logging.
 
-11. Questions & Unknowns
+12. Questions & Unknowns
 ------------------------
 1. **Auth Alignment:** How should Authentik-based identity integrate with the server MVP’s API key security without duplicating effort? Is API key auth temporary or complementary (e.g., CLI uses API keys, UI uses Authentik)?
 2. **Platform Support Timeline:** What is the roadmap for extending beyond OrbStack to generic Docker hosts, and are there environment-specific constraints we must design around now?
@@ -175,7 +209,7 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 8. **Telemetry & Privacy:** What optional analytics, if any, will be collected, and how will user consent be gathered/configured?
 9. **Premium Feature Definition:** Which features are candidates for monetization versus free tier, and do any current requirements depend on premium functionality being available at launch?
 
-12. Architectural Evolution & Decisions
+13. Architectural Evolution & Decisions
 --------------------------------------
 ### API Simplification (September 2025)
 **Decision:** Permanently removed development-specific API endpoints (`/api/dev/*`) to simplify codebase and improve maintainability.

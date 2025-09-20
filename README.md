@@ -4,18 +4,18 @@ A modern home lab app deployment platform. Hola helps enthusiasts discover, inst
 
 This repository is a TypeScript-first monorepo powered by Bun workspaces containing:
 - **Web UI**: Vite + React + TypeScript
-- **Server API**: Bun + TypeScript (Phase 7 Complete: Drafts, Validation, Deployments, Dev Sessions)
+- **Server API**: Bun + TypeScript with REST API and real-time features
 - **Shared**: TypeScript configs and shared types
 - **CLI**: Command-line interface for deployment workflows
 - **SDK**: TypeScript client library for server API
+- **Compose**: Docker Compose stack for local deployment
 
-**Current Status**: 🚀 Phase 7 server implementation complete! Ready for SDK and CLI integration.
+**Current Status**: 🚀 Core server implementation complete with deployment management, job tracking, and real-time updates.
 
-More docs:
-- Monorepo guide: [`docs/monorepo.md`](docs/monorepo.md)
-- Server plan: [`docs/SERVER_ARCHITECTURE.md`](docs/SERVER_ARCHITECTURE.md)
-- Product overview (PRD): [`docs/PRD.md`](docs/PRD.md)
-- High-level architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+Available documentation:
+- UX specification: [`docs/UX_SPEC.md`](docs/UX_SPEC.md)
+- Implementation review: [`docs/HOLA_REVIEW.md`](docs/HOLA_REVIEW.md)
+- Contributing guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 ## What Hola Does
 
@@ -41,11 +41,12 @@ Non-goals (see full PRD for details):
 .
 ├── packages/
 │   ├── web/       # Vite + React + TS frontend
-│   ├── server/    # Bun + TS server (API) - Phase 7 Complete
+│   ├── server/    # Bun + TS server (API) with REST and SSE
 │   ├── shared/    # Shared TS configs/types  
 │   ├── cli/       # Command-line interface
-│   └── sdk/       # TypeScript client library
-├── docs/          # Architecture, server plan, product docs
+│   ├── sdk/       # TypeScript client library
+│   └── compose/   # Docker Compose stack
+├── docs/          # UX spec and implementation review
 ├── .bun-version   # Bun version pin
 ├── package.json   # Bun workspaces root
 └── tsconfig.json  # TS project references
@@ -70,10 +71,10 @@ Key entry points:
 
 ## Tech Stack
 
-- Runtime/tooling: Bun 1.x (see `.bun-version`)
+- Runtime/tooling: Bun 1.2.19 (see `.bun-version`)
 - Language: TypeScript 5.x
 - Frontend: Vite, React, TailwindCSS, React Router
-- Server: Bun-native HTTP
+- Server: Bun-native HTTP with real-time SSE
 - Linting: ESLint (flat config)
 - CI: GitHub Actions with oven-sh/setup-bun
 
@@ -81,7 +82,7 @@ Key entry points:
 
 Web (Vite):
 - Dev server: http://localhost:5173
-- Proxy: `/api` -> `http://localhost:3001` (config in [`packages/web/vite.config.declaration()`](packages/web/vite.config.ts))
+- Proxy: `/api` -> `http://localhost:3001` (config in [`packages/web/vite.config.ts`](packages/web/vite.config.ts))
 - Override API base (optional): `VITE_API_BASE_URL`
 
 Server (Bun):
@@ -91,7 +92,7 @@ Server (Bun):
 ## Getting Started
 
 Prerequisites
-- Bun installed matching `.bun-version`
+- Bun installed matching `.bun-version` (1.2.19)
   - Linux/macOS: `curl -fsSL https://bun.sh/install | bash`
   - Windows (PowerShell): `powershell -c "irm bun.com/install.ps1 | iex"`
 
@@ -110,10 +111,10 @@ bun run dev
 Run individually:
 ```bash
 # Web
-bun --cwd packages/web run dev
+bun run dev:web
 
-# Server
-bun --cwd packages/server run dev
+# Server  
+bun run dev:server
 ```
 
 Type-check and lint all packages:
@@ -126,7 +127,7 @@ Run tests:
 ```bash
 bun test                    # All tests
 bun run test:web           # Web tests only
-cd packages/server && bun test  # Server tests only
+bun run test:server        # Server tests only
 ```
 
 Build:
@@ -139,32 +140,50 @@ bun --cwd packages/web run build
 ## Scripts Overview
 
 Root workspace scripts orchestrate common flows:
-- dev: run web and server in watch mode
-- build: build all
-- typecheck: tsc --noEmit across packages
-- lint: eslint across packages
-- test: run all tests across packages
-- test:web: web tests using Vitest
+- `dev`: run web and server in watch mode
+- `build`: build all packages
+- `typecheck`: tsc --noEmit across packages
+- `lint`: eslint across packages
+- `test`: run all tests across packages
+- `test:web`: web tests using Vitest
+- `test:server`: server tests using Bun
+- `test:all`: run tests in all packages
+- `clean`: clean workspace and reset
+
+Testing utilities:
+- `test:env:setup`: start Docker test environment
+- `test:env:teardown`: stop Docker test environment  
+- `test:env:integration`: run full integration test suite
+
+CI tools:
+- `ci:local`: run GitHub Actions locally with act
+- `ci:local:dryrun`: dry run of local CI
+- `ci:local:full`: full CI suite locally
 
 See per-package scripts:
-- Web: [`packages/web/package.declaration()`](packages/web/package.json)
-- Server: [`packages/server/package.declaration()`](packages/server/package.json)
-- Shared: [`packages/shared/package.declaration()`](packages/shared/package.json)
+- Web: [`packages/web/package.json`](packages/web/package.json)
+- Server: [`packages/server/package.json`](packages/server/package.json)
+- Shared: [`packages/shared/package.json`](packages/shared/package.json)
+- CLI: [`packages/cli/package.json`](packages/cli/package.json)
+- SDK: [`packages/sdk/package.json`](packages/sdk/package.json)
+- Compose: [`packages/compose/package.json`](packages/compose/package.json)
 
 
 ## Development Notes
 
-- TypeScript uses bundler module resolution where appropriate for Vite/Bun compatibility.
-- Prefer shared types in `@hola/shared` to keep API contracts consistent between web and server.
-- When changing server endpoints, update shared DTOs and regenerate types if applicable.
-- Align server evolution to the Hono/OpenAPI plan; expose `/openapi.json` and add contract tests in CI as the API grows.
+- TypeScript uses bundler module resolution for Vite/Bun compatibility
+- Shared types in `@hola/shared` maintain API contract consistency between web and server
+- When changing server endpoints, update shared DTOs to maintain type safety
+- Server provides OpenAPI documentation at `/api/openapi.json` with interactive docs at `/docs`
+- Use standardized test environment from `helpers/test-environment` for reliable testing
+- All linting errors must be fixed before committing - zero tolerance for linting issues
 
 ## Contributing
 
-Read [`CONTRIBUTING.declaration()`](CONTRIBUTING.md) for workflow, linting, and commit conventions.
+Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for workflow, linting, and commit conventions.
 
 ## License
 
-See [`LICENSE.declaration()`](LICENSE).
+See [`LICENSE`](LICENSE).
 
 ---
