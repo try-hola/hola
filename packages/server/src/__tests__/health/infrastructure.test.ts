@@ -7,10 +7,10 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { API } from '@hola/shared';
-import { setupTestServer, teardownTestServer } from '../utils/server';
+import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
 
-const BASE_URL = 'http://localhost:3001';
-const TEST_TIMEOUT = 30000;
+const BASE_URL = TEST_BASE_URL;
+const TEST_TIMEOUT = 8000;
 
 describe('Health and Infrastructure', () => {
   beforeAll(async () => {
