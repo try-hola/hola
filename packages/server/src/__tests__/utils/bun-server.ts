@@ -23,6 +23,20 @@ export async function startServer(port: number = 3001, env: Record<string, strin
 
   // Resolve bun executable path robustly to avoid ENOENT in CI where PATH might differ.
   const resolvedBunPath = resolveBunPath();
+  // If CI standard bun install path exists and no explicit override provided, set env for downstream tools
+  if (!process.env.HOLA_TEST_BUN_PATH) {
+    try {
+      const ciPath = '/home/runner/.bun/bin/bun';
+      if (ciPath !== resolvedBunPath) {
+        // quick existence check
+        if (Bun.file(ciPath).size >= 0) {
+          process.env.HOLA_TEST_BUN_PATH = ciPath;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
   console.log(`Starting server with \`${resolvedBunPath} run dev\` on port ${port}...`);
   
   // Start server process in background
