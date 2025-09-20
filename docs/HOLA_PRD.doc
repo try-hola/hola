@@ -71,9 +71,10 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - Concurrency guard preventing simultaneous submitted drafts per deployment.
 
 ### CLI Experience
-- React+Ink CLI (`@hola/cli`) mirrors web workflows for automation: draft lifecycle, validation, finalize, deploy, job watch, and dev sessions.
+- React+Ink CLI (`@hola/cli`) mirrors web workflows for automation: draft lifecycle, validation, finalize, deploy, job watch.
 - Commands emphasize scriptability, colored output, and non-zero exit codes on failures.
 - Future expansion includes bundle scaffolding, packaging, registry push, logs, watch, and cleanup operations.
+- **Note:** Development session commands removed in favor of standard Draft/Deployment workflows for consistency.
 
 5. System Architecture Overview
 -------------------------------
@@ -107,9 +108,10 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - Catalog, bundles, backups, and additional endpoints remain consistent with existing architecture docs.
 
 ### Realtime & SSE
-- SSE endpoints provide job log streaming (`/api/jobs/:id/logs/stream`) and dev session events (`/api/dev/sessions/:id/events`).
-- Events include `log`, `job_update`, `session_status`, and `heartbeat` aligned with the shared `SSEEvent` union type.
+- SSE endpoints provide job log streaming (`/api/jobs/:id/logs/stream`) and system status updates.
+- Events include `log`, `job_update`, `system_status`, and `heartbeat` aligned with the shared `SSEEvent` union type.
 - Server sends heartbeats and manages backpressure; client SDK/CLI provide automatic reconnection with exponential backoff and testing helpers for deterministic behavior.
+- **Architecture Decision:** Development session SSE events removed to simplify API surface and improve maintainability.
 
 ### Observability & Security
 - Metrics: counts of drafts/change drafts, validation outcomes, job durations, rollback count, HTTP metrics via Prometheus, request duration histograms.
@@ -130,7 +132,8 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - **Package:** `packages/cli` built with TypeScript, React, Ink; distributed via bin wrapper (`hola`). Depends on `@hola/sdk` and `@hola/shared` for shared contracts.
 - **Tooling:** Bun-driven dev (`bun src/index.tsx`), `bun build` to Node-target ESM, strict TypeScript config, linting, and forthcoming tests (unit, Ink UI, contract).
 - **Command Surface (Phase 1):** `deploy run`, granular draft/validate/finalize actions, job watch, SSE streaming with `eventsource-parser`, optional JSON output.
-- **Phase 2 Enhancements:** `bundle init/dev/validate/pack/push/deploy/logs/watch/clean` with file watching (chokidar), Traefik-aware validation, hotkeys, and fallback behaviors when dev APIs are disabled.
+- **Phase 2 Enhancements:** `bundle init/validate/pack/push/deploy/logs/watch/clean` with file watching (chokidar), Traefik-aware validation, hotkeys, and standard Draft-based workflows.
+- **Architecture Evolution:** Development session commands removed in favor of unified Draft/Deployment patterns for better consistency and maintainability.
 - **Runtime Expectations:** Clear status line UI, `<Static>` log rendering, keyboard shortcuts, environment variables (`HOLA_API_URL`, `HOLA_TOKEN`, dev flags), and robust error handling for network/auth failures.
 
 8. Monorepo Structure & Tooling
@@ -169,6 +172,29 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 5. **Backup Storage Limits:** Are there retention policies or storage quotas beyond “seven per deployment,” and how do we alert users about insufficient disk space?
 6. **Secrets Management Roadmap:** What is the timeline for integrating external secret stores (e.g., Vault) or syncing with Authentik? Are there compliance requirements that influence encryption choices?
 7. **CLI Distribution:** Will the CLI be published globally (npm/brew) or remain workspace-only? Should we support Windows/WSL out of the gate?
-8. **Dev Session Feature Flag:** What are the activation criteria and default state for developer endpoints? How does the product behave in environments where dev APIs remain disabled long term?
-9. **Telemetry & Privacy:** What optional analytics, if any, will be collected, and how will user consent be gathered/configured?
-10. **Premium Feature Definition:** Which features are candidates for monetization versus free tier, and do any current requirements depend on premium functionality being available at launch?
+8. **Telemetry & Privacy:** What optional analytics, if any, will be collected, and how will user consent be gathered/configured?
+9. **Premium Feature Definition:** Which features are candidates for monetization versus free tier, and do any current requirements depend on premium functionality being available at launch?
+
+12. Architectural Evolution & Decisions
+--------------------------------------
+### API Simplification (September 2025)
+**Decision:** Permanently removed development-specific API endpoints (`/api/dev/*`) to simplify codebase and improve maintainability.
+
+**Rationale:**
+- Development APIs added complexity without sufficient value over standard workflows
+- Standard Draft/Deployment patterns provide equivalent functionality with better consistency
+- Simplified API surface (~50 to ~35 endpoints) reduces maintenance burden
+- Easier developer onboarding with fewer API patterns to learn
+- Improved reliability through reduced code paths
+
+**Impact:**
+- CLI validation now uses Draft workflow (create draft → upload files → validate)
+- All development functionality must use production-ready API patterns
+- SSE events simplified by removing development-specific event types
+- Web UI development dashboards and debug pages removed
+- GitHub Actions workflows cleaned of obsolete environment variables
+
+**Implementation Pattern:**
+When removing deprecated APIs: (1) remove endpoints from server and shared constants, (2) delete associated web components and test files, (3) update CLI to use standard SDK methods, (4) clean SSE event types, (5) update CI/CD workflows, (6) verify all tests and builds pass.
+
+This decision establishes a precedent for preferring unified, production-ready API patterns over development-specific infrastructure.
