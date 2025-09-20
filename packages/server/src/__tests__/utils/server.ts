@@ -7,6 +7,8 @@
 
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 // Support multiple concurrent servers keyed by port to avoid cross-suite interference
 const serverProcesses = new Map<number, ChildProcess>();
@@ -22,17 +24,30 @@ export async function startServer(port: number = 3001, env: Record<string, strin
     throw new Error(`Server is already running on port ${port}. Call stopServer(${port}) first.`);
   }
 
-  console.log(`Starting server with \`bun run dev\` on port ${port} (cwd=packages/server)...`);
-  
+  // Determine correct working directory for the server package. Tests may run from
+  // the repo root OR from the server package itself. The previous implementation
+  // always appended `/packages/server`, which produced an invalid path when already
+  // inside the package (e.g. /workspaces/hola/packages/server/packages/server) and
+  // caused ENOENT on spawn.
+  let serverCwd = process.cwd();
+  const appended = path.join(serverCwd, 'packages', 'server');
+  if (!serverCwd.endsWith(path.join('packages', 'server')) && fs.existsSync(appended)) {
+    serverCwd = appended;
+  }
+
+  // Resolve bun executable path explicitly to avoid PATH issues inside Bun test runner
+  const bunExec = process.execPath || 'bun';
+
+  console.log(`Starting server with \`bun run dev\` on port ${port} (cwd=${serverCwd})...`);
+
   // Start server process in background
-  const proc = spawn('bun', ['run', 'dev'], {
-    // Ensure we execute the server package's dev script, NOT the root concurrent script
-    cwd: `${process.cwd()}/packages/server`,
+  const proc = spawn(bunExec, ['run', 'dev'], {
+    cwd: serverCwd,
     env: {
       ...process.env,
       PORT: String(port),
       enableDevApi: 'true',
-      ...env, // Allow custom environment variables / overrides
+      ...env,
     },
     stdio: 'ignore',
     detached: true,

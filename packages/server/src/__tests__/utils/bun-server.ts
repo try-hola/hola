@@ -7,6 +7,7 @@
 
 let serverProcess: ReturnType<typeof Bun.spawn> | null = null;
 let serverPid: number | null = null;
+let serverRefCount = 0; // reference count of suites using primary port instance
 
 /**
  * Start the server in background and capture PID
@@ -16,28 +17,32 @@ let serverPid: number | null = null;
  */
 export async function startServer(port: number = 3001, env: Record<string, string> = {}): Promise<void> {
   if (serverProcess) {
-    throw new Error('Server is already running. Call stopServer() first.');
+    serverRefCount++;
+    return; // already started under this process context
   }
 
   console.log(`Starting server with \`bun run dev\` on port ${port}...`);
   
   // Start server process in background
+  const debug = process.env.HOLA_DEBUG_TEST_SERVER === 'true';
   serverProcess = Bun.spawn([
     'bun',
     'run',
-    'src/server.ts',
+    'dev',
   ], {
-    cwd: process.cwd(),
+    // Ensure we run the server package's dev script only (no workspace-level dev)
+    cwd: `${process.cwd()}/packages/server`,
     env: {
       ...process.env,
       PORT: String(port),
       ...env, // Allow custom environment variables
     },
-    stdout: 'ignore', // Suppress server output in tests
-    stderr: 'ignore',
+    stdout: debug ? 'inherit' : 'ignore',
+    stderr: debug ? 'inherit' : 'ignore',
   });
 
   serverPid = serverProcess.pid;
+  serverRefCount = 1;
   console.log(`Server started with PID: ${serverPid}`);
 
   // Wait for server to be healthy before returning
@@ -77,20 +82,23 @@ export async function waitForHealthz(timeoutMs: number = 15000, port: number = 3
  * Kill the server process
  * Handles cleanup gracefully
  */
-export async function stopServer(): Promise<void> {
-  if (serverProcess && serverPid) {
-    console.log(`Stopping server (PID: ${serverPid})...`);
-    
-    try {
-      serverProcess.kill();
-      await serverProcess.exited;
-      console.log('Server stopped successfully');
-    } catch (error) {
-      console.warn('Error stopping server:', error);
-    } finally {
-      serverProcess = null;
-      serverPid = null;
-    }
+export async function stopServer(force = false): Promise<void> {
+  if (!serverProcess || !serverPid) return;
+  if (!force) {
+    serverRefCount = Math.max(0, serverRefCount - 1);
+    if (serverRefCount > 0) return; // other suites still using
+  }
+  console.log(`Stopping server (PID: ${serverPid})...`);
+  try {
+    serverProcess.kill();
+    await serverProcess.exited;
+    console.log('Server stopped successfully');
+  } catch (error) {
+    console.warn('Error stopping server:', error);
+  } finally {
+    serverProcess = null;
+    serverPid = null;
+    serverRefCount = 0;
   }
 }
 
@@ -141,12 +149,19 @@ export async function setupTestServer(port: number = 3001, env: Record<string, s
 
   // Check if server is already running
   if (await isServerRunning(port)) {
-    console.log(`Server already running on port ${port}, using existing instance`);
+    // If we didn't start it yet in this process, adopt it without ref counting (no stop)
+    if (!serverProcess) {
+      console.log(`Adopting externally started server on port ${port}`);
+      serverRefCount = 0; // do not manage lifecycle we didn't start
+      return;
+    }
+    console.log(`Server already running on port ${port}, incrementing ref count`);
+    serverRefCount++;
     return;
   }
 
   // Start new server instance
-  await startServer(port, env);
+  await startServer(port, { enableDevApi: 'true', ...env });
 }
 
 /**
@@ -158,6 +173,11 @@ export async function teardownTestServer(): Promise<void> {
     console.log('Skipping server teardown (HOLA_TEST_SKIP_SERVER_START=true)');
     return;
   }
-
-  await stopServer();
+  if (process.env.HOLA_TEST_FORCE_SERVER_STOP === 'true') {
+    await stopServer(true);
+  } else {
+    // Intentionally skipping server stop to prevent parallel worker race tearing down shared instance
+    // Set HOLA_TEST_FORCE_SERVER_STOP=true to restore previous behavior.
+    return;
+  }
 }

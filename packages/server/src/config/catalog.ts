@@ -12,6 +12,7 @@ export interface CatalogConfig {
   // Remote catalog JSON
   catalogUrl?: string; // public, cached JSON endpoint
   refreshIntervalMs: number; // obey cache headers; fallback refresh cadence
+  fetchTimeoutMs?: number; // network fetch timeout for remote catalog
 
   // Cache/retention
   cacheSoftCapBytes: number; // soft cap for non-active cache (LRU eviction)
@@ -29,6 +30,7 @@ export const defaultCatalogConfig: CatalogConfig = {
 
   catalogUrl: process.env.HOLA_CATALOG_URL || undefined,
   refreshIntervalMs: Number(process.env.HOLA_CATALOG_REFRESH_INTERVAL_MS) || 24 * 60 * 60 * 1000, // 24h
+  fetchTimeoutMs: Number(process.env.HOLA_CATALOG_FETCH_TIMEOUT_MS) || 3000,
 
   cacheSoftCapBytes: Number(process.env.HOLA_BUNDLE_CACHE_CAP_BYTES) || 1_000_000_000, // 1 GB
   retainPriorVersions: Number(process.env.HOLA_RETAIN_PRIOR_VERSIONS) || 2,
