@@ -13,7 +13,7 @@ import type {
   SystemHealthResponse
 } from '@hola/shared';
 import { setupTestServer, teardownTestServer, TEST_BASE_URL } from '../utils/server';
-import { getSystemMonitoringService } from '../../services/factory';
+import { getServices, resetServices } from '../../services/simple-factory';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
 
 const BASE_URL = TEST_BASE_URL;
@@ -194,7 +194,7 @@ describe('System Monitoring', () => {
         evt => evt.type === 'system_update' && typeof evt.data === 'object' && (evt.data as { version?: { hola?: string } }).version?.hola === '1.0.0-test',
         6000
       );
-      const monitoring = getSystemMonitoringService() as MockSystemMonitoringService;
+      const monitoring = getServices().systemMonitoring as MockSystemMonitoringService;
       await tick();
       monitoring.emitTestStatus({
         docker: { ok: true, version: 'test' },

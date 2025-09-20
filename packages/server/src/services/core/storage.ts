@@ -10,7 +10,7 @@ import { join, dirname, resolve } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
+import type { HealthCheckable, ServiceHealth } from './types';
 
 export interface StorageConfig {
   holaDir: string;

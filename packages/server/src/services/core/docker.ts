@@ -10,7 +10,7 @@ import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { getLogger } from '../../lib/logger';
-import type { ServiceHealth, HealthCheckable } from '../factory';
+import type { ServiceHealth, HealthCheckable } from './types';
 
 const execAsync = promisify(exec);
 

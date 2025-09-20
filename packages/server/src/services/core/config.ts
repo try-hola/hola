@@ -7,7 +7,7 @@
 
 import { type AppEnvVar } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
-import type { HealthCheckable, ServiceHealth } from '../factory';
+import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 
 export interface SystemSettings {

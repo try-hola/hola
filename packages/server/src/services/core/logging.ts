@@ -6,9 +6,9 @@
  */
 
 import { getLogger } from '../../lib/logger';
-import { type HealthCheckable, type ServiceHealth } from '../factory';
+import { type HealthCheckable, type ServiceHealth } from './types';
 import type { StorageService } from './storage';
-import { getStorageService } from '../factory';
+import { getServices } from '../simple-factory';
 import { getFileLogger, initializeFileLogger, type LogLevel as FileLogLevel } from '../../lib/file-logger';
 import type { LogEntry as SharedLogEntry } from '@hola/shared';
 
@@ -64,7 +64,7 @@ export class RealLoggingService implements LoggingService {
   private initialized = false;
 
   constructor(storage?: StorageService) {
-    this.storage = storage ?? getStorageService();
+    this.storage = storage ?? getServices().storage;
   }
 
   private targetKey(target: LoggingTarget): string {

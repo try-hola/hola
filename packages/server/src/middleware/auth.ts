@@ -6,7 +6,7 @@
 
 import { getLogger } from '../lib/logger';
 import type { Principal, AuthService, Capability } from '../services/auth/auth-service';
-import { getAuthService as getAuthServiceFromFactory } from '../services/factory';
+import { getServices } from '../services/simple-factory';
 import { featureFlags } from '../config/features';
 
 export interface AuthContext {
@@ -193,8 +193,8 @@ export function createAuthMiddleware() {
     
     // Get auth service and authenticate
     try {
-      const authService = getAuthServiceFromFactory();
-      const authResult = await authService.authenticate(token, {
+      const services = getServices();
+      const authResult = await services.auth.authenticate(token, {
         path,
         method,
         userAgent: req.headers.get('user-agent') || undefined,
@@ -225,7 +225,7 @@ export function createAuthMiddleware() {
       
       // Check if principal has required capability for this endpoint
       const requiredCapability = getRequiredCapability(path, method);
-      if (requiredCapability && !authService.hasCapability(authResult.principal, requiredCapability)) {
+      if (requiredCapability && !getAuthService().hasCapability(authResult.principal, requiredCapability)) {
         logger.warn('Insufficient capabilities', { 
           path, 
           method, 
@@ -296,7 +296,7 @@ export function createAuthMiddleware() {
  * Get auth service instance
  */
 function getAuthService(): AuthService {
-  return getAuthServiceFromFactory();
+  return getServices().auth;
 }
 
 /**

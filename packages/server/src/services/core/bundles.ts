@@ -4,7 +4,7 @@ import { mkdirSync, existsSync, rmSync, statSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import { getLogger } from '../../lib/logger';
-import type { ServiceHealth, HealthCheckable } from '../factory';
+import type { ServiceHealth, HealthCheckable } from './types';
 import { catalogConfig } from '../../config/catalog';
 import { getBundleCacheManager } from './bundle-cache';
 
