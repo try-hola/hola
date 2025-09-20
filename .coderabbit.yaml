@@ -1,0 +1,240 @@
+# CodeRabbit Configuration for Hola
+# TypeScript monorepo with React web frontend, Bun server, and shared packages
+
+# Global settings
+language: en-US
+tone_instructions: "Be concise and focus on critical issues, architectural concerns, and TypeScript best practices. Pay special attention to type safety, API contract consistency between frontend and backend, and monorepo package boundaries."
+early_access: false
+
+# Review settings
+reviews:
+  # Use assertive profile for thorough code reviews given the strict quality standards
+  profile: assertive
+  high_level_summary: true
+  high_level_summary_placeholder: "@coderabbitai summary"
+  high_level_summary_in_walkthrough: false
+  
+  # Auto-review settings
+  auto_review:
+    enabled: true
+    drafts: false  # Skip drafts to avoid noise
+    
+    # Include bot PRs by explicitly NOT ignoring common bot usernames
+    # If you want to exclude specific bots, add them here:
+    # ignore_usernames: ["dependabot[bot]", "renovate[bot]", "github-actions[bot]"]
+    # 
+    # For now, keep empty to review ALL PRs including bots
+    ignore_usernames: []
+  
+  # Review features
+  request_changes_workflow: false
+  review_status: true
+  commit_status: true
+  fail_commit_status: false
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: true
+  auto_assign_reviewers: false
+  poem: false  # Keep reviews professional
+
+  # Path-specific instructions for monorepo packages
+  path_instructions:
+    - path: "packages/web/**"
+      instructions: |
+        This is the React frontend package. Focus on:
+        - React hooks usage and dependencies (especially StrictMode compatibility)
+        - Component architecture and reusability
+        - TypeScript usage with shared API types from @hola/shared
+        - Tailwind CSS class organization
+        - Error handling and loading states
+        - Accessibility best practices
+        - Performance considerations (unnecessary re-renders, bundle size)
+    
+    - path: "packages/server/**"
+      instructions: |
+        This is the Bun server package. Focus on:
+        - API endpoint implementation following shared contracts
+        - TypeScript strict typing and error handling
+        - Security considerations (input validation, sanitization)
+        - Performance and async patterns
+        - Docker integration and health checks
+        - Service layer architecture and testing patterns
+        - Database integration and data persistence
+    
+    - path: "packages/shared/**"
+      instructions: |
+        This is the shared types and API contracts package. Focus on:
+        - TypeScript type definitions and export consistency
+        - API route constants and path builders
+        - Breaking changes that affect multiple packages
+        - Documentation for exported types and interfaces
+        - Backward compatibility considerations
+    
+    - path: "packages/cli/**"
+      instructions: |
+        This is the CLI package using React Ink. Focus on:
+        - Command-line interface patterns and usability
+        - Integration with shared API types
+        - Error handling and user feedback
+        - Performance for CLI operations
+    
+    - path: "packages/sdk/**"
+      instructions: |
+        This is the TypeScript SDK package. Focus on:
+        - API client implementation and error handling
+        - Type safety and shared contract adherence
+        - Documentation and examples
+        - Bundle size and tree-shaking compatibility
+    
+    - path: "**/__tests__/**"
+      instructions: |
+        Test files should follow project testing standards:
+        - Use fakes instead of complex mocks for business dependencies
+        - Ensure test isolation and cleanup
+        - Test error scenarios and edge cases
+        - Prefer integration tests over unit tests where appropriate
+    
+    - path: "docs/**"
+      instructions: |
+        Documentation files should be:
+        - Clear, concise, and up-to-date
+        - Consistent with current implementation
+        - Include relevant examples and code snippets
+        - Follow markdown best practices
+
+  # Labeling instructions for pull requests
+  labeling_instructions:
+    - label: "breaking-change"
+      instructions: "Apply when changes affect public APIs, shared types, or require updates across multiple packages"
+    
+    - label: "web"
+      instructions: "Apply when changes primarily affect the React frontend package"
+    
+    - label: "server"
+      instructions: "Apply when changes primarily affect the Bun server package"
+    
+    - label: "shared"
+      instructions: "Apply when changes affect shared types or API contracts"
+    
+    - label: "cli"
+      instructions: "Apply when changes affect the CLI package"
+    
+    - label: "sdk"
+      instructions: "Apply when changes affect the SDK package"
+    
+    - label: "documentation"
+      instructions: "Apply when changes primarily affect documentation or README files"
+    
+    - label: "testing"
+      instructions: "Apply when changes primarily affect test files or testing infrastructure"
+    
+    - label: "security"
+      instructions: "Apply when changes affect security, authentication, or input validation"
+    
+    - label: "performance"
+      instructions: "Apply when changes affect performance, optimization, or resource usage"
+
+  # File patterns to include/exclude
+  path_filters:
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/.next/**"
+    - "!**/coverage/**"
+    - "!**/*.lock"
+    - "!**/*.lockb"
+    - "!**/deployments/**"
+    - "!**/dev-sessions/**"
+    - "!**/drafts/**"
+    - "!**/logs/**"
+
+  # Tool configurations
+  tools:
+    # JavaScript/TypeScript linting
+    eslint:
+      enabled: true
+    
+    # Security scanning
+    gitleaks:
+      enabled: true
+    
+    # Docker linting
+    hadolint:
+      enabled: true
+    
+    # YAML linting
+    yamllint:
+      enabled: true
+    
+    # Markdown linting
+    markdownlint:
+      enabled: true
+    
+    # GitHub Actions linting
+    actionlint:
+      enabled: true
+    
+    # Shell script linting
+    shellcheck:
+      enabled: true
+
+  # Finishing touches
+  finishing_touches:
+    docstrings:
+      enabled: true
+    unit_tests:
+      enabled: true
+
+# Chat configuration
+chat:
+  auto_reply: true
+  art: false  # Keep professional
+
+# Knowledge base configuration
+knowledge_base:
+  opt_out: false
+  
+  # Code guidelines from project documentation
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/.github/copilot-instructions.md"
+      - "**/README.md"
+      - "**/CONTRIBUTING.md"
+      - "**/.github/instructions/*.md"
+  
+  # Web search for up-to-date library information
+  web_search:
+    enabled: true
+  
+  # Learn from interactions
+  learnings:
+    enabled: true
+
+# Code generation settings
+code_generation:
+  docstrings:
+    language: en-US
+    path_instructions:
+      - path: "packages/shared/**"
+        instructions: "Generate comprehensive TSDoc comments for exported types and interfaces"
+      - path: "packages/server/**"
+        instructions: "Focus on API endpoint documentation and business logic explanation"
+      - path: "packages/web/**"
+        instructions: "Document component props, hooks, and complex logic"
+  
+  unit_tests:
+    path_instructions:
+      - path: "packages/server/**"
+        instructions: "Generate tests using fakes instead of mocks, focus on API endpoint testing and business logic"
+      - path: "packages/web/**"
+        instructions: "Generate React component tests using React Testing Library, focus on user interactions"
+      - path: "packages/shared/**"
+        instructions: "Generate type safety tests and utility function tests"
