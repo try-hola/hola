@@ -187,9 +187,13 @@ bun lint                  # Lint all packages
 
 ## Code Quality Requirements
 
-**🚨 CRITICAL: ALL LINTING ERRORS MUST BE FIXED - NO EXCEPTIONS 🚨**
+**🚨 CRITICAL: ALL LINTING, TYPECHECKS, AND TESTS MUST PASS - NO EXCEPTIONS 🚨**
 
-**Linting is not optional - it is a strict requirement. Work is not complete until linting passes 100% clean with zero errors or warnings. This is non-negotiable.**
+**Quality Gates are not optional - they are strict requirements. Work is not complete until all three requirements pass 100% clean:**
+
+1. **🚨 MANDATORY LINTING**: `bun run lint` must pass with ZERO errors or warnings
+2. **🚨 MANDATORY TYPECHECKS**: `bun run typecheck` must pass with ZERO errors  
+3. **🚨 MANDATORY TESTS**: `bun run test` must pass with ZERO failing tests
 
 ### Pre-Commit Checklist
 ```bash
@@ -197,7 +201,6 @@ bun lint                  # Lint all packages
 bun run lint              # ⚠️  MUST pass with ZERO errors - FIX ALL LINTING ISSUES
 bun run typecheck         # ⚠️  Fix all type errors  
 bun run test              # ⚠️  Ensure all tests pass
-bun run build             # ⚠️  Verify build succeeds
 ```
 
 **If ANY of these commands fail, you MUST fix the issues before proceeding. No shortcuts, no exceptions.**

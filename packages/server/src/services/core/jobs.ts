@@ -7,7 +7,6 @@
 
 import { getLogger } from '../../lib/logger';
 import type { HealthCheckable, ServiceHealth } from './types';
-import { getServices } from '../simple-factory';
 import type { DatabaseService } from './database';
 import { DatabaseJobRepository, type JobRepository, type JobEntity } from './repositories';
 import type { LoggingService } from './logging';

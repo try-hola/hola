@@ -195,7 +195,7 @@ describe('System Monitoring', () => {
         6000
       );
       const svc = getServices().systemMonitoring;
-      if (!('emitTestStatus' in (svc as any))) {
+      if (!('emitTestStatus' in (svc as unknown))) {
         // Not a mock; environment misconfigured — soft-skip
         expect(true).toBe(true);
         return;
