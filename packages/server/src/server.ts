@@ -6,14 +6,8 @@ import {
   type GetSummaryResponse,
   type GetCatalogAppsResponse,
   type CreateDraftRequest,
-  type CreateDraftResponse,
-  type GetDraftResponse,
-  type PatchDraftResponse,
-  type UploadDraftFileResponse,
-  type DeleteDraftFileResponse,
-  type ValidateDraftResponse,
-  type PreflightResponse,
-  type FinalizeDraftResponse,
+  type PatchDraftRequest,
+  type DraftFile,
   type GetDeploymentsResponse,
   
   type PatchDeploymentRequest,
@@ -404,102 +398,272 @@ async function route(url: URL, req: Request): Promise<Response> {
   // ===== DRAFT ROUTES =====
   // Draft creation
   if (pathname === API.drafts.create && req.method === 'POST') {
-    const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
-    const payload: CreateDraftResponse = {
-      draftId: crypto.randomUUID(),
-      app: { id: body.appId || 'unknown', name: 'App', icon: '📦' },
-      systemEnv: [
-        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-      ],
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      defaults: {
-        ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-        volumes: [{ hostPath: './data', containerPath: '/var/www/html', readOnly: false }],
-      },
-    };
-    return json(payload);
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+      const context = getRequestContext(req);
+      logger.info('Creating draft', { 
+        requestId: context?.requestId, 
+        appId: body.appId, 
+        version: body.version 
+      });
+
+      if (!body.appId) {
+        return json({ error: { code: 'MISSING_APP_ID', message: 'appId is required' } }, { status: 400 });
+      }
+
+      const services = getServices();
+      const payload = await services.drafts.createDraft(body as CreateDraftRequest);
+      
+      logger.info('Draft created successfully', { 
+        requestId: context?.requestId, 
+        draftId: payload.draftId 
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to create draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_CREATION_FAILED', message: 'Failed to create draft' } },
+        { status: 500 }
+      );
+    }
   }
 
   // Draft by ID operations
   const draftMatch = pathname.match(/^\/api\/drafts\/([^/]+)$/);
   if (draftMatch && req.method === 'GET') {
-    const draftId = draftMatch[1];
-    const payload: GetDraftResponse = {
-      draftId,
-      appId: 'nextcloud',
-      version: '1.0.0',
-      systemOverrides: {},
-      appEnv: [
-        { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-        { key: 'POSTGRES_PASSWORD', value: '', isSecret: true, description: 'Database password' },
-      ],
-      ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
-      composeOverride: '',
-      files: [],
-    };
-    return json(payload);
+    try {
+      const draftId = draftMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Getting draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      const payload = await services.drafts.getDraft(draftId);
+      
+      logger.info('Draft retrieved successfully', { 
+        requestId: context?.requestId, 
+        draftId 
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to get draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_NOT_FOUND', message: 'Draft not found' } },
+        { status: 404 }
+      );
+    }
   }
 
   if (draftMatch && req.method === 'PATCH') {
-    const payload: PatchDraftResponse = {
-      ok: true,
-      draft: {
-        draftId: draftMatch[1],
-        appId: 'nextcloud',
-        version: '1.0.0',
-        systemOverrides: {},
-        appEnv: [],
-        ports: [],
-        composeOverride: '',
-        files: [],
-      },
-    };
-    return json(payload);
+    try {
+      const draftId = draftMatch[1];
+      const body = (await req.json().catch(() => ({}))) as PatchDraftRequest;
+      const context = getRequestContext(req);
+      logger.info('Updating draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      const payload = await services.drafts.updateDraft(draftId, body);
+      
+      logger.info('Draft updated successfully', { 
+        requestId: context?.requestId, 
+        draftId 
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to update draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_UPDATE_FAILED', message: 'Failed to update draft' } },
+        { status: 500 }
+      );
+    }
+  }
+
+  if (draftMatch && req.method === 'DELETE') {
+    try {
+      const draftId = draftMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Deleting draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      await services.drafts.deleteDraft(draftId);
+      
+      logger.info('Draft deleted successfully', { 
+        requestId: context?.requestId, 
+        draftId 
+      });
+      return json({ ok: true });
+    } catch (error) {
+      logger.error('Failed to delete draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_DELETE_FAILED', message: 'Failed to delete draft' } },
+        { status: 500 }
+      );
+    }
   }
 
   // Draft uploads
   const draftUploadsMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads$/);
   if (draftUploadsMatch && req.method === 'POST') {
-    const payload: UploadDraftFileResponse = { uploadId: crypto.randomUUID(), name: 'file', size: 1234, kind: (new URL(req.url)).searchParams.get('kind') === 'composeOverride' ? 'composeOverride' : 'additionalFile' };
-    return json(payload);
+    try {
+      const draftId = draftUploadsMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Uploading file to draft', { requestId: context?.requestId, draftId });
+
+      // Handle multipart form data or JSON body with file content
+      const contentType = req.headers.get('content-type') || '';
+      let fileData: { name: string; content: Buffer; kind: DraftFile['kind']; path?: string };
+
+      if (contentType.includes('multipart/form-data')) {
+        // For multipart uploads, we'd need to parse the form data
+        // For now, create a placeholder implementation
+        const body = await req.arrayBuffer();
+        const kindParam = searchParams.get('kind');
+        const validKinds: DraftFile['kind'][] = ['composeOverride', 'additionalFile', 'env', 'secret'];
+        const kind = (validKinds.includes(kindParam as DraftFile['kind'])) ? kindParam as DraftFile['kind'] : 'additionalFile';
+        
+        fileData = {
+          name: searchParams.get('name') || 'upload',
+          content: Buffer.from(body),
+          kind,
+          path: searchParams.get('path') || undefined
+        };
+      } else {
+        // Handle JSON-encoded file content
+        const body = await req.json();
+        const validKinds: DraftFile['kind'][] = ['composeOverride', 'additionalFile', 'env', 'secret'];
+        const kind = (validKinds.includes(body.kind)) ? body.kind : 'additionalFile';
+        
+        fileData = {
+          name: body.name || 'upload',
+          content: Buffer.from(body.content || '', 'base64'),
+          kind,
+          path: body.path || undefined
+        };
+      }
+
+      const services = getServices();
+      const payload = await services.drafts.uploadFile(draftId, fileData);
+      
+      logger.info('File uploaded successfully', { 
+        requestId: context?.requestId, 
+        draftId,
+        uploadId: payload.uploadId,
+        fileName: payload.name
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to upload file', error as Error);
+      return json(
+        { error: { code: 'FILE_UPLOAD_FAILED', message: 'Failed to upload file' } },
+        { status: 500 }
+      );
+    }
   }
 
   const draftUploadByIdMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/uploads\/([^/]+)$/);
   if (draftUploadByIdMatch && req.method === 'DELETE') {
-    const payload: DeleteDraftFileResponse = { ok: true };
-    return json(payload);
+    try {
+      const draftId = draftUploadByIdMatch[1];
+      const uploadId = draftUploadByIdMatch[2];
+      const context = getRequestContext(req);
+      logger.info('Deleting file from draft', { requestId: context?.requestId, draftId, uploadId });
+
+      const services = getServices();
+      const payload = await services.drafts.deleteFile(draftId, uploadId);
+      
+      logger.info('File deleted successfully', { 
+        requestId: context?.requestId, 
+        draftId,
+        uploadId
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to delete file', error as Error);
+      return json(
+        { error: { code: 'FILE_DELETE_FAILED', message: 'Failed to delete file' } },
+        { status: 500 }
+      );
+    }
   }
 
   // Draft validation
   const draftValidateMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/validate$/);
   if (draftValidateMatch && req.method === 'POST') {
-    const payload: ValidateDraftResponse = { ok: true, errors: [], warnings: [] };
-    return json(payload);
+    try {
+      const draftId = draftValidateMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Validating draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      const payload = await services.drafts.validateDraft(draftId);
+      
+      logger.info('Draft validated successfully', { 
+        requestId: context?.requestId, 
+        draftId,
+        isValid: payload.ok,
+        errorCount: payload.errors.length,
+        warningCount: payload.warnings.length
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to validate draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_VALIDATION_FAILED', message: 'Failed to validate draft' } },
+        { status: 500 }
+      );
+    }
   }
 
   // Draft preflight
   const draftPreflightMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/preflight$/);
   if (draftPreflightMatch && req.method === 'POST') {
-    const payload: PreflightResponse = {
-      ok: true,
-      checks: [
-        { name: 'env', status: 'pass' },
-        { name: 'docker', status: 'pass' },
-        { name: 'disk', status: 'warn', detail: 'Low disk space' },
-      ],
-    };
-    return json(payload);
+    try {
+      const draftId = draftPreflightMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Running preflight check for draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      const payload = await services.drafts.preflightCheck(draftId);
+      
+      logger.info('Preflight check completed', { 
+        requestId: context?.requestId, 
+        draftId,
+        isReady: payload.ok,
+        checkCount: payload.checks.length
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to run preflight check', error as Error);
+      return json(
+        { error: { code: 'PREFLIGHT_CHECK_FAILED', message: 'Failed to run preflight check' } },
+        { status: 500 }
+      );
+    }
   }
 
   // Draft finalization
   const draftFinalizeMatch = pathname.match(/^\/api\/drafts\/([^/]+)\/finalize$/);
   if (draftFinalizeMatch && req.method === 'POST') {
-    const payload: FinalizeDraftResponse = { spec: { services: {} }, checksum: crypto.randomUUID() };
-    return json(payload);
+    try {
+      const draftId = draftFinalizeMatch[1];
+      const context = getRequestContext(req);
+      logger.info('Finalizing draft', { requestId: context?.requestId, draftId });
+
+      const services = getServices();
+      const payload = await services.drafts.finalizeDraft(draftId);
+      
+      logger.info('Draft finalized successfully', { 
+        requestId: context?.requestId, 
+        draftId,
+        checksum: payload.checksum
+      });
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to finalize draft', error as Error);
+      return json(
+        { error: { code: 'DRAFT_FINALIZATION_FAILED', message: 'Failed to finalize draft' } },
+        { status: 500 }
+      );
+    }
   }
 
 
