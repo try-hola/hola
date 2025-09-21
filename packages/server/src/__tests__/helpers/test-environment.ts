@@ -157,21 +157,19 @@ export async function setupFeatureTestEnvironment(
 ): Promise<void> {
   const featureEnv: Record<string, Record<string, string>> = {
     drafts: {
-      HOLA_ENABLE_DEV_API: 'true',
-      HOLA_USE_REAL_DRAFTS: 'false',
+      NODE_ENV: 'test', // Force test environment
     },
     deployments: {
-      HOLA_USE_REAL_DEPLOYMENTS: 'false',
-      HOLA_USE_REAL_DOCKER: 'false',
+      NODE_ENV: 'test', // Force test environment
     },
     docker: {
-      HOLA_USE_REAL_DOCKER: 'false',
+      NODE_ENV: 'test', // Force test environment
     },
     auth: {
-      HOLA_USE_AUTH: 'false',
+      NODE_ENV: 'test', // Force test environment
     },
     system: {
-      HOLA_USE_REAL_SYSTEM_MONITORING: 'false',
+      NODE_ENV: 'test', // Force test environment
     },
   };
 

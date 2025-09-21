@@ -52,6 +52,29 @@ describe('Simple Service Factory', () => {
       expect(services.storage.constructor.name).toBe('RealStorageService');
       expect(services.docker.constructor.name).toBe('RealDockerService');
     });
+
+    it('should create mixed services for development environment', () => {
+      const services = createServices('development');
+      
+      expect(services.storage).toBeDefined();
+      expect(services.config).toBeDefined();
+      expect(services.database).toBeDefined();
+      expect(services.auth).toBeDefined();
+      expect(services.docker).toBeDefined();
+      expect(services.systemMonitoring).toBeDefined();
+      expect(services.logging).toBeDefined();
+      expect(services.jobs).toBeDefined();
+      expect(services.catalog).toBeDefined();
+      expect(services.bundles).toBeDefined();
+      expect(services.drafts).toBeDefined();
+      expect(services.validation).toBeDefined();
+      expect(services.deployments).toBeDefined();
+      
+      // Verify mixed implementations: real services where safe, mock Docker for safety
+      expect(services.storage.constructor.name).toBe('RealStorageService');
+      expect(services.docker.constructor.name).toBe('MockDockerService'); // Mock for safety
+      expect(services.systemMonitoring.constructor.name).toBe('RealSystemMonitoringService');
+    });
   });
 
   describe('detectEnvironment', () => {
@@ -100,6 +123,22 @@ describe('Simple Service Factory', () => {
       delete process.env.HOLA_DISABLE_AUTOSTART;
       
       expect(detectEnvironment()).toBe('production');
+      
+      process.env.NODE_ENV = originalNodeEnv;
+      process.env.VITEST = originalVitest;
+      process.env.HOLA_DISABLE_AUTOSTART = originalAutostart;
+    });
+
+    it('should detect development environment when NODE_ENV is development', () => {
+      const originalNodeEnv = process.env.NODE_ENV;
+      const originalVitest = process.env.VITEST;
+      const originalAutostart = process.env.HOLA_DISABLE_AUTOSTART;
+      
+      process.env.NODE_ENV = 'development';
+      delete process.env.VITEST;
+      delete process.env.HOLA_DISABLE_AUTOSTART;
+      
+      expect(detectEnvironment()).toBe('development');
       
       process.env.NODE_ENV = originalNodeEnv;
       process.env.VITEST = originalVitest;

@@ -11,7 +11,8 @@ Reliable, isolated tests with fakes-first strategy and simplified service manage
 - Fakes over mocks: simple in-memory fakes implementing same interface in `__tests__/fakes/`.
 - Organize by feature; only import `@hola/shared` across packages.
 - **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.
-- **Simplified services**: Tests automatically use all mock services, no configuration needed.
+- **Environment-based testing**: Test environment automatically uses all mock services via environment detection.
+- **3-Environment System**: test (all mocks), development (mixed), production (all real) - tests always run in test mode.
 - No external network calls or background processes.
 
 ## React Testing Environment (Web Package)
@@ -87,6 +88,7 @@ describe('My Tests', () => {
 - Use `await waitFor()` for React 18 async rendering.
 - **Use standardized test environment**: Always import from `helpers/test-environment` for server tests.
 - **Remove tests for deprecated APIs**: When endpoints are removed, delete all associated test files completely.
+- **Clean imports**: Only import types and functions that are actually used in tests to avoid linting errors.
 - **Use defensive service casting**: Add runtime guards when casting to mock types:
   ```typescript
   const svc = getServices().someService;
@@ -97,6 +99,7 @@ describe('My Tests', () => {
   const mockService = svc as MockSomeService;
   ```
 - **Use robust error matching**: `/(ERROR_CODE|fallback text)/i.test(error.message)` for case-insensitive patterns.
+- **Run linting before committing**: Always run `bun run lint` to catch unused imports and other issues.
 
 ## Don't
 - Mock deep internals; test public APIs.
@@ -107,3 +110,4 @@ describe('My Tests', () => {
 - **Test removed API endpoints**: Delete tests for `/api/dev/*` and other deprecated endpoints completely.
 - **Leave orphaned test files**: When cleaning up APIs, remove ALL related test files, not just failing assertions.
 - **Test deprecated SSE events**: Remove SSE test helpers and event handlers for removed functionality.
+- **Import unused types**: Avoid importing types that aren't used in tests (causes linting errors).

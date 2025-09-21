@@ -1,36 +1,145 @@
 /**
- * Minimal feature flags for authentication and observability
+ * Environment-based configuration system
  * 
- * Simplified from complex service factory flags to only essential features.
+ * Replaces complex feature flag matrix with simple environment modes.
+ * Each environment has clear, predictable configuration defaults.
  */
 
+export type Environment = 'test' | 'development' | 'production';
+
+export interface EnvironmentConfig {
+  environment: Environment;
+  useAuth: boolean;
+  useObservability: boolean;
+  enableDevApi: boolean;
+  useRealServices: boolean;
+}
+
+/**
+ * Get configuration for an environment
+ */
+export function getEnvironmentConfig(env: Environment): EnvironmentConfig {
+  switch (env) {
+    case 'test':
+      return {
+        environment: 'test',
+        useAuth: false,           // Simplify test setup
+        useObservability: false,  // Reduce test complexity
+        enableDevApi: true,       // Enable dev endpoints for testing
+        useRealServices: false,   // Always use mocks for reliable testing
+      };
+    
+    case 'development': 
+      return {
+        environment: 'development',
+        useAuth: false,           // Optional in development, can be overridden
+        useObservability: false,  // Optional in development, can be overridden
+        enableDevApi: true,       // Enable dev features for development
+        useRealServices: true,    // Mix of real and mock services for development
+      };
+    
+    case 'production':
+      return {
+        environment: 'production', 
+        useAuth: true,            // Production security enabled
+        useObservability: true,   // Full observability in production
+        enableDevApi: false,      // No dev endpoints in production
+        useRealServices: true,    // Always real services in production
+      };
+  }
+}
+
+/**
+ * Detect environment from process.env
+ */
+export function detectEnvironment(): Environment {
+  // Check if we're in a test environment
+  if (process.env.NODE_ENV === 'test' || 
+      process.env.VITEST === 'true' || 
+      process.env.HOLA_DISABLE_AUTOSTART === 'true') {
+    return 'test';
+  }
+  
+  // Check if we're in development environment
+  if (process.env.NODE_ENV === 'development') {
+    return 'development';
+  }
+  
+  return 'production';
+}
+
+/**
+ * Load environment configuration with optional overrides
+ */
+export function loadEnvironmentConfig(): EnvironmentConfig {
+  const env = detectEnvironment();
+  const config = getEnvironmentConfig(env);
+  
+  // Allow specific overrides for development and production
+  if (env === 'development' || env === 'production') {
+    // Auth can be overridden
+    if (process.env.HOLA_USE_AUTH === 'true') {
+      config.useAuth = true;
+    } else if (process.env.HOLA_USE_AUTH === 'false') {
+      config.useAuth = false;
+    }
+    
+    // Observability can be overridden
+    if (process.env.HOLA_USE_OBSERVABILITY === 'true') {
+      config.useObservability = true;
+    } else if (process.env.HOLA_USE_OBSERVABILITY === 'false') {
+      config.useObservability = false;
+    }
+  }
+  
+  return config;
+}
+
+/**
+ * Legacy feature flags interface for backward compatibility
+ * 
+ * @deprecated Use EnvironmentConfig instead. Will be removed in v2.0.0
+ */
 export interface FeatureFlags {
   useAuth: boolean;
   useObservability: boolean; // enables metrics/tracing/exporters
 }
 
+/**
+ * @deprecated Use loadEnvironmentConfig() instead. Will be removed in v2.0.0
+ */
+export function loadFeatureFlags(): FeatureFlags {
+  const config = loadEnvironmentConfig();
+  return {
+    useAuth: config.useAuth,
+    useObservability: config.useObservability,
+  };
+}
+
+/**
+ * @deprecated Use loadEnvironmentConfig() instead. Will be removed in v2.0.0
+ */
 export const defaultFeatureFlags: FeatureFlags = {
   useAuth: false,
   useObservability: false,
 };
 
 /**
- * Load feature flags from environment variables
+ * Global environment configuration instance
  */
-export function loadFeatureFlags(): FeatureFlags {
-  return {
-    useAuth: process.env.HOLA_USE_AUTH === 'true',
-    useObservability: process.env.HOLA_USE_OBSERVABILITY === 'true',
-  };
-}
+export const environmentConfig = loadEnvironmentConfig();
 
 /**
- * Global feature flags instance
+ * Global feature flags instance (for backward compatibility)
+ * 
+ * @deprecated Use environmentConfig instead. Will be removed in v2.0.0
  */
 export const featureFlags = loadFeatureFlags();
 
 /**
  * Check if a feature flag is enabled
+ * 
+ * @deprecated Use environmentConfig directly instead. Will be removed in v2.0.0
  */
 export function isFeatureEnabled(flag: keyof FeatureFlags): boolean {
   return featureFlags[flag];

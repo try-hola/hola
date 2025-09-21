@@ -95,6 +95,33 @@ Hola streamlines the discovery, deployment, and lifecycle management of self-hos
 - Secrets stored locally with encryption at rest; CLI and UI hide secret values in diffs/logs.
 - Backups prune to seven retained archives per deployment.
 
+### Environment Configuration System
+Hola uses a simplified 3-environment configuration system that replaced the previous complex feature flag matrix:
+
+- **Test Environment** (`NODE_ENV=test`, `VITEST=true`, or `HOLA_DISABLE_AUTOSTART=true`):
+  - All mock services for reliable testing
+  - Authentication disabled for simplified test setup
+  - Observability disabled to reduce test complexity
+  - Dev API endpoints enabled for testing
+  - Ensures deterministic, fast test execution
+
+- **Development Environment** (`NODE_ENV=development`):
+  - Mixed real and mock services for safe development
+  - Mock Docker service to prevent accidental container operations
+  - Real storage, database, and monitoring services
+  - Authentication disabled by default (can be overridden with `HOLA_USE_AUTH=true`)
+  - Dev API endpoints enabled for development features
+  - Observability optional (can be enabled with `HOLA_USE_OBSERVABILITY=true`)
+
+- **Production Environment** (default):
+  - All real services for full functionality
+  - Authentication enabled by default for security
+  - Observability enabled for monitoring and metrics
+  - Dev API endpoints disabled for security
+  - Can be overridden with `HOLA_USE_AUTH=false` or `HOLA_USE_OBSERVABILITY=false` if needed
+
+This approach reduces configuration complexity from 2^15 = 32,768 possible combinations to 3 predictable modes, making deployment and testing more reliable.
+
 ### Key Domain Models
 - **Draft:** Captures pre-deployment customization (env, overrides, files, advanced options, validation state, status).
 - **Upload:** Metadata for temporary files associated with drafts (compose overrides, additional files).
