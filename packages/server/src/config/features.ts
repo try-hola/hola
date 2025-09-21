@@ -98,7 +98,7 @@ export function loadEnvironmentConfig(): EnvironmentConfig {
 /**
  * Legacy feature flags interface for backward compatibility
  * 
- * @deprecated Use EnvironmentConfig instead
+ * @deprecated Use EnvironmentConfig instead. Will be removed in v2.0.0
  */
 export interface FeatureFlags {
   useAuth: boolean;
@@ -106,7 +106,7 @@ export interface FeatureFlags {
 }
 
 /**
- * @deprecated Use loadEnvironmentConfig() instead
+ * @deprecated Use loadEnvironmentConfig() instead. Will be removed in v2.0.0
  */
 export function loadFeatureFlags(): FeatureFlags {
   const config = loadEnvironmentConfig();
@@ -117,7 +117,7 @@ export function loadFeatureFlags(): FeatureFlags {
 }
 
 /**
- * @deprecated Use loadEnvironmentConfig() instead
+ * @deprecated Use loadEnvironmentConfig() instead. Will be removed in v2.0.0
  */
 export const defaultFeatureFlags: FeatureFlags = {
   useAuth: false,
@@ -132,14 +132,14 @@ export const environmentConfig = loadEnvironmentConfig();
 /**
  * Global feature flags instance (for backward compatibility)
  * 
- * @deprecated Use environmentConfig instead
+ * @deprecated Use environmentConfig instead. Will be removed in v2.0.0
  */
 export const featureFlags = loadFeatureFlags();
 
 /**
  * Check if a feature flag is enabled
  * 
- * @deprecated Use environmentConfig directly instead
+ * @deprecated Use environmentConfig directly instead. Will be removed in v2.0.0
  */
 export function isFeatureEnabled(flag: keyof FeatureFlags): boolean {
   return featureFlags[flag];

@@ -167,7 +167,6 @@ export async function setupFeatureTestEnvironment(
     },
     auth: {
       NODE_ENV: 'test', // Force test environment
-      HOLA_USE_AUTH: 'false', // Explicitly disable auth for testing
     },
     system: {
       NODE_ENV: 'test', // Force test environment

@@ -12,6 +12,9 @@ TypeScript monorepo for application deployment platform with:
 
 - **Modern TypeScript**: Strict typing, ESNext features, workspace references
 - **Code Quality**: **CRITICAL - ALL linting errors must be fixed before any work can be considered complete. Zero linting errors allowed.**
+  - **Unused Imports**: Always remove unused type imports and variables to prevent `no-unused-vars` ESLint errors
+  - **TypeScript Strict Mode**: No `any` types, proper typing required
+  - **Import Organization**: Separate type imports, remove unused imports, consistent formatting
 - **Testing**: Use fakes instead of mocks, organize by feature, ensure isolation  
 - **Monorepo Structure**: Clean separation between web, server, and shared packages
 - **Type Safety**: End-to-end type safety from API to UI
@@ -218,11 +221,13 @@ bun run test              # ⚠️  Ensure all tests pass
 - ❌ Using `any` type - use proper typing or `unknown` with type guards
 - ❌ Missing dependencies in React hook arrays - causes infinite loops
 - ❌ Unused variables or imports - clean up code before committing
+- ❌ **Unused type imports** - remove unused `type` imports to prevent `no-unused-vars` errors
 - ❌ `console.log` in production code - use proper error handling or logging
 - ❌ Type assertions with `as any` - use proper type guards instead
 - ❌ Missing return types on functions - explicitly type function returns
 - ❌ **Method name mismatches** - always verify service interface method names
 - ❌ **Interface method calls** - check method signatures before calling service methods
+- ❌ **Dead configuration** - remove redundant environment variable settings in test mode
 
 ### Type Safety & Service Interface Verification
 **🚨 CRITICAL: Always verify service interfaces before implementing**

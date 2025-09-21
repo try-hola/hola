@@ -10,8 +10,6 @@ import {
   getEnvironmentConfig, 
   detectEnvironment, 
   loadEnvironmentConfig,
-  type Environment,
-  type EnvironmentConfig 
 } from '../../config/features';
 
 describe('Environment Configuration', () => {
