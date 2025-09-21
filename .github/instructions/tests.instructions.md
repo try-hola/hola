@@ -98,6 +98,14 @@ describe('My Tests', () => {
   }
   const mockService = svc as MockSomeService;
   ```
+- **Handle 204 No Content responses**: Update test helpers to handle empty response bodies:
+  ```typescript
+  // In makeRequest helper
+  if (response.status === 204) {
+    return { success: response.ok, data: {} as T };
+  }
+  ```
+- **Test relative paths**: Use relative paths in file upload tests: `'config/file.yml'` not `'/config/file.yml'`
 - **Use robust error matching**: `/(ERROR_CODE|fallback text)/i.test(error.message)` for case-insensitive patterns.
 - **Run linting before committing**: Always run `bun run lint` to catch unused imports and other issues.
 

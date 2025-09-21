@@ -34,6 +34,14 @@ export async function makeRequest<T = unknown>(options: {
 
   const response = await fetch(options.url, requestOptions);
   
+  // Handle 204 No Content responses
+  if (response.status === 204) {
+    return {
+      success: response.ok,
+      data: {} as T, // Empty object for 204 responses
+    };
+  }
+  
   if (!response.headers.get('content-type')?.includes('application/json')) {
     return {
       success: response.ok,

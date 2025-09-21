@@ -39,12 +39,17 @@ import {
   type RollbackResponse,
 } from '@hola/shared';
 
+// Error interface for proper typing
+interface ServiceError extends Error {
+  code?: string;
+}
+
 // Phase 0: Infrastructure imports
 import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
 import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
-import { createRequestMiddleware, createHealthMiddleware, getRequestContext } from './middleware/request';
+import { createRequestMiddleware, createHealthMiddleware, getRequestContext, type RequestContext } from './middleware/request';
 import { getServices, resetServices } from './services/simple-factory';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
@@ -398,9 +403,12 @@ async function route(url: URL, req: Request): Promise<Response> {
   // ===== DRAFT ROUTES =====
   // Draft creation
   if (pathname === API.drafts.create && req.method === 'POST') {
+    let body: Partial<CreateDraftRequest> | undefined;
+    let context: RequestContext | undefined;
+    
     try {
-      const body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
-      const context = getRequestContext(req);
+      body = (await req.json().catch(() => ({}))) as Partial<CreateDraftRequest>;
+      context = getRequestContext(req);
       logger.info('Creating draft', { 
         requestId: context?.requestId, 
         appId: body.appId, 
@@ -420,7 +428,11 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to create draft', error as Error);
+      logger.error('Failed to create draft', {
+        requestId: context?.requestId,
+        appId: body?.appId,
+        error: error instanceof Error ? error.message : String(error),
+      });
       return json(
         { error: { code: 'DRAFT_CREATION_FAILED', message: 'Failed to create draft' } },
         { status: 500 }
@@ -453,7 +465,7 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  if (draftMatch && req.method === 'PATCH') {
+  if (draftMatch && (req.method === 'PATCH' || req.method === 'PUT')) {
     try {
       const draftId = draftMatch[1];
       const body = (await req.json().catch(() => ({}))) as PatchDraftRequest;
@@ -469,10 +481,21 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to update draft', error as Error);
+      const draftId = draftMatch[1];
+      const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
+      logger.error('Failed to update draft', { 
+        draftId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
       return json(
-        { error: { code: 'DRAFT_UPDATE_FAILED', message: 'Failed to update draft' } },
-        { status: 500 }
+        { 
+          error: { 
+            code: status === 404 ? 'DRAFT_NOT_FOUND' : 'DRAFT_UPDATE_FAILED', 
+            message: status === 404 ? 'Draft not found' : 'Failed to update draft' 
+          } 
+        },
+        { status }
       );
     }
   }
@@ -490,12 +513,23 @@ async function route(url: URL, req: Request): Promise<Response> {
         requestId: context?.requestId, 
         draftId 
       });
-      return json({ ok: true });
+      return new Response(null, { status: 204 });
     } catch (error) {
-      logger.error('Failed to delete draft', error as Error);
+      const draftId = draftMatch[1];
+      const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
+      logger.error('Failed to delete draft', { 
+        draftId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
       return json(
-        { error: { code: 'DRAFT_DELETE_FAILED', message: 'Failed to delete draft' } },
-        { status: 500 }
+        { 
+          error: { 
+            code: status === 404 ? 'DRAFT_NOT_FOUND' : 'DRAFT_DELETE_FAILED', 
+            message: status === 404 ? 'Draft not found' : 'Failed to delete draft' 
+          } 
+        }, 
+        { status }
       );
     }
   }
@@ -513,28 +547,35 @@ async function route(url: URL, req: Request): Promise<Response> {
       let fileData: { name: string; content: Buffer; kind: DraftFile['kind']; path?: string };
 
       if (contentType.includes('multipart/form-data')) {
-        // For multipart uploads, we'd need to parse the form data
-        // For now, create a placeholder implementation
-        const body = await req.arrayBuffer();
-        const kindParam = searchParams.get('kind');
+        const form = await req.formData();
+        const filePart = form.get('file');
+        if (!(filePart instanceof File)) {
+          return json({ error: { code: 'BAD_UPLOAD', message: 'multipart/form-data must include a file field' } }, { status: 400 });
+        }
+        const buf = Buffer.from(await filePart.arrayBuffer());
+        const name = (form.get('name') as string) || filePart.name || 'upload';
+        const kindStr = (form.get('kind') as string) || 'additionalFile';
         const validKinds: DraftFile['kind'][] = ['composeOverride', 'additionalFile', 'env', 'secret'];
-        const kind = (validKinds.includes(kindParam as DraftFile['kind'])) ? kindParam as DraftFile['kind'] : 'additionalFile';
-        
-        fileData = {
-          name: searchParams.get('name') || 'upload',
-          content: Buffer.from(body),
-          kind,
-          path: searchParams.get('path') || undefined
-        };
+        const kind = (validKinds.includes(kindStr as DraftFile['kind']) ? (kindStr as DraftFile['kind']) : 'additionalFile');
+        const path = (form.get('path') as string) || undefined;
+        if (path && (path.startsWith('/') || path.split('/').some(seg => seg === '..'))) {
+          return json({ error: { code: 'INVALID_PATH', message: 'Path must be relative and must not contain ".."' } }, { status: 400 });
+        }
+        fileData = { name, content: buf, kind, path };
       } else {
         // Handle JSON-encoded file content
         const body = await req.json();
         const validKinds: DraftFile['kind'][] = ['composeOverride', 'additionalFile', 'env', 'secret'];
         const kind = (validKinds.includes(body.kind)) ? body.kind : 'additionalFile';
-        
+        if (typeof body.content !== 'string') {
+          return json({ error: { code: 'BAD_UPLOAD', message: 'JSON body must provide base64 content' } }, { status: 400 });
+        }
+        if (body.path && (body.path.startsWith('/') || String(body.path).split('/').some((seg: string) => seg === '..'))) {
+          return json({ error: { code: 'INVALID_PATH', message: 'Path must be relative and must not contain ".."' } }, { status: 400 });
+        }
         fileData = {
           name: body.name || 'upload',
-          content: Buffer.from(body.content || '', 'base64'),
+          content: Buffer.from(body.content, 'base64'),
           kind,
           path: body.path || undefined
         };
@@ -551,7 +592,11 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to upload file', error as Error);
+      const draftId = draftUploadsMatch[1];
+      logger.error('Failed to upload file', { 
+        draftId, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
       return json(
         { error: { code: 'FILE_UPLOAD_FAILED', message: 'Failed to upload file' } },
         { status: 500 }
@@ -568,20 +613,30 @@ async function route(url: URL, req: Request): Promise<Response> {
       logger.info('Deleting file from draft', { requestId: context?.requestId, draftId, uploadId });
 
       const services = getServices();
-      const payload = await services.drafts.deleteFile(draftId, uploadId);
+      await services.drafts.deleteFile(draftId, uploadId);
       
       logger.info('File deleted successfully', { 
         requestId: context?.requestId, 
         draftId,
         uploadId
       });
-      return json(payload);
+      return new Response(null, { status: 204 });
     } catch (error) {
-      logger.error('Failed to delete file', error as Error);
-      return json(
-        { error: { code: 'FILE_DELETE_FAILED', message: 'Failed to delete file' } },
-        { status: 500 }
-      );
+      const draftId = draftUploadByIdMatch[1];
+      const uploadId = draftUploadByIdMatch[2];
+      const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
+      logger.error('Failed to delete file', { 
+        draftId, 
+        uploadId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      return json({ 
+        error: { 
+          code: status === 404 ? 'FILE_NOT_FOUND' : 'FILE_DELETE_FAILED', 
+          message: status === 404 ? 'File not found' : 'Failed to delete file' 
+        } 
+      }, { status });
     }
   }
 
@@ -605,11 +660,19 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to validate draft', error as Error);
-      return json(
-        { error: { code: 'DRAFT_VALIDATION_FAILED', message: 'Failed to validate draft' } },
-        { status: 500 }
-      );
+      const draftId = draftValidateMatch[1];
+      const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
+      logger.error('Failed to validate draft', { 
+        draftId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      return json({ 
+        error: { 
+          code: status === 404 ? 'DRAFT_NOT_FOUND' : 'DRAFT_VALIDATION_FAILED', 
+          message: status === 404 ? 'Draft not found' : 'Failed to validate draft' 
+        } 
+      }, { status });
     }
   }
 
@@ -632,11 +695,19 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to run preflight check', error as Error);
-      return json(
-        { error: { code: 'PREFLIGHT_CHECK_FAILED', message: 'Failed to run preflight check' } },
-        { status: 500 }
-      );
+      const draftId = draftPreflightMatch[1];
+      const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
+      logger.error('Failed to run preflight check', { 
+        draftId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      return json({ 
+        error: { 
+          code: status === 404 ? 'DRAFT_NOT_FOUND' : 'PREFLIGHT_CHECK_FAILED', 
+          message: status === 404 ? 'Draft not found' : 'Failed to run preflight check' 
+        } 
+      }, { status });
     }
   }
 
@@ -658,11 +729,20 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to finalize draft', error as Error);
-      return json(
-        { error: { code: 'DRAFT_FINALIZATION_FAILED', message: 'Failed to finalize draft' } },
-        { status: 500 }
-      );
+      const draftId = draftFinalizeMatch[1];
+      const codeVal = (error as ServiceError)?.code;
+      const status = codeVal === 'NOT_FOUND' ? 404 : codeVal === 'CONFLICT' ? 409 : 500;
+      logger.error('Failed to finalize draft', { 
+        draftId, 
+        status, 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      return json({ 
+        error: { 
+          code: status === 404 ? 'DRAFT_NOT_FOUND' : 'DRAFT_FINALIZATION_FAILED', 
+          message: status === 404 ? 'Draft not found' : 'Failed to finalize draft' 
+        } 
+      }, { status });
     }
   }
 

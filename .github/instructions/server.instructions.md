@@ -31,6 +31,35 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - Keep handlers `async`, return via `json(...)`, centralize error mapping.
 - Always use `@hola/shared` types for request/response.
 
+## Error Handling & HTTP Best Practices
+- **Request ID Logging**: Always include `requestId`, `draftId`, and relevant context in error logs:
+  ```typescript
+  } catch (error) {
+    const context = getRequestContext(req);
+    logger.error('Failed to create draft', {
+      requestId: context?.requestId,
+      appId: body?.appId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  ```
+- **HTTP Status Mapping**: Map service errors to appropriate HTTP status codes:
+  - `404 Not Found` for missing resources (error.code === 'NOT_FOUND')
+  - `409 Conflict` for state conflicts (error.code === 'CONFLICT')  
+  - `400 Bad Request` for validation errors
+  - `500 Internal Server Error` for unexpected failures
+- **Method Support**: Support both PUT and PATCH for updates: `if (req.method === 'PATCH' || req.method === 'PUT')`
+- **Delete Responses**: Return `204 No Content` for successful deletions, not JSON
+- **Multipart File Handling**: Use `req.formData()` for multipart uploads, validate file fields and paths:
+  ```typescript
+  const form = await req.formData();
+  const filePart = form.get('file');
+  if (!(filePart instanceof File)) {
+    return json({ error: { code: 'BAD_UPLOAD', message: 'Missing file field' } }, { status: 400 });
+  }
+  ```
+- **Path Validation**: Reject absolute paths and directory traversal: `path.startsWith('/') || path.includes('..')`
+- **Type Safety**: Avoid `any` - define proper interfaces like `ServiceError extends Error { code?: string }`
+
 ## Don't
 - Invent new endpoints without updating `@hola/shared`.
 - Block event loop with heavy CPU.
