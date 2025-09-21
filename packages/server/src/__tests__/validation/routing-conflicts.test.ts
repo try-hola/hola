@@ -8,16 +8,19 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import type {
   TraefikRoutingRule,
-  RoutingConflict,
-  TraefikRoutingMap,
   DeploymentListItem,
   GetDeploymentsResponse,
+  GetDeploymentsRequest,
 } from '@hola/shared';
 import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
 import { RealValidationService } from '../../services/core/validation';
 import { MockStorageService } from '../../services/core/storage';
 import { MockDockerService } from '../../services/core/docker';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
+
+interface MockDeploymentService {
+  listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
+}
 
 describe('Validation Service - Routing Conflicts', () => {
   let validationService: RealValidationService;
@@ -70,17 +73,17 @@ describe('Validation Service - Routing Conflicts', () => {
 
   test('should return no conflicts for unique host', async () => {
     // Mock deployment service to return no existing deployments
-    const mockDeploymentService = {
+    const mockDeploymentService: MockDeploymentService = {
       listDeployments: async () => ({
         items: [],
         page: 1,
         limit: 1000,
         total: 0,
-      } as GetDeploymentsResponse),
+      }),
     };
 
     // Override the deployment service temporarily
-    (validationService as any).deploymentService = mockDeploymentService;
+    Object.assign(validationService, { deploymentService: mockDeploymentService });
 
     const conflicts = await validationService.validateRoutingRules('nextcloud', 'local.hola');
     expect(conflicts).toEqual([]);
@@ -101,16 +104,16 @@ describe('Validation Service - Routing Conflicts', () => {
       },
     ];
 
-    const mockDeploymentService = {
-      listDeployments: async (request: any) => ({
+    const mockDeploymentService: MockDeploymentService = {
+      listDeployments: async (request: GetDeploymentsRequest) => ({
         items: request.status === 'running' ? existingDeployments : [],
         page: 1,
         limit: 1000,
         total: existingDeployments.length,
-      } as GetDeploymentsResponse),
+      }),
     };
 
-    (validationService as any).deploymentService = mockDeploymentService;
+    Object.assign(validationService, { deploymentService: mockDeploymentService });
 
     const conflicts = await validationService.validateRoutingRules('nextcloud', 'local.hola');
     
@@ -137,16 +140,16 @@ describe('Validation Service - Routing Conflicts', () => {
       },
     ];
 
-    const mockDeploymentService = {
-      listDeployments: async (request: any) => ({
+    const mockDeploymentService: MockDeploymentService = {
+      listDeployments: async (request: GetDeploymentsRequest) => ({
         items: request.status === 'installing' ? pendingDeployments : [],
         page: 1,
         limit: 1000,
         total: request.status === 'installing' ? pendingDeployments.length : 0,
-      } as GetDeploymentsResponse),
+      }),
     };
 
-    (validationService as any).deploymentService = mockDeploymentService;
+    Object.assign(validationService, { deploymentService: mockDeploymentService });
 
     const conflicts = await validationService.validateRoutingRules('nextcloud', 'local.hola');
     
@@ -173,16 +176,16 @@ describe('Validation Service - Routing Conflicts', () => {
       },
     ];
 
-    const mockDeploymentService = {
-      listDeployments: async (request: any) => ({
+    const mockDeploymentService: MockDeploymentService = {
+      listDeployments: async (request: GetDeploymentsRequest) => ({
         items: request.status === 'running' ? existingDeployments : [],
         page: 1,
         limit: 1000,
         total: existingDeployments.length,
-      } as GetDeploymentsResponse),
+      }),
     };
 
-    (validationService as any).deploymentService = mockDeploymentService;
+    Object.assign(validationService, { deploymentService: mockDeploymentService });
 
     // Check for a different app - should have no conflicts
     const conflicts = await validationService.validateRoutingRules('homeassistant', 'local.hola');
@@ -190,13 +193,13 @@ describe('Validation Service - Routing Conflicts', () => {
   });
 
   test('should handle deployment service errors gracefully', async () => {
-    const mockDeploymentService = {
+    const mockDeploymentService: MockDeploymentService = {
       listDeployments: async () => {
         throw new Error('Service unavailable');
       },
     };
 
-    (validationService as any).deploymentService = mockDeploymentService;
+    Object.assign(validationService, { deploymentService: mockDeploymentService });
 
     // Should not throw, but return empty conflicts
     const conflicts = await validationService.validateRoutingRules('nextcloud', 'local.hola');
@@ -205,7 +208,7 @@ describe('Validation Service - Routing Conflicts', () => {
 
   test('should handle missing deployment service', async () => {
     // Simulate missing deployment service
-    (validationService as any).deploymentService = undefined;
+    Object.assign(validationService, { deploymentService: undefined });
 
     const conflicts = await validationService.validateRoutingRules('nextcloud', 'local.hola');
     expect(conflicts).toEqual([]);
