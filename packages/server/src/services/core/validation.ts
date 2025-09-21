@@ -5,6 +5,7 @@
  * Includes schema validation, preflight checks, and resource validation.
  */
 
+import * as crypto from 'crypto';
 import type { 
   Draft, 
   DraftFile,
@@ -523,8 +524,10 @@ export class RealValidationService implements ValidationService {
 
   generateRoutingRule(deploymentId: string, appName: string, domain: string): TraefikRoutingRule {
     const host = `${appName}.${domain}`;
-    const serviceName = `${appName}-${deploymentId.slice(0, 8)}`;
-    const networkName = `hola-${deploymentId.slice(0, 8)}`;
+    // Use first 12 chars for better uniqueness while keeping names manageable
+    const shortId = deploymentId.slice(0, 12);
+    const serviceName = `${appName}-${shortId}`;
+    const networkName = `hola-${shortId}`;
 
     return {
       deploymentId,
@@ -542,7 +545,10 @@ export class RealValidationService implements ValidationService {
       // Try to load from persisted storage first
       const mapData = await this.storageService.readFile('runtime/traefik/routing-map.json');
       return JSON.parse(mapData.toString('utf-8'));
-    } catch {
+    } catch (error) {
+      this.logger.debug('Could not load routing map from storage, using in-memory map', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
       // If file doesn't exist or can't be read, return current in-memory map
       return { ...this.routingMap };
     }

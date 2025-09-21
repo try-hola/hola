@@ -10,18 +10,14 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import type {
   DeploymentListItem,
-  GetDeploymentsResponse,
   GetDeploymentsRequest,
 } from '@hola/shared';
 import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+import { MockDeploymentService } from '../helpers/mock-deployment-service';
 import { RealValidationService } from '../../services/core/validation';
 import { MockStorageService } from '../../services/core/storage';
 import { MockDockerService } from '../../services/core/docker';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
-
-interface MockDeploymentService {
-  listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
-}
 
 describe('Acceptance Criteria - Host-based Routing Conflicts', () => {
   let validationService: RealValidationService;
@@ -158,8 +154,8 @@ describe('Acceptance Criteria - Host-based Routing Conflicts', () => {
       appName: 'app',
       host: 'app.local',
       domain: 'local',
-      serviceName: 'app-deploy-a',
-      networkName: 'hola-deploy-a',
+      serviceName: 'app-deploy-abc12',
+      networkName: 'hola-deploy-abc12',
       createdAt: expect.any(String),
     });
 

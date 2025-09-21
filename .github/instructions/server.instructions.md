@@ -40,6 +40,11 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - Parse query params defensively with defaults.
 - Keep handlers `async`, return via `json(...)`, centralize error mapping.
 - Always use `@hola/shared` types for request/response.
+- **Import crypto properly**: Use `import * as crypto from 'crypto'` when using crypto.randomUUID().
+- **Share service instances**: Create single instances of services and reuse them to avoid state duplication.
+- **Extract shared interfaces**: Place commonly used test interfaces in shared helper files under `__tests__/helpers/`.
+- **Use consistent ID truncation**: When truncating UUIDs for naming, use 12 characters minimum for better uniqueness.
+- **Log errors properly**: Include error context in catch blocks, don't silently swallow errors.
 
 ## Error Handling & HTTP Best Practices
 - **Request ID Logging**: Always include `requestId`, `draftId`, and relevant context in error logs:
@@ -90,6 +95,9 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - Log secrets or internal stack traces to clients.
 - **Create `/api/dev/*` endpoints**: Development features must use standard API patterns (Drafts, SSE, etc.).
 - **Add development-specific middleware**: Use feature flags on standard endpoints instead of separate dev infrastructure.
+- **Duplicate service instances**: Avoid creating multiple instances of the same service - use shared instances.
+- **Use any without imports**: Always import required modules (like crypto) before using their functions.
+- **Silently swallow errors**: Always log caught errors with appropriate context before fallback behavior.
 
 ## Testing & Dev
 - **Use standardized test environment**: Import from `helpers/test-environment` for reliable in-process testing.

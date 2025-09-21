@@ -118,6 +118,8 @@ describe('My Tests', () => {
 - **Test relative paths**: Use relative paths in file upload tests: `'config/file.yml'` not `'/config/file.yml'`
 - **Use robust error matching**: `/(ERROR_CODE|fallback text)/i.test(error.message)` for case-insensitive patterns.
 - **Run linting before committing**: Always run `bun run lint` to catch unused imports and other issues.
+- **Extract shared test interfaces**: Place commonly used mock interfaces in `__tests__/helpers/` to avoid duplication.
+- **Use proper typing**: Import shared types and interfaces instead of defining locally in each test file.
 
 ## Don't
 - Mock deep internals; test public APIs.
@@ -129,3 +131,5 @@ describe('My Tests', () => {
 - **Leave orphaned test files**: When cleaning up APIs, remove ALL related test files, not just failing assertions.
 - **Test deprecated SSE events**: Remove SSE test helpers and event handlers for removed functionality.
 - **Import unused types**: Avoid importing types that aren't used in tests (causes linting errors).
+- **Duplicate test interfaces**: Don't define the same mock interface in multiple test files - extract to shared helpers.
+- **Use direct property assignment**: Avoid `(service as any).property = value` - use proper DI or shared instances.

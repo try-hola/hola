@@ -9,18 +9,14 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:tes
 import type {
   TraefikRoutingRule,
   DeploymentListItem,
-  GetDeploymentsResponse,
   GetDeploymentsRequest,
 } from '@hola/shared';
 import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
+import { MockDeploymentService } from '../helpers/mock-deployment-service';
 import { RealValidationService } from '../../services/core/validation';
 import { MockStorageService } from '../../services/core/storage';
 import { MockDockerService } from '../../services/core/docker';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
-
-interface MockDeploymentService {
-  listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
-}
 
 describe('Validation Service - Routing Conflicts', () => {
   let validationService: RealValidationService;
@@ -65,8 +61,8 @@ describe('Validation Service - Routing Conflicts', () => {
       appName: 'nextcloud',
       host: 'nextcloud.local.hola',
       domain: 'local.hola',
-      serviceName: 'nextcloud-deploy-1',
-      networkName: 'hola-deploy-1',
+      serviceName: 'nextcloud-deploy-123',
+      networkName: 'hola-deploy-123',
       createdAt: expect.any(String),
     });
   });

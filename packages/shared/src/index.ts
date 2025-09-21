@@ -742,6 +742,7 @@ export type PortReservation = {
   expiresAt?: string;
 };
 
+// @deprecated - Use TraefikRoutingMap instead
 export type GlobalPortRegistry = Record<string, PortReservation>; // "protocol:port" -> reservation
 
 // Directory structure metadata
