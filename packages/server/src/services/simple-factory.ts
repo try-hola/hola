@@ -105,8 +105,8 @@ export function createServices(env: ServiceEnvironment): Services {
       jobs,
       catalog,
       bundles: new RealBundleService(),
-      drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring)),
-      validation: new RealValidationService(docker, systemMonitoring),
+      drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring, storage)),
+      validation: new RealValidationService(docker, systemMonitoring, storage),
       deployments: new RealDeploymentService(storage, jobs, docker),
     };
   }
@@ -142,8 +142,8 @@ export function createServices(env: ServiceEnvironment): Services {
     jobs,
     catalog,
     bundles: new RealBundleService(),
-    drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring)),
-    validation: new RealValidationService(docker, systemMonitoring),
+    drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring, storage)),
+    validation: new RealValidationService(docker, systemMonitoring, storage),
     deployments: new RealDeploymentService(storage, jobs, docker),
   };
 }

@@ -634,7 +634,7 @@ export type DraftFile = {
 };
 
 // Enhanced validation responses
-export type PreflightCheckType = 'env' | 'docker' | 'disk' | 'ports' | 'images' | 'network' | 'permissions';
+export type PreflightCheckType = 'env' | 'docker' | 'disk' | 'ports' | 'images' | 'network' | 'permissions' | 'routing';
 export type PreflightCheckStatus = 'pass' | 'warn' | 'fail';
 
 export type EnhancedPreflightCheck = {
@@ -714,7 +714,27 @@ export type ResourceLimits = {
   pidsLimit?: number;
 };
 
-// Port management
+// Traefik routing configuration
+export type TraefikRoutingRule = {
+  deploymentId: string;
+  appName: string;
+  host: string; // e.g., "nextcloud.local.hola"
+  domain: string; // e.g., "local.hola"
+  serviceName: string;
+  networkName: string;
+  createdAt: string;
+};
+
+export type RoutingConflict = {
+  conflictingDeploymentId: string;
+  conflictingAppName: string;
+  conflictingHost: string;
+  message: string;
+};
+
+export type TraefikRoutingMap = Record<string, TraefikRoutingRule>; // "host" -> routing rule
+
+// Port management (deprecated - kept for backwards compatibility)
 export type PortReservation = {
   deploymentId: string;
   releaseId: string;
