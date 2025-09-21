@@ -4,6 +4,16 @@ applyTo: "/packages/**/__tests__/**"
 
 # Tests Instructions
 
+## 🚨 CRITICAL QUALITY GATES - NEVER IGNORE 🚨
+
+**Work is NEVER complete until ALL THREE quality gates pass 100% clean:**
+
+1. **🔴 MANDATORY LINT**: `bun run lint` must pass with ZERO errors/warnings
+2. **🔴 MANDATORY TYPECHECK**: `bun run typecheck` must pass with ZERO type errors  
+3. **🔴 MANDATORY TESTS**: `bun run test` must pass with ZERO failing tests
+
+**Failure to meet these gates will cause CI/CD failures and block deployments. NO EXCEPTIONS.**
+
 ## Purpose
 Reliable, isolated tests with fakes-first strategy and simplified service management.
 
@@ -98,6 +108,14 @@ describe('My Tests', () => {
   }
   const mockService = svc as MockSomeService;
   ```
+- **Handle 204 No Content responses**: Update test helpers to handle empty response bodies:
+  ```typescript
+  // In makeRequest helper
+  if (response.status === 204) {
+    return { success: response.ok, data: {} as T };
+  }
+  ```
+- **Test relative paths**: Use relative paths in file upload tests: `'config/file.yml'` not `'/config/file.yml'`
 - **Use robust error matching**: `/(ERROR_CODE|fallback text)/i.test(error.message)` for case-insensitive patterns.
 - **Run linting before committing**: Always run `bun run lint` to catch unused imports and other issues.
 

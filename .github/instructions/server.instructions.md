@@ -4,6 +4,16 @@ applyTo: "/packages/server/src/**"
 
 # Server Package Instructions
 
+## 🚨 CRITICAL QUALITY GATES - NEVER IGNORE 🚨
+
+**Work is NEVER complete until ALL THREE quality gates pass 100% clean:**
+
+1. **🔴 MANDATORY LINT**: `bun run lint` must pass with ZERO errors/warnings
+2. **🔴 MANDATORY TYPECHECK**: `bun run typecheck` must pass with ZERO type errors
+3. **🔴 MANDATORY TESTS**: `bun run test` must pass with ZERO failing tests
+
+**Failure to meet these gates will cause CI/CD failures and block deployments. NO EXCEPTIONS.**
+
 ## Purpose
 Bun HTTP server implementing REST endpoints that strictly follow the contracts in `@hola/shared`. Emphasizes simplified service management with environment-based selection.
 
@@ -30,6 +40,49 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - Parse query params defensively with defaults.
 - Keep handlers `async`, return via `json(...)`, centralize error mapping.
 - Always use `@hola/shared` types for request/response.
+
+## Error Handling & HTTP Best Practices
+- **Request ID Logging**: Always include `requestId`, `draftId`, and relevant context in error logs:
+  ```typescript
+  } catch (error) {
+    const context = getRequestContext(req);
+    logger.error('Failed to create draft', {
+      requestId: context?.requestId,
+      appId: body?.appId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  ```
+- **HTTP Status Mapping**: Map service errors to appropriate HTTP status codes:
+  - `404 Not Found` for missing resources (error.code === 'NOT_FOUND')
+  - `409 Conflict` for state conflicts (error.code === 'CONFLICT')  
+  - `400 Bad Request` for validation errors
+  - `500 Internal Server Error` for unexpected failures
+- **Method Support**: Support both PUT and PATCH for updates: `if (req.method === 'PATCH' || req.method === 'PUT')`
+- **Delete Responses**: Return `204 No Content` for successful deletions, not JSON
+- **Multipart File Handling**: Use `req.formData()` for multipart uploads, validate file fields and paths:
+  ```typescript
+  const form = await req.formData();
+  const filePart = form.get('file');
+  if (!(filePart instanceof File)) {
+    return json({ error: { code: 'BAD_UPLOAD', message: 'Missing file field' } }, { status: 400 });
+  }
+  ```
+- **Path Validation**: Reject absolute paths and directory traversal: `path.startsWith('/') || path.includes('..')`
+- **Type Safety**: Avoid `any` - define proper interfaces like `ServiceError extends Error { code?: string }`
+- **Logger Interface**: Use correct logger.error signature: `logger.error(message, error?, context?)`:
+  ```typescript
+  // ✅ Correct usage
+  logger.error('Failed to create draft', error instanceof Error ? error : new Error(String(error)), {
+    requestId: context?.requestId,
+    draftId
+  });
+  
+  // ❌ Wrong - causes TypeScript errors
+  logger.error('Failed to create draft', {
+    requestId: context?.requestId,
+    error: error.message  // Don't pass context as second param
+  });
+  ```
 
 ## Don't
 - Invent new endpoints without updating `@hola/shared`.
