@@ -428,10 +428,9 @@ async function route(url: URL, req: Request): Promise<Response> {
       });
       return json(payload);
     } catch (error) {
-      logger.error('Failed to create draft', {
+      logger.error('Failed to create draft', error instanceof Error ? error : new Error(String(error)), {
         requestId: context?.requestId,
         appId: body?.appId,
-        error: error instanceof Error ? error.message : String(error),
       });
       return json(
         { error: { code: 'DRAFT_CREATION_FAILED', message: 'Failed to create draft' } },
@@ -483,10 +482,9 @@ async function route(url: URL, req: Request): Promise<Response> {
     } catch (error) {
       const draftId = draftMatch[1];
       const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
-      logger.error('Failed to update draft', { 
+      logger.error('Failed to update draft', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json(
         { 
@@ -517,10 +515,9 @@ async function route(url: URL, req: Request): Promise<Response> {
     } catch (error) {
       const draftId = draftMatch[1];
       const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
-      logger.error('Failed to delete draft', { 
+      logger.error('Failed to delete draft', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json(
         { 
@@ -593,9 +590,8 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json(payload);
     } catch (error) {
       const draftId = draftUploadsMatch[1];
-      logger.error('Failed to upload file', { 
-        draftId, 
-        error: error instanceof Error ? error.message : String(error) 
+      logger.error('Failed to upload file', error instanceof Error ? error : new Error(String(error)), { 
+        draftId 
       });
       return json(
         { error: { code: 'FILE_UPLOAD_FAILED', message: 'Failed to upload file' } },
@@ -625,11 +621,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       const draftId = draftUploadByIdMatch[1];
       const uploadId = draftUploadByIdMatch[2];
       const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
-      logger.error('Failed to delete file', { 
+      logger.error('Failed to delete file', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
         uploadId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json({ 
         error: { 
@@ -662,10 +657,9 @@ async function route(url: URL, req: Request): Promise<Response> {
     } catch (error) {
       const draftId = draftValidateMatch[1];
       const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
-      logger.error('Failed to validate draft', { 
+      logger.error('Failed to validate draft', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json({ 
         error: { 
@@ -697,10 +691,9 @@ async function route(url: URL, req: Request): Promise<Response> {
     } catch (error) {
       const draftId = draftPreflightMatch[1];
       const status = (error as ServiceError)?.code === 'NOT_FOUND' ? 404 : 500;
-      logger.error('Failed to run preflight check', { 
+      logger.error('Failed to run preflight check', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json({ 
         error: { 
@@ -732,10 +725,9 @@ async function route(url: URL, req: Request): Promise<Response> {
       const draftId = draftFinalizeMatch[1];
       const codeVal = (error as ServiceError)?.code;
       const status = codeVal === 'NOT_FOUND' ? 404 : codeVal === 'CONFLICT' ? 409 : 500;
-      logger.error('Failed to finalize draft', { 
+      logger.error('Failed to finalize draft', error instanceof Error ? error : new Error(String(error)), { 
         draftId, 
-        status, 
-        error: error instanceof Error ? error.message : String(error) 
+        status 
       });
       return json({ 
         error: { 

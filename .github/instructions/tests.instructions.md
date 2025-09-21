@@ -4,6 +4,16 @@ applyTo: "/packages/**/__tests__/**"
 
 # Tests Instructions
 
+## 🚨 CRITICAL QUALITY GATES - NEVER IGNORE 🚨
+
+**Work is NEVER complete until ALL THREE quality gates pass 100% clean:**
+
+1. **🔴 MANDATORY LINT**: `bun run lint` must pass with ZERO errors/warnings
+2. **🔴 MANDATORY TYPECHECK**: `bun run typecheck` must pass with ZERO type errors  
+3. **🔴 MANDATORY TESTS**: `bun run test` must pass with ZERO failing tests
+
+**Failure to meet these gates will cause CI/CD failures and block deployments. NO EXCEPTIONS.**
+
 ## Purpose
 Reliable, isolated tests with fakes-first strategy and simplified service management.
 

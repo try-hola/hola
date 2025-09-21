@@ -4,6 +4,16 @@ applyTo: "/packages/server/src/**"
 
 # Server Package Instructions
 
+## 🚨 CRITICAL QUALITY GATES - NEVER IGNORE 🚨
+
+**Work is NEVER complete until ALL THREE quality gates pass 100% clean:**
+
+1. **🔴 MANDATORY LINT**: `bun run lint` must pass with ZERO errors/warnings
+2. **🔴 MANDATORY TYPECHECK**: `bun run typecheck` must pass with ZERO type errors
+3. **🔴 MANDATORY TESTS**: `bun run test` must pass with ZERO failing tests
+
+**Failure to meet these gates will cause CI/CD failures and block deployments. NO EXCEPTIONS.**
+
 ## Purpose
 Bun HTTP server implementing REST endpoints that strictly follow the contracts in `@hola/shared`. Emphasizes simplified service management with environment-based selection.
 
@@ -59,6 +69,20 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
   ```
 - **Path Validation**: Reject absolute paths and directory traversal: `path.startsWith('/') || path.includes('..')`
 - **Type Safety**: Avoid `any` - define proper interfaces like `ServiceError extends Error { code?: string }`
+- **Logger Interface**: Use correct logger.error signature: `logger.error(message, error?, context?)`:
+  ```typescript
+  // ✅ Correct usage
+  logger.error('Failed to create draft', error instanceof Error ? error : new Error(String(error)), {
+    requestId: context?.requestId,
+    draftId
+  });
+  
+  // ❌ Wrong - causes TypeScript errors
+  logger.error('Failed to create draft', {
+    requestId: context?.requestId,
+    error: error.message  // Don't pass context as second param
+  });
+  ```
 
 ## Don't
 - Invent new endpoints without updating `@hola/shared`.
