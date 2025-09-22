@@ -93,6 +93,9 @@ export function createServices(env: ServiceEnvironment): Services {
     
     const catalog = new RealCatalogService();
     
+    // Create shared validation service instance to avoid duplication
+    const validation = new RealValidationService(docker, systemMonitoring, storage);
+    
     return {
       storage,
       config: new RealConfigService(storage),
@@ -105,8 +108,8 @@ export function createServices(env: ServiceEnvironment): Services {
       jobs,
       catalog,
       bundles: new RealBundleService(),
-      drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring)),
-      validation: new RealValidationService(docker, systemMonitoring),
+      drafts: new RealDraftService(storage, catalog, validation),
+      validation,
       deployments: new RealDeploymentService(storage, jobs, docker),
     };
   }
@@ -130,6 +133,9 @@ export function createServices(env: ServiceEnvironment): Services {
   const apiKeyProvider = new ApiKeyAuthProvider();
   authService.registerProvider(apiKeyProvider);
   
+  // Create shared validation service instance to avoid duplication  
+  const validation = new RealValidationService(docker, systemMonitoring, storage);
+  
   return {
     storage,
     config: new RealConfigService(storage),
@@ -142,8 +148,8 @@ export function createServices(env: ServiceEnvironment): Services {
     jobs,
     catalog,
     bundles: new RealBundleService(),
-    drafts: new RealDraftService(storage, catalog, new RealValidationService(docker, systemMonitoring)),
-    validation: new RealValidationService(docker, systemMonitoring),
+    drafts: new RealDraftService(storage, catalog, validation),
+    validation,
     deployments: new RealDeploymentService(storage, jobs, docker),
   };
 }

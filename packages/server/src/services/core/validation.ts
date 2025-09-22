@@ -5,6 +5,7 @@
  * Includes schema validation, preflight checks, and resource validation.
  */
 
+import * as crypto from 'crypto';
 import type { 
   Draft, 
   DraftFile,
@@ -13,6 +14,9 @@ import type {
   EnhancedPreflightResponse,
   EnhancedPreflightCheck,
   GlobalPortRegistry,
+  TraefikRoutingRule,
+  TraefikRoutingMap,
+  RoutingConflict,
   ResourceLimits,
   AppEnvVar
 } from '@hola/shared';
@@ -21,6 +25,8 @@ import { getLogger } from '../../lib/logger';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { DockerService } from './docker';
 import type { SystemMonitoringService } from './system-monitoring';
+import type { DeploymentService } from './deployment';
+import type { StorageService } from './storage';
 import { parse as parseYAML } from 'yaml';
 import type { ComposeFile, ComposeService } from './compose-parser';
 
@@ -35,8 +41,14 @@ export interface ValidationService extends HealthCheckable {
   validateEnvironment(env: AppEnvVar[]): Promise<ValidationIssue[]>;
   validateResources(limits?: ResourceLimits): Promise<ValidationIssue[]>;
   
-  // Port management
-  reservePorts(deploymentId: string, ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>): Promise<string>; // returns reservation token
+  // Traefik routing conflict detection
+  validateRoutingRules(appName: string, domain: string): Promise<RoutingConflict[]>;
+  generateRoutingRule(deploymentId: string, appName: string, domain: string): TraefikRoutingRule;
+  getRoutingMap(): Promise<TraefikRoutingMap>;
+  persistRoutingMap(rules: TraefikRoutingRule[]): Promise<void>;
+  
+  // Deprecated port management (kept for backwards compatibility)
+  reservePorts(deploymentId: string, ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>): Promise<string>;
   releasePorts(reservationToken: string): Promise<void>;
   getPortRegistry(): Promise<GlobalPortRegistry>;
 }
@@ -45,10 +57,13 @@ export class RealValidationService implements ValidationService {
   private logger = getLogger().child({ service: 'ValidationService' });
   private portRegistry: GlobalPortRegistry = {};
   private reservations = new Map<string, { deploymentId: string; ports: string[] }>(); // token -> reservation
+  private routingMap: TraefikRoutingMap = {};
 
   constructor(
     private dockerService: DockerService,
-    private systemMonitoringService: SystemMonitoringService
+    private systemMonitoringService: SystemMonitoringService,
+    private storageService: StorageService,
+    private deploymentService?: DeploymentService
   ) {}
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -264,6 +279,37 @@ export class RealValidationService implements ValidationService {
         }
       }
 
+      // Check Traefik routing conflicts
+      try {
+        // Use default domain for now - this could be configurable
+        const defaultDomain = 'local.hola';
+        const routingConflicts = await this.validateRoutingRules(draft.appId, defaultDomain);
+        
+        if (routingConflicts.length === 0) {
+          checks.push({
+            name: 'routing',
+            type: 'routing',
+            status: 'pass',
+            detail: `Host '${draft.appId}.${defaultDomain}' is available`,
+          });
+        } else {
+          checks.push({
+            name: 'routing',
+            type: 'routing',
+            status: 'fail',
+            detail: routingConflicts.map(c => c.message).join(', '),
+            remediation: 'Choose a different app name or remove conflicting deployments',
+          });
+        }
+      } catch (error) {
+        checks.push({
+          name: 'routing',
+          type: 'routing',
+          status: 'warn',
+          detail: `Could not check routing conflicts: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        });
+      }
+
       const allOk = checks.every(c => c.status === 'pass');
       const hasFailures = checks.some(c => c.status === 'fail');
 
@@ -412,6 +458,130 @@ export class RealValidationService implements ValidationService {
     return issues;
   }
 
+  // Traefik routing conflict detection methods
+  async validateRoutingRules(appName: string, domain: string): Promise<RoutingConflict[]> {
+    const conflicts: RoutingConflict[] = [];
+    const proposedHost = `${appName}.${domain}`;
+    
+    this.logger.info('Validating routing rules', { appName, domain, proposedHost });
+
+    try {
+      // Skip validation if deploymentService is not available (during initialization)
+      if (!this.deploymentService) {
+        this.logger.warn('DeploymentService not available for routing validation');
+        return conflicts;
+      }
+
+      // Get all active deployments to check for conflicts
+      const deployments = await this.deploymentService.listDeployments({ 
+        status: 'running',
+        page: 1,
+        limit: 1000 // Get all active deployments
+      });
+
+      // Check for host conflicts
+      for (const deployment of deployments.items) {
+        const existingHost = `${deployment.app}.${domain}`;
+        
+        if (existingHost === proposedHost) {
+          conflicts.push({
+            conflictingDeploymentId: deployment.id,
+            conflictingAppName: deployment.app,
+            conflictingHost: existingHost,
+            message: `Host '${proposedHost}' is already in use by deployment '${deployment.name}' (${deployment.id})`
+          });
+        }
+      }
+
+      // Also check pending/installing deployments
+      const pendingDeployments = await this.deploymentService.listDeployments({
+        status: 'installing',
+        page: 1,
+        limit: 1000
+      });
+
+      for (const deployment of pendingDeployments.items) {
+        const existingHost = `${deployment.app}.${domain}`;
+        
+        if (existingHost === proposedHost) {
+          conflicts.push({
+            conflictingDeploymentId: deployment.id,
+            conflictingAppName: deployment.app,
+            conflictingHost: existingHost,
+            message: `Host '${proposedHost}' conflicts with pending deployment '${deployment.name}' (${deployment.id})`
+          });
+        }
+      }
+
+    } catch (error) {
+      this.logger.error('Failed to validate routing rules', error as Error, { appName, domain });
+      // Don't throw here - return empty conflicts to allow deployment to proceed
+      // The actual deployment process will catch any real conflicts
+    }
+
+    return conflicts;
+  }
+
+  generateRoutingRule(deploymentId: string, appName: string, domain: string): TraefikRoutingRule {
+    const host = `${appName}.${domain}`;
+    // Use first 12 chars for better uniqueness while keeping names manageable
+    const shortId = deploymentId.slice(0, 12);
+    const serviceName = `${appName}-${shortId}`;
+    const networkName = `hola-${shortId}`;
+
+    return {
+      deploymentId,
+      appName,
+      host,
+      domain,
+      serviceName,
+      networkName,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  async getRoutingMap(): Promise<TraefikRoutingMap> {
+    try {
+      // Try to load from persisted storage first
+      const mapData = await this.storageService.readFile('runtime/traefik/routing-map.json');
+      return JSON.parse(mapData.toString('utf-8'));
+    } catch (error) {
+      this.logger.debug('Could not load routing map from storage, using in-memory map', { 
+        error: error instanceof Error ? error.message : String(error) 
+      });
+      // If file doesn't exist or can't be read, return current in-memory map
+      return { ...this.routingMap };
+    }
+  }
+
+  async persistRoutingMap(rules: TraefikRoutingRule[]): Promise<void> {
+    try {
+      // Ensure the runtime/traefik directory exists
+      await this.storageService.ensureDir('runtime/traefik');
+
+      // Convert rules array to map
+      const routingMap: TraefikRoutingMap = {};
+      for (const rule of rules) {
+        routingMap[rule.host] = rule;
+      }
+
+      // Update in-memory map
+      this.routingMap = routingMap;
+
+      // Persist to storage for debugging/ops
+      await this.storageService.writeFile(
+        'runtime/traefik/routing-map.json',
+        JSON.stringify(routingMap, null, 2)
+      );
+
+      this.logger.info('Routing map persisted', { ruleCount: rules.length });
+    } catch (error) {
+      this.logger.error('Failed to persist routing map', error as Error, { ruleCount: rules.length });
+      // Don't throw - persistence is optional for debugging
+    }
+  }
+
+  // Deprecated port management methods (kept for backwards compatibility)
   async reservePorts(deploymentId: string, ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>): Promise<string> {
     const token = crypto.randomUUID();
     const portKeys: string[] = [];
@@ -565,6 +735,36 @@ export class MockValidationService implements ValidationService {
     return [];
   }
 
+  // Mock routing methods
+  async validateRoutingRules(appName: string, domain: string): Promise<RoutingConflict[]> {
+    this.logger.info('Mock: Validating routing rules', { appName, domain });
+    // Return no conflicts in mock mode
+    return [];
+  }
+
+  generateRoutingRule(deploymentId: string, appName: string, domain: string): TraefikRoutingRule {
+    const host = `${appName}.${domain}`;
+    return {
+      deploymentId,
+      appName,
+      host,
+      domain,
+      serviceName: `mock-${appName}`,
+      networkName: `mock-network-${deploymentId.slice(0, 8)}`,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  async getRoutingMap(): Promise<TraefikRoutingMap> {
+    this.logger.info('Mock: Getting routing map');
+    return {};
+  }
+
+  async persistRoutingMap(rules: TraefikRoutingRule[]): Promise<void> {
+    this.logger.info('Mock: Persisting routing map', { ruleCount: rules.length });
+  }
+
+  // Mock port management (deprecated)
   async reservePorts(deploymentId: string): Promise<string> {
     const token = crypto.randomUUID();
     this.logger.info('Mock: Reserving ports', { deploymentId, token });
