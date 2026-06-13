@@ -570,7 +570,57 @@ export * from './docs';
 // ------------------------------------------------------
 
 // Validation report for internal use
-export type ValidationIssue = { field?: string; message: string; code?: string };
+export type ValidationSeverity = 'error' | 'warning';
+
+/**
+ * Stable, machine-readable codes emitted by Compose schema/semantic validation.
+ * These are part of the API contract; clients may branch on them.
+ */
+export type ComposeIssueCode =
+  | 'INVALID_YAML'
+  | 'NO_SERVICES'
+  | 'UNSUPPORTED_KEY'
+  | 'INVALID_SERVICE'
+  | 'INVALID_SERVICE_NAME'
+  | 'IMAGE_AND_BUILD_CONFLICT'
+  | 'MISSING_IMAGE_OR_BUILD'
+  | 'INVALID_IMAGE_REF'
+  | 'IMAGE_MISSING_TAG'
+  | 'INVALID_ENV_FORM'
+  | 'DUPLICATE_ENV_KEY'
+  | 'UNDEFINED_VOLUME'
+  | 'UNDEFINED_NETWORK'
+  | 'UNDEFINED_SECRET'
+  | 'HOST_PORT_NOT_ALLOWED';
+
+/**
+ * Codes emitted by the broader ValidationService (drafts, env, resources).
+ * The trailing `(string & {})` keeps the type open for codes produced by
+ * other validators while preserving autocompletion for the known set.
+ */
+export type ValidationIssueCode =
+  | ComposeIssueCode
+  | 'MISSING_APP_ID'
+  | 'INVALID_PORT_RANGE'
+  | 'INVALID_ENV_KEY'
+  | 'MISSING_SECRET_VALUE'
+  | 'LOW_MEMORY'
+  | 'LOW_CPU'
+  | 'VALIDATION_FAILED'
+  | (string & {});
+
+export type ValidationIssue = {
+  /** Stable machine-readable code (e.g. 'HOST_PORT_NOT_ALLOWED'). */
+  code: ValidationIssueCode;
+  /** Whether this issue blocks (`error`) or is advisory (`warning`). */
+  severity: ValidationSeverity;
+  /** Human-readable description of the problem. */
+  message: string;
+  /** Precise dotted/bracketed path to the offending node, e.g. `services.web.ports[0]`. */
+  path?: string;
+  /** @deprecated Human-facing field label; prefer `path`. Retained for back-compat. */
+  field?: string;
+};
 export type ValidationReport = {
   ok: boolean;
   errors: ValidationIssue[];
