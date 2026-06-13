@@ -455,76 +455,66 @@ export class RealDockerService implements DockerService, HealthCheckable {
 /**
  * Mock Docker service implementation for when Docker is unavailable
  */
+/**
+ * Mock Docker service that simulates a working Docker engine. Used for
+ * development and tests so the deployment lifecycle converges to real terminal
+ * states without an actual Docker daemon. Reports itself as available so the
+ * lifecycle executor exercises the same success/failure paths as production.
+ */
 export class MockDockerService implements DockerService {
   private logger = getLogger().child({ service: 'MockDockerService' });
 
   async getDockerInfo(): Promise<DockerInfo> {
-    this.logger.debug('Mock Docker info requested');
-    return {
-      available: false,
-      error: 'Docker not available (using mock implementation)',
-    };
+    return { available: true, version: 'mock', serverVersion: 'mock', apiVersion: 'mock' };
   }
 
   async checkDockerAvailability(): Promise<boolean> {
-    return false;
+    return true;
   }
 
-  async composeUp(): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose up requested');
-    return {
-      success: false,
-      output: 'Docker not available (using mock implementation)',
-    };
+  async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose up', { projectPath, projectName });
+    return { success: true, output: `[mock] Project ${projectName} created and started` };
   }
 
-  async composeDown(): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose down requested');
-    return {
-      success: false,
-      output: 'Docker not available (using mock implementation)',
-    };
+  async composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose down', { projectPath, projectName });
+    return { success: true, output: `[mock] Project ${projectName} stopped and removed` };
   }
 
-  async composePs(): Promise<ComposeProject> {
-    this.logger.debug('Mock compose ps requested');
+  async composePs(_projectPath: string, projectName: string): Promise<ComposeProject> {
     return {
-      name: 'mock-project',
-      services: [],
+      name: projectName,
+      services: [
+        { name: 'app', state: 'running', status: 'Up (mock)', image: 'mock:latest', ports: [] },
+      ],
       configFiles: [],
     };
   }
 
-  async composeRestart(): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose restart requested');
-    return {
-      success: false,
-      output: 'Docker not available (using mock implementation)',
-    };
+  async composeRestart(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose restart', { projectPath, projectName });
+    return { success: true, output: `[mock] Project ${projectName} restarted` };
   }
 
-  async getContainerLogs(): Promise<DockerLogs> {
-    this.logger.debug('Mock container logs requested');
+  async getContainerLogs(containerName: string): Promise<DockerLogs> {
     return {
-      entries: [],
+      entries: [
+        { timestamp: new Date().toISOString(), service: containerName, level: 'info', message: '[mock] container log line' },
+      ],
       hasMore: false,
     };
   }
 
-  async streamContainerLogs(): Promise<{ stop: () => void }> {
-    this.logger.debug('Mock container log stream requested');
-    return {
-      stop: () => {
-        this.logger.debug('Mock log stream stopped');
-      },
-    };
+  async streamContainerLogs(
+    containerName: string,
+    callback: (log: DockerLogs['entries'][0]) => void
+  ): Promise<{ stop: () => void }> {
+    callback({ timestamp: new Date().toISOString(), service: containerName, level: 'info', message: '[mock] streaming log line' });
+    return { stop: () => {} };
   }
 
   async healthCheck(): Promise<ServiceHealth> {
-    return {
-      healthy: false,
-      lastCheck: new Date(),
-      error: 'Docker not available (using mock implementation)',
-    };
+    return { healthy: true, lastCheck: new Date() };
   }
 }

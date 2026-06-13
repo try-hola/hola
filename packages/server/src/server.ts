@@ -905,50 +905,26 @@ async function route(url: URL, req: Request): Promise<Response> {
   const deploymentLogsStreamMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs\/stream$/);
   if (deploymentLogsStreamMatch && req.method === 'GET') {
     const deploymentId = deploymentLogsStreamMatch[1];
+    const services = getServices();
     const stream = createSSEStream({
       logger,
       onSubscribe(controller) {
-        let i = 0;
-        const services = ['nextcloud', 'postgres', 'redis'];
-  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
-        const messages = ['Starting service', 'Processing request', 'Cache operation', 'Database query'];
         controller.heartbeat();
-        const interval = setInterval(() => {
-          i += 1;
+        // Stream real deployment lifecycle/Compose logs emitted by the deployment service.
+        const sub = services.logging.onLog({ kind: 'deployment', id: deploymentId }, entry => {
           controller.send({
             type: 'log',
             data: {
-              timestamp: new Date().toISOString(),
-              service: services[i % services.length],
-              level: levels[i % levels.length],
-              message: `Deployment ${deploymentId} log entry ${i}: ${messages[i % messages.length]}`,
+              timestamp: entry.timestamp,
+              service: entry.service,
+              level: entry.level,
+              message: entry.message,
             },
           });
-
-          if (i % 15 === 0) {
-            controller.send({
-              type: 'deployment_update',
-              data: {
-                deploymentId,
-                status: 'running',
-                uptime: `${Math.floor(i / 60)}m ${i % 60}s`,
-                lastUpdated: new Date().toISOString(),
-              },
-            });
-          }
-
-          if (i % 30 === 0) {
-            controller.heartbeat();
-          }
-        }, 2000);
-
-        const closer = setTimeout(() => {
-          controller.close();
-        }, 300000);
+        });
 
         return () => {
-          clearInterval(interval);
-          clearTimeout(closer);
+          sub.unsubscribe();
         };
       },
     });

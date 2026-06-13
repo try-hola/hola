@@ -38,10 +38,11 @@ import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
-import type { JobService } from './jobs';
+import type { JobService, JobContext } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts } from './draft';
 import type { RoutingService } from './routing';
+import type { LoggingService } from './logging';
 
 /** Promote a new release built from a finalized draft onto an existing deployment. */
 export interface PromoteRequest {
@@ -678,13 +679,117 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   constructor(
     private storageService: StorageService,
     jobService: JobService,
-    // Reserved for orchestration wiring (issue #15); not yet used directly here.
     private dockerService: DockerService,
     private draftService: DraftService,
-    private routingService: RoutingService
+    private routingService: RoutingService,
+    private loggingService: LoggingService
   ) {
     super(jobService);
-    void this.dockerService;
+    // Perform real Compose lifecycle work when a deployment job runs.
+    this.jobService.setExecutor(ctx => this.runLifecycleJob(ctx));
+  }
+
+  /** Deterministic Compose project name (aligns with the routing network name). */
+  private projectName(deploymentId: string): string {
+    return `hola-${deploymentId.slice(0, 12)}`;
+  }
+
+  /** Absolute working directory that holds the materialized docker-compose.yml. */
+  private runtimeDir(deploymentId: string): string {
+    return this.storageService.resolveHolaPath('deployments', deploymentId, 'runtime');
+  }
+
+  /** Write the active release's compose file into the deployment runtime dir. */
+  private async materializeCompose(deployment: EnhancedDeploymentDetail): Promise<string> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) {
+      throw new Error('No active release to deploy');
+    }
+    const src = `deployments/${deployment.id}/releases/${releaseId}/compose-override.yml`;
+    if (!(await this.storageService.fileExists(src))) {
+      throw new Error('Active release has no compose file');
+    }
+    const content = await this.storageService.readFileAsString(src);
+    await this.storageService.writeFile(`deployments/${deployment.id}/runtime/docker-compose.yml`, content);
+    return this.runtimeDir(deployment.id);
+  }
+
+  private jobTypeToAction(type: Job['type']): string {
+    switch (type) {
+      case 'stop': return 'stop';
+      case 'backup': return 'delete';
+      default: return 'start';
+    }
+  }
+
+  /**
+   * Job executor: run the requested Compose lifecycle operation for a deployment,
+   * stream logs to the job and the deployment, and converge the deployment to a
+   * truthful terminal status. Returns false for non-deployment jobs (simulated
+   * fallback). Throws on Compose failure so the job is marked failed.
+   */
+  private async runLifecycleJob(ctx: JobContext): Promise<boolean> {
+    const deploymentId = ctx.job.deploymentId;
+    if (!deploymentId) return false;
+    await this.ensureLoaded();
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) return false;
+
+    const action = (ctx.payload.action as string | undefined) ?? this.jobTypeToAction(ctx.job.type);
+    const projectName = this.projectName(deploymentId);
+    const logBoth = async (level: 'info' | 'warn' | 'error' | 'debug', message: string) => {
+      await ctx.log(level, message);
+      await this.loggingService.logDeployment(deploymentId, level, message);
+    };
+
+    await logBoth('info', `Starting deployment action: ${action}`);
+    await ctx.setProgress(10);
+
+    try {
+      let output: string;
+      let nextStatus: EnhancedDeploymentDetail['status'];
+      let nextLifecycle: EnhancedDeploymentDetail['lifecycleState'];
+
+      if (action === 'stop' || action === 'delete') {
+        const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName);
+        output = res.output;
+        if (!res.success && action !== 'delete') throw new Error(res.output);
+        nextStatus = 'stopped';
+        nextLifecycle = 'stopped';
+      } else if (action === 'restart') {
+        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment), projectName);
+        output = res.output;
+        if (!res.success) throw new Error(res.output);
+        nextStatus = 'running';
+        nextLifecycle = 'active';
+      } else {
+        // deploy / start / rollback -> compose up
+        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment), projectName);
+        output = res.output;
+        if (!res.success) throw new Error(res.output);
+        nextStatus = 'running';
+        nextLifecycle = 'active';
+      }
+
+      if (output) await logBoth('info', output);
+      await ctx.setProgress(90);
+
+      deployment.status = nextStatus;
+      deployment.lifecycleState = nextLifecycle;
+      deployment.lastUpdated = new Date().toISOString();
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+
+      await logBoth('info', `Deployment action '${action}' completed`);
+      return true;
+    } catch (error) {
+      deployment.status = 'error';
+      deployment.lastUpdated = new Date().toISOString();
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+      await logBoth('error', `Deployment action '${action}' failed: ${error instanceof Error ? error.message : String(error)}`);
+      throw error;
+    }
   }
 
   /** Derive the Traefik routing rule for a deployment's active release. */

@@ -59,11 +59,20 @@ function makeJobs(): JobArg {
     cancelJob: async () => {},
     getJob: async () => null,
     onJobUpdate: () => ({ unsubscribe() {} }),
+    setExecutor: () => {},
     healthCheck: async () => ({ healthy: true, lastCheck: new Date() }),
   } as unknown as JobArg;
 }
 
 const noDocker = {} as unknown as DockerService;
+type LoggingArg = ConstructorParameters<typeof RealDeploymentService>[5];
+const noLogging = {
+  log: async () => {},
+  onLog: () => ({ unsubscribe() {} }),
+  logJob: async () => {},
+  logDeployment: async () => {},
+  healthCheck: async () => ({ healthy: true, lastCheck: new Date() }),
+} as unknown as LoggingArg;
 
 describe('Deployment persistence (real service)', () => {
   let dataRoot: string;
@@ -81,7 +90,7 @@ describe('Deployment persistence (real service)', () => {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
-    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing);
+    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing, noLogging);
     return { storage, drafts, routing, deployments };
   }
 

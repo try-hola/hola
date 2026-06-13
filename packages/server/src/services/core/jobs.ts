@@ -29,12 +29,30 @@ export interface CreateJobParams {
   deploymentId?: string;
 }
 
+/** Context handed to a job executor for logging, progress, and cancellation. */
+export interface JobContext {
+  job: SharedJob;
+  payload: Record<string, unknown>;
+  log(level: 'info' | 'warn' | 'error' | 'debug', message: string, metadata?: Record<string, unknown>): Promise<void>;
+  setProgress(percent: number): Promise<void>;
+  isCancelled(): boolean;
+}
+
+/**
+ * Performs the real work for a job. Returns `true` if it handled the job (so the
+ * service skips the simulated fallback), `false`/`undefined` to fall back.
+ * Throwing marks the job failed.
+ */
+export type JobExecutor = (ctx: JobContext) => Promise<boolean | void>;
+
 export interface JobService extends HealthCheckable {
   createJob(params: CreateJobParams): Promise<SharedJob>;
   cancelJob(id: string): Promise<void>;
   getJob(id: string): Promise<SharedJob | null>;
   listJobs(filter?: { deploymentId?: string; status?: SharedJobStatus }): Promise<SharedJob[]>;
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void };
+  /** Register the executor that performs real work for jobs (e.g. Compose lifecycle). */
+  setExecutor(executor: JobExecutor): void;
 }
 
 function toShared(job: JobEntity): SharedJob {
@@ -62,11 +80,16 @@ export class RealJobService implements JobService {
   private cancelled = new Set<string>();
   private maxRetries = Number(process.env.HOLA_JOBS_MAX_RETRIES || 0);
   private baseBackoffMs = Number(process.env.HOLA_JOBS_BACKOFF_MS || 500);
+  private executor?: JobExecutor;
 
   constructor(db: DatabaseService, logging: LoggingService) {
     this.db = db;
     this.repo = new DatabaseJobRepository(this.db);
     this.logging = logging;
+  }
+
+  setExecutor(executor: JobExecutor): void {
+    this.executor = executor;
   }
 
   private enqueue(id: string) {
@@ -99,7 +122,31 @@ export class RealJobService implements JobService {
       this.bus.emit(id, { id, status: 'running' });
       await this.logging.logJob(id, 'info', 'Job started');
 
-      // Simulated steps with logs and progress
+      // Prefer the registered executor (real work, e.g. Compose lifecycle).
+      if (this.executor) {
+        const entity = await this.repo.findById(id);
+        const ctx: JobContext = {
+          job: toShared(entity!),
+          payload: entity?.payload ?? {},
+          log: (level, message, metadata) => this.logging.logJob(id, level, message, metadata),
+          setProgress: async (percent) => {
+            const p = Math.max(0, Math.min(100, Math.round(percent)));
+            await this.repo.updateProgress(id, p);
+            this.bus.emit(id, { id, status: 'running', progress: p });
+          },
+          isCancelled: () => this.cancelled.has(id),
+        };
+        const handled = await this.executor(ctx);
+        if (handled) {
+          await this.repo.updateStatus(id, 'completed');
+          const finishedAt = new Date().toISOString();
+          this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt });
+          await this.logging.logJob(id, 'info', 'Job completed');
+          return;
+        }
+      }
+
+      // Simulated steps with logs and progress (fallback for unhandled job types)
       const steps = [
         'Initializing task',
         'Preparing environment',
@@ -307,6 +354,10 @@ export class MockJobService implements JobService {
 
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void } {
     return this.bus.on(jobId, listener);
+  }
+
+  setExecutor(): void {
+    // Mock jobs do not run an executor (test mode resolves jobs synthetically).
   }
 
   async healthCheck(): Promise<ServiceHealth> {
