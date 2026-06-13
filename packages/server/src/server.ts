@@ -36,6 +36,7 @@ import {
   type GetSystemStatusResponse,
   type Job,
   type JobStatus,
+  type RollbackRequest,
   type RollbackResponse,
 } from '@hola/shared';
 
@@ -54,17 +55,13 @@ import { getServices, resetServices } from './services/simple-factory';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
-// import { createErrorMappingMiddleware } from './middleware/error-mapping';
+import { mapErrorToResponse } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
 import { createAuthMiddleware } from './middleware/auth';
 
 // Import enhanced mock data
 import {
-  // Deployments
-  getDeployments,
-  getDeploymentHistory,
-  executeDeploymentAction,
   // Catalog (fallback mocks)
   getCatalogApps,
   getCatalogAppById,
@@ -167,6 +164,15 @@ function json(data: unknown, init?: ResponseInit) {
 
 function notFound() {
   return json({ error: { code: 'NOT_FOUND', message: 'Not Found' } }, { status: 404 });
+}
+
+// Centralized error -> HTTP mapping for service-backed routes. Typed service
+// errors (NotFoundError, ValidationError, ConflictError, ...) map to consistent
+// status codes and response bodies; CORS headers are applied by handleRequest.
+function errorResponse(req: Request, error: unknown) {
+  const requestId = getRequestContext(req)?.requestId;
+  const { status, body } = mapErrorToResponse(error, requestId);
+  return json(body, { status });
 }
 
 function withCors(res: Response) {
@@ -740,45 +746,74 @@ async function route(url: URL, req: Request): Promise<Response> {
 
 
   // Deployments
+  // All deployment routes are served by the single authoritative DeploymentService
+  // (selected per-environment in the service factory). Errors are mapped centrally
+  // via errorResponse() so unknown deployments fail uniformly with a typed 404.
   if (pathname === API.deployments.base && req.method === 'GET') {
     const page = Number(searchParams.get('page')) || 1;
     const limit = Number(searchParams.get('limit')) || 12;
     const q = searchParams.get('q') || undefined;
     const statusParam = searchParams.get('status') || 'all';
-    
-    const payload: GetDeploymentsResponse = getDeployments({ 
-      page, 
-      limit, 
-      q, 
-      status: statusParam === 'all' ? 'all' : statusParam as 'running' | 'stopped' | 'installing' | 'updating' | 'error'
-    });
-    return json(payload);
+
+    try {
+      const services = getServices();
+      const payload: GetDeploymentsResponse = await services.deployments.listDeployments({
+        page,
+        limit,
+        q,
+        status: statusParam === 'all' ? 'all' : statusParam as 'running' | 'stopped' | 'installing' | 'updating' | 'error',
+      });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   if (pathname === API.deployments.base && req.method === 'POST') {
     // create from draft
-    const body = await req.json().catch(() => ({}));
-    const services = getServices();
-    const payload = await services.deployments.createFromDraft(body);
-    return json(payload);
+    try {
+      const body = await req.json().catch(() => ({}));
+      const services = getServices();
+      const payload = await services.deployments.createFromDraft(body);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
-    const services = getServices();
     try {
+      const services = getServices();
       const payload = await services.deployments.getDeployment(id);
       return json(payload);
-    } catch {
-      return notFound();
+    } catch (err) {
+      return errorResponse(req, err);
     }
   }
 
   if (deploymentMatch && req.method === 'PATCH') {
-    await req.json().catch(() => ({})) as PatchDeploymentRequest;
-    const payload: PatchDeploymentResponse = { ok: true };
-    return json(payload);
+    const id = deploymentMatch[1];
+    try {
+      const body = (await req.json().catch(() => ({}))) as PatchDeploymentRequest;
+      const services = getServices();
+      const payload: PatchDeploymentResponse = await services.deployments.updateDeployment(id, body);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  if (deploymentMatch && req.method === 'DELETE') {
+    const id = deploymentMatch[1];
+    try {
+      const services = getServices();
+      await services.deployments.deleteDeployment(id);
+      return json({ ok: true });
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   const deploymentActionsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/actions$/);
@@ -786,37 +821,32 @@ async function route(url: URL, req: Request): Promise<Response> {
     const deploymentId = deploymentActionsMatch[1];
     const body = (await req.json().catch(() => ({}))) as Partial<PostDeploymentActionRequest>;
     const action = body.action;
-    
+
     if (!action || !['start', 'stop', 'restart', 'delete'].includes(action)) {
       return json({ error: { code: 'INVALID_ACTION', message: 'Invalid action' } }, { status: 400 });
     }
-    
+
     try {
-      // Phase 5: create a real job via JobService when enabled
       const services = getServices();
-      // Map deployment actions to job types
-      const jobType = action === 'delete' ? 'backup' : (action as 'start' | 'stop' | 'restart');
-      const job = await services.jobs.createJob({ type: jobType, deploymentId });
-      return json({ ok: true, jobId: job.id } satisfies PostDeploymentActionResponse);
-    } catch {
-      // Fallback to mock behavior
-      const payload: PostDeploymentActionResponse = executeDeploymentAction(deploymentId, action);
+      const payload: PostDeploymentActionResponse = await services.deployments.executeAction(deploymentId, { action });
       return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
     }
   }
 
   // Deployment rollback
   const deploymentRollbackMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/rollback$/);
   if (deploymentRollbackMatch && req.method === 'POST') {
-    // const deploymentId = deploymentRollbackMatch[1]; // not needed for mock response
-    // Accept optional targetReleaseId but ignore in mock
-    await req.json().catch(() => ({}));
-    const payload: RollbackResponse = {
-      jobId: crypto.randomUUID(),
-      targetReleaseId: 'previous-release',
-      previousReleaseId: 'older-release'
-    };
-    return json(payload);
+    const deploymentId = deploymentRollbackMatch[1];
+    try {
+      const body = (await req.json().catch(() => ({}))) as RollbackRequest;
+      const services = getServices();
+      const payload: RollbackResponse = await services.deployments.rollback(deploymentId, body);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   const deploymentHistoryMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/history$/);
@@ -824,12 +854,14 @@ async function route(url: URL, req: Request): Promise<Response> {
     const deploymentId = deploymentHistoryMatch[1];
     const page = Number(searchParams.get('page')) || 1;
     const limit = Number(searchParams.get('limit')) || 10;
-    
-    const payload = getDeploymentHistory(deploymentId, { page, limit });
-    if (!payload) {
-      return notFound();
+
+    try {
+      const services = getServices();
+      const payload = await services.deployments.getDeploymentHistory(deploymentId, { page, limit });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
     }
-    return json(payload);
   }
 
   // Logs SSE (deployment)

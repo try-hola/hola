@@ -58,7 +58,10 @@ export function createServices(env: ServiceEnvironment): Services {
     // All mock services for reliable testing
     const storage = new MockStorageService();
     const database = new MockDatabaseService();
-    
+    // Share the jobs service so deployment history reflects jobs created by
+    // create/action/rollback (the deployment service is the single owner).
+    const jobs = new MockJobService();
+
     return {
       storage,
       config: new MockConfigService(),
@@ -68,12 +71,12 @@ export function createServices(env: ServiceEnvironment): Services {
       docker: new MockDockerService(),
       systemMonitoring: new MockSystemMonitoringService(),
       logging: new MockLoggingService(),
-      jobs: new MockJobService(),
+      jobs,
       catalog: new MockCatalogService(),
       bundles: new MockBundleService(),
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
-      deployments: new MockDeploymentService(),
+      deployments: new MockDeploymentService(jobs),
     };
   }
   
