@@ -41,6 +41,7 @@ import type { StorageService } from './storage';
 import type { JobService } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts } from './draft';
+import type { RoutingService } from './routing';
 
 /** Promote a new release built from a finalized draft onto an existing deployment. */
 export interface PromoteRequest {
@@ -291,6 +292,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void releaseId;
   }
 
+  /** Validate routing (host) availability before creating a deployment. Default no-op. */
+  protected async onBeforeCreate(deploymentId: string, app: string): Promise<void> {
+    void deploymentId;
+    void app;
+  }
+
+  /** Routing cleanup when a deployment is removed (issue #16). Default no-op. */
+  protected async onDeploymentRemoved(deploymentId: string): Promise<void> {
+    void deploymentId;
+  }
+
   /** Load the finalized artifacts for a draft. Default null (mock has no draft store). */
   protected async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {
     void draftId;
@@ -379,6 +391,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // fails before any deployment directory or record is created (no partial state).
       const artifacts = await this.loadFinalizedArtifacts(request.draftId);
       const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+
+      // Reject a routing (host) conflict before creating any deployment state.
+      await this.onBeforeCreate(deploymentId, app);
 
       await this.ensureLayout(deploymentId);
 
@@ -526,6 +541,8 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+
+    await this.onDeploymentRemoved(deploymentId);
   }
 
   async executeAction(deploymentId: string, request: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse> {
@@ -663,10 +680,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     jobService: JobService,
     // Reserved for orchestration wiring (issue #15); not yet used directly here.
     private dockerService: DockerService,
-    private draftService: DraftService
+    private draftService: DraftService,
+    private routingService: RoutingService
   ) {
     super(jobService);
     void this.dockerService;
+  }
+
+  /** Derive the Traefik routing rule for a deployment's active release. */
+  private routingRuleFor(deployment: EnhancedDeploymentDetail): ReturnType<RoutingService['generateRule']> {
+    const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
+    const port = release?.ports?.[0]?.container;
+    return this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, port });
   }
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -731,7 +756,31 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       }
     }
 
+    // Rebuild Traefik routing from the persisted active deployments.
+    const rules = Array.from(this.deployments.values())
+      .filter(d => d.currentReleaseId)
+      .map(d => this.routingRuleFor(d));
+    await this.routingService.reconcile(rules);
+
     this.logger.info('Rehydrated deployments from storage', { count: this.deployments.size });
+  }
+
+  protected override async onBeforeCreate(deploymentId: string, app: string): Promise<void> {
+    const rule = this.routingService.generateRule({ deploymentId, appName: app });
+    const conflicts = await this.routingService.validateRule(rule);
+    if (conflicts.length > 0) {
+      throw new ConflictError(conflicts.map(c => c.message).join('; '));
+    }
+  }
+
+  protected override async onActiveReleaseChanged(deploymentId: string): Promise<void> {
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) return;
+    await this.routingService.activateRoute(this.routingRuleFor(deployment));
+  }
+
+  protected override async onDeploymentRemoved(deploymentId: string): Promise<void> {
+    await this.routingService.deactivateRoute(deploymentId);
   }
 
   protected override async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {

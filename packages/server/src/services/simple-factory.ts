@@ -20,6 +20,7 @@ import { RealCatalogService, MockCatalogService, type CatalogService } from './c
 import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
 import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
+import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
 import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
 
 /**
@@ -39,6 +40,7 @@ export interface Services {
   bundles: BundleService;
   drafts: DraftService;
   validation: ValidationService;
+  routing: RoutingService;
   deployments: DeploymentService;
 }
 
@@ -76,6 +78,7 @@ export function createServices(env: ServiceEnvironment): Services {
       bundles: new MockBundleService(),
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
+      routing: new MockRoutingService(),
       deployments: new MockDeploymentService(jobs),
     };
   }
@@ -96,8 +99,11 @@ export function createServices(env: ServiceEnvironment): Services {
     
     const catalog = new RealCatalogService();
     
+    // Shared routing service owns Traefik rule generation/validation/emission.
+    const routing = new RealRoutingService(storage);
+
     // Create shared validation service instance to avoid duplication
-    const validation = new RealValidationService(docker, systemMonitoring, storage);
+    const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
 
     // Shared draft service: the deployment service builds releases from its finalized artifacts.
     const drafts = new RealDraftService(storage, catalog, validation);
@@ -116,7 +122,8 @@ export function createServices(env: ServiceEnvironment): Services {
       bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
       drafts,
       validation,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts),
+      routing,
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing),
     };
   }
   
@@ -139,8 +146,11 @@ export function createServices(env: ServiceEnvironment): Services {
   const apiKeyProvider = new ApiKeyAuthProvider();
   authService.registerProvider(apiKeyProvider);
   
+  // Shared routing service owns Traefik rule generation/validation/emission.
+  const routing = new RealRoutingService(storage);
+
   // Create shared validation service instance to avoid duplication
-  const validation = new RealValidationService(docker, systemMonitoring, storage);
+  const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
 
   // Shared draft service: the deployment service builds releases from its finalized artifacts.
   const drafts = new RealDraftService(storage, catalog, validation);
@@ -159,7 +169,8 @@ export function createServices(env: ServiceEnvironment): Services {
     bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
     drafts,
     validation,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts),
+    routing,
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing),
   };
 }
 
