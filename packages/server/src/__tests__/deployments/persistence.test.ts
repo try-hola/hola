@@ -1,0 +1,211 @@
+/**
+ * Deployment Persistence Tests (real service)
+ *
+ * Verifies that RealDeploymentService is durable and that promotion/rollback are
+ * atomic: releases are built from finalized draft artifacts (#11), deployments,
+ * releases, and the active-release pointer survive a simulated restart (a fresh
+ * service over the same data root), rollback atomically switches the active
+ * release, a failed promotion leaves the previous release active, and unknown /
+ * unfinalized inputs fail with typed errors. Uses a temporary data root so the
+ * suite passes without a writable home directory.
+ */
+
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mkdtemp, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+import { RealDeploymentService } from '../../services/core/deployment';
+import { RealDraftService } from '../../services/core/draft';
+import { RealStorageService } from '../../services/core/storage';
+import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
+import type { DockerService } from '../../services/core/docker';
+
+type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
+type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
+type JobArg = ConstructorParameters<typeof RealDeploymentService>[1];
+
+function makeCatalog(): CatalogArg {
+  return {
+    getApp: async (appId: string) => ({ id: appId, name: 'Test App', icon: '📦' }),
+    getVersionDetail: async () => ({
+      defaultEnv: [{ key: 'APP_PORT', value: '3000', isSecret: false, description: 'port' }],
+      defaults: {
+        ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }],
+        volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
+      },
+    }),
+  } as unknown as CatalogArg;
+}
+
+function makeValidation(): ValidationArg {
+  return {
+    validateDraft: async () => ({ ok: true, errors: [], warnings: [] }),
+    preflightCheck: async () => ({ ok: true, checks: [] }),
+  } as unknown as ValidationArg;
+}
+
+/** Minimal in-memory job service (avoids MockJobService's progress timers). */
+function makeJobs(): JobArg {
+  const jobs: Array<{ id: string; type: string; status: string; startedAt: string; deploymentId?: string }> = [];
+  return {
+    createJob: async (p: { type: string; deploymentId?: string }) => {
+      const job = { id: crypto.randomUUID(), type: p.type, status: 'queued', startedAt: new Date().toISOString(), deploymentId: p.deploymentId };
+      jobs.push(job);
+      return job;
+    },
+    listJobs: async (f?: { deploymentId?: string }) => jobs.filter(j => !f?.deploymentId || j.deploymentId === f.deploymentId),
+    cancelJob: async () => {},
+    getJob: async () => null,
+    onJobUpdate: () => ({ unsubscribe() {} }),
+    healthCheck: async () => ({ healthy: true, lastCheck: new Date() }),
+  } as unknown as JobArg;
+}
+
+const noDocker = {} as unknown as DockerService;
+
+describe('Deployment persistence (real service)', () => {
+  let dataRoot: string;
+
+  beforeEach(async () => {
+    dataRoot = await mkdtemp(join(tmpdir(), 'hola-deploy-'));
+  });
+
+  afterEach(async () => {
+    await rm(dataRoot, { recursive: true, force: true });
+  });
+
+  /** A fresh service set over the same data root simulates a restart. */
+  function makeSystem() {
+    const storage = new RealStorageService({ holaDir: dataRoot });
+    const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
+    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts);
+    return { storage, drafts, deployments };
+  }
+
+  async function finalizedDraft(drafts: RealDraftService, compose?: string): Promise<string> {
+    const { draftId } = await drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    if (compose) {
+      await drafts.updateDraft(draftId, { composeOverride: compose });
+    }
+    await drafts.finalizeDraft(draftId);
+    return draftId;
+  }
+
+  test('promotes a finalized draft into a deployment with a persisted active release', async () => {
+    const { storage, drafts, deployments } = makeSystem();
+    const draftId = await finalizedDraft(drafts, 'services:\n  gitea:\n    image: gitea/gitea\n');
+
+    const created = await deployments.createFromDraft({ draftId, name: 'gitea', options: { autoStart: false } });
+    expect(created.releaseId).toBeDefined();
+
+    // Built from the manifest (app/version), not fabricated.
+    const detail = await deployments.getDeployment(created.deploymentId);
+    expect(detail.app).toBe('gitea');
+    expect(detail.version).toBe('1.0.0');
+
+    // Durable: immutable release dir, staged compose, and the current pointer.
+    expect(await storage.fileExists(`deployments/${created.deploymentId}/releases/${created.releaseId}/metadata.json`)).toBe(true);
+    expect(await storage.fileExists(`deployments/${created.deploymentId}/releases/${created.releaseId}/compose-override.yml`)).toBe(true);
+    expect(await storage.readFileAsString(`deployments/${created.deploymentId}/current`)).toBe(created.releaseId);
+
+    const releases = await deployments.getReleases(created.deploymentId);
+    expect(releases).toHaveLength(1);
+    expect(releases[0].status).toBe('active');
+  });
+
+  test('deployment, releases, and active pointer survive a restart', async () => {
+    const a = makeSystem();
+    const draftId = await finalizedDraft(a.drafts);
+    const created = await a.deployments.createFromDraft({ draftId, name: 'gitea', options: { autoStart: false } });
+
+    // Restart.
+    const b = makeSystem();
+    const list = await b.deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items.some(d => d.id === created.deploymentId)).toBe(true);
+
+    const detail = await b.deployments.getDeployment(created.deploymentId);
+    expect(detail.id).toBe(created.deploymentId);
+
+    const releases = await b.deployments.getReleases(created.deploymentId);
+    expect(releases.find(r => r.id === created.releaseId)?.status).toBe('active');
+  });
+
+  test('re-deploy then rollback atomically switches the active release and survives restart', async () => {
+    const a = makeSystem();
+    const draftA = await finalizedDraft(a.drafts, 'services:\n  gitea:\n    image: gitea:a\n');
+    const dep = await a.deployments.createFromDraft({ draftId: draftA, name: 'gitea', options: { autoStart: false } });
+    const release1 = dep.releaseId;
+
+    // Promote a second release onto the same deployment.
+    const draftB = await finalizedDraft(a.drafts, 'services:\n  gitea:\n    image: gitea:b\n');
+    const promoted = await a.deployments.promote(dep.deploymentId, { draftId: draftB, options: { autoStart: false } });
+    const release2 = promoted.releaseId;
+
+    expect(await a.storage.readFileAsString(`deployments/${dep.deploymentId}/current`)).toBe(release2);
+    let releases = await a.deployments.getReleases(dep.deploymentId);
+    expect(releases.find(r => r.id === release2)?.status).toBe('active');
+    expect(releases.find(r => r.id === release1)?.status).toBe('stopped');
+
+    // Roll back to the first release.
+    const rollback = await a.deployments.rollback(dep.deploymentId, { targetReleaseId: release1 });
+    expect(rollback.targetReleaseId).toBe(release1);
+    expect(rollback.previousReleaseId).toBe(release2);
+    expect(await a.storage.readFileAsString(`deployments/${dep.deploymentId}/current`)).toBe(release1);
+
+    releases = await a.deployments.getReleases(dep.deploymentId);
+    expect(releases.find(r => r.id === release1)?.status).toBe('active');
+    expect(releases.find(r => r.id === release2)?.status).toBe('stopped');
+
+    // Restart: the rolled-back pointer is rehydrated.
+    const b = makeSystem();
+    const after = await b.deployments.getReleases(dep.deploymentId);
+    expect(after.find(r => r.id === release1)?.status).toBe('active');
+    expect(await b.storage.readFileAsString(`deployments/${dep.deploymentId}/current`)).toBe(release1);
+  });
+
+  test('default rollback (no target) returns to the previous release', async () => {
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });
+    const release1 = dep.releaseId;
+    const promoted = await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts), options: { autoStart: false } });
+
+    const rollback = await deployments.rollback(dep.deploymentId, {});
+    expect(rollback.targetReleaseId).toBe(release1);
+    expect(rollback.previousReleaseId).toBe(promoted.releaseId);
+  });
+
+  test('a failed promotion leaves the previous release active', async () => {
+    const { storage, drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });
+    const release1 = dep.releaseId;
+
+    // Promote from a draft that was never finalized -> should throw before any switch.
+    const { draftId: unfinalized } = await drafts.createDraft({ appId: 'gitea' });
+    await expect(deployments.promote(dep.deploymentId, { draftId: unfinalized })).rejects.toBeInstanceOf(ConflictError);
+
+    // The active release and pointer are unchanged.
+    expect(await storage.readFileAsString(`deployments/${dep.deploymentId}/current`)).toBe(release1);
+    const releases = await deployments.getReleases(dep.deploymentId);
+    expect(releases).toHaveLength(1);
+    expect(releases[0].status).toBe('active');
+  });
+
+  test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });
+
+    await expect(deployments.getRelease(dep.deploymentId, 'bogus')).rejects.toBeInstanceOf(NotFoundError);
+    await expect(deployments.rollback(dep.deploymentId, { targetReleaseId: 'bogus' })).rejects.toBeInstanceOf(NotFoundError);
+
+    // Only the current release exists -> nothing to roll back to.
+    await expect(deployments.rollback(dep.deploymentId, {})).rejects.toBeInstanceOf(ConflictError);
+
+    // Creating from a non-finalized draft fails and leaves no deployment behind.
+    const { draftId: unfinalized } = await drafts.createDraft({ appId: 'gitea' });
+    await expect(deployments.createFromDraft({ draftId: unfinalized })).rejects.toBeInstanceOf(ConflictError);
+
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items).toHaveLength(1); // only the one valid deployment
+  });
+});
