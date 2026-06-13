@@ -1,5 +1,7 @@
 import {
   API,
+  AUTH_API,
+  type GetAuthMeResponse,
   type HealthResponse,
   type HelloResponse,
   type GetMeResponse,
@@ -58,7 +60,7 @@ import { createSSEStream, createSSEHeaders } from './utils/sse';
 import { mapErrorToResponse } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
-import { createAuthMiddleware } from './middleware/auth';
+import { createAuthMiddleware, getPrincipal } from './middleware/auth';
 
 // Import enhanced mock data
 import {
@@ -303,6 +305,17 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (pathname === API.me && req.method === 'GET') {
     const me = getIdentity(req);
     if (!me) return json({ error: { code: 'UNAUTHENTICATED', message: 'No identity' } }, { status: 401 });
+    return json(me);
+  }
+
+  // Current authenticated principal (resolved by the auth middleware).
+  if (pathname === AUTH_API.me && req.method === 'GET') {
+    const principal = getPrincipal(req);
+    if (principal) {
+      return json(principal as GetAuthMeResponse);
+    }
+    const me = getIdentity(req);
+    if (!me) return json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, { status: 401 });
     return json(me);
   }
 
