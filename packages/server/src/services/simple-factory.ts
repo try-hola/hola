@@ -123,7 +123,7 @@ export function createServices(env: ServiceEnvironment): Services {
       drafts,
       validation,
       routing,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing),
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging),
     };
   }
   
@@ -170,7 +170,7 @@ export function createServices(env: ServiceEnvironment): Services {
     drafts,
     validation,
     routing,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging),
   };
 }
 
