@@ -16,6 +16,7 @@
     "test:web:watch": "cd packages/web && npx vitest",
     "test:server": "bun --cwd packages/server test",
     "test:server:watch": "bun --cwd packages/server test --watch",
+    "test:integration": "bun --cwd packages/server test:integration",
     "test:env:setup": "docker-compose -f packages/server/test-docker-compose.yml up -d",
     "test:env:teardown": "docker-compose -f packages/server/test-docker-compose.yml down -v",
     "test:env:integration": "bun run test:env:setup && bun run test && bun run test:env:teardown",
