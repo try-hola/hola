@@ -25,7 +25,8 @@ import type {
 import { createHash } from 'crypto';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
+import { validateComposeDocument } from '@hola/shared/compose-validate';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
@@ -135,6 +136,20 @@ interface DraftRecord {
   fileChecksums: Record<string, string>;
   /** Per-upload target deployment paths, keyed by uploadId (not part of the wire Draft). */
   filePaths: Record<string, string>;
+}
+
+/**
+ * Reject a Compose override that cannot be parsed as YAML at ingestion time so
+ * malformed input fails fast with a 400. Semantic issues (undefined volumes,
+ * host ports, etc.) are NOT rejected here — they surface through the `/validate`
+ * endpoint so the wizard can display them inline while the user iterates.
+ */
+function assertComposeParses(content: string, source: string): void {
+  if (!content || !content.trim()) return;
+  const parseErrors = validateComposeDocument(content).filter((i) => i.code === 'INVALID_YAML');
+  if (parseErrors.length > 0) {
+    throw new ValidationError(`Invalid compose YAML in ${source}`, { issues: parseErrors });
+  }
 }
 
 export class RealDraftService implements DraftService {
@@ -347,6 +362,11 @@ export class RealDraftService implements DraftService {
     // Avoid logging secret env values; log which fields changed instead.
     this.logger.info('Updating draft', { draftId, fields: Object.keys(patch) });
 
+    // Fail fast on unparseable compose overrides set via PATCH (#13).
+    if (typeof patch.composeOverride === 'string') {
+      assertComposeParses(patch.composeOverride, 'composeOverride');
+    }
+
     // Apply patch (preserve file metadata managed by upload/delete).
     record.draft = { ...record.draft, ...patch };
     record.updatedAt = new Date().toISOString();
@@ -383,6 +403,11 @@ export class RealDraftService implements DraftService {
   ): Promise<UploadDraftFileResponse> {
     await this.ensureLoaded();
     const record = this.requireRecord(draftId);
+
+    // Fail fast on unparseable compose overrides (#13).
+    if (file.kind === 'composeOverride') {
+      assertComposeParses(file.content.toString('utf-8'), file.name);
+    }
 
     const uploadId = crypto.randomUUID();
     this.logger.info('Uploading file to draft', { draftId, uploadId, fileName: file.name, kind: file.kind, size: file.content.length });

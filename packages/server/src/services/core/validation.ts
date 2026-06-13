@@ -24,7 +24,20 @@ import type { SystemMonitoringService } from './system-monitoring';
 import type { RoutingService } from './routing';
 import type { StorageService } from './storage';
 import { parse as parseYAML } from 'yaml';
+import { validateComposeDocument } from '@hola/shared/compose-validate';
 import type { ComposeFile, ComposeService } from './compose-parser';
+
+/**
+ * Prefix Compose-internal field paths (e.g. `services.web.ports[0]`) with the
+ * source they came from within the draft (`composeOverride` or `files.<id>`),
+ * so clients can locate the offending input precisely.
+ */
+function remapComposePath(issues: ValidationIssue[], source: string): ValidationIssue[] {
+  return issues.map((issue) => {
+    const path = issue.path ? `${source}.${issue.path}` : source;
+    return { ...issue, path, field: path };
+  });
+}
 
 export interface ValidationService extends HealthCheckable {
   // Draft validation
@@ -72,54 +85,40 @@ export class RealValidationService implements ValidationService {
     const errors: ValidationIssue[] = [];
     const warnings: ValidationIssue[] = [];
 
+    const partition = (issues: ValidationIssue[]) => {
+      for (const issue of issues) {
+        if (issue.severity === 'error') errors.push(issue);
+        else warnings.push(issue);
+      }
+    };
+
     try {
       // Validate required fields
       if (!draft.appId) {
-        errors.push({ field: 'appId', message: 'Application ID is required' });
+        errors.push({ code: 'MISSING_APP_ID', severity: 'error', field: 'appId', path: 'appId', message: 'Application ID is required' });
       }
 
       // Validate environment variables
-      const envIssues = await this.validateEnvironment(draft.appEnv);
-      errors.push(...envIssues.filter(i => i.code === 'ERROR'));
-      warnings.push(...envIssues.filter(i => i.code === 'WARNING'));
+      partition(await this.validateEnvironment(draft.appEnv));
 
       // Validate ports
-      const portIssues = await this.validatePorts(draft.ports);
-      errors.push(...portIssues.filter(i => i.code === 'ERROR'));
-      warnings.push(...portIssues.filter(i => i.code === 'WARNING'));
+      partition(await this.validatePorts(draft.ports));
 
-      // Validate compose override if present
+      // Strict Compose schema + semantic validation of the override (#13).
       if (draft.composeOverride) {
-        try {
-          // Inline compose validation (simplified)
-          const composeData = parseYAML(draft.composeOverride) as ComposeFile;
-          if (!composeData.services || Object.keys(composeData.services).length === 0) {
-            warnings.push({ 
-              field: 'composeOverride', 
-              message: 'Compose file has no services defined' 
-            });
-          }
-        } catch (error) {
-          errors.push({ 
-            field: 'composeOverride', 
-            message: `Invalid compose override: ${error instanceof Error ? error.message : 'Unknown error'}` 
-          });
-        }
+        partition(
+          remapComposePath(validateComposeDocument(draft.composeOverride), 'composeOverride'),
+        );
       }
 
-      // Validate uploaded files
+      // Validate uploaded compose files with the same strict validator.
       if (files) {
         for (const [uploadId, file] of files) {
           if (file.kind === 'composeOverride' && file.content) {
-            try {
-              const composeContent = file.content.toString('utf-8');
-              parseYAML(composeContent) as ComposeFile;
-            } catch (error) {
-              errors.push({
-                field: `files.${uploadId}`,
-                message: `Invalid compose file: ${error instanceof Error ? error.message : 'Parse error'}`,
-              });
-            }
+            const composeContent = file.content.toString('utf-8');
+            partition(
+              remapComposePath(validateComposeDocument(composeContent), `files.${uploadId}`),
+            );
           }
         }
       }
@@ -133,7 +132,7 @@ export class RealValidationService implements ValidationService {
       this.logger.error('Draft validation failed', error as Error, { draftId: draft.draftId });
       return {
         ok: false,
-        errors: [{ message: error instanceof Error ? error.message : 'Validation failed' }],
+        errors: [{ code: 'VALIDATION_FAILED', severity: 'error', message: error instanceof Error ? error.message : 'Validation failed' }],
         warnings,
       };
     }
@@ -190,7 +189,7 @@ export class RealValidationService implements ValidationService {
       // Validate port definitions (no host-port reservation; ingress is Traefik-only).
       if (draft.ports.length > 0) {
         const portIssues = await this.validatePorts(draft.ports);
-        if (portIssues.some(i => i.code === 'ERROR')) {
+        if (portIssues.some(i => i.severity === 'error')) {
           checks.push({
             name: 'ports',
             type: 'ports',
@@ -218,7 +217,7 @@ export class RealValidationService implements ValidationService {
           detail: 'Environment variables are valid',
         });
       } else {
-        const hasErrors = envIssues.some(i => i.code === 'ERROR');
+        const hasErrors = envIssues.some(i => i.severity === 'error');
         checks.push({
           name: 'env',
           type: 'env',
@@ -306,34 +305,16 @@ export class RealValidationService implements ValidationService {
     const issues: ValidationIssue[] = [];
 
     for (const port of ports) {
-      const hostPort = port.host;
-      if (hostPort) {
-        // Check port range
-        if (hostPort < 1 || hostPort > 65535) {
-          issues.push({
-            field: 'ports',
-            message: `Port ${hostPort} is outside valid range (1-65535)`,
-            code: 'ERROR',
-          });
-          continue;
-        }
-
-        // Check for well-known ports
-        if (hostPort < 1024) {
-          issues.push({
-            field: 'ports',
-            message: `Port ${hostPort} is a privileged port and may require root access`,
-            code: 'WARNING',
-          });
-        }
-      }
-
-      // Validate container port
+      // Host-port publishing is unsupported (Traefik-only ingress); the strict
+      // Compose validator rejects `ports:` entries. Here we only sanity-check
+      // the container port range for declared port intents.
       if (port.container < 1 || port.container > 65535) {
         issues.push({
+          code: 'INVALID_PORT_RANGE',
+          severity: 'error',
           field: 'ports',
+          path: 'ports',
           message: `Container port ${port.container} is outside valid range (1-65535)`,
-          code: 'ERROR',
         });
       }
     }
@@ -351,8 +332,9 @@ export class RealValidationService implements ValidationService {
           // For now, just validate the image name format
           if (!image.includes(':')) {
             issues.push({
+              code: 'IMAGE_MISSING_TAG',
+              severity: 'warning',
               message: `Image '${image}' should include a tag (e.g., '${image}:latest')`,
-              code: 'WARNING',
             });
           }
         } catch {
@@ -361,8 +343,9 @@ export class RealValidationService implements ValidationService {
       }
     } catch (error) {
       issues.push({
+        code: 'IMAGE_MISSING_TAG',
+        severity: 'warning',
         message: `Could not validate images: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        code: 'WARNING',
       });
     }
 
@@ -376,18 +359,22 @@ export class RealValidationService implements ValidationService {
       // Check for empty required variables
       if (!envVar.value && envVar.isSecret) {
         issues.push({
+          code: 'MISSING_SECRET_VALUE',
+          severity: 'error',
           field: `env.${envVar.key}`,
+          path: `env.${envVar.key}`,
           message: `Secret environment variable '${envVar.key}' is required but empty`,
-          code: 'ERROR',
         });
       }
 
       // Check for invalid characters in keys
       if (!envVar.key.match(/^[A-Z_][A-Z0-9_]*$/)) {
         issues.push({
+          code: 'INVALID_ENV_KEY',
+          severity: 'warning',
           field: `env.${envVar.key}`,
+          path: `env.${envVar.key}`,
           message: `Environment variable name '${envVar.key}' should use uppercase letters, numbers, and underscores`,
-          code: 'WARNING',
         });
       }
     }
@@ -401,15 +388,17 @@ export class RealValidationService implements ValidationService {
     if (limits) {
       if (limits.memoryBytes && limits.memoryBytes < 64 * 1024 * 1024) { // 64MB minimum
         issues.push({
+          code: 'LOW_MEMORY',
+          severity: 'warning',
           message: 'Memory limit is very low (< 64MB) and may cause container crashes',
-          code: 'WARNING',
         });
       }
 
       if (limits.cpuShares && limits.cpuShares < 256) {
         issues.push({
+          code: 'LOW_CPU',
+          severity: 'warning',
           message: 'CPU shares are very low and may impact performance',
-          code: 'WARNING',
         });
       }
     }
@@ -480,7 +469,7 @@ export class MockValidationService implements ValidationService {
       ok: true,
       errors: [],
       warnings: [
-        { field: 'ports', message: 'Mock validation - ports may conflict' },
+        { code: 'IMAGE_MISSING_TAG', severity: 'warning', field: 'ports', message: 'Mock validation - ports may conflict' },
       ],
     };
   }

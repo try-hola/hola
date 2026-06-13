@@ -7,11 +7,18 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./compose-validate": {
+      "types": "./src/compose-validate.ts",
+      "default": "./src/compose-validate.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "lint": "bunx --bun eslint ."
+  },
+  "dependencies": {
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "typescript": "^6.0.3",
