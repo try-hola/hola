@@ -1,0 +1,21 @@
+# Gitea bundle for Hola — your first self-hosted app.
+#
+# Deploy with:  hola bundle deploy --path examples/bundles/gitea --app-id gitea
+#
+# No host ports are published: Hola/Traefik route to the container's port 3000
+# at gitea.<HOLA_BASE_DOMAIN>. Set GITEA__server__ROOT_URL to that host.
+services:
+  gitea:
+    image: gitea/gitea:1.22
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__server__HTTP_PORT=3000
+      - GITEA__server__ROOT_URL=https://gitea.local.hola/
+      - GITEA__server__DISABLE_SSH=false
+    volumes:
+      - gitea-data:/data
+
+volumes:
+  gitea-data:
