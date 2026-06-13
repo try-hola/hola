@@ -18,6 +18,7 @@ import { join } from 'path';
 import { RealDeploymentService } from '../../services/core/deployment';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
+import { RealRoutingService } from '../../services/core/routing';
 import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
 import type { DockerService } from '../../services/core/docker';
 
@@ -79,8 +80,9 @@ describe('Deployment persistence (real service)', () => {
   function makeSystem() {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
-    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts);
-    return { storage, drafts, deployments };
+    const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
+    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing);
+    return { storage, drafts, routing, deployments };
   }
 
   async function finalizedDraft(drafts: RealDraftService, compose?: string): Promise<string> {
@@ -189,6 +191,38 @@ describe('Deployment persistence (real service)', () => {
     const releases = await deployments.getReleases(dep.deploymentId);
     expect(releases).toHaveLength(1);
     expect(releases[0].status).toBe('active');
+  });
+
+  test('routing is emitted on create, rebuilt on restart, and removed on delete', async () => {
+    const a = makeSystem();
+    const dep = await a.deployments.createFromDraft({ draftId: await finalizedDraft(a.drafts), name: 'gitea', options: { autoStart: false } });
+
+    // A Traefik route + dynamic config are emitted for the active deployment.
+    const map = await a.routing.getRoutingMap();
+    expect(map['gitea.local.hola']?.deploymentId).toBe(dep.deploymentId);
+    expect(await a.storage.fileExists('runtime/traefik/dynamic.yml')).toBe(true);
+
+    // Restart reconstructs routing from persisted deployments.
+    const b = makeSystem();
+    await b.deployments.listDeployments({ page: 1, limit: 100 }); // triggers rehydrate + reconcile
+    expect((await b.routing.getRoutingMap())['gitea.local.hola']?.deploymentId).toBe(dep.deploymentId);
+
+    // Deleting the deployment removes its route.
+    await b.deployments.deleteDeployment(dep.deploymentId);
+    expect((await b.routing.getRoutingMap())['gitea.local.hola']).toBeUndefined();
+  });
+
+  test('a second deployment of the same app is rejected as a host conflict', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    await expect(
+      deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea-2', options: { autoStart: false } })
+    ).rejects.toBeInstanceOf(ConflictError);
+
+    // The conflicting second deployment left no state behind.
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items).toHaveLength(1);
   });
 
   test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {

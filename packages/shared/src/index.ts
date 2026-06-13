@@ -722,6 +722,7 @@ export type TraefikRoutingRule = {
   domain: string; // e.g., "local.hola"
   serviceName: string;
   networkName: string;
+  port?: number; // internal container/service port Traefik forwards to
   createdAt: string;
 };
 
@@ -733,17 +734,6 @@ export type RoutingConflict = {
 };
 
 export type TraefikRoutingMap = Record<string, TraefikRoutingRule>; // "host" -> routing rule
-
-// Port management (deprecated - kept for backwards compatibility)
-export type PortReservation = {
-  deploymentId: string;
-  releaseId: string;
-  reservedAt: string;
-  expiresAt?: string;
-};
-
-// @deprecated - Use TraefikRoutingMap instead
-export type GlobalPortRegistry = Record<string, PortReservation>; // "protocol:port" -> reservation
 
 // Directory structure metadata
 export type DeploymentDirectoryLayout = {
