@@ -2,7 +2,12 @@
   "name": "get2know.io devcontainer",
   "image": "ghcr.io/get2knowio/devcontainer:latest",
   "remoteUser": "vscode",
-  "features": {},
+  "features": {
+    // Docker-in-Docker so the Compose orchestration integration test (#19) can
+    // run a real daemon inside the dev container. Starts dockerd and adds the
+    // remote user to the docker group.
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
 //   "postCreateCommand": "npm install",
   "customizations": {
     "vscode": {
