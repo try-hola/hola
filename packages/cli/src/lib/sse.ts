@@ -2,8 +2,8 @@ import { createParser, type EventSourceMessage } from 'eventsource-parser';
 
 export type SSEHandler = (msg: EventSourceMessage) => void;
 
-export async function streamSSE(url: string, opts?: { headers?: Record<string, string> }, onEvent?: SSEHandler): Promise<void> {
-  const res = await fetch(url, { headers: opts?.headers });
+export async function streamSSE(url: string, opts?: { headers?: Record<string, string>; signal?: AbortSignal }, onEvent?: SSEHandler): Promise<void> {
+  const res = await fetch(url, { headers: opts?.headers, signal: opts?.signal });
   if (!res.ok || !res.body) {
     const text = await safeText(res);
     throw new Error(`SSE connect failed: ${res.status} ${res.statusText}${text ? `: ${text}` : ''}`);

@@ -10,22 +10,6 @@ prog
   .version('0.1.0')
   .describe('Hola CLI — deployments and bundle developer workflow');
 
-// bundle dev
-prog
-  .command('bundle dev')
-  .describe('Start a dev session, sync files, validate and optionally deploy')
-  .option('--path, -p', 'Bundle directory', '.')
-  .option('--app-id', 'App ID')
-  .option('--version', 'Version (default: dev)')
-  .option('--watch', 'Watch glob', '')
-  .option('--traefik', 'Traefik mode flag', false)
-  .option('--no-deploy', 'Validate only, do not deploy', false)
-  .option('--no-stream', 'Do not stream SSE during deploy', false)
-  .action(async () => {
-    console.log('Dev mode is not yet implemented. Use "hola bundle validate" and "hola bundle deploy" instead.');
-    process.exitCode = 1;
-  });
-
 // bundle validate
 prog
   .command('bundle validate')
@@ -41,12 +25,14 @@ prog
 // bundle deploy (one-shot)
 prog
   .command('bundle deploy')
-  .describe('One-shot import → draft → validate → finalize → deploy')
+  .describe('One-shot import → draft → validate → preflight → finalize → deploy → watch')
   .option('--path, -p', 'Bundle directory', '.')
-  .option('--app-id', 'App ID')
-  .option('--version', 'Version')
+  .option('--app-id', 'App ID (defaults to the bundle directory name)')
+  .option('--version', 'Version', 'latest')
   .option('--traefik', 'Require Traefik mode', false)
-  .option('--no-stream', 'Do not stream SSE during deploy', false)
+  .option('--strict', 'Fail on validation warnings', false)
+  .option('--no-stream', 'Do not watch the deployment job', false)
+  .option('--json', 'Print the result as JSON', false)
   .action(async (opts) => {
     const { runBundleDeploy } = await load(import('./commands/bundle/deploy'));
     await runBundleDeploy(opts);
