@@ -94,8 +94,11 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     const detail = await deployments.getDeployment(created.deploymentId);
     expect(detail.status).toBe('running');
 
-    // The compose file was materialized for the Compose project.
-    expect(await makeSystem().storage.fileExists(`deployments/${created.deploymentId}/runtime/docker-compose.yml`)).toBe(true);
+    // The compose file was materialized and attached to the Traefik network.
+    const materialized = await makeSystem().storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    expect(materialized).toContain('hola');
+    expect(materialized).toContain('aliases');
+    expect(materialized).toContain('external: true');
   });
 
   test('stop action runs Compose down and converges to stopped', async () => {

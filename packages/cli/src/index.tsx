@@ -29,6 +29,7 @@ prog
   .option('--path, -p', 'Bundle directory', '.')
   .option('--app-id', 'App ID (defaults to the bundle directory name)')
   .option('--version', 'Version', 'latest')
+  .option('--port', 'Ingress container port Traefik routes to (e.g. 3000 for Gitea)')
   .option('--traefik', 'Require Traefik mode', false)
   .option('--strict', 'Fail on validation warnings', false)
   .option('--no-stream', 'Do not watch the deployment job', false)

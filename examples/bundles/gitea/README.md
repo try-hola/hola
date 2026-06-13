@@ -9,7 +9,7 @@ With the Hola stack running (see `packages/compose`) and `HOLA_TOKEN` set to you
 ```bash
 export HOLA_API_URL=https://app.<your-domain>   # or http://localhost:3001 against a local server
 export HOLA_TOKEN=<admin-api-key>               # docker compose exec server cat /data/config/admin-api-key
-hola bundle deploy --path examples/bundles/gitea --app-id gitea
+hola bundle deploy --path examples/bundles/gitea --app-id gitea --port 3000
 ```
 
 The CLI imports the compose, validates and finalizes a draft, creates the deployment, and watches
