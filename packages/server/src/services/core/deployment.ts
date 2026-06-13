@@ -43,6 +43,7 @@ import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts } from './draft';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
+import { attachToHolaNetwork } from './compose-network';
 
 /** Promote a new release built from a finalized draft onto an existing deployment. */
 export interface PromoteRequest {
@@ -709,7 +710,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     if (!(await this.storageService.fileExists(src))) {
       throw new Error('Active release has no compose file');
     }
-    const content = await this.storageService.readFileAsString(src);
+    const raw = await this.storageService.readFileAsString(src);
+
+    // Attach the ingress service to the Traefik network so the emitted routing
+    // config can reach it (the alias must match the routing service name).
+    let content = raw;
+    try {
+      const alias = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app }).serviceName;
+      content = attachToHolaNetwork(raw, { alias, ingressService: deployment.app });
+    } catch (error) {
+      this.logger.warn('Could not attach app to Traefik network; deploying compose as-is', {
+        deploymentId: deployment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     await this.storageService.writeFile(`deployments/${deployment.id}/runtime/docker-compose.yml`, content);
     return this.runtimeDir(deployment.id);
   }

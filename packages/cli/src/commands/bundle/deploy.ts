@@ -14,6 +14,7 @@ export interface BundleDeployOptions {
   path?: string;
   appId?: string;
   version?: string;
+  port?: number | string;
   traefik?: boolean;
   noStream?: boolean;
   json?: boolean;
@@ -80,7 +81,12 @@ export async function runBundleDeploy(
 
     out(`Creating draft for ${appId}@${version}`);
     const draft = (await sdk.drafts.create({ appId, version })) as CreateDraftResponse;
-    await sdk.drafts.update(draft.draftId, { composeOverride, ...(appEnv.length ? { appEnv } : {}) });
+    const port = opts.port !== undefined ? Number(opts.port) : undefined;
+    await sdk.drafts.update(draft.draftId, {
+      composeOverride,
+      ...(appEnv.length ? { appEnv } : {}),
+      ...(port && Number.isFinite(port) ? { ports: [{ container: port, protocol: 'tcp' }] } : {}),
+    });
 
     out('Validating…');
     const report = (await sdk.drafts.validate(draft.draftId)) as {
