@@ -21,7 +21,6 @@
     "noFallthroughCasesInSwitch": true,
     
     /* Workspace path mapping to mirror packages/server */
-    "baseUrl": ".",
     "paths": {
       "@hola/shared": ["../shared/src/index.ts"]
     }

@@ -309,7 +309,7 @@ curl -H "Authorization: Bearer $TOKEN" https://api.example.com/api/health`
 
   // Final verification
   steps.push({
-    step: stepNumber++,
+    step: stepNumber,
     title: 'Verify Migration',
     description: 'Confirm all functionality works correctly with the new API version',
     required: true

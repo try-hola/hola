@@ -29,13 +29,18 @@
     "ci:local:pr": "act pull_request",
     "ci:local:list": "act --list"
   },
-  "packageManager": "bun@1.1.34",
+  "packageManager": "bun@1.3.14",
   "resolutions": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "@babel/helpers": "7.29.7",
+    "esbuild": "0.28.1",
+    "flatted": "3.4.2",
+    "picomatch": "4.0.4",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "shell-quote": "1.8.4"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.22",
-    "@types/node": "^24.5.2"
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.3"
   }
 }

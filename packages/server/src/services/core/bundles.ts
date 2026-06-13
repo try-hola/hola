@@ -1,12 +1,12 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { mkdirSync, existsSync, rmSync, statSync } from 'fs';
-import { join, dirname } from 'path';
-import { homedir } from 'os';
+import { join } from 'path';
 import { getLogger } from '../../lib/logger';
+import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
 import { catalogConfig } from '../../config/catalog';
-import { getBundleCacheManager } from './bundle-cache';
+import { BundleCacheManager } from './bundle-cache';
 
 const execAsync = promisify(exec);
 
@@ -26,12 +26,12 @@ export interface BundleService {
 
 export class RealBundleService implements BundleService, HealthCheckable {
   private logger = getLogger().child({ service: 'RealBundleService' });
-  private baseCache = join(homedir(), '.hola', 'cache', 'bundles');
-  private cacheManager = getBundleCacheManager();
+  private baseCache: string;
+  private cacheManager: BundleCacheManager;
 
-  constructor() {
-    // ensure base dir
-    mkdirSync(this.baseCache, { recursive: true });
+  constructor(baseCache = join(getHolaDataDir(), 'cache', 'bundles')) {
+    this.baseCache = baseCache;
+    this.cacheManager = new BundleCacheManager(baseCache);
   }
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -72,7 +72,7 @@ export class RealBundleService implements BundleService, HealthCheckable {
       this.logger.debug('ORAS pull output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
     } catch (error) {
       this.logger.error('ORAS pull failed', error as Error, { ref: opts.ociRef });
-      throw new Error('ORAS_PULL_FAILED');
+      throw new Error('ORAS_PULL_FAILED', { cause: error });
     }
 
     // Optional signature verify-if-present
@@ -163,11 +163,12 @@ export class RealBundleService implements BundleService, HealthCheckable {
 
 export class MockBundleService implements BundleService {
   private logger = getLogger().child({ service: 'MockBundleService' });
+
+  constructor(private basePath = join(getHolaDataDir(), 'mock-bundles')) {}
+
   async ensurePulled(opts: { appId: string; version: string; ociRef: string }): Promise<BundleInfo> {
     this.logger.debug('Mock ensurePulled', opts);
-    const p = join(homedir(), '.hola', 'mock-bundles', sanitize(opts.appId), sanitize(opts.version));
-    mkdirSync(dirname(p), { recursive: true });
-    mkdirSync(p, { recursive: true });
+    const p = join(this.basePath, sanitize(opts.appId), sanitize(opts.version));
     return { localPath: p };
   }
   async validateLayout(bundlePath: string) {

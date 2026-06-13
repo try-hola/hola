@@ -94,7 +94,7 @@ The Hola repository has **significantly exceeded** the PRD's scope and vision, i
 The shared type system and API constants provide excellent safety and are appropriate complexity for the scale.
 
 #### 2. **StrictMode-Compatible React Hooks**
-React 18 compatibility patterns are well-implemented and necessary for reliable frontend behavior.
+React StrictMode compatibility patterns are well-implemented and necessary for reliable frontend behavior.
 
 #### 3. **Structured Logging and Metrics**
 Request correlation and structured logging provide essential observability for a deployment platform.

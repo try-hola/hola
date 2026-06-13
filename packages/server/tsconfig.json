@@ -9,7 +9,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "baseUrl": ".",
+    "rootDir": "../..",
     "paths": {
       "@hola/shared": ["../shared/src/index.ts"]
     }

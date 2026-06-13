@@ -6,20 +6,20 @@
   "scripts": {
     "dev": "bun run src/server.ts",
     "start": "bun run src/server.ts",
+    "build": "bun build src/server.ts --outdir=dist --target=bun --sourcemap",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "bunx --bun eslint ."
   },
   "dependencies": {
     "@hola/shared": "workspace:*",
-    "yaml": "^2.8.1"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@eslint/js": "^9.9.0",
-    "@types/bun": "^1.1.6",
-    "@types/yaml": "^1.9.7",
-    "eslint": "^9.9.0",
-    "typescript": "^5.5.4",
-    "typescript-eslint": "^8.0.1"
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "^1.3.14",
+    "eslint": "^10.5.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.0"
   }
 }

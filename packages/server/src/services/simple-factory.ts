@@ -83,7 +83,7 @@ export function createServices(env: ServiceEnvironment): Services {
     const database = new RealDatabaseService(storage);
     const authService = new RealAuthService(false); // Auth disabled in development by default
     const docker = new MockDockerService(); // Use mock Docker for safety in development
-    const systemMonitoring = new RealSystemMonitoringService();
+    const systemMonitoring = new RealSystemMonitoringService(storage.resolveHolaPath());
     
     // Create logging service with storage dependency
     const logging = new RealLoggingService(storage);
@@ -107,7 +107,7 @@ export function createServices(env: ServiceEnvironment): Services {
       logging,
       jobs,
       catalog,
-      bundles: new RealBundleService(),
+      bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
       drafts: new RealDraftService(storage, catalog, validation),
       validation,
       deployments: new RealDeploymentService(storage, jobs, docker),
@@ -119,7 +119,7 @@ export function createServices(env: ServiceEnvironment): Services {
   const database = new RealDatabaseService(storage);
   const authService = new RealAuthService(true);
   const docker = new RealDockerService();
-  const systemMonitoring = new RealSystemMonitoringService();
+  const systemMonitoring = new RealSystemMonitoringService(storage.resolveHolaPath());
   
   // Create logging service with storage dependency
   const logging = new RealLoggingService(storage);
@@ -147,7 +147,7 @@ export function createServices(env: ServiceEnvironment): Services {
     logging,
     jobs,
     catalog,
-    bundles: new RealBundleService(),
+    bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
     drafts: new RealDraftService(storage, catalog, validation),
     validation,
     deployments: new RealDeploymentService(storage, jobs, docker),

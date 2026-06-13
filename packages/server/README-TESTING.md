@@ -23,8 +23,7 @@ describe('My Feature Tests', () => {
   beforeAll(async () => {
     await setupTestEnvironment({
       env: {
-        HOLA_USE_REAL_DOCKER: 'false',
-        HOLA_USE_REAL_DATABASE: 'false',
+        NODE_ENV: 'test',
       }
     });
   });
@@ -84,16 +83,14 @@ bun test src/__tests__/drafts/management.test.ts
 bun test --timeout=30000
 ```
 
-### Feature Flag Testing
+### Environment Testing
 
-Test different configurations using environment variables:
+The standard suite uses `NODE_ENV=test`. Real-service integration tests should
+instantiate the required service with a temporary `HOLA_DATA_DIR` and skip
+explicitly when an external dependency such as Docker is unavailable.
 
 ```bash
-# Test with real Docker integration (requires Docker)
-HOLA_USE_REAL_DOCKER=true bun test src/__tests__/docker/integration.test.ts
-
-# Test with development API enabled  
-HOLA_ENABLE_DEV_API=true bun test src/__tests__/drafts/management.test.ts
+NODE_ENV=test bun test
 ```
 
 ## Test Organization
@@ -170,7 +167,7 @@ docker compose -f test-docker-compose.yml down -v
 
 **Note**: This should only be used for special integration scenarios. The in-process approach is preferred for most tests.
 
-If Docker is unavailable, either skip these tests (e.g., `it.skip`/tag filters) or rely on helpers that auto‑detect and skip when `HOLA_USE_REAL_DOCKER` is `false`.
+If Docker is unavailable, integration tests must skip explicitly. The standard test environment always uses mock services.
 
 ### CI/CD Integration
 
@@ -179,7 +176,7 @@ The GitHub Actions workflow automatically runs tests:
 ```yaml
 - name: Test
   env:
-    HOLA_USE_REAL_DOCKER: "false"
+    NODE_ENV: "test"
   run: bun run test
 ```
 
@@ -240,7 +237,7 @@ The in-process test environment provides excellent performance:
 **Solution**: This shouldn't happen with in-process testing. Check for background processes.
 
 #### Tests fail in CI but pass locally
-**Solution**: Verify environment variables are consistent. Use `HOLA_USE_REAL_*=false` in CI.
+**Solution**: Verify environment variables are consistent and use `NODE_ENV=test` for the standard suite.
 
 #### Memory leaks between tests
 **Solution**: Always call `teardownTestEnvironment()` and check for hanging promises.
@@ -288,10 +285,10 @@ afterAll(() => teardownTestEnvironment());
 2. **Update setup calls**:
    ```typescript
    // Old
-   await setupTestServer(3001, { HOLA_USE_REAL_DOCKER: 'false' });
+   await setupTestServer(3001, { NODE_ENV: 'test' });
    
    // New
-   await setupTestEnvironment({ env: { HOLA_USE_REAL_DOCKER: 'false' } });
+   await setupTestEnvironment({ env: { NODE_ENV: 'test' } });
    ```
 
 3. **Use feature environments when possible**:
@@ -299,8 +296,7 @@ afterAll(() => teardownTestEnvironment());
    // Instead of manual env setup
    await setupTestEnvironment({ 
      env: { 
-       HOLA_ENABLE_DEV_API: 'true',
-       HOLA_USE_REAL_DRAFTS: 'false' 
+       NODE_ENV: 'test'
      } 
    });
    

@@ -4,7 +4,7 @@ import path from 'path';
 
 export default defineConfig({
   plugins: [react({
-    // Use React 18 JSX transform
+    // Use the automatic JSX transform.
     jsxRuntime: 'automatic',
     include: ['**/*.tsx', '**/*.jsx'],
   })],
@@ -32,10 +32,5 @@ export default defineConfig({
       { find: '@hola/shared', replacement: path.resolve(__dirname, '../shared/src') },
       { find: '@hola/sdk', replacement: path.resolve(__dirname, '../sdk/src') },
     ],
-  },
-  esbuild: {
-    // Ensure JSX is handled correctly
-    jsx: 'automatic',
-    jsxImportSource: 'react',
   },
 });

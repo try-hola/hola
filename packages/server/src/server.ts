@@ -932,7 +932,7 @@ async function route(url: URL, req: Request): Promise<Response> {
     const page = parseInt(url.searchParams.get('page') ?? '1', 10);
     const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
     
-    let jobs: Job[] = [];
+    let jobs: Job[];
     try {
       // Phase 5: Use JobService if available
       const services = getServices();

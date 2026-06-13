@@ -71,8 +71,8 @@ Key entry points:
 
 ## Tech Stack
 
-- Runtime/tooling: Bun 1.2.19 (see `.bun-version`)
-- Language: TypeScript 5.x
+- Runtime/tooling: Bun 1.3.14 (see `.bun-version`)
+- Language: TypeScript 6.x
 - Frontend: Vite, React, TailwindCSS, React Router
 - Server: Bun-native HTTP with real-time SSE
 - Linting: ESLint (flat config)
@@ -92,7 +92,7 @@ Server (Bun):
 ## Getting Started
 
 Prerequisites
-- Bun installed matching `.bun-version` (1.2.19)
+- Bun installed matching `.bun-version` (1.3.14)
   - Linux/macOS: `curl -fsSL https://bun.sh/install | bash`
   - Windows (PowerShell): `powershell -c "irm bun.com/install.ps1 | iex"`
 

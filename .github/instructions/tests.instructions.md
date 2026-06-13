@@ -33,7 +33,7 @@ Reliable, isolated tests with fakes-first strategy and simplified service manage
 - **React Plugin**: Include `@vitejs/plugin-react` with explicit JSX configuration
 - **DOM Globals**: Ensure `document` and `window` are available via jsdom setup
 
-### React 18 StrictMode Compatibility
+### React StrictMode Compatibility
 - **Async Rendering**: Use `await waitFor()` for component updates, not synchronous expectations
 - **Double Execution**: Effects run twice in StrictMode - design hooks with stable dependencies
 - **Hook Dependencies**: Empty `[]` dependencies for basic fetchers, `useMemo` for cache keys with params
@@ -78,7 +78,7 @@ import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-e
 describe('My Tests', () => {
   beforeAll(async () => {
     await setupTestEnvironment({
-      env: { HOLA_USE_REAL_DOCKER: 'false' }
+      env: { NODE_ENV: 'test' }
     });
   });
 
@@ -95,7 +95,7 @@ describe('My Tests', () => {
 - Use realistic sample data aligned with `@hola/shared` types.
 - Keep tests deterministic; avoid arbitrary sleeps.
 - Configure jsdom properly for React component tests.
-- Use `await waitFor()` for React 18 async rendering.
+- Use `await waitFor()` for React async rendering.
 - **Use standardized test environment**: Always import from `helpers/test-environment` for server tests.
 - **Remove tests for deprecated APIs**: When endpoints are removed, delete all associated test files completely.
 - **Clean imports**: Only import types and functions that are actually used in tests to avoid linting errors.
@@ -124,7 +124,7 @@ describe('My Tests', () => {
 ## Don't
 - Mock deep internals; test public APIs.
 - Introduce flaky timers; poll for readiness.
-- Expect synchronous DOM updates in React 18.
+- Do not assume synchronous DOM updates in React.
 - Use `document` or `window` without proper jsdom setup.
 - **Use background processes**: No `bun run dev &`, `kill %1`, or `pkill` patterns.
 - **Test removed API endpoints**: Delete tests for `/api/dev/*` and other deprecated endpoints completely.

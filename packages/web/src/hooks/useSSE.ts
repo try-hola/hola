@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import type { SSEEvent } from '@hola/shared';
+import type { LogEntry, SSEEvent } from '@hola/shared';
 import { createSSEClient, type SSEClient } from '../utils/sse-client';
 import type { SSEOptions, SSEState } from '../utils/sse-types';
 
@@ -87,5 +87,53 @@ export function useSSE(
     connect,
     disconnect,
     isConnected: state.connectionState === 'connected',
+  };
+}
+
+export function useLogsSSE(
+  deploymentId?: string,
+  jobId?: string,
+  options: SSEOptions = {}
+): {
+  logs: LogEntry[];
+  connectionState: SSEState['connectionState'];
+  error: string | null;
+  isConnected: boolean;
+  clearLogs: () => void;
+} {
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+
+  const sseUrl = useMemo(() => {
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+    if (jobId) {
+      return `${baseUrl}/api/jobs/${jobId}/logs/stream`;
+    }
+    if (deploymentId) {
+      return `${baseUrl}/api/deployments/${deploymentId}/logs/stream`;
+    }
+    return null;
+  }, [deploymentId, jobId]);
+
+  const handleEvent = useCallback((event: SSEEvent) => {
+    if (event.type === 'log') {
+      setLogs(previous => [...previous, event.data]);
+    }
+  }, []);
+
+  const sseState = useSSE(sseUrl, handleEvent, {
+    ...options,
+    eventTypes: ['log'],
+  });
+
+  const clearLogs = useCallback(() => {
+    setLogs([]);
+  }, []);
+
+  return {
+    logs,
+    connectionState: sseState.connectionState,
+    error: sseState.error,
+    isConnected: sseState.isConnected,
+    clearLogs,
   };
 }

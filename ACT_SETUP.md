@@ -48,7 +48,7 @@ act -P ubuntu-latest=catthehacker/ubuntu:act-latest
 
 ## Features
 - ✅ **Workspace Binding**: Uses local code directly (no checkout needed)
-- ✅ **Environment Variables**: `HOLA_ENABLE_DEV_API=true`, `HOLA_USE_REAL_DOCKER=false`
+- ✅ **Test Environment**: `NODE_ENV=test` selects deterministic mock services
 - ✅ **Docker Support**: Uses `catthehacker/ubuntu:act-latest` for compatibility
 - ✅ **Caching**: Action caching enabled for faster subsequent runs
 - ✅ **Local Optimization**: Separate workflow without GitHub-specific steps
@@ -73,6 +73,5 @@ act -P ubuntu-latest=catthehacker/ubuntu:act-latest
 - Update images with `docker pull catthehacker/ubuntu:act-latest`
 
 ## Environment Variables
-Default environment variables set in `.actrc`:
-- `HOLA_ENABLE_DEV_API=true` - Enable development API features
-- `HOLA_USE_REAL_DOCKER=false` - Use mock Docker service for safety
+Default environment variable set in `.actrc`:
+- `NODE_ENV=test` - Select deterministic mock services for CI-compatible tests

@@ -37,8 +37,6 @@ services:
     environment:
       - NODE_ENV=test
       - HOLA_TEST_MODE=true
-      - HOLA_USE_REAL_DOCKER=false
-      - HOLA_USE_REAL_DATABASE=false
       - HOLA_DISABLE_AUTOSTART=true
     depends_on:
       - test-database

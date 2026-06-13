@@ -45,8 +45,8 @@ export async function safeFetch(input: RequestInfo | URL, init?: RequestInit): P
     // Network errors (e.g., DNS, refused) surface here as thrown exceptions from fetch()
     if (err instanceof Error) {
       // Keep message concise and user-facing
-      throw new Error(err.message || 'Network request failed');
+      throw new Error(err.message || 'Network request failed', { cause: err });
     }
-    throw new Error('Network request failed');
+    throw new Error('Network request failed', { cause: err });
   }
 }
