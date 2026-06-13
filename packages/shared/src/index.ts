@@ -156,27 +156,12 @@ export const CAPABILITIES = {
 
 export type Capability = typeof CAPABILITIES[keyof typeof CAPABILITIES];
 
-// Auth API endpoints
+// Auth API endpoints.
+// pt.1 (control-plane API keys) implements `me`. Session/SSO endpoints
+// (login/logout/refresh) arrive with application SSO in MVP pt.2 (ADR 0001).
 export const AUTH_API = {
-  login: '/api/auth/login',
-  logout: '/api/auth/logout',
-  refresh: '/api/auth/refresh',
   me: '/api/auth/me',
 } as const;
-
-// Auth request/response types
-export type LoginRequest = {
-  // API key login
-  apiKey?: string;
-  // Future: username/password, OAuth, etc.
-};
-
-export type LoginResponse = {
-  success: boolean;
-  token?: string;
-  principal?: Principal;
-  error?: string;
-};
 
 export type GetAuthMeResponse = Principal;
 

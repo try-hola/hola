@@ -11,7 +11,8 @@ import { RealStorageService, MockStorageService, type StorageService } from './c
 import { RealConfigService, MockConfigService, type ConfigService } from './core/config';
 import { RealDatabaseService, MockDatabaseService, type DatabaseService } from './core/database';
 import { RealDatabaseConfigService, type DatabaseConfigService } from './core/database-config';
-import { RealAuthService, MockAuthService, ApiKeyAuthProvider, type AuthService } from './auth/auth-service';
+import { RealAuthService, MockAuthService, type AuthService } from './auth/auth-service';
+import { resolveAdminApiKey, createAdminApiKeyProvider } from './auth/api-key-config';
 import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
 import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
 import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
@@ -143,8 +144,8 @@ export function createServices(env: ServiceEnvironment): Services {
   const catalog = new RealCatalogService();
   
   // Set up auth provider for real auth service
-  const apiKeyProvider = new ApiKeyAuthProvider();
-  authService.registerProvider(apiKeyProvider);
+  // Register the admin API-key provider with a usable credential (env or generated+persisted).
+  authService.registerProvider(createAdminApiKeyProvider(resolveAdminApiKey()));
   
   // Shared routing service owns Traefik rule generation/validation/emission.
   const routing = new RealRoutingService(storage);
