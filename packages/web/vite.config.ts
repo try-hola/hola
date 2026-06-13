@@ -20,8 +20,10 @@ export default defineConfig({
       allow: ['..'],
     },
     proxy: {
+      // Target the local server by default; the compose dev override points
+      // this at the server container (http://hola-server:3001).
       '/api': {
-        target: 'http://localhost:3001',
+        target: process.env.HOLA_API_PROXY_TARGET || 'http://localhost:3001',
         changeOrigin: true,
       },
     },

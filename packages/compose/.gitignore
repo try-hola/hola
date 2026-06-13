@@ -4,3 +4,6 @@
 # Runtime data
 logs/
 data/
+
+# Traefik ACME certificate store (contains private keys)
+traefik/acme/

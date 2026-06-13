@@ -1,21 +1,30 @@
-version: "3.9"
-
-x-common-labels: &common-labels
-  traefik.enable: "true"
+# Hola production stack: Traefik (ingress/TLS) + web (SPA, single origin) + API server.
+#
+# The API server orchestrates app deployments via the Docker socket and emits
+# Traefik dynamic configuration into its data volume, which Traefik reads through
+# its file provider, so deployed apps become routable at <app>.<HOLA_BASE_DOMAIN>.
+#
+#   cp .env.example .env   # then edit
+#   ./scripts/install.sh   # or: docker compose up -d --build
 
 services:
   traefik:
     image: traefik:v3.1
     container_name: traefik
+    restart: unless-stopped
     command:
       - --api.dashboard=true
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:${TRAEFIK_HTTP_PORT:-80}
-      - --entrypoints.websecure.address=:${TRAEFIK_HTTPS_PORT:-443}
-      - --providers.file.directory=/etc/traefik/dynamic
+      # App routes emitted by the Hola server land here (shared data volume).
+      - --providers.file.directory=/data/runtime/traefik
       - --providers.file.watch=true
-      # Let's Encrypt (HTTP-01 challenge)
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      # Global HTTP -> HTTPS redirect at the entrypoint (no per-service middleware).
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      # Let's Encrypt (HTTP-01). Requires public, resolvable domains.
       - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.le.acme.httpchallenge=true
@@ -25,65 +34,60 @@ services:
       - "${TRAEFIK_HTTPS_PORT:-443}:443"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - hola-data:/data:ro
       - ./traefik/acme:/letsencrypt
     labels:
-      <<: *common-labels
-      # Dashboard over HTTP
-      traefik.http.routers.traefik-http.rule: Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)
-      traefik.http.routers.traefik-http.service: api@internal
-      traefik.http.routers.traefik-http.entrypoints: web
-      # Dashboard over HTTPS (with LE)
-      traefik.http.routers.traefik-https.rule: Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)
-      traefik.http.routers.traefik-https.entrypoints: websecure
-      traefik.http.routers.traefik-https.service: api@internal
-      traefik.http.routers.traefik-https.tls: true
-      traefik.http.routers.traefik-https.tls.certresolver: le
+      traefik.enable: "true"
+      traefik.http.routers.traefik.rule: Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)
+      traefik.http.routers.traefik.entrypoints: websecure
+      traefik.http.routers.traefik.service: api@internal
+      traefik.http.routers.traefik.tls: "true"
+      traefik.http.routers.traefik.tls.certresolver: le
 
   server:
     image: hola/server:latest
+    build:
+      context: ../..
+      dockerfile: packages/server/Dockerfile
     container_name: hola-server
-    depends_on:
-      - traefik
+    restart: unless-stopped
     environment:
       - NODE_ENV=production
+      - HOLA_DATA_DIR=/data
+      - HOLA_USE_AUTH=${HOLA_USE_AUTH:-true}
+      # Optional fixed admin key; if unset, the server generates one on first boot
+      # and writes it to /data/config/admin-api-key (see README).
+      - HOLA_API_KEY=${HOLA_API_KEY:-}
+      # Base domain that deployed apps are exposed under (e.g. gitea.${HOLA_BASE_DOMAIN}).
+      - HOLA_BASE_DOMAIN=${HOLA_BASE_DOMAIN:-local.hola}
+    volumes:
+      # Orchestrate deployments by talking to the host Docker engine.
+      # SECURITY: this grants control of the host's Docker - see README.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - hola-data:/data
+    # Internal only: reached through the web container's /api proxy, not exposed by Traefik.
     labels:
-      <<: *common-labels
-      # HTTP router (redirect to HTTPS)
-      traefik.http.routers.hola-server-http.rule: Host(`${SERVER_DOMAIN}`)
-      traefik.http.routers.hola-server-http.entrypoints: web
-      traefik.http.routers.hola-server-http.middlewares: hola-redirect@docker
-      # HTTPS router
-      traefik.http.routers.hola-server-https.rule: Host(`${SERVER_DOMAIN}`)
-      traefik.http.routers.hola-server-https.entrypoints: websecure
-      traefik.http.routers.hola-server-https.tls: true
-      traefik.http.routers.hola-server-https.tls.certresolver: le
-      # Service port
-      traefik.http.services.hola-server.loadbalancer.server.port: "3001"
+      traefik.enable: "false"
 
   web:
     image: hola/web:latest
+    build:
+      context: ../..
+      dockerfile: packages/web/Dockerfile
     container_name: hola-web
+    restart: unless-stopped
     depends_on:
-      - traefik
       - server
     labels:
-      <<: *common-labels
-      # HTTP router (redirect to HTTPS)
-      traefik.http.routers.hola-web-http.rule: Host(`${WEB_DOMAIN}`)
-      traefik.http.routers.hola-web-http.entrypoints: web
-      traefik.http.routers.hola-web-http.middlewares: hola-redirect@docker
-      # HTTPS router
-      traefik.http.routers.hola-web-https.rule: Host(`${WEB_DOMAIN}`)
-      traefik.http.routers.hola-web-https.entrypoints: websecure
-      traefik.http.routers.hola-web-https.tls: true
-      traefik.http.routers.hola-web-https.tls.certresolver: le
-      # Service port (production image expected to serve on 3000)
-      traefik.http.services.hola-web.loadbalancer.server.port: "3000"
+      traefik.enable: "true"
+      traefik.http.routers.hola-web.rule: Host(`${HOLA_DOMAIN}`)
+      traefik.http.routers.hola-web.entrypoints: websecure
+      traefik.http.routers.hola-web.tls: "true"
+      traefik.http.routers.hola-web.tls.certresolver: le
+      traefik.http.services.hola-web.loadbalancer.server.port: "80"
 
-      # Shared middleware for HTTP->HTTPS redirect
-      traefik.http.middlewares.hola-redirect.redirectscheme.scheme: https
-      traefik.http.middlewares.hola-redirect.redirectscheme.permanent: "true"
+volumes:
+  hola-data:
 
 networks:
   default:
