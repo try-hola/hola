@@ -1,23 +1,36 @@
 {
-  "name": "get2know.io devcontainer",
-  "image": "ghcr.io/get2knowio/devcontainer:latest",
+  "name": "Node.js Agentic Development",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "remoteUser": "vscode",
   "features": {
-    // Docker-in-Docker so the Compose orchestration integration test (#19) can
-    // run a real daemon inside the dev container. Starts dockerd and adds the
-    // remote user to the docker group.
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    },
     "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
       "moby": false
-    }
+    },
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/eitsupi/devcontainer-features/jq-likes:2": {},
+    "ghcr.io/get2knowio/devcontainer-features/ai-clis:2": {
+      "omit": "codeRabbit,qmd"
+    },
+    "ghcr.io/get2knowio/devcontainer-features/modern-cli-tools:2": {},
+    "ghcr.io/get2knowio/devcontainer-features/node-dev-tools:2": {},
+    "ghcr.io/get2knowio/devcontainer-features/github-actions-tools:2": {}
   },
-//   "postCreateCommand": "npm install",
   "customizations": {
     "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      },
       "extensions": [
         "ms-vscode.vscode-typescript-next",
         "esbenp.prettier-vscode",
         "dbaeumer.vscode-eslint"
       ]
     }
-  }
+  },
+  "postCreateCommand": "node --version && tsc --version"
 }
