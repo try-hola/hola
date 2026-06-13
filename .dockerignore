@@ -1,0 +1,14 @@
+# Keep the Docker build context lean and reproducible.
+**/node_modules
+**/dist
+**/.turbo
+**/coverage
+**/*.log
+.git
+.github
+.devcontainer
+**/.DS_Store
+packages/compose/data
+packages/compose/logs
+packages/compose/traefik/acme
+packages/*/.cache
