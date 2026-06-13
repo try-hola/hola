@@ -40,10 +40,20 @@ import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService } from './jobs';
 import type { DockerService } from './docker';
+import type { DraftService, FinalizedArtifacts } from './draft';
+
+/** Promote a new release built from a finalized draft onto an existing deployment. */
+export interface PromoteRequest {
+  draftId: string;
+  reason?: string;
+  options?: { autoStart?: boolean };
+}
 
 export interface DeploymentService extends HealthCheckable {
   // Deployment lifecycle
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
+  /** Stage a new release from a finalized draft onto an existing deployment and activate it. */
+  promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -197,6 +207,8 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   protected logger = getLogger().child({ service: 'DeploymentService' });
   protected deployments = new Map<string, EnhancedDeploymentDetail>();
   protected releases = new Map<string, Release>();
+  /** One-time rehydration guard so persisted state loads at most once. */
+  private loadPromise: Promise<void> | null = null;
 
   constructor(protected jobService: JobService) {}
 
@@ -216,6 +228,75 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void deploymentId;
   }
 
+  /** Rehydrate persisted deployments/releases from storage exactly once. */
+  protected async ensureLoaded(): Promise<void> {
+    if (!this.loadPromise) {
+      this.loadPromise = this.loadFromStorage();
+    }
+    return this.loadPromise;
+  }
+
+  /** Default: nothing to load (mock keeps its constructor seed). */
+  protected async loadFromStorage(): Promise<void> {}
+
+  /**
+   * Build the release (and resolved app/version) for a deployment from a draft.
+   * Default is a synthetic in-memory release; the real service overrides this to
+   * build from the finalized artifacts produced by DraftService (#11).
+   */
+  protected async buildReleaseFromDraft(
+    artifacts: FinalizedArtifacts | null,
+    request: { draftId?: string },
+    deploymentId: string,
+    releaseId: string
+  ): Promise<{ app: string; version?: string; release: Release }> {
+    void artifacts;
+    const now = new Date().toISOString();
+    return {
+      app: 'Unknown App',
+      version: undefined,
+      release: {
+        id: releaseId,
+        deploymentId,
+        draftId: request.draftId ?? '',
+        status: 'creating',
+        createdAt: now,
+        images: [],
+        ports: [],
+        filesChecksums: {},
+      },
+    };
+  }
+
+  /** Copy immutable release artifacts to durable storage. Default no-op (mock). */
+  protected async stageReleaseArtifacts(
+    artifacts: FinalizedArtifacts | null,
+    deploymentId: string,
+    release: Release
+  ): Promise<void> {
+    void artifacts;
+    void deploymentId;
+    void release;
+  }
+
+  /** Atomically record the active-release pointer. Default no-op (mock). */
+  protected async writeCurrentPointer(deploymentId: string, releaseId: string): Promise<void> {
+    void deploymentId;
+    void releaseId;
+  }
+
+  /** Routing-activation seam for Traefik config (issue #16). Default no-op. */
+  protected async onActiveReleaseChanged(deploymentId: string, releaseId: string): Promise<void> {
+    void deploymentId;
+    void releaseId;
+  }
+
+  /** Load the finalized artifacts for a draft. Default null (mock has no draft store). */
+  protected async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {
+    void draftId;
+    return null;
+  }
+
   /** Look up a deployment or throw a typed 404. */
   protected requireDeployment(deploymentId: string): EnhancedDeploymentDetail {
     const deployment = this.deployments.get(deploymentId);
@@ -225,7 +306,63 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return deployment;
   }
 
+  private countReleases(deploymentId: string): number {
+    let n = 0;
+    for (const r of this.releases.values()) {
+      if (r.deploymentId === deploymentId) n++;
+    }
+    return n;
+  }
+
+  /**
+   * Atomically make `releaseId` the active release of a deployment: demote the
+   * previously-active release, activate the target, update the deployment's
+   * release pointers, and write the durable `current` pointer last. A failure
+   * before the pointer write leaves the previous active release intact.
+   */
+  protected async promoteRelease(deploymentId: string, releaseId: string): Promise<void> {
+    const deployment = this.requireDeployment(deploymentId);
+    const release = this.releases.get(releaseId);
+    if (!release || release.deploymentId !== deploymentId) {
+      throw new NotFoundError(`Release not found: ${releaseId}`);
+    }
+
+    const now = new Date().toISOString();
+    const previousReleaseId = deployment.currentReleaseId;
+
+    // Demote the previously-active release.
+    if (previousReleaseId && previousReleaseId !== releaseId) {
+      const prev = this.releases.get(previousReleaseId);
+      if (prev) {
+        prev.status = 'stopped';
+        this.releases.set(prev.id, prev);
+        await this.persistRelease(prev);
+      }
+    }
+
+    // Activate the target release.
+    release.status = 'active';
+    release.deployedAt = now;
+    this.releases.set(releaseId, release);
+    await this.persistRelease(release);
+
+    // Update deployment pointers.
+    if (previousReleaseId !== releaseId) {
+      deployment.previousReleaseId = previousReleaseId;
+    }
+    deployment.currentReleaseId = releaseId;
+    deployment.rollbackAvailable = this.countReleases(deploymentId) > 1;
+    deployment.lastUpdated = now;
+    this.deployments.set(deploymentId, deployment);
+    await this.persistDeployment(deployment);
+
+    // Durable active-release switch (authoritative on rehydration), then routing.
+    await this.writeCurrentPointer(deploymentId, releaseId);
+    await this.onActiveReleaseChanged(deploymentId, releaseId);
+  }
+
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {
+    await this.ensureLoaded();
     const deploymentId = crypto.randomUUID();
     const releaseId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -238,20 +375,25 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     });
 
     try {
+      // Build the release from the finalized draft FIRST so an unfinalized draft
+      // fails before any deployment directory or record is created (no partial state).
+      const artifacts = await this.loadFinalizedArtifacts(request.draftId);
+      const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+
       await this.ensureLayout(deploymentId);
 
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
         name: request.name || `deployment-${deploymentId.slice(0, 8)}`,
-        app: 'Unknown App', // Will be updated from draft
+        app,
         icon: '📦',
         status: 'installing',
         lifecycleState: 'releasing',
-        currentReleaseId: releaseId,
         draftId: request.draftId,
         rollbackAvailable: false,
         resources: { cpu: '0%', memory: '0MB' },
         ports: [],
+        version,
         lastUpdated: now,
         metadata: {
           createdAt: now,
@@ -260,34 +402,16 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         },
       };
       this.deployments.set(deploymentId, deployment);
-
-      const release: Release = {
-        id: releaseId,
-        deploymentId,
-        draftId: request.draftId,
-        status: 'creating',
-        createdAt: now,
-        images: [],
-        ports: [],
-        filesChecksums: {},
-      };
       this.releases.set(releaseId, release);
 
-      await this.persistDeployment(deployment);
+      await this.stageReleaseArtifacts(artifacts, deploymentId, release);
       await this.persistRelease(release);
+      await this.persistDeployment(deployment);
 
-      let jobId: string | undefined;
+      // Atomically activate the first release.
+      await this.promoteRelease(deploymentId, releaseId);
 
-      // Optionally start deployment immediately
-      if (request.options?.autoStart !== false) {
-        const job = await this.jobService.createJob({
-          type: 'start',
-          deploymentId,
-          payload: { releaseId, action: 'deploy' },
-        });
-        jobId = job.id;
-        this.logger.info('Deployment job created', { deploymentId, releaseId, jobId });
-      }
+      const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
       return { deploymentId, releaseId, jobId };
     } catch (error) {
@@ -299,17 +423,57 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     }
   }
 
+  async promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse> {
+    await this.ensureLoaded();
+    this.requireDeployment(deploymentId);
+    const releaseId = crypto.randomUUID();
+
+    this.logger.info('Promoting new release onto deployment', { deploymentId, releaseId, draftId: request.draftId });
+
+    const artifacts = await this.loadFinalizedArtifacts(request.draftId);
+    const { release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+    this.releases.set(releaseId, release);
+
+    await this.ensureLayout(deploymentId);
+    await this.stageReleaseArtifacts(artifacts, deploymentId, release);
+    await this.persistRelease(release);
+
+    // Atomically switch the active release to the new one.
+    await this.promoteRelease(deploymentId, releaseId);
+
+    const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
+
+    return { deploymentId, releaseId, jobId };
+  }
+
+  /** Create a start job for a (re)deployment unless autoStart was disabled. */
+  private async maybeStartJob(deploymentId: string, releaseId: string, autoStart?: boolean): Promise<string | undefined> {
+    if (autoStart === false) {
+      return undefined;
+    }
+    const job = await this.jobService.createJob({
+      type: 'start',
+      deploymentId,
+      payload: { releaseId, action: 'deploy' },
+    });
+    this.logger.info('Deployment job created', { deploymentId, releaseId, jobId: job.id });
+    return job.id;
+  }
+
   async listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse> {
+    await this.ensureLoaded();
     this.logger.info('Listing deployments', { request });
     return filterAndPaginateDeployments(Array.from(this.deployments.values()), request);
   }
 
   async getDeployment(deploymentId: string): Promise<GetDeploymentResponse> {
+    await this.ensureLoaded();
     this.logger.info('Getting deployment', { deploymentId });
     return toDetailResponse(this.requireDeployment(deploymentId));
   }
 
   async updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse> {
+    await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
 
     this.logger.info('Updating deployment', { deploymentId, request });
@@ -331,6 +495,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   async deleteDeployment(deploymentId: string): Promise<void> {
+    await this.ensureLoaded();
     this.requireDeployment(deploymentId);
 
     this.logger.info('Deleting deployment', { deploymentId });
@@ -364,6 +529,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   async executeAction(deploymentId: string, request: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse> {
+    await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
 
     this.logger.info('Executing deployment action', { deploymentId, action: request.action });
@@ -387,28 +553,31 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   async rollback(deploymentId: string, request: RollbackRequest): Promise<RollbackResponse> {
+    await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
 
     this.logger.info('Rolling back deployment', { deploymentId, targetReleaseId: request.targetReleaseId });
 
     let targetReleaseId = request.targetReleaseId;
     if (!targetReleaseId) {
-      // Find the previous successful release (second most recent active release).
-      const releases = Array.from(this.releases.values())
-        .filter(r => r.deploymentId === deploymentId && r.status === 'active')
+      // Default to the most recent release other than the one currently active.
+      const candidates = Array.from(this.releases.values())
+        .filter(r => r.deploymentId === deploymentId && r.id !== deployment.currentReleaseId)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-      if (releases.length < 2) {
+      if (candidates.length === 0) {
         throw new ConflictError('No previous release available for rollback');
       }
 
-      targetReleaseId = releases[1].id; // Second most recent
+      targetReleaseId = candidates[0].id;
     }
 
     const targetRelease = this.releases.get(targetReleaseId);
     if (!targetRelease || targetRelease.deploymentId !== deploymentId) {
       throw new NotFoundError(`Target release not found: ${targetReleaseId}`);
     }
+
+    const previousReleaseId = deployment.currentReleaseId || '';
 
     const job = await this.jobService.createJob({
       type: 'start',
@@ -420,7 +589,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       },
     });
 
-    const previousReleaseId = deployment.currentReleaseId || '';
+    // Atomically activate the target release (switches the durable current pointer).
+    await this.promoteRelease(deploymentId, targetReleaseId);
+
     deployment.status = 'installing';
     deployment.lifecycleState = 'releasing';
     deployment.lastUpdated = new Date().toISOString();
@@ -438,6 +609,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     deploymentId: string,
     options?: { page?: number; limit?: number }
   ): Promise<GetDeploymentHistoryResponse> {
+    await this.ensureLoaded();
     this.logger.info('Getting deployment history', { deploymentId, options });
     this.requireDeployment(deploymentId); // 404 for unknown deployments, consistent with other routes
     const jobs = await this.jobService.listJobs({ deploymentId });
@@ -445,12 +617,14 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   async getReleases(deploymentId: string): Promise<Release[]> {
+    await this.ensureLoaded();
     return Array.from(this.releases.values())
       .filter(r => r.deploymentId === deploymentId)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async getRelease(deploymentId: string, releaseId: string): Promise<Release> {
+    await this.ensureLoaded();
     const release = this.releases.get(releaseId);
     if (!release || release.deploymentId !== deploymentId) {
       throw new NotFoundError(`Release not found: ${releaseId}`);
@@ -488,7 +662,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     private storageService: StorageService,
     jobService: JobService,
     // Reserved for orchestration wiring (issue #15); not yet used directly here.
-    private dockerService: DockerService
+    private dockerService: DockerService,
+    private draftService: DraftService
   ) {
     super(jobService);
     void this.dockerService;
@@ -508,12 +683,129 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
+  /** Rehydrate deployments, releases, and the active-release pointer from storage. */
+  protected override async loadFromStorage(): Promise<void> {
+    if (!(await this.storageService.fileExists('deployments'))) {
+      return;
+    }
+
+    let ids: string[];
+    try {
+      ids = await this.storageService.listDir('deployments');
+    } catch {
+      return;
+    }
+
+    for (const deploymentId of ids) {
+      const metaPath = `deployments/${deploymentId}/metadata.json`;
+      if (!(await this.storageService.fileExists(metaPath))) {
+        continue;
+      }
+      try {
+        const deployment = JSON.parse(await this.storageService.readFileAsString(metaPath)) as EnhancedDeploymentDetail;
+
+        // Load every release for this deployment.
+        const releasesDir = `deployments/${deploymentId}/releases`;
+        if (await this.storageService.fileExists(releasesDir)) {
+          for (const releaseId of await this.storageService.listDir(releasesDir)) {
+            const relPath = `${releasesDir}/${releaseId}/metadata.json`;
+            if (await this.storageService.fileExists(relPath)) {
+              const release = JSON.parse(await this.storageService.readFileAsString(relPath)) as Release;
+              this.releases.set(release.id, release);
+            }
+          }
+        }
+
+        // The `current` pointer is authoritative for the active release.
+        const pointerPath = `deployments/${deploymentId}/current`;
+        if (await this.storageService.fileExists(pointerPath)) {
+          deployment.currentReleaseId = (await this.storageService.readFileAsString(pointerPath)).trim();
+        }
+
+        this.deployments.set(deploymentId, deployment);
+      } catch (error) {
+        this.logger.warn('Failed to rehydrate deployment; skipping', {
+          deploymentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    this.logger.info('Rehydrated deployments from storage', { count: this.deployments.size });
+  }
+
+  protected override async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {
+    // Throws ConflictError if the draft was never finalized.
+    return this.draftService.getFinalizedArtifacts(draftId);
+  }
+
+  protected override async buildReleaseFromDraft(
+    artifacts: FinalizedArtifacts | null,
+    request: { draftId?: string },
+    deploymentId: string,
+    releaseId: string
+  ): Promise<{ app: string; version?: string; release: Release }> {
+    const now = new Date().toISOString();
+    const manifest = artifacts?.manifest;
+
+    const filesChecksums: Record<string, string> = {};
+    for (const f of manifest?.files ?? []) {
+      filesChecksums[f.path || f.name] = f.sha256;
+    }
+
+    const release: Release = {
+      id: releaseId,
+      deploymentId,
+      draftId: request.draftId ?? manifest?.draftId ?? '',
+      status: 'creating',
+      createdAt: now,
+      images: [],
+      ports: (manifest?.ports ?? []).map(p => ({ host: p.host, container: p.container, protocol: p.protocol })),
+      filesChecksums,
+      metadata: manifest ? { checksum: manifest.checksum } : undefined,
+    };
+
+    return {
+      app: manifest?.appId ?? 'Unknown App',
+      version: manifest?.version,
+      release,
+    };
+  }
+
   protected override async ensureLayout(deploymentId: string): Promise<void> {
     const layout = await this.getDirectoryLayout(deploymentId);
     await this.storageService.ensureDir(layout.deploymentPath);
     await this.storageService.ensureDir(layout.draftsPath);
     await this.storageService.ensureDir(layout.releasesPath);
     await this.storageService.ensureDir(layout.logsPath);
+  }
+
+  /** Copy the finalized artifacts into the immutable release directory. */
+  protected override async stageReleaseArtifacts(
+    artifacts: FinalizedArtifacts | null,
+    deploymentId: string,
+    release: Release
+  ): Promise<void> {
+    if (!artifacts) {
+      return;
+    }
+    const releaseDir = `deployments/${deploymentId}/releases/${release.id}`;
+    if (artifacts.composeOverride) {
+      await this.storageService.writeFile(`${releaseDir}/compose-override.yml`, artifacts.composeOverride);
+    }
+    for (const file of artifacts.files) {
+      await this.storageService.writeFile(`${releaseDir}/files/${file.uploadId}-${file.name}`, file.content);
+    }
+    // Persist the source manifest alongside the release for traceability.
+    await this.storageService.writeFile(
+      `${releaseDir}/manifest.json`,
+      JSON.stringify(artifacts.manifest, null, 2)
+    );
+  }
+
+  /** Atomically switch the active-release pointer (storage writes are temp+rename). */
+  protected override async writeCurrentPointer(deploymentId: string, releaseId: string): Promise<void> {
+    await this.storageService.writeFile(`deployments/${deploymentId}/current`, releaseId);
   }
 
   protected override async persistDeployment(deployment: EnhancedDeploymentDetail): Promise<void> {

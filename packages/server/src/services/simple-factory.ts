@@ -98,7 +98,10 @@ export function createServices(env: ServiceEnvironment): Services {
     
     // Create shared validation service instance to avoid duplication
     const validation = new RealValidationService(docker, systemMonitoring, storage);
-    
+
+    // Shared draft service: the deployment service builds releases from its finalized artifacts.
+    const drafts = new RealDraftService(storage, catalog, validation);
+
     return {
       storage,
       config: new RealConfigService(storage),
@@ -111,9 +114,9 @@ export function createServices(env: ServiceEnvironment): Services {
       jobs,
       catalog,
       bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
-      drafts: new RealDraftService(storage, catalog, validation),
+      drafts,
       validation,
-      deployments: new RealDeploymentService(storage, jobs, docker),
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts),
     };
   }
   
@@ -136,9 +139,12 @@ export function createServices(env: ServiceEnvironment): Services {
   const apiKeyProvider = new ApiKeyAuthProvider();
   authService.registerProvider(apiKeyProvider);
   
-  // Create shared validation service instance to avoid duplication  
+  // Create shared validation service instance to avoid duplication
   const validation = new RealValidationService(docker, systemMonitoring, storage);
-  
+
+  // Shared draft service: the deployment service builds releases from its finalized artifacts.
+  const drafts = new RealDraftService(storage, catalog, validation);
+
   return {
     storage,
     config: new RealConfigService(storage),
@@ -151,9 +157,9 @@ export function createServices(env: ServiceEnvironment): Services {
     jobs,
     catalog,
     bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
-    drafts: new RealDraftService(storage, catalog, validation),
+    drafts,
     validation,
-    deployments: new RealDeploymentService(storage, jobs, docker),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts),
   };
 }
 

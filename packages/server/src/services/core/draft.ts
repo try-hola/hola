@@ -25,9 +25,43 @@ import type {
 import { createHash } from 'crypto';
 
 import { getLogger } from '../../lib/logger';
+import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
+
+/**
+ * Shape of `drafts/<id>/finalized/manifest.json` produced by `finalizeDraft`.
+ * This is the deterministic, deployment-ready specification consumed by
+ * `DeploymentService` when building a release.
+ */
+export interface FinalizedManifestFile {
+  uploadId: string;
+  name: string;
+  kind: DraftFile['kind'];
+  path?: string;
+  sha256: string;
+}
+
+export interface FinalizedManifest {
+  draftId: string;
+  appId: string;
+  version?: string;
+  systemOverrides: Record<string, string>;
+  appEnv: AppEnvVar[];
+  ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
+  composeOverride: string;
+  files: FinalizedManifestFile[];
+  checksum: string;
+  finalizedAt: string;
+}
+
+/** Finalized manifest plus the staged file/compose contents it references. */
+export interface FinalizedArtifacts {
+  manifest: FinalizedManifest;
+  composeOverride?: string;
+  files: Array<{ uploadId: string; name: string; kind: DraftFile['kind']; path?: string; content: Buffer }>;
+}
 
 /**
  * Deterministic JSON serialization with recursively sorted object keys, so a
@@ -71,7 +105,9 @@ export interface DraftService extends HealthCheckable {
   
   // Finalization
   finalizeDraft(draftId: string): Promise<FinalizeDraftResponse>;
-  
+  /** Read the staged finalized artifacts for a finalized draft (for deployment creation). */
+  getFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts>;
+
   // Internal helpers
   getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults }>;
 }
@@ -547,6 +583,31 @@ export class RealDraftService implements DraftService {
     }
   }
 
+  async getFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts> {
+    await this.ensureLoaded();
+    const manifestPath = `drafts/${draftId}/finalized/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) {
+      throw new ConflictError(`Draft is not finalized: ${draftId}`);
+    }
+
+    const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+
+    const files: FinalizedArtifacts['files'] = [];
+    for (const f of manifest.files) {
+      const blobPath = `drafts/${draftId}/finalized/files/${f.uploadId}-${f.name}`;
+      const content = (await this.storageService.fileExists(blobPath))
+        ? await this.storageService.readFile(blobPath)
+        : Buffer.alloc(0);
+      files.push({ uploadId: f.uploadId, name: f.name, kind: f.kind, path: f.path, content });
+    }
+
+    return {
+      manifest,
+      composeOverride: manifest.composeOverride || undefined,
+      files,
+    };
+  }
+
   async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
@@ -697,6 +758,25 @@ export class MockDraftService implements DraftService {
     const draft = this.drafts.get(draftId);
     if (!draft) throw new Error(`Draft not found: ${draftId}`);
     return { spec: { draftId: draft.draftId, appId: draft.appId, finalizedAt: new Date().toISOString() }, checksum: crypto.randomUUID() };
+  }
+
+  async getFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts> {
+    this.logger.info('Mock: Getting finalized artifacts', { draftId });
+    const draft = this.drafts.get(draftId);
+    if (!draft) throw new NotFoundError(`Draft not found: ${draftId}`);
+    const manifest: FinalizedManifest = {
+      draftId,
+      appId: draft.appId,
+      version: draft.version,
+      systemOverrides: draft.systemOverrides,
+      appEnv: draft.appEnv,
+      ports: draft.ports,
+      composeOverride: draft.composeOverride ?? '',
+      files: [],
+      checksum: 'mock-checksum',
+      finalizedAt: new Date().toISOString(),
+    };
+    return { manifest, composeOverride: manifest.composeOverride || undefined, files: [] };
   }
 
   async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults }> {
