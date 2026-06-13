@@ -1,0 +1,19 @@
+# Minimal fixture bundle for the Docker/Compose orchestration integration test (#19).
+#
+# Chosen for deterministic, fast, hermetic behaviour:
+#   - busybox (~4MB) so the first run pulls quickly;
+#   - emits a fixed `HOLA_FIXTURE_READY` line so the test can prove logs come from
+#     the real container rather than synthetic fallback data;
+#   - a real healthcheck (a sentinel file) so the container transitions to `healthy`;
+#   - NO `ports:` mapping — nothing is published to the host; the app is only
+#     reachable on the internal `hola` network, exactly as Hola requires.
+services:
+  fixture:
+    image: busybox:1.36
+    command: ["sh", "-c", "echo HOLA_FIXTURE_READY && touch /tmp/ready && sleep 3600"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 1s
