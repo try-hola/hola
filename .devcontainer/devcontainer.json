@@ -6,7 +6,9 @@
     // Docker-in-Docker so the Compose orchestration integration test (#19) can
     // run a real daemon inside the dev container. Starts dockerd and adds the
     // remote user to the docker group.
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": false
+    }
   },
 //   "postCreateCommand": "npm install",
   "customizations": {
