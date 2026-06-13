@@ -9,8 +9,8 @@
 # Bind the workspace directory to make file changes persistent
 --bind
 
-# Set environment variables for local testing
---env HOLA_USE_REAL_DOCKER=false
+# Select deterministic mock services for local CI testing
+--env NODE_ENV=test
 
 # Use the host's Docker daemon (since we're in a dev container)
 --use-gitignore=false

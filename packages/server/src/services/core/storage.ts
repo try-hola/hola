@@ -6,10 +6,11 @@
  */
 
 import { promises as fs } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { join, dirname, isAbsolute } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { getLogger } from '../../lib/logger';
+import { getHolaDataDir } from '../../config/paths';
 import type { HealthCheckable, ServiceHealth } from './types';
 
 export interface StorageConfig {
@@ -56,10 +57,8 @@ export class RealStorageService implements StorageService {
   private initialized = false;
 
   constructor(config?: Partial<StorageConfig>) {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || tmpdir();
-    
     this.config = {
-      holaDir: resolve(homeDir, '.hola'),
+      holaDir: getHolaDataDir(),
       tempDir: tmpdir(),
       atomicWrites: true,
       createDirs: true,
@@ -130,38 +129,50 @@ export class RealStorageService implements StorageService {
 
   // Directory operations
   async ensureDir(path: string): Promise<void> {
+    path = this.resolveStoragePath(path);
+
     try {
       await fs.mkdir(path, { recursive: true });
       this.logger.debug('Directory ensured', { path });
     } catch (error) {
       this.logger.error('Failed to ensure directory', error as Error, { path });
-      throw new Error(`Failed to create directory ${path}: ${error}`);
+      throw new Error(`Failed to create directory ${path}: ${error}`, { cause: error });
     }
   }
 
   async listDir(path: string): Promise<string[]> {
+    path = this.resolveStoragePath(path);
+
     try {
       const items = await fs.readdir(path);
       this.logger.debug('Directory listed', { path, count: items.length });
       return items;
     } catch (error) {
       this.logger.error('Failed to list directory', error as Error, { path });
-      throw new Error(`Failed to list directory ${path}: ${error}`);
+      throw new Error(`Failed to list directory ${path}: ${error}`, { cause: error });
     }
   }
 
   async deleteDir(path: string, recursive = false): Promise<void> {
+    path = this.resolveStoragePath(path);
+
     try {
-      await fs.rmdir(path, { recursive });
+      if (recursive) {
+        await fs.rm(path, { recursive: true });
+      } else {
+        await fs.rmdir(path);
+      }
       this.logger.info('Directory deleted', { path, recursive });
     } catch (error) {
       this.logger.error('Failed to delete directory', error as Error, { path, recursive });
-      throw new Error(`Failed to delete directory ${path}: ${error}`);
+      throw new Error(`Failed to delete directory ${path}: ${error}`, { cause: error });
     }
   }
 
   // File operations
   async writeFile(path: string, content: string | Buffer): Promise<void> {
+    path = this.resolveStoragePath(path);
+
     try {
       if (this.config.createDirs) {
         await this.ensureDir(dirname(path));
@@ -180,7 +191,7 @@ export class RealStorageService implements StorageService {
       });
     } catch (error) {
       this.logger.error('Failed to write file', error as Error, { path });
-      throw new Error(`Failed to write file ${path}: ${error}`);
+      throw new Error(`Failed to write file ${path}: ${error}`, { cause: error });
     }
   }
 
@@ -202,13 +213,15 @@ export class RealStorageService implements StorageService {
   }
 
   async readFile(path: string): Promise<Buffer> {
+    path = this.resolveStoragePath(path);
+
     try {
       const content = await fs.readFile(path);
       this.logger.debug('File read', { path, size: content.length });
       return content;
     } catch (error) {
       this.logger.error('Failed to read file', error as Error, { path });
-      throw new Error(`Failed to read file ${path}: ${error}`);
+      throw new Error(`Failed to read file ${path}: ${error}`, { cause: error });
     }
   }
 
@@ -218,16 +231,20 @@ export class RealStorageService implements StorageService {
   }
 
   async deleteFile(path: string): Promise<void> {
+    path = this.resolveStoragePath(path);
+
     try {
       await fs.unlink(path);
       this.logger.debug('File deleted', { path });
     } catch (error) {
       this.logger.error('Failed to delete file', error as Error, { path });
-      throw new Error(`Failed to delete file ${path}: ${error}`);
+      throw new Error(`Failed to delete file ${path}: ${error}`, { cause: error });
     }
   }
 
   async fileExists(path: string): Promise<boolean> {
+    path = this.resolveStoragePath(path);
+
     try {
       await fs.access(path);
       return true;
@@ -237,6 +254,8 @@ export class RealStorageService implements StorageService {
   }
 
   async getMetadata(path: string): Promise<FileMetadata> {
+    path = this.resolveStoragePath(path);
+
     try {
       const stats = await fs.stat(path);
       return {
@@ -248,11 +267,15 @@ export class RealStorageService implements StorageService {
       };
     } catch (error) {
       this.logger.error('Failed to get file metadata', error as Error, { path });
-      throw new Error(`Failed to get metadata for ${path}: ${error}`);
+      throw new Error(`Failed to get metadata for ${path}: ${error}`, { cause: error });
     }
   }
 
   // Utility operations
+  private resolveStoragePath(path: string): string {
+    return isAbsolute(path) ? path : this.resolveHolaPath(path);
+  }
+
   resolveHolaPath(...segments: string[]): string {
     return join(this.config.holaDir, ...segments);
   }

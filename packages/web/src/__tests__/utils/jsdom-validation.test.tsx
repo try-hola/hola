@@ -32,7 +32,7 @@ describe('JSdom & React Testing Library Validation', () => {
   it('should support @testing-library/react render function', async () => {
     const { container } = render(<TestComponent />);
     
-    // React 18 async rendering - wait for content
+    // React async rendering - wait for content
     await waitFor(() => {
       expect(screen.getByText('Hello World')).toBeInTheDocument();
     });
@@ -49,7 +49,7 @@ describe('JSdom & React Testing Library Validation', () => {
   it('should support jest-dom matchers', async () => {
     render(<TestComponent />);
     
-    // React 18 async rendering - wait for content 
+    // React async rendering - wait for content
     await waitFor(() => {
       expect(screen.getByText('Hello World')).toBeInTheDocument();
     });

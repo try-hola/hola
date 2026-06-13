@@ -122,4 +122,4 @@ Bun HTTP server implementing REST endpoints that strictly follow the contracts i
 - **Endpoint Retirement**: When removing API endpoints, clean ALL references: tests, web components, CLI commands, SSE events, shared types.
 - **Feature Flag Cleanup**: Remove obsolete environment variables from CI workflows and documentation.
 - **Breaking Changes**: Update CLI commands to use standard API patterns instead of removed development endpoints.
-- **Validation**: Ensure GitHub Actions workflows don't reference removed functionality (e.g., `HOLA_ENABLE_DEV_API`).
+- **Validation**: Ensure GitHub Actions workflows don't reference removed development API functionality.

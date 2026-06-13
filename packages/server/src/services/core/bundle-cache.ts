@@ -1,7 +1,7 @@
 import { existsSync, rmSync, statSync, readdirSync, utimesSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { getLogger } from '../../lib/logger';
+import { getHolaDataDir } from '../../config/paths';
 import { catalogConfig } from '../../config/catalog';
 
 export interface CacheEntry {
@@ -32,8 +32,9 @@ export interface CacheStats {
  */
 export class BundleCacheManager {
   private logger = getLogger().child({ service: 'BundleCacheManager' });
-  private baseCache = join(homedir(), '.hola', 'cache', 'bundles');
   private inUseBundles = new Set<string>(); // appId:version keys
+
+  constructor(private baseCache = join(getHolaDataDir(), 'cache', 'bundles')) {}
 
   /**
    * Mark a bundle as in-use (protected from eviction)
@@ -310,9 +311,12 @@ export class BundleCacheManager {
 }
 
 // Global cache manager instance
-let globalCacheManager: BundleCacheManager;
+let globalCacheManager: BundleCacheManager | undefined;
 
-export function getBundleCacheManager(): BundleCacheManager {
+export function getBundleCacheManager(baseCache?: string): BundleCacheManager {
+  if (baseCache) {
+    return new BundleCacheManager(baseCache);
+  }
   if (!globalCacheManager) {
     globalCacheManager = new BundleCacheManager();
   }

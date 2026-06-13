@@ -24,31 +24,12 @@ describe('Deployment Management', () => {
   let baseURL: string;
 
   beforeAll(async () => {
-    // Enable Phase 7 features for testing
-    process.env.HOLA_ENABLE_DEV_API = 'true';
-    process.env.HOLA_USE_REAL_DEPLOYMENTS = 'false';
-    process.env.HOLA_USE_REAL_VALIDATION = 'false';
-    process.env.HOLA_USE_REAL_DRAFTS = 'false';
-    
     baseURL = 'http://localhost:3001';
-    
-    // Use centralized server setup
-    await setupTestServer(3001, {
-      HOLA_ENABLE_DEV_API: 'true',
-      HOLA_USE_REAL_DEPLOYMENTS: 'false',
-      HOLA_USE_REAL_VALIDATION: 'false',
-      HOLA_USE_REAL_DRAFTS: 'false',
-    });
+    await setupTestServer(3001, { NODE_ENV: 'test' });
   });
 
   afterAll(async () => {
     await teardownTestServer();
-    
-    // Clean up environment
-    delete process.env.HOLA_ENABLE_DEV_API;
-    delete process.env.HOLA_USE_REAL_DEPLOYMENTS;
-    delete process.env.HOLA_USE_REAL_VALIDATION;
-    delete process.env.HOLA_USE_REAL_DRAFTS;
   });
 
   describe('Deployment Lifecycle', () => {

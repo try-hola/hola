@@ -19,25 +19,12 @@ describe('Draft File Operations', () => {
   let baseURL: string;
 
   beforeAll(async () => {
-    // Enable Phase 7 features for testing
-    process.env.HOLA_ENABLE_DEV_API = 'true';
-    process.env.HOLA_USE_REAL_DRAFTS = 'false'; // Start with mocks
-    
     baseURL = 'http://localhost:3002';
-    
-    // Use centralized server setup
-    await setupTestServer(3002, {
-      HOLA_ENABLE_DEV_API: 'true',
-      HOLA_USE_REAL_DRAFTS: 'false',
-    });
+    await setupTestServer(3002, { NODE_ENV: 'test' });
   });
 
   afterAll(async () => {
     await teardownTestServer();
-    
-    // Clean up environment
-    delete process.env.HOLA_ENABLE_DEV_API;
-    delete process.env.HOLA_USE_REAL_DRAFTS;
   });
 
   test('should upload a file to draft', async () => {

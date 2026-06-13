@@ -181,7 +181,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       return merged satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
-      throw new Error('MANIFEST_UNAVAILABLE');
+      throw new Error('MANIFEST_UNAVAILABLE', { cause: error });
     }
   }
 

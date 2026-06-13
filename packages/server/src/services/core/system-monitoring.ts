@@ -8,9 +8,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { statSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
 import { getLogger } from '../../lib/logger';
+import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
 // Note: avoid static import of getDockerService to prevent circular deps; use dynamic import where needed
 import type { SystemStatus } from '@hola/shared';
@@ -76,7 +75,7 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
   private monitoringInterval?: NodeJS.Timeout;
 
   constructor(holaDataPath?: string) {
-    this.holaDataPath = holaDataPath || join(homedir(), '.hola');
+    this.holaDataPath = holaDataPath || getHolaDataDir();
   }
 
   async getDiskUsage(path?: string): Promise<DiskUsage> {

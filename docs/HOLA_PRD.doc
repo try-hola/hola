@@ -194,10 +194,10 @@ Standard test setup pattern uses `setupTestEnvironment()` and `teardownTestEnvir
 - `bun run test:env:integration` - Docker Compose integration (special scenarios only)
 
 #### Test Organization
-Directory structure places tests in `packages/*/src/__tests__/` with helpers in `helpers/test-environment.ts`. Feature-specific directories (auth, deployments, docker) organize tests logically. Integration testing via Docker Compose available for scenarios requiring actual service dependencies, with dynamic port allocation and auto-detection when `HOLA_USE_REAL_DOCKER=false`.
+Directory structure places tests in `packages/*/src/__tests__/` with helpers in `helpers/test-environment.ts`. Feature-specific directories (auth, deployments, docker) organize tests logically. Integration testing via Docker Compose is available for scenarios requiring actual service dependencies, with explicit skips when Docker is unavailable.
 
 #### CI/CD Integration
-GitHub Actions workflow uses the standardized environment with `HOLA_USE_REAL_DOCKER="false"` and `bun test`. All tests use the same in-process environment locally and in CI, ensuring consistent behavior.
+GitHub Actions uses the standardized test environment selected by the test runner and `bun run test`. All tests use the same in-process environment locally and in CI, ensuring consistent behavior.
 
 #### Quality Gates & Migration
 All tests must follow the standardized environment: import from helpers, no background processes (`&`, `kill`, `pkill` patterns), proper cleanup with `teardownTestEnvironment()`, feature flags in test setup, and comprehensive error handling. Legacy patterns using external server startup/cleanup have been deprecated in favor of the reliable in-process approach.

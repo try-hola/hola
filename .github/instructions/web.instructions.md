@@ -29,9 +29,9 @@ React + TypeScript SPA using Tailwind. Consume APIs via `@hola/shared` with Stri
 - Error handling populates `{ loading, error, data }` with friendly messages; never throw from render.
 - SSE utilities should expose connection state and implement auto-reconnect with backoff.
 
-## React 18 Testing Environment
+## React Testing Environment
 - **jsdom Configuration**: Ensure `vitest.config.ts` includes `environment: 'jsdom'` and proper setup files.
-- **Async Rendering**: Use `await waitFor()` for component state changes; React 18 renders asynchronously.
+- **Async Rendering**: Use `await waitFor()` for component state changes; React renders asynchronously.
 - **StrictMode Effects**: Design hooks with stable dependencies; effects execute twice in development.
 - **Multiple React Copies**: Workspace dependencies can cause hook failures - ensure single React instance.
 

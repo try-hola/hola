@@ -300,8 +300,8 @@ cd packages/server && bun run dev    # Development server for manual testing
 # NEVER use background processes for automated testing
 # ALWAYS use in-process test environment from helpers/test-environment
 
-# For API testing with feature flags (manual development only)
-HOLA_USE_REAL_DOCKER=true bun run dev  # Enable specific features for development
+# Production mode selects real services, including Docker
+NODE_ENV=production bun run dev
 # Always use in-process testing for automated tests
 ```
 
@@ -326,7 +326,7 @@ HOLA_USE_REAL_DOCKER=true bun run dev  # Enable specific features for developmen
 ## Architecture Patterns
 
 ### StrictMode-Compatible API Hooks
-React 18 StrictMode causes double-execution of effects, which breaks traditional API hooks. Use this proven pattern:
+React StrictMode can double-execute effects in development, which breaks traditional API hooks. Use this proven pattern:
 
 **Working Pattern for API Hooks**:
 ```typescript
@@ -489,7 +489,7 @@ import type { SomeType } from '@hola/shared';
 3. **Clean test files** - remove ALL tests for deprecated functionality, don't leave orphaned files
 4. **Update SSE types** - remove event types and handlers for deprecated functionality
 5. **Fix CLI commands** - update to use standard SDK methods (Draft workflow for validation)
-6. **Clean CI/CD** - remove obsolete environment variables (`HOLA_ENABLE_DEV_API`) from workflows
+6. **Clean CI/CD** - remove obsolete development API environment variables from workflows
 7. **Verify health** - ensure all tests, linting, and builds pass after cleanup
 
 **Architectural Decision Rationale**:
@@ -503,10 +503,10 @@ import type { SomeType } from '@hola/shared';
 - **Standardized Test Environment**: Always use `helpers/test-environment` for server tests
 - **In-Process Testing**: All tests run in-process for speed, reliability, and isolation
 - **No Background Processes**: Never use `bun run dev &`, `kill %1`, or `pkill` patterns in tests
-- **Feature Flag Testing**: Set environment variables in test setup, not external server processes
+- **Environment Testing**: Set `NODE_ENV` in test setup, not external server processes
 - **Health Verification**: In-process tests don't need health checks - they're always ready
 
-**Feature Flag Testing**:
+**Environment Testing**:
 ```bash
 # ✅ Correct: Use standardized test environment  
 import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-environment';
@@ -514,8 +514,7 @@ import { setupTestEnvironment, teardownTestEnvironment } from '../helpers/test-e
 beforeAll(async () => {
   await setupTestEnvironment({
     env: {
-      HOLA_USE_REAL_DOCKER: 'true',
-      HOLA_USE_REAL_DATABASE: 'true'
+      NODE_ENV: 'test'
     }
   });
 });

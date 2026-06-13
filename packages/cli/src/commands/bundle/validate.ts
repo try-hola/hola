@@ -6,7 +6,7 @@ import type { CreateDraftResponse, ValidateDraftResponse } from '@hola/shared';
 export async function runBundleValidate(opts: { path?: string; strict?: boolean; json?: boolean }) {
   const dir = path.resolve(process.cwd(), opts.path ?? '.');
   const composePath = path.join(dir, 'docker-compose.yaml');
-  let composeYaml = '';
+  let composeYaml: string;
   try {
     composeYaml = await fs.readFile(composePath, 'utf8');
   } catch {

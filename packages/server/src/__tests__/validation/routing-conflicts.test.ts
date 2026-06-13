@@ -25,8 +25,7 @@ describe('Validation Service - Routing Conflicts', () => {
   beforeAll(async () => {
     await setupTestEnvironment({
       env: {
-        HOLA_USE_REAL_DOCKER: 'false',
-        HOLA_USE_REAL_DATABASE: 'false',
+        NODE_ENV: 'test',
       }
     });
   });
