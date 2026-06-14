@@ -25,6 +25,11 @@ services:
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
+      # Default cert resolver for HTTPS so server-emitted app routes (Traefik
+      # file provider, which set `tls: {}` without a resolver) get Let's Encrypt
+      # certificates automatically — every deployed app at <app>.<base-domain>
+      # is served over valid TLS, not Traefik's self-signed default.
+      - --entrypoints.websecure.http.tls.certresolver=le
       # Global HTTP -> HTTPS redirect at the entrypoint (no per-service middleware).
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
