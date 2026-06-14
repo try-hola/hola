@@ -93,6 +93,31 @@ explicitly when an external dependency such as Docker is unavailable.
 NODE_ENV=test bun test
 ```
 
+### Test Tiers
+
+| Tier | Files | Services | Runs in default `bun test` / CI | Command |
+| --- | --- | --- | --- | --- |
+| Unit / integration | `*.test.ts` | mock | yes | `bun test` |
+| Contract | `__tests__/contract/*.test.ts` | mock (HTTP) + real (temp dir, mock Docker) | yes | `bun test` |
+| Smoke (mock + failure paths) | `__tests__/smoke/*.test.ts` | mock (HTTP) + real (temp dir, mock/failing Docker) | yes | `bun test` |
+| Smoke / orchestration (real Docker) | `__tests__/integration/*.it.ts` | real services + **real Docker** | **no** (gated) | `bun run test:integration` |
+
+`*.it.ts` files are never collected by the default `bun test` run — they only
+run via `bun run test:integration`, and each skips explicitly (`describe.skipIf`)
+when no Docker daemon is reachable, so the hermetic baseline stays green on
+daemonless hosts. Real-service tiers reuse `helpers/real-system.ts`
+(`makeRealSystem`, `finalizedFixtureDraft`, `waitForJob`) to wire the real
+services over a temporary `HOLA_DATA_DIR`; restart recovery is asserted by
+recreating that system over the same data dir.
+
+```bash
+# Hermetic baseline (unit, contract, smoke) — no Docker required
+bun test
+
+# Real-Docker orchestration + end-to-end smoke (workflow + restart recovery)
+bun run test:integration
+```
+
 ## Test Organization
 
 ### Directory Structure
