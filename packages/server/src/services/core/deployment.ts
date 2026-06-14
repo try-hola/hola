@@ -31,7 +31,8 @@ import type {
   DeploymentAction,
   DeploymentDirectoryLayout,
   Job,
-  DeploymentListItem
+  DeploymentListItem,
+  ProvisionedAuthRef
 } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
@@ -802,7 +803,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     deployment: EnhancedDeploymentDetail
   ): Promise<{ env: Record<string, string>; credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> } | null> {
     const auth = await this.readActiveAuth(deployment);
-    if (!auth || auth.mode === 'none') return null;
+    // Nothing to do for `none` unless it's explicitly gated by a forward-auth fallback.
+    const wantsFallback = auth?.fallback === 'forward-auth' && auth.mode !== 'forward-auth';
+    if (!auth || (auth.mode === 'none' && !wantsFallback)) return null;
 
     const rule = this.routingRuleFor(deployment);
     const result = await this.provisioner.provision({
@@ -816,8 +819,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       forwardAuth: auth.forwardAuth,
     });
 
-    // Persist the provisioned ref so re-deploy reuses it and delete can tear it down.
-    deployment.metadata.auth = { mode: auth.mode, ref: result.ref, middleware: result.middleware };
+    // Defense-in-depth: also gate the app behind forward-auth when requested,
+    // even though it has its own (OIDC) login. Provisions a second proxy provider.
+    let middleware = result.middleware;
+    let fallbackRef: ProvisionedAuthRef | undefined;
+    if (wantsFallback) {
+      const fa = await this.provisioner.provision({
+        deploymentId: deployment.id,
+        appName: deployment.app,
+        mode: 'forward-auth',
+        host: rule.host,
+        existingRef: deployment.metadata.auth?.fallbackRef,
+        forwardAuth: auth.forwardAuth,
+      });
+      middleware = fa.middleware;
+      fallbackRef = fa.ref;
+    }
+
+    // Persist the provisioned refs so re-deploy reuses them and delete can tear them down.
+    deployment.metadata.auth = { mode: auth.mode, ref: result.ref, middleware, fallbackRef };
     this.deployments.set(deployment.id, deployment);
     await this.persistDeployment(deployment);
 
@@ -888,7 +908,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     logBoth: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>
   ): Promise<void> {
     await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
-    if (provisioned.auth.mode === 'forward-auth') {
+    // Re-emit the route with the gate whenever a forward-auth middleware was
+    // provisioned — either `forward-auth` mode or a `fallback: forward-auth` on a
+    // native-oidc/none app. routingRuleFor reads the persisted middleware.
+    if (deployment.metadata.auth?.middleware) {
       await this.routingService.activateRoute(this.routingRuleFor(deployment));
       await logBoth('info', 'Auth: forward-auth gate applied to route');
     }
@@ -1076,7 +1099,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // they activate immediately with the gate.
     if (!rule.forwardAuth) {
       const auth = await this.readActiveAuth(deployment);
-      if (auth?.mode === 'forward-auth') {
+      if (auth?.mode === 'forward-auth' || auth?.fallback === 'forward-auth') {
         this.logger.info('Deferring route activation until forward-auth is provisioned', { deploymentId });
         return;
       }
@@ -1092,6 +1115,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const auth = deployment.metadata.auth;
     if (!auth) return;
     await this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.ref });
+    // Tear down the extra forward-auth provider from a `fallback: forward-auth` too.
+    if (auth.fallbackRef) {
+      await this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.fallbackRef });
+    }
   }
 
   protected override async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {

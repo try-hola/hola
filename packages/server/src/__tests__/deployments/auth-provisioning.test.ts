@@ -376,6 +376,31 @@ describe('Auth provisioning lifecycle', () => {
     expect(mapAfter['gitea.local.hola']?.forwardAuth?.name).toBe('ak-gitea-x');
   });
 
+  test('fallback: a native-oidc app is also gated behind forward-auth', async () => {
+    const sys = makeSystem({ auth: { ...OIDC_AUTH, fallback: 'forward-auth' } });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    // Both the primary (oidc) and the fallback (forward-auth) were provisioned.
+    expect(spy.provisions.map(p => p.mode)).toEqual(['native-oidc', 'forward-auth']);
+
+    // OIDC env was injected AND the route is gated by the forward-auth middleware.
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    expect(env.GITEA_OIDC_CLIENT_ID).toBe('cid-123');
+    const map = JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json'));
+    expect(map['gitea.local.hola']?.forwardAuth?.name).toBe('ak-gitea-x');
+
+    // Both refs persisted; delete tears both down.
+    const meta = JSON.parse(await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`));
+    expect(meta.metadata.auth.ref.providerPk).toBe(42);
+    expect(meta.metadata.auth.fallbackRef.mode).toBe('forward-auth');
+
+    await sys.deployments.deleteDeployment(created.deploymentId);
+    expect(spy.deprovisions.map(d => d.ref?.mode).sort()).toEqual(['forward-auth', 'native-oidc']);
+  });
+
   test('native-ldap: injects the bind config into the ingress service', async () => {
     const sys = makeSystem({
       auth: {

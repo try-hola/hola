@@ -158,6 +158,9 @@ generated `AUTHENTIK_BOOTSTRAP_PASSWORD`.
   forward-auth middleware). Works out of the box.
 - **native-LDAP** — for apps that bind to an LDAP directory; **needs one-time setup** (below).
 
+An app's manifest can also set `auth.fallback: forward-auth` to gate a native-OIDC (or
+no-auth) app behind the proxy *as well*, for defense-in-depth.
+
 ### native-LDAP one-time setup
 The bind-account half is automatic (Hola creates a per-app LDAP service account on install), but the
 shared LDAP directory needs an outpost you create once:

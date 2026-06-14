@@ -789,7 +789,9 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     // reused on re-deploy and torn down on delete. Keyed on deploymentId.
     // `middleware` is set for forward-auth apps so the route can be re-emitted
     // with the gate on restart without re-provisioning.
-    auth?: { mode: AuthMode; ref: ProvisionedAuthRef; middleware?: ForwardAuthMiddleware };
+    // `ref` is the primary mode's artifact; `fallbackRef` is the extra forward-auth
+    // provider when `auth.fallback: forward-auth` gates a native-oidc/none app too.
+    auth?: { mode: AuthMode; ref: ProvisionedAuthRef; middleware?: ForwardAuthMiddleware; fallbackRef?: ProvisionedAuthRef };
   };
 };
 
