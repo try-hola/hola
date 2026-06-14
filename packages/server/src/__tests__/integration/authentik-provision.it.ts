@@ -198,6 +198,42 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     expect(after.body.providers).not.toContain(result.ref.providerPk!);
   }, 120_000);
 
+  test('scoped-token bootstrap: self-mints a non-superuser token and provisions with it', async () => {
+    // No direct API token — force the self-bootstrap path from the admin token.
+    const svc = new RealAuthentikProvisionerService({ ...config, authentikApiToken: undefined, authentikBootstrapToken: BOOTSTRAP_TOKEN });
+
+    // native-oidc through the scoped token (exercises provider/app/flows/scope mappings).
+    const oidc = await svc.provision({
+      deploymentId: 'dep-scoped-oidc-01',
+      appName: 'gitea',
+      mode: 'native-oidc',
+      host: 'g.example.com',
+      oidc: { redirectPath: '/cb', scopes: ['openid', 'email'], env: { issuer: 'I', clientId: 'C', clientSecret: 'S', redirectUri: 'R' } },
+    });
+    expect((await akGet(`/api/v3/providers/oauth2/${oidc.ref.providerPk}/`)).status).toBe(200);
+    await svc.deprovision({ deploymentId: 'dep-scoped-oidc-01', ref: oidc.ref });
+
+    // native-ldap through the scoped token (exercises create_user + set_password + the grant).
+    const ldap = await svc.provision({
+      deploymentId: 'dep-scoped-ldap-01',
+      appName: 'nextcloud',
+      mode: 'native-ldap',
+      host: 'nc.example.com',
+      ldap: { env: { host: 'H', port: 'P', bindDn: 'BIND_DN', bindPassword: 'BIND_PW', baseDn: 'BASE_DN' } },
+    });
+    expect((await akGet(`/api/v3/core/users/${ldap.ref.bindAccountPk}/`)).status).toBe(200);
+    await svc.deprovision({ deploymentId: 'dep-scoped-ldap-01', ref: ldap.ref });
+
+    // The bootstrapped service account exists and is NOT a superuser.
+    const users = (await akGet('/api/v3/core/users/?username=hola-provisioner')) as {
+      status: number;
+      body: { results: Array<{ is_superuser: boolean }> };
+    };
+    expect(users.status).toBe(200);
+    expect(users.body.results.length).toBeGreaterThan(0);
+    expect(users.body.results[0].is_superuser).toBe(false);
+  }, 120_000);
+
   test('native-ldap: provisions a real bind service account, then deletes it', async () => {
     const svc = new RealAuthentikProvisionerService(config);
     const result = await svc.provision({

@@ -284,3 +284,66 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(deletes).toContain('/api/v3/providers/proxy/55/');
   });
 });
+
+describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
+  const BOOTSTRAP_CONFIG: AuthConfig = { ...CONFIG, authentikApiToken: undefined, authentikBootstrapToken: 'admin-tok' };
+  let bootCalls: Array<{ method: string; path: string; auth?: string; body?: Record<string, unknown> }>;
+
+  beforeEach(() => {
+    bootCalls = [];
+    originalFetch = globalThis.fetch;
+    let tokenCreated = false;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = new URL(typeof input === 'string' ? input : input.toString());
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      bootCalls.push({ method, path: url.pathname, auth, body });
+
+      if (method === 'GET' && url.pathname === '/api/v3/core/users/') return json({ results: [] }); // no SA yet
+      if (method === 'POST' && url.pathname === '/api/v3/core/users/service_account/') return json({ user_pk: 9, username: 'hola-provisioner' }, 201);
+      if (method === 'POST' && url.pathname === '/api/v3/rbac/permissions/assigned_by_users/9/assign/') return json({});
+      if (method === 'GET' && url.pathname === '/api/v3/core/tokens/hola-provisioner-token/view_key/') {
+        return tokenCreated ? json({ key: 'scoped-key-xyz' }) : new Response('gone', { status: 404 });
+      }
+      if (method === 'POST' && url.pathname === '/api/v3/core/tokens/') { tokenCreated = true; return json({ pk: 1 }, 201); }
+      // OIDC provisioning calls (should use the scoped token):
+      if (method === 'GET' && url.pathname.startsWith('/api/v3/flows/instances/')) return json({ pk: 'flow' });
+      if (method === 'GET' && url.pathname.startsWith('/api/v3/propertymappings/provider/scope/')) return json({ results: [{ pk: 'm' }] });
+      if (method === 'POST' && url.pathname === '/api/v3/providers/oauth2/') return json({ pk: 1, client_id: body.client_id, client_secret: body.client_secret }, 201);
+      if (method === 'POST' && url.pathname === '/api/v3/core/applications/') return json({ pk: 2 }, 201);
+      return new Response('unexpected', { status: 500 });
+    }) as typeof globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('mints a scoped token from the bootstrap token, then provisions with the scoped token', async () => {
+    const svc = new RealAuthentikProvisionerService(BOOTSTRAP_CONFIG);
+    const result = await svc.provision(OIDC_INPUT);
+
+    // Bootstrap sequence ran with the ADMIN token: ensure SA, assign perms, mint + read token.
+    const boot = bootCalls.filter(c =>
+      c.path === '/api/v3/core/users/service_account/' ||
+      c.path === '/api/v3/rbac/permissions/assigned_by_users/9/assign/' ||
+      c.path === '/api/v3/core/tokens/');
+    expect(boot.length).toBe(3);
+    expect(boot.every(c => c.auth === 'Bearer admin-tok')).toBe(true);
+    // Assigned a non-superuser permission set (a representative perm is present).
+    const assign = bootCalls.find(c => c.path === '/api/v3/rbac/permissions/assigned_by_users/9/assign/')!;
+    expect((assign.body!.permissions as string[])).toContain('authentik_providers_oauth2.add_oauth2provider');
+
+    // The actual provisioning calls used the SCOPED token, not the admin token.
+    const providerCall = bootCalls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/oauth2/')!;
+    expect(providerCall.auth).toBe('Bearer scoped-key-xyz');
+    expect(result.ref.providerPk).toBe(1);
+
+    // A second provision reuses the cached scoped token (no second bootstrap).
+    bootCalls.length = 0;
+    await svc.provision({ ...OIDC_INPUT, deploymentId: 'dep-second-0002' });
+    expect(bootCalls.some(c => c.path === '/api/v3/core/users/service_account/')).toBe(false);
+    expect(bootCalls.find(c => c.path === '/api/v3/providers/oauth2/')!.auth).toBe('Bearer scoped-key-xyz');
+  });
+});

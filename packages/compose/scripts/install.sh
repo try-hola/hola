@@ -56,8 +56,9 @@ if [[ "$AUTH_MODE" == "authentik" ]]; then
   ensure_secret AUTHENTIK_BOOTSTRAP_PASSWORD "$(openssl rand -hex 24)"
   ensure_secret AUTHENTIK_BOOTSTRAP_TOKEN "$(openssl rand -hex 32)"
 
-  # The bootstrap token doubles as the server's provisioning API token.
-  env_set HOLA_AUTHENTIK_API_TOKEN "$(env_get AUTHENTIK_BOOTSTRAP_TOKEN)"
+  # The server uses AUTHENTIK_BOOTSTRAP_TOKEN (passed through by compose) ONCE at
+  # startup to mint a least-privilege scoped token, then provisions as a non-superuser
+  # service account. HOLA_AUTHENTIK_API_TOKEN stays blank unless you pin your own.
 
   # Derive the public issuer URL from the Authentik domain.
   authentik_domain="$(env_get HOLA_AUTHENTIK_DOMAIN | xargs || true)"

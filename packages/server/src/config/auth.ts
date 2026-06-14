@@ -25,8 +25,18 @@ export interface AuthConfig {
    * `authentikUrl` when unset.
    */
   authentikPublicUrl?: string;
-  /** Long-lived API token (Bearer) the provisioner authenticates with. */
+  /**
+   * Long-lived scoped API token the provisioner authenticates with. If set, it's
+   * used directly (operator pre-provisioned a least-privilege token). If unset,
+   * the provisioner self-bootstraps one from `authentikBootstrapToken`.
+   */
   authentikApiToken?: string;
+  /**
+   * Admin (akadmin) token used ONCE at startup to mint a scoped service-account
+   * token, so day-to-day provisioning runs with least privilege rather than as
+   * the superuser. Ignored when `authentikApiToken` is set.
+   */
+  authentikBootstrapToken?: string;
   /** Network timeout for Authentik API calls. */
   fetchTimeoutMs: number;
   /** LDAP outpost service host apps bind to (compose DNS name). */
@@ -49,6 +59,7 @@ export const defaultAuthConfig: AuthConfig = {
     stripTrailingSlash(process.env.HOLA_AUTHENTIK_PUBLIC_URL) ||
     stripTrailingSlash(process.env.HOLA_AUTHENTIK_URL),
   authentikApiToken: process.env.HOLA_AUTHENTIK_API_TOKEN || undefined,
+  authentikBootstrapToken: process.env.HOLA_AUTHENTIK_BOOTSTRAP_TOKEN || undefined,
   fetchTimeoutMs: Number(process.env.HOLA_AUTHENTIK_FETCH_TIMEOUT_MS) || 5000,
   ldapHost: process.env.HOLA_AUTHENTIK_LDAP_HOST || 'authentik-ldap',
   ldapPort: process.env.HOLA_AUTHENTIK_LDAP_PORT || '3389',

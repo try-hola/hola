@@ -79,6 +79,10 @@ services:
       - HOLA_AUTH_MODE=${HOLA_AUTH_MODE:-none}
       - HOLA_AUTHENTIK_URL=${HOLA_AUTHENTIK_URL:-http://authentik-server:9000}
       - HOLA_AUTHENTIK_PUBLIC_URL=${HOLA_AUTHENTIK_PUBLIC_URL:-}
+      # The server self-bootstraps a least-privilege scoped token from the admin
+      # bootstrap token at startup; provisioning then runs as a non-superuser
+      # service account. Set HOLA_AUTHENTIK_API_TOKEN to pin a pre-made scoped token instead.
+      - HOLA_AUTHENTIK_BOOTSTRAP_TOKEN=${AUTHENTIK_BOOTSTRAP_TOKEN:-}
       - HOLA_AUTHENTIK_API_TOKEN=${HOLA_AUTHENTIK_API_TOKEN:-}
       # Base DN of the shared LDAP directory (for native-ldap apps); host/port
       # default to the authentik-ldap outpost service.
