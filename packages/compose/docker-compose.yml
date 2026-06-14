@@ -29,6 +29,9 @@ services:
       # file provider, which set `tls: {}` without a resolver) get Let's Encrypt
       # certificates automatically — every deployed app at <app>.<base-domain>
       # is served over valid TLS, not Traefik's self-signed default.
+      # Default resolver for ALL websecure routers (UI, dashboard, auth, and the
+      # server-emitted app routes) so none need a per-router certresolver label.
+      # The DNS-01 overlay (docker-compose.dns01.yml) adds wildcard domains here.
       - --entrypoints.websecure.http.tls.certresolver=le
       # Global HTTP -> HTTPS redirect at the entrypoint (no per-service middleware).
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -51,7 +54,6 @@ services:
       traefik.http.routers.traefik.entrypoints: websecure
       traefik.http.routers.traefik.service: api@internal
       traefik.http.routers.traefik.tls: "true"
-      traefik.http.routers.traefik.tls.certresolver: le
 
   server:
     image: hola/server:latest
@@ -110,7 +112,6 @@ services:
       traefik.http.routers.hola-web.rule: Host(`${HOLA_DOMAIN}`)
       traefik.http.routers.hola-web.entrypoints: websecure
       traefik.http.routers.hola-web.tls: "true"
-      traefik.http.routers.hola-web.tls.certresolver: le
       traefik.http.services.hola-web.loadbalancer.server.port: "80"
 
   # --- Authentik (SSO platform) -------------------------------------------
@@ -169,7 +170,6 @@ services:
       traefik.http.routers.authentik.rule: Host(`${HOLA_AUTHENTIK_DOMAIN:-auth.local.hola}`)
       traefik.http.routers.authentik.entrypoints: websecure
       traefik.http.routers.authentik.tls: "true"
-      traefik.http.routers.authentik.tls.certresolver: le
       traefik.http.services.authentik.loadbalancer.server.port: "9000"
 
   authentik-worker:
