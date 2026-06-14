@@ -7,8 +7,22 @@ const load = async <T,>(p: Promise<T>): Promise<T> => p;
 const prog = sade('hola');
 
 prog
-  .version('0.1.0')
-  .describe('Hola CLI — deployments and bundle developer workflow');
+  .version('0.2.0')
+  .describe('Hola CLI — install, deployments, and the bundle developer workflow');
+
+// init — guided first-time setup (writes .env on this machine; no server needed)
+prog
+  .command('init')
+  .describe('Interactively generate a Hola .env (validated, runs locally)')
+  .option('--out', 'Path to write the .env (default <compose-dir>/.env)')
+  .option('--compose-dir', 'Path to the packages/compose directory')
+  .option('--force', 'Update an existing .env in place', false)
+  .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
+  .option('--json', 'Print the resolved config as JSON (secrets redacted)', false)
+  .action(async (opts) => {
+    const { runInit } = await load(import('./commands/init/init'));
+    await runInit(opts);
+  });
 
 // bundle validate
 prog
