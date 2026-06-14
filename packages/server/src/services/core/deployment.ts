@@ -43,8 +43,10 @@ import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
-import type { ProvisionerService } from './provisioner';
+import type { ProvisionerService, ProvisionResult } from './provisioner';
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
+
+type ProvisionCredentials = NonNullable<ProvisionResult['credentials']>;
 
 /** Promote a new release built from a finalized draft onto an existing deployment. */
 export interface PromoteRequest {
@@ -714,6 +716,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     this.jobService.setExecutor(ctx => this.runLifecycleJob(ctx));
   }
 
+  /** Post-deploy auth-setup retry tuning (overridable in tests to avoid real waits). */
+  authSetupMaxAttempts = 18;
+  authSetupIntervalMs = 5000;
+
   /** Deterministic Compose project name (aligns with the routing network name). */
   private projectName(deploymentId: string): string {
     return `hola-${deploymentId.slice(0, 12)}`;
@@ -769,27 +775,34 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return this.runtimeDir(deployment.id);
   }
 
-  /**
-   * Provision auth artifacts (if the active release's manifest declares an
-   * `auth` block) before the app starts, and return the env to inject. Idempotent:
-   * reuses any ref already persisted on the deployment (keyed on deploymentId), so
-   * restart/rollback/start-after-stop never create duplicate clients. Throws on
-   * provisioning failure so the lifecycle job fails before any container starts.
-   */
-  private async provisionAuthEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
+  /** Read the active release's declared auth config (if any). */
+  private async readActiveAuth(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest['auth']> {
     const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return {};
+    if (!releaseId) return undefined;
     const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return {};
-
-    let auth: FinalizedManifest['auth'];
+    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
     try {
       const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      auth = manifest.auth;
+      return manifest.auth;
     } catch {
-      return {};
+      return undefined;
     }
-    if (!auth || auth.mode === 'none') return {};
+  }
+
+  /**
+   * Provision auth artifacts (if the active release's manifest declares an
+   * `auth` block) before the app starts. Returns the env to inject plus the raw
+   * provisioned credentials + the auth config (for any post-deploy setup command),
+   * or null when there's nothing to do. Idempotent: reuses any ref already persisted
+   * on the deployment (keyed on deploymentId), so restart/rollback/start-after-stop
+   * never create duplicate clients. Throws on provisioning failure so the lifecycle
+   * job fails before any container starts.
+   */
+  private async provisionAuth(
+    deployment: EnhancedDeploymentDetail
+  ): Promise<{ env: Record<string, string>; credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> } | null> {
+    const auth = await this.readActiveAuth(deployment);
+    if (!auth || auth.mode === 'none') return null;
 
     const rule = this.routingRuleFor(deployment);
     const result = await this.provisioner.provision({
@@ -808,7 +821,61 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     this.deployments.set(deployment.id, deployment);
     await this.persistDeployment(deployment);
 
-    return result.env;
+    return { env: result.env, credentials: result.credentials, auth };
+  }
+
+  /**
+   * Run an app's post-deploy OIDC setup command (e.g. `gitea admin auth add-oauth`)
+   * inside its container, for apps that can't be configured by env alone. Idempotent
+   * via the manifest's check/checkMatch guard, and retried with backoff because the
+   * app may still be running first-boot migrations. Throws if it never succeeds, so a
+   * deploy that can't complete its auth wiring is surfaced rather than silently broken.
+   */
+  private async runPostDeploySetup(
+    deployment: EnhancedDeploymentDetail,
+    provisioned: { credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> },
+    projectName: string,
+    logBoth: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>
+  ): Promise<void> {
+    const setup = provisioned.auth.oidc?.setup;
+    const creds = provisioned.credentials;
+    if (!setup || !creds) return;
+
+    const service = setup.service ?? deployment.app;
+    const dir = this.runtimeDir(deployment.id);
+    const subs: Record<string, string> = {
+      clientId: creds.clientId,
+      clientSecret: creds.clientSecret,
+      issuer: creds.issuer,
+      redirectUri: creds.redirectUri,
+      host: this.routingRuleFor(deployment).host,
+    };
+    const apply = (args: string[]) =>
+      args.map(a => a.replace(/\{\{(\w+)\}\}/g, (_, k) => subs[k] ?? `{{${k}}}`));
+
+    for (let attempt = 1; attempt <= this.authSetupMaxAttempts; attempt++) {
+      if (attempt > 1) await new Promise(r => setTimeout(r, this.authSetupIntervalMs));
+
+      if (setup.check) {
+        const chk = await this.dockerService.composeExec(dir, projectName, service, apply(setup.check), { user: setup.user });
+        if (!chk.success) {
+          await logBoth('info', `Auth setup: app not ready yet (attempt ${attempt}/${this.authSetupMaxAttempts})`);
+          continue; // app likely still starting; retry
+        }
+        if (setup.checkMatch && chk.output.includes(setup.checkMatch)) {
+          await logBoth('info', 'Auth setup: already configured, skipping');
+          return;
+        }
+      }
+
+      const cmd = await this.dockerService.composeExec(dir, projectName, service, apply(setup.command), { user: setup.user });
+      if (cmd.success) {
+        await logBoth('info', 'Auth setup: OIDC source configured');
+        return;
+      }
+      await logBoth('warn', `Auth setup command failed (attempt ${attempt}/${this.authSetupMaxAttempts})`);
+    }
+    throw new Error('post-deploy auth setup did not succeed after retries');
   }
 
   private jobTypeToAction(type: Job['type']): string {
@@ -854,18 +921,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextStatus = 'stopped';
         nextLifecycle = 'stopped';
       } else if (action === 'restart') {
-        const env = await this.provisionAuthEnv(deployment);
-        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment, env), projectName);
+        const provisioned = await this.provisionAuth(deployment);
+        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
+        if (provisioned) await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
         // deploy / start / rollback -> compose up
-        const env = await this.provisionAuthEnv(deployment);
-        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment, env), projectName);
+        const provisioned = await this.provisionAuth(deployment);
+        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
+        if (provisioned) await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       }

@@ -270,15 +270,36 @@ export type GetCatalogAppVersionDetailResponse = {
 // capability × platform at deploy time.
 export type AuthMode = 'none' | 'native-oidc' | 'native-ldap' | 'forward-auth';
 
+// A command run inside an app's container after deploy to finish OIDC wiring for
+// apps that can't be configured by env alone (e.g. Gitea stores its OAuth2 login
+// source in the DB and needs `gitea admin auth add-oauth`). Placeholders
+// {{clientId}} {{clientSecret}} {{issuer}} {{redirectUri}} {{host}} are substituted
+// with the provisioned values. `check`/`checkMatch` make it idempotent: if `check`
+// exits 0 and its stdout contains `checkMatch`, `command` is skipped.
+export type OidcSetupCommand = {
+  /** Compose service to exec in (defaults to the ingress service). */
+  service?: string;
+  /** Exec as this user (e.g. `git` for Gitea). */
+  user?: string;
+  /** Idempotency probe argv; if it succeeds and its output contains checkMatch, skip command. */
+  check?: string[];
+  checkMatch?: string;
+  /** The argv that configures the OIDC source (placeholders substituted). */
+  command: string[];
+};
+
 export type AppAuthConfig = {
   mode: AuthMode;
-  // For `native-oidc`: the env-var NAMES this app expects its OIDC settings in,
-  // plus the callback path and requested scopes. Hola provisions an OIDC client
-  // and injects the values under these names at deploy time.
+  // For `native-oidc`: how Hola wires the provisioned OIDC client into the app.
+  // `env` maps the issuer/client id/secret/redirect into the app's expected env-var
+  // NAMES (for env-configurable apps like Grafana). `setup` runs an in-container
+  // command for apps configured via CLI/DB (like Gitea). At least one is expected;
+  // an app may use both. `redirectPath` + `scopes` are always required.
   oidc?: {
     redirectPath: string;
     scopes: string[];
-    env: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+    setup?: OidcSetupCommand;
   };
   // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.
   ldap?: {

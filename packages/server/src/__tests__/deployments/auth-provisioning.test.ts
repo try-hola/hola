@@ -82,14 +82,15 @@ class SpyProvisioner implements ProvisionerService {
     this.provisions.push(input);
     if (this.failNext) throw new ProvisioningError('simulated provisioning failure');
     if (input.mode === 'native-oidc' && input.oidc) {
+      const redirectUri = `https://${input.host}${input.oidc.redirectPath}`;
+      const issuer = 'https://auth.example.com/application/o/gitea-x/';
       const names = input.oidc.env;
+      const env = names
+        ? { [names.issuer]: issuer, [names.clientId]: 'cid-123', [names.clientSecret]: 'csecret-456', [names.redirectUri]: redirectUri }
+        : {};
       return {
-        env: {
-          [names.issuer]: 'https://auth.example.com/application/o/gitea-x/',
-          [names.clientId]: 'cid-123',
-          [names.clientSecret]: 'csecret-456',
-          [names.redirectUri]: `https://${input.host}${input.oidc.redirectPath}`,
-        },
+        env,
+        credentials: { clientId: 'cid-123', clientSecret: 'csecret-456', issuer, redirectUri },
         ref: input.existingRef ?? { mode: 'native-oidc', providerPk: 42, applicationSlug: 'gitea-x', clientId: 'cid-123' },
       };
     }
@@ -249,5 +250,71 @@ describe('Auth provisioning lifecycle', () => {
     // Deletion completed despite the deprovision error.
     expect(failingDeprovision.deprovisions).toHaveLength(1);
     await expect(sys.deployments.getDeployment(created.deploymentId)).rejects.toThrow();
+  });
+
+  // --- Post-deploy setup command (e.g. Gitea `gitea admin auth add-oauth`) -----
+
+  const OIDC_SETUP_AUTH: AppAuthConfig = {
+    mode: 'native-oidc',
+    oidc: {
+      redirectPath: '/user/oauth2/authentik/callback',
+      scopes: ['openid', 'email'],
+      // No `env` — Gitea-style: configured by an in-container command instead.
+      setup: {
+        user: 'git',
+        check: ['gitea', 'admin', 'auth', 'list'],
+        checkMatch: 'authentik',
+        command: [
+          'gitea', 'admin', 'auth', 'add-oauth', '--name', 'authentik',
+          '--key', '{{clientId}}', '--secret', '{{clientSecret}}',
+          '--auto-discover-url', '{{issuer}}.well-known/openid-configuration',
+        ],
+      },
+    },
+  };
+
+  /** Docker mock that records composeExec calls and lets a test control the check output. */
+  class RecordingDocker extends MockDockerService {
+    execCalls: Array<{ service: string; command: string[]; user?: string }> = [];
+    checkOutput = '';
+    override async composeExec(_p: string, _n: string, service: string, command: string[], opts?: { user?: string }) {
+      this.execCalls.push({ service, command, user: opts?.user });
+      if (command.includes('list')) return { success: true, output: this.checkOutput };
+      return { success: true, output: '[mock] source created' };
+    }
+  }
+
+  test('post-deploy setup runs the OIDC command with substituted credentials (no env injected)', async () => {
+    const docker = new RecordingDocker();
+    const sys = makeSystem({ auth: OIDC_SETUP_AUTH, docker });
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    // The add-oauth command ran in the ingress service as the configured user,
+    // with placeholders substituted by the provisioned credentials.
+    const addCall = docker.execCalls.find(c => c.command.includes('add-oauth'));
+    expect(addCall).toBeDefined();
+    expect(addCall!.service).toBe('gitea');
+    expect(addCall!.user).toBe('git');
+    expect(addCall!.command).toContain('cid-123');
+    expect(addCall!.command).toContain('csecret-456');
+    expect(addCall!.command).toContain('https://auth.example.com/application/o/gitea-x/.well-known/openid-configuration');
+
+    // The app has no env mapping, so nothing was injected into the compose.
+    expect(await readMaterializedEnv(sys.storage, created.deploymentId)).toEqual({});
+  });
+
+  test('post-deploy setup is idempotent: skips the command when already configured', async () => {
+    const docker = new RecordingDocker();
+    docker.checkOutput = 'authentik   OAuth2   ...'; // `gitea admin auth list` already lists it
+    const sys = makeSystem({ auth: OIDC_SETUP_AUTH, docker });
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    // The guard matched, so only the check ran — no add-oauth.
+    expect(docker.execCalls.some(c => c.command.includes('add-oauth'))).toBe(false);
+    expect(docker.execCalls.some(c => c.command.includes('list'))).toBe(true);
   });
 });

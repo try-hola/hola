@@ -5,7 +5,7 @@
  * and log streaming capabilities with graceful degradation when Docker is unavailable.
  */
 
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync } from 'fs';
 import { join } from 'path';
@@ -13,6 +13,7 @@ import { getLogger } from '../../lib/logger';
 import type { ServiceHealth, HealthCheckable } from './types';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface DockerInfo {
   available: boolean;
@@ -57,7 +58,16 @@ export interface DockerService {
   composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
   composeRestart(projectPath: string, projectName: string, serviceName?: string): Promise<{ success: boolean; output: string }>;
-  
+  /** Run a command inside a running compose service (no shell). Used for post-deploy
+   *  auth setup (e.g. `gitea admin auth add-oauth`). */
+  composeExec(
+    projectPath: string,
+    projectName: string,
+    service: string,
+    command: string[],
+    opts?: { user?: string }
+  ): Promise<{ success: boolean; output: string }>;
+
   // Log operations
   getContainerLogs(containerName: string, since?: string, tail?: number): Promise<DockerLogs>;
   streamContainerLogs(containerName: string, callback: (log: DockerLogs['entries'][0]) => void): Promise<{ stop: () => void }>;
@@ -284,6 +294,32 @@ export class RealDockerService implements DockerService, HealthCheckable {
     }
   }
 
+  async composeExec(
+    projectPath: string,
+    projectName: string,
+    service: string,
+    command: string[],
+    opts?: { user?: string }
+  ): Promise<{ success: boolean; output: string }> {
+    const composeFile = join(projectPath, 'docker-compose.yml');
+    // Build argv directly (no shell) so provisioned values can't be injected.
+    const args = ['compose', '-f', composeFile, '-p', projectName, 'exec', '-T'];
+    if (opts?.user) args.push('--user', opts.user);
+    args.push(service, ...command);
+    try {
+      const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout: 60000 });
+      const output = [stdout, stderr].filter(Boolean).join('\n');
+      this.logger.info('Compose exec succeeded', { projectName, service, output: output.substring(0, 1000) });
+      return { success: true, output };
+    } catch (error) {
+      // execFile rejects on non-zero exit; surface stdout+stderr+message for the caller.
+      const e = error as { stdout?: string; stderr?: string; message?: string };
+      const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n');
+      this.logger.warn('Compose exec failed', { projectName, service, output: output.substring(0, 1000) });
+      return { success: false, output };
+    }
+  }
+
   async getContainerLogs(containerName: string, since?: string, tail?: number): Promise<DockerLogs> {
     try {
       this.logger.debug('Getting container logs', { containerName, since, tail });
@@ -495,6 +531,16 @@ export class MockDockerService implements DockerService {
   async composeRestart(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose restart', { projectPath, projectName });
     return { success: true, output: `[mock] Project ${projectName} restarted` };
+  }
+
+  async composeExec(
+    projectPath: string,
+    projectName: string,
+    service: string,
+    command: string[]
+  ): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose exec', { projectPath, projectName, service, command });
+    return { success: true, output: `[mock] exec ${service}: ${command.join(' ')}` };
   }
 
   async getContainerLogs(containerName: string): Promise<DockerLogs> {
