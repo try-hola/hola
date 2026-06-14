@@ -15,8 +15,11 @@ reviews:
   high_level_summary_in_walkthrough: false
   
   # Auto-review settings
+  # Disabled: the org is credit-limited and CodeRabbit is not a required check
+  # (main is unprotected). Reviews can still be summoned on demand with an
+  # `@coderabbitai review` PR comment. Flip back to true to re-enable.
   auto_review:
-    enabled: true
+    enabled: false
     drafts: false  # Skip drafts to avoid noise
     
     # Include bot PRs by explicitly NOT ignoring common bot usernames
@@ -28,8 +31,9 @@ reviews:
   
   # Review features
   request_changes_workflow: false
-  review_status: true
-  commit_status: true
+  # Do not post the "CodeRabbit" review/commit status checks on PRs.
+  review_status: false
+  commit_status: false
   fail_commit_status: false
   collapse_walkthrough: false
   changed_files_summary: true
