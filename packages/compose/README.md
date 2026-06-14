@@ -108,6 +108,25 @@ The server mounts `/var/run/docker.sock` so it can run `docker compose` for depl
 grants control of the host's Docker engine** (effectively root on the host). Run Hola only on a
 host you trust, keep the admin API key secret, and do not expose the API without auth.
 
+## App catalog
+The install wizard browses a remote **catalog** of installable apps. The server fetches the
+catalog JSON from `HOLA_CATALOG_URL`, set in `.env`:
+
+```bash
+# the official catalog (the default in .env.example)
+HOLA_CATALOG_URL=https://raw.githubusercontent.com/try-hola/apps/main/catalog.json
+```
+
+- **Default (turnkey):** `.env.example` ships pointing at the official `try-hola/apps` catalog, so a
+  fresh install shows published apps (e.g. Gitea) out of the box.
+- **Self-host:** point `HOLA_CATALOG_URL` at your own `catalog.json` (same shape; see the
+  [apps repo](https://github.com/try-hola/apps)).
+- **Disable:** leave `HOLA_CATALOG_URL` blank — the catalog is empty and you install by
+  pasting/uploading a Compose file instead.
+
+Apps are pulled from GHCR (`ghcr.io/try-hola/*`) as OCI bundles; the bundle's `compose.yaml`
+becomes the deployment. Pulling requires the package to be **public** (or a registry token).
+
 ## Deploying apps & routing
 When you deploy an app through Hola, the server writes a Traefik router/service for it into
 `/data/runtime/traefik/dynamic.yml`, which Traefik picks up automatically. For Traefik to reach the
@@ -128,5 +147,5 @@ covered by the integration test in issue #19.
 - `docker-compose.yml` — production stack (build, socket, data volume, Traefik file provider).
 - `docker-compose.dev.yml` — opt-in local dev overlay (Bun dev servers, HTTP only); `HOLA_DEV=1`.
 - `../server/Dockerfile`, `../web/Dockerfile`, `../web/nginx.conf` — images.
-- `.env.example` — domains, ports, auth.
+- `.env.example` — domains, ports, auth, catalog URL.
 - `scripts/` — install/up/down/logs/status helpers.

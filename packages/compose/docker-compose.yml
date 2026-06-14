@@ -69,6 +69,9 @@ services:
       - HOLA_API_KEY=${HOLA_API_KEY:-}
       # Base domain that deployed apps are exposed under (e.g. gitea.${HOLA_BASE_DOMAIN}).
       - HOLA_BASE_DOMAIN=${HOLA_BASE_DOMAIN:-local.hola}
+      # Remote app catalog (JSON). The turnkey default lives in .env.example; blank
+      # disables the catalog. See README "App catalog".
+      - HOLA_CATALOG_URL=${HOLA_CATALOG_URL:-}
     volumes:
       # Orchestrate deployments by talking to the host Docker engine.
       # SECURITY: this grants control of the host's Docker - see README.
