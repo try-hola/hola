@@ -1,5 +1,10 @@
 # Hola Repository Review: PRD Alignment and Technical Assessment
 
+> **Historical document.** This review predates the production-recovery epic and
+> its phase-based framing no longer reflects the current system. For accurate,
+> current docs see [ARCHITECTURE.md](ARCHITECTURE.md) and
+> [OPERATIONS.md](OPERATIONS.md). Kept for context.
+
 **Review Date**: January 2025  
 **Scope**: Complete codebase analysis comparing actual implementation against PRD requirements  
 **Purpose**: Identify deviations, complexity issues, and ambiguity areas for improved AI agent assistance

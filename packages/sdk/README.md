@@ -28,6 +28,5 @@ console.log(deployments.items.map(d => d.name));
 - Jobs: get and stream logs, list by deployment/status
 - Validation: compose validation
 - Bundles: import/register
-- Dev sessions (feature-flagged): CRUD, actions, status, logs
 
 All responses and inputs are fully typed using `@hola/shared` models.

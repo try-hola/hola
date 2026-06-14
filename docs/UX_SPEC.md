@@ -1,4 +1,10 @@
 # Hola Website UX Spec
+
+> **Historical / aspirational.** This UX spec (including marketing-site scope and
+> any phase or OrbStack references) predates the production-recovery epic and
+> does not all reflect the implemented product. For the current system see
+> [ARCHITECTURE.md](ARCHITECTURE.md) and [OPERATIONS.md](OPERATIONS.md).
+
 Scope: Marketing site (M1–M6) and Product SPA (S1–S10)
 Deliverables: Low-fidelity ASCII wireframes + structured descriptions and acceptance criteria
 Design direction: Dark-first high-contrast theme, accessible tokens. Link out to GitHub docs for MVP.
