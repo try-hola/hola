@@ -31,16 +31,19 @@ if [[ ! -f "$ROOT_DIR/traefik/acme/acme.json" ]]; then
   chmod 600 "$ROOT_DIR/traefik/acme/acme.json"
 fi
 
-# Provide hosts hint
-if ! grep -q "app.local.hola" /etc/hosts 2>/dev/null; then
-  cat <<'HOSTS_HINT'
-[install] Hint: Add these to /etc/hosts for local domains:
+# Dev-only hosts hint (production uses real, resolvable domains).
+if [[ "${HOLA_DEV:-}" == "1" || "${HOLA_DEV:-}" == "true" ]]; then
+  if ! grep -q "app.local.hola" /etc/hosts 2>/dev/null; then
+    cat <<'HOSTS_HINT'
+[install] Hint: Add these to /etc/hosts for local dev domains:
   127.0.0.1 app.local.hola traefik.local.hola
 HOSTS_HINT
+  fi
 fi
 
-# Bring up the stack (will automatically include docker-compose.override.yml if present)
-"$SCRIPT_DIR/up.sh"
+# Build images and bring up the stack. Defaults to the PRODUCTION stack; set
+# HOLA_DEV=1 to run the local dev override (Bun dev servers, HTTP only) instead.
+"$SCRIPT_DIR/up.sh" --build
 
 cat <<'NEXT'
 [install] Done. If auth is enabled and you did not set HOLA_API_KEY, retrieve the

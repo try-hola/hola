@@ -5,7 +5,11 @@
 # its file provider, so deployed apps become routable at <app>.<HOLA_BASE_DOMAIN>.
 #
 #   cp .env.example .env   # then edit
-#   ./scripts/install.sh   # or: docker compose up -d --build
+#   ./scripts/install.sh   # or: docker compose -f docker-compose.yml up -d --build
+#
+# This is the PRODUCTION stack. For local development use the dev override:
+#   HOLA_DEV=1 ./scripts/up.sh
+#   # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 services:
   traefik:

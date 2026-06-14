@@ -32,14 +32,15 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
 ```bash
 cd packages/compose
 cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL, ...
-./scripts/install.sh          # prepares .env/acme and runs `docker compose up -d --build`
+./scripts/install.sh          # prepares .env/acme and runs `up.sh --build` (production)
 # or manually:
 docker compose -f docker-compose.yml up -d --build
 ```
 
-`./scripts/install.sh` only includes the dev override when you run the dev scripts; for a
-production deploy use the explicit `-f docker-compose.yml` form above (or `scripts/up.sh` after
-removing the override).
+`./scripts/install.sh` defaults to the **production** stack and builds the images on first run.
+The dev overlay (`docker-compose.dev.yml`) is opt-in via `HOLA_DEV=1`, and because it is named
+`*.dev.yml` (not `*.override.yml`) `docker compose` never auto-merges it — so a fresh-host install
+is always production.
 
 ### Retrieve the admin API key
 Auth is **on by default in production**. If you did not set `HOLA_API_KEY` in `.env`, the server
@@ -57,7 +58,8 @@ Send it as `Authorization: Bearer <key>` (or `X-API-Key: <key>`) from the CLI/SD
 ```bash
 cd packages/compose
 cp .env.example .env
-./scripts/up.sh               # auto-includes docker-compose.override.yml
+HOLA_DEV=1 ./scripts/up.sh    # opt into the dev overlay (docker-compose.dev.yml)
+# or: bun run dev
 ```
 
 Dev runs the monorepo with Bun dev servers (hot reload) over **HTTP only** (no TLS/LE). The web
@@ -124,7 +126,7 @@ covered by the integration test in issue #19.
 
 ## Files
 - `docker-compose.yml` — production stack (build, socket, data volume, Traefik file provider).
-- `docker-compose.override.yml` — local dev (Bun dev servers, HTTP only).
+- `docker-compose.dev.yml` — opt-in local dev overlay (Bun dev servers, HTTP only); `HOLA_DEV=1`.
 - `../server/Dockerfile`, `../web/Dockerfile`, `../web/nginx.conf` — images.
 - `.env.example` — domains, ports, auth.
 - `scripts/` — install/up/down/logs/status helpers.

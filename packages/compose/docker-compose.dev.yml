@@ -1,4 +1,8 @@
-# Local development overrides (auto-merged by docker compose).
+# Local development overlay — OPT-IN, layered on top of docker-compose.yml.
+#
+# Named *.dev.yml (not *.override.yml) so `docker compose` never auto-merges it;
+# production stays the default. Enable it with `HOLA_DEV=1 ./scripts/up.sh` or
+# `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
 #
 # Runs the monorepo with Bun dev servers (hot reload), HTTP only (no TLS/LE),
 # and a single dev domain. Web (Vite, :5173) serves the SPA and proxies /api to
