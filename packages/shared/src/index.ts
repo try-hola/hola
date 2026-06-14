@@ -787,7 +787,9 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     notes?: string;
     // Auth artifacts provisioned for this deployment (if any), so they can be
     // reused on re-deploy and torn down on delete. Keyed on deploymentId.
-    auth?: { mode: AuthMode; ref: ProvisionedAuthRef };
+    // `middleware` is set for forward-auth apps so the route can be re-emitted
+    // with the gate on restart without re-provisioning.
+    auth?: { mode: AuthMode; ref: ProvisionedAuthRef; middleware?: ForwardAuthMiddleware };
   };
 };
 
@@ -826,6 +828,15 @@ export type ResourceLimits = {
 };
 
 // Traefik routing configuration
+// Forward-auth middleware attached to a route so Traefik gates the app behind the
+// auth platform's outpost. `outpostUrl` is the platform's internal base URL
+// (e.g. http://authentik-server:9000); the renderer derives the forwardAuth
+// address, the auth-response headers, and the outpost path-prefix router from it.
+export type ForwardAuthMiddleware = {
+  name: string;
+  outpostUrl: string;
+};
+
 export type TraefikRoutingRule = {
   deploymentId: string;
   appName: string;
@@ -835,6 +846,8 @@ export type TraefikRoutingRule = {
   networkName: string;
   port?: number; // internal container/service port Traefik forwards to
   createdAt: string;
+  // Present when the app is protected by forward-auth (auth mode `forward-auth`).
+  forwardAuth?: ForwardAuthMiddleware;
 };
 
 export type RoutingConflict = {

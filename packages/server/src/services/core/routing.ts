@@ -85,19 +85,60 @@ function sortedMap(rules: TraefikRoutingRule[]): TraefikRoutingMap {
   return map;
 }
 
+// Identity headers Authentik's outpost returns and Traefik must copy upstream.
+const AUTHENTIK_AUTH_RESPONSE_HEADERS = [
+  'X-authentik-username',
+  'X-authentik-groups',
+  'X-authentik-email',
+  'X-authentik-name',
+  'X-authentik-uid',
+  'X-authentik-jwt',
+];
+
 /** Render the Traefik file-provider dynamic config for a routing map (deterministic). */
 function renderDynamicConfig(map: TraefikRoutingMap): string {
   const routers: Record<string, unknown> = {};
   const services: Record<string, unknown> = {};
+  const middlewares: Record<string, unknown> = {};
 
   for (const host of Object.keys(map).sort()) {
     const rule = map[host];
-    routers[rule.serviceName] = {
+    const router: Record<string, unknown> = {
       rule: `Host(\`${host}\`)`,
       service: rule.serviceName,
       entryPoints: ['websecure'],
       tls: {},
     };
+
+    if (rule.forwardAuth) {
+      const mwName = rule.forwardAuth.name;
+      const outpost = rule.forwardAuth.outpostUrl.replace(/\/+$/, '');
+      // Gate the app's router behind the outpost.
+      router.middlewares = [mwName];
+      middlewares[mwName] = {
+        forwardAuth: {
+          address: `${outpost}/outpost.goauthentik.io/auth/traefik`,
+          trustForwardHeader: true,
+          authResponseHeaders: AUTHENTIK_AUTH_RESPONSE_HEADERS,
+        },
+      };
+      // Higher-priority router sends the outpost's own auth/callback endpoints to
+      // Authentik (without this, login/callback 404s). Priority beats the Host router.
+      const outpostRouter = `${rule.serviceName}-ak-outpost`;
+      const outpostService = `${rule.serviceName}-ak-outpost`;
+      routers[outpostRouter] = {
+        rule: `Host(\`${host}\`) && PathPrefix(\`/outpost.goauthentik.io/\`)`,
+        service: outpostService,
+        priority: 100,
+        entryPoints: ['websecure'],
+        tls: {},
+      };
+      services[outpostService] = {
+        loadBalancer: { servers: [{ url: outpost }] },
+      };
+    }
+
+    routers[rule.serviceName] = router;
     services[rule.serviceName] = {
       loadBalancer: {
         servers: [{ url: `http://${rule.serviceName}:${rule.port ?? 80}` }],
@@ -105,7 +146,9 @@ function renderDynamicConfig(map: TraefikRoutingMap): string {
     };
   }
 
-  return stringifyYAML({ http: { routers, services } });
+  const http: Record<string, unknown> = { routers, services };
+  if (Object.keys(middlewares).length > 0) http.middlewares = middlewares;
+  return stringifyYAML({ http });
 }
 
 export class RealRoutingService implements RoutingService {

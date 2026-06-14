@@ -60,6 +60,18 @@ function installFetch(handler?: (call: RecordedCall) => Response | undefined) {
     if (method === 'POST' && url.pathname === '/api/v3/core/applications/') {
       return json({ pk: 7, slug: body.slug }, 201);
     }
+    if (method === 'POST' && url.pathname === '/api/v3/providers/proxy/') {
+      return json({ pk: 55 }, 201);
+    }
+    if (method === 'GET' && url.pathname === '/api/v3/outposts/instances/') {
+      return json({ results: [{ pk: 1, providers: [] }] });
+    }
+    if (method === 'GET' && url.pathname.startsWith('/api/v3/outposts/instances/')) {
+      return json({ pk: 1, providers: [55] });
+    }
+    if (method === 'PATCH') {
+      return json({ pk: 1 });
+    }
     if (method === 'DELETE') {
       return new Response(null, { status: 204 });
     }
@@ -168,10 +180,52 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('forward-auth and native-ldap are not implemented yet', async () => {
+  test('native-ldap is not implemented yet', async () => {
     installFetch();
     const svc = new RealAuthentikProvisionerService(CONFIG);
-    await expect(svc.provision({ ...OIDC_INPUT, mode: 'forward-auth', oidc: undefined })).rejects.toThrow(/not implemented/);
     await expect(svc.provision({ ...OIDC_INPUT, mode: 'native-ldap', oidc: undefined })).rejects.toThrow(/not implemented/);
+  });
+
+  test('forward-auth provision creates a proxy provider, app, and binds the outpost', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+    });
+
+    // Proxy provider created in forward_single mode for the app's host.
+    const provCall = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/proxy/')!;
+    expect(provCall).toBeDefined();
+    expect((provCall.body as Record<string, unknown>).mode).toBe('forward_single');
+    expect((provCall.body as Record<string, unknown>).external_host).toBe('https://grafana.example.com');
+
+    // Provider bound to the embedded outpost (PATCH includes its pk).
+    const patch = calls.find(c => c.method === 'PATCH' && c.path.startsWith('/api/v3/outposts/instances/'))!;
+    expect(patch).toBeDefined();
+    expect((patch.body as { providers: number[] }).providers).toContain(55);
+
+    // Returns a middleware descriptor pointing at the internal outpost URL.
+    expect(result.middleware?.outpostUrl).toBe('http://authentik-server:9000');
+    expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });
+  });
+
+  test('forward-auth deprovision detaches the outpost then deletes app + provider', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.deprovision({
+      deploymentId: 'x',
+      ref: { mode: 'forward-auth', providerPk: 55, applicationSlug: 'grafana-x', outpostPk: 1 },
+    });
+
+    // Outpost PATCHed to drop the provider, then both resources deleted.
+    expect(calls.some(c => c.method === 'PATCH' && c.path === '/api/v3/outposts/instances/1/')).toBe(true);
+    const deletes = calls.filter(c => c.method === 'DELETE').map(c => c.path);
+    expect(deletes).toContain('/api/v3/core/applications/grafana-x/');
+    expect(deletes).toContain('/api/v3/providers/proxy/55/');
   });
 });

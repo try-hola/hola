@@ -73,6 +73,33 @@ describe('RoutingService', () => {
     expect(await storage.readFileAsString('runtime/traefik/dynamic.yml')).toBe(first);
   });
 
+  test('forward-auth rule emits the outpost middleware + path-prefix router', async () => {
+    const base = routing.generateRule({ deploymentId: 'dep-a', appName: 'grafana', port: 3000 });
+    const rule = { ...base, forwardAuth: { name: 'ak-grafana-dep-a', outpostUrl: 'http://authentik-server:9000' } };
+    await routing.activateRoute(rule);
+
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+
+    // The app router is gated by the middleware.
+    expect(dynamic.http.routers['grafana-dep-a'].middlewares).toEqual(['ak-grafana-dep-a']);
+    // The middleware points at the outpost's forward-auth endpoint with identity headers.
+    const mw = dynamic.http.middlewares['ak-grafana-dep-a'].forwardAuth;
+    expect(mw.address).toBe('http://authentik-server:9000/outpost.goauthentik.io/auth/traefik');
+    expect(mw.trustForwardHeader).toBe(true);
+    expect(mw.authResponseHeaders).toContain('X-authentik-username');
+    // A higher-priority router routes the outpost's own endpoints to Authentik.
+    const outpost = dynamic.http.routers['grafana-dep-a-ak-outpost'];
+    expect(outpost.rule).toBe('Host(`grafana.local.hola`) && PathPrefix(`/outpost.goauthentik.io/`)');
+    expect(outpost.priority).toBeGreaterThan(1);
+    expect(dynamic.http.services['grafana-dep-a-ak-outpost'].loadBalancer.servers[0].url).toBe('http://authentik-server:9000');
+
+    // forwardAuth survives a restart rebuild (persisted on the rule).
+    const fresh = new RealRoutingService(storage, { baseDomain: 'local.hola' });
+    await fresh.reconcile([rule]);
+    const map = await fresh.getRoutingMap();
+    expect(map['grafana.local.hola']?.forwardAuth?.name).toBe('ak-grafana-dep-a');
+  });
+
   test('re-activating the same deployment replaces its prior host', async () => {
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea' }));
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea-renamed' }));

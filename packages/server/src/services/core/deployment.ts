@@ -817,7 +817,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     });
 
     // Persist the provisioned ref so re-deploy reuses it and delete can tear it down.
-    deployment.metadata.auth = { mode: auth.mode, ref: result.ref };
+    deployment.metadata.auth = { mode: auth.mode, ref: result.ref, middleware: result.middleware };
     this.deployments.set(deployment.id, deployment);
     await this.persistDeployment(deployment);
 
@@ -878,6 +878,22 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     throw new Error('post-deploy auth setup did not succeed after retries');
   }
 
+  /** Finish auth wiring after the container is up: run any setup command, then for
+   *  forward-auth re-emit the route with its gate (the route was first activated at
+   *  promote time, before provisioning produced the middleware). */
+  private async completeAuthWiring(
+    deployment: EnhancedDeploymentDetail,
+    provisioned: { credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> },
+    projectName: string,
+    logBoth: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>
+  ): Promise<void> {
+    await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
+    if (provisioned.auth.mode === 'forward-auth') {
+      await this.routingService.activateRoute(this.routingRuleFor(deployment));
+      await logBoth('info', 'Auth: forward-auth gate applied to route');
+    }
+  }
+
   private jobTypeToAction(type: Job['type']): string {
     switch (type) {
       case 'stop': return 'stop';
@@ -925,7 +941,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
-        if (provisioned) await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
+        if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
@@ -934,7 +950,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const res = await this.dockerService.composeUp(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
-        if (provisioned) await this.runPostDeploySetup(deployment, provisioned, projectName, logBoth);
+        if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       }
@@ -960,11 +976,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
-  /** Derive the Traefik routing rule for a deployment's active release. */
+  /** Derive the Traefik routing rule for a deployment's active release. Carries the
+   *  forward-auth middleware (if provisioned) so the gate survives restart/reconcile. */
   private routingRuleFor(deployment: EnhancedDeploymentDetail): ReturnType<RoutingService['generateRule']> {
     const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
     const port = release?.ports?.[0]?.container;
-    return this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, port });
+    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, port });
+    const middleware = deployment.metadata.auth?.middleware;
+    return middleware ? { ...rule, forwardAuth: middleware } : rule;
   }
 
   async healthCheck(): Promise<ServiceHealth> {

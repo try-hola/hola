@@ -19,7 +19,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import { getLogger } from '../../lib/logger';
 import { ProvisioningError } from '../../middleware/error-mapping';
 import type { AuthConfig } from '../../config/auth';
-import type { AuthMode, ProvisionedAuthRef } from '@hola/shared';
+import type { AuthMode, ProvisionedAuthRef, ForwardAuthMiddleware } from '@hola/shared';
 import type { ServiceHealth, HealthCheckable } from './types';
 
 export interface ProvisionInput {
@@ -52,11 +52,8 @@ export interface ProvisionResult {
   credentials?: { clientId: string; clientSecret: string; issuer: string; redirectUri: string };
   /** Opaque handle to persist for idempotent re-provision and teardown. */
   ref: ProvisionedAuthRef;
-  /** forward-auth only (PR3): Traefik middleware descriptor for the router. */
-  middleware?: {
-    name: string;
-    forwardAuth: { address: string; trustForwardHeader: boolean; authResponseHeaders: string[] };
-  };
+  /** forward-auth only: descriptor the routing service attaches to the app's route. */
+  middleware?: ForwardAuthMiddleware;
 }
 
 export interface DeprovisionInput {
@@ -105,6 +102,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       case 'native-oidc':
         return this.provisionOidc(input);
       case 'forward-auth':
+        return this.provisionForwardAuth(input);
       case 'native-ldap':
         throw new ProvisioningError(`auth mode '${input.mode}' is not implemented yet`);
       case 'none':
@@ -116,15 +114,31 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
   async deprovision(input: DeprovisionInput): Promise<void> {
     const ref = input.ref;
-    if (!ref || ref.mode !== 'native-oidc') return;
-    // Delete the application first (it points at the provider), then the provider.
-    if (ref.applicationSlug) {
-      await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(ref.applicationSlug)}/`);
+    if (!ref) return;
+    if (ref.mode === 'native-oidc') {
+      // Delete the application first (it points at the provider), then the provider.
+      if (ref.applicationSlug) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(ref.applicationSlug)}/`);
+      }
+      if (ref.providerPk != null) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/providers/oauth2/${ref.providerPk}/`);
+      }
+      this.logger.info('Deprovisioned OIDC client', { deploymentId: input.deploymentId, providerPk: ref.providerPk });
+      return;
     }
-    if (ref.providerPk != null) {
-      await this.apiDeleteIgnoreMissing(`/api/v3/providers/oauth2/${ref.providerPk}/`);
+    if (ref.mode === 'forward-auth') {
+      // Detach from the outpost first, then delete the application and provider.
+      if (ref.outpostPk != null && ref.providerPk != null) {
+        await this.removeProviderFromOutpost(ref.outpostPk, ref.providerPk);
+      }
+      if (ref.applicationSlug) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(ref.applicationSlug)}/`);
+      }
+      if (ref.providerPk != null) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${ref.providerPk}/`);
+      }
+      this.logger.info('Deprovisioned forward-auth provider', { deploymentId: input.deploymentId, providerPk: ref.providerPk });
     }
-    this.logger.info('Deprovisioned OIDC client', { deploymentId: input.deploymentId, providerPk: ref.providerPk });
   }
 
   // ---- native-oidc -------------------------------------------------------
@@ -200,6 +214,91 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   private issuerUrl(slug: string): string {
     const base = this.config.authentikPublicUrl || this.config.authentikUrl || '';
     return `${base}/application/o/${slug}/`;
+  }
+
+  // ---- forward-auth ------------------------------------------------------
+
+  private forwardAuthMiddleware(slug: string): ForwardAuthMiddleware {
+    return { name: `ak-${slug}`, outpostUrl: this.config.authentikUrl ?? '' };
+  }
+
+  private async provisionForwardAuth(input: ProvisionInput): Promise<ProvisionResult> {
+    const externalHost = `https://${input.host}`;
+    const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
+
+    // Idempotent re-provision: reuse the existing proxy provider, refresh its host.
+    const existing = input.existingRef;
+    if (existing && existing.mode === 'forward-auth' && existing.providerPk != null) {
+      await this.api('PATCH', `/api/v3/providers/proxy/${existing.providerPk}/`, { external_host: externalHost });
+      this.logger.info('Reused existing forward-auth provider', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
+      return { env: {}, ref: existing, middleware: this.forwardAuthMiddleware(existing.applicationSlug ?? slug) };
+    }
+
+    const [authFlow, invalidationFlow] = await Promise.all([
+      this.resolveFlowPk(AUTHZ_FLOW_SLUG),
+      this.resolveFlowPk(INVALIDATION_FLOW_SLUG),
+    ]);
+
+    const provider = await this.api<{ pk: number }>('POST', '/api/v3/providers/proxy/', {
+      name: `hola-${input.appName}-${input.deploymentId.slice(0, 8)}`,
+      authorization_flow: authFlow,
+      invalidation_flow: invalidationFlow,
+      mode: 'forward_single',
+      external_host: externalHost,
+    });
+
+    try {
+      await this.api('POST', '/api/v3/core/applications/', {
+        name: `${input.appName} (${input.deploymentId.slice(0, 8)})`,
+        slug,
+        provider: provider.pk,
+        meta_launch_url: externalHost,
+      });
+    } catch (error) {
+      await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${provider.pk}/`);
+      throw new ProvisioningError('failed to create Authentik application', error);
+    }
+
+    // Bind the provider to the embedded outpost so it actually enforces auth.
+    const outpostPk = await this.addProviderToEmbeddedOutpost(provider.pk);
+
+    this.logger.info('Provisioned forward-auth provider', { deploymentId: input.deploymentId, providerPk: provider.pk, slug, outpostPk });
+
+    return {
+      env: {},
+      ref: { mode: 'forward-auth', providerPk: provider.pk, applicationSlug: slug, outpostPk },
+      middleware: this.forwardAuthMiddleware(slug),
+    };
+  }
+
+  /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
+  private async addProviderToEmbeddedOutpost(providerPk: number): Promise<number | undefined> {
+    const list = await this.api<{ results: Array<{ pk: number; providers: number[] }> }>(
+      'GET',
+      `/api/v3/outposts/instances/?name__iexact=${encodeURIComponent('authentik Embedded Outpost')}`
+    );
+    const outpost = list.results?.[0];
+    if (!outpost) {
+      this.logger.warn('Embedded outpost not found; forward-auth will not enforce until bound');
+      return undefined;
+    }
+    const providers = Array.from(new Set([...(outpost.providers ?? []), providerPk]));
+    await this.api('PATCH', `/api/v3/outposts/instances/${outpost.pk}/`, { providers });
+    return outpost.pk;
+  }
+
+  private async removeProviderFromOutpost(outpostPk: number, providerPk: number): Promise<void> {
+    try {
+      const outpost = await this.api<{ providers: number[] }>('GET', `/api/v3/outposts/instances/${outpostPk}/`);
+      const providers = (outpost.providers ?? []).filter(p => p !== providerPk);
+      await this.api('PATCH', `/api/v3/outposts/instances/${outpostPk}/`, { providers });
+    } catch (error) {
+      this.logger.warn('Failed to detach provider from outpost; continuing', {
+        outpostPk,
+        providerPk,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private oidcEnv(
@@ -324,6 +423,14 @@ export class MockProvisionerService implements ProvisionerService {
         env,
         credentials: { clientId, clientSecret, issuer, redirectUri },
         ref: input.existingRef ?? { mode: 'native-oidc', providerPk: 1, applicationSlug: slug, clientId },
+      };
+    }
+    if (input.mode === 'forward-auth') {
+      const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
+      return {
+        env: {},
+        ref: input.existingRef ?? { mode: 'forward-auth', providerPk: 2, applicationSlug: slug, outpostPk: 1 },
+        middleware: { name: `ak-${slug}`, outpostUrl: 'http://authentik-server:9000' },
       };
     }
     // none / unimplemented modes: no-op so a deploy proceeds without auth wiring.
