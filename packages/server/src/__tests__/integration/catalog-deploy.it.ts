@@ -21,6 +21,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { RealDeploymentService } from '../../services/core/deployment';
+import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
 import { RealRoutingService } from '../../services/core/routing';
@@ -156,7 +157,7 @@ describe.skipIf(!dockerOk)('Catalog → deploy (real daemon)', () => {
       const jobs = new RealJobService(database, logging);
       const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
       const drafts = new RealDraftService(storage, makeCatalog(compose), makeValidation());
-      const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging);
+      const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
 
       // Catalog-seeded draft: NO updateDraft of composeOverride — it must arrive
       // from getVersionDetail via createDraft (the #82 change).

@@ -40,10 +40,11 @@ import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService, JobContext } from './jobs';
 import type { DockerService } from './docker';
-import type { DraftService, FinalizedArtifacts } from './draft';
+import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
-import { attachToHolaNetwork } from './compose-network';
+import type { ProvisionerService } from './provisioner';
+import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 
 /** Promote a new release built from a finalized draft onto an existing deployment. */
 export interface PromoteRequest {
@@ -305,6 +306,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void deploymentId;
   }
 
+  /**
+   * Tear down provisioned auth artifacts when a deployment is deleted. Default
+   * no-op (mock). Called with the live deployment record (so its metadata.auth
+   * ref is available) before storage is removed.
+   */
+  protected async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {
+    void deployment;
+  }
+
   /** Load the finalized artifacts for a draft. Default null (mock has no draft store). */
   protected async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {
     void draftId;
@@ -513,7 +523,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
   async deleteDeployment(deploymentId: string): Promise<void> {
     await this.ensureLoaded();
-    this.requireDeployment(deploymentId);
+    // Capture the live record up front so its provisioned-auth ref is available
+    // for teardown before in-memory/storage state is removed.
+    const deployment = this.requireDeployment(deploymentId);
 
     this.logger.info('Deleting deployment', { deploymentId });
 
@@ -522,6 +534,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       await this.executeAction(deploymentId, { action: 'stop' });
     } catch (error) {
       this.logger.warn('Failed to stop deployment before deletion', {
+        deploymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Tear down auth artifacts (OIDC client, etc.). Must never block deletion:
+    // a failure leaves an orphan that is logged for manual cleanup.
+    try {
+      await this.onDeprovision(deployment);
+    } catch (error) {
+      this.logger.warn('Failed to deprovision auth artifacts; continuing with delete', {
         deploymentId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -683,7 +706,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     private dockerService: DockerService,
     private draftService: DraftService,
     private routingService: RoutingService,
-    private loggingService: LoggingService
+    private loggingService: LoggingService,
+    private provisioner: ProvisionerService
   ) {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
@@ -701,7 +725,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /** Write the active release's compose file into the deployment runtime dir. */
-  private async materializeCompose(deployment: EnhancedDeploymentDetail): Promise<string> {
+  private async materializeCompose(
+    deployment: EnhancedDeploymentDetail,
+    injectedEnv: Record<string, string> = {}
+  ): Promise<string> {
     const releaseId = deployment.currentReleaseId;
     if (!releaseId) {
       throw new Error('No active release to deploy');
@@ -725,8 +752,63 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       });
     }
 
-    await this.storageService.writeFile(`deployments/${deployment.id}/runtime/docker-compose.yml`, content);
+    // Inject provisioned auth env into the ingress service. NOT swallowed: a
+    // failure here must fail the deploy rather than silently ship an app whose
+    // auth was never wired (a security-relevant bypass).
+    const hasSecret = Object.keys(injectedEnv).length > 0;
+    if (hasSecret) {
+      content = injectEnvironment(content, injectedEnv, { ingressService: deployment.app });
+    }
+
+    // The runtime compose may hold a client secret in cleartext; restrict it.
+    await this.storageService.writeFile(
+      `deployments/${deployment.id}/runtime/docker-compose.yml`,
+      content,
+      hasSecret ? 0o600 : undefined
+    );
     return this.runtimeDir(deployment.id);
+  }
+
+  /**
+   * Provision auth artifacts (if the active release's manifest declares an
+   * `auth` block) before the app starts, and return the env to inject. Idempotent:
+   * reuses any ref already persisted on the deployment (keyed on deploymentId), so
+   * restart/rollback/start-after-stop never create duplicate clients. Throws on
+   * provisioning failure so the lifecycle job fails before any container starts.
+   */
+  private async provisionAuthEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return {};
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return {};
+
+    let auth: FinalizedManifest['auth'];
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      auth = manifest.auth;
+    } catch {
+      return {};
+    }
+    if (!auth || auth.mode === 'none') return {};
+
+    const rule = this.routingRuleFor(deployment);
+    const result = await this.provisioner.provision({
+      deploymentId: deployment.id,
+      appName: deployment.app,
+      mode: auth.mode,
+      host: rule.host,
+      existingRef: deployment.metadata.auth?.ref,
+      oidc: auth.oidc,
+      ldap: auth.ldap,
+      forwardAuth: auth.forwardAuth,
+    });
+
+    // Persist the provisioned ref so re-deploy reuses it and delete can tear it down.
+    deployment.metadata.auth = { mode: auth.mode, ref: result.ref };
+    this.deployments.set(deployment.id, deployment);
+    await this.persistDeployment(deployment);
+
+    return result.env;
   }
 
   private jobTypeToAction(type: Job['type']): string {
@@ -772,14 +854,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextStatus = 'stopped';
         nextLifecycle = 'stopped';
       } else if (action === 'restart') {
-        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment), projectName);
+        const env = await this.provisionAuthEnv(deployment);
+        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment, env), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
         // deploy / start / rollback -> compose up
-        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment), projectName);
+        const env = await this.provisionAuthEnv(deployment);
+        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment, env), projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         nextStatus = 'running';
@@ -901,6 +985,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   protected override async onDeploymentRemoved(deploymentId: string): Promise<void> {
     await this.routingService.deactivateRoute(deploymentId);
+  }
+
+  protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {
+    const auth = deployment.metadata.auth;
+    if (!auth) return;
+    await this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.ref });
   }
 
   protected override async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {

@@ -19,7 +19,9 @@ import { RealJobService } from '../../services/core/jobs';
 import { RealValidationService } from '../../services/core/validation';
 import { MockDockerService } from '../../services/core/docker';
 import { MockSystemMonitoringService } from '../../services/core/system-monitoring';
+import { MockProvisionerService } from '../../services/core/provisioner';
 import type { DockerService } from '../../services/core/docker';
+import type { ProvisionerService } from '../../services/core/provisioner';
 
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 
@@ -50,11 +52,16 @@ export interface RealSystem {
   docker: DockerService;
   validation: RealValidationService;
   drafts: RealDraftService;
+  provisioner: ProvisionerService;
   deployments: RealDeploymentService;
 }
 
 /** Build a full real-service system rooted at `dataRoot`, with the given Docker engine. */
-export function makeRealSystem(dataRoot: string, docker: DockerService = new MockDockerService()): RealSystem {
+export function makeRealSystem(
+  dataRoot: string,
+  docker: DockerService = new MockDockerService(),
+  provisioner: ProvisionerService = new MockProvisionerService()
+): RealSystem {
   const storage = new RealStorageService({ holaDir: dataRoot });
   const database = new RealDatabaseService(storage);
   const logging = new RealLoggingService(storage);
@@ -63,8 +70,8 @@ export function makeRealSystem(dataRoot: string, docker: DockerService = new Moc
   const systemMonitoring = new MockSystemMonitoringService();
   const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
   const drafts = new RealDraftService(storage, makeStubCatalog(), validation);
-  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging);
-  return { storage, database, jobs, routing, docker, validation, drafts, deployments };
+  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner);
+  return { storage, database, jobs, routing, docker, validation, drafts, provisioner, deployments };
 }
 
 /** Poll a job to a terminal state. */

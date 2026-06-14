@@ -255,6 +255,51 @@ export type GetCatalogAppVersionDetailResponse = {
   // composeOverride so it can be deployed without the user pasting compose.
   // Optional: clients that only need env/port defaults can ignore it.
   composeOverride?: string;
+  // How the app integrates with auth/SSO, declared in its bundle manifest.
+  // Drives provisioning at deploy time (see AppAuthConfig). Optional: apps
+  // that don't declare it behave as `none` (no auth wiring).
+  auth?: AppAuthConfig;
+};
+
+// ------------------------------------------------------
+// Auth / SSO
+// ------------------------------------------------------
+// How a catalog app integrates with the operator's auth platform. The platform
+// (Authentik today; Authelia+LLDAP tracked in try-hola/hola#88) is chosen by the
+// operator; this declares only the app's *capability* so Hola can resolve
+// capability × platform at deploy time.
+export type AuthMode = 'none' | 'native-oidc' | 'native-ldap' | 'forward-auth';
+
+export type AppAuthConfig = {
+  mode: AuthMode;
+  // For `native-oidc`: the env-var NAMES this app expects its OIDC settings in,
+  // plus the callback path and requested scopes. Hola provisions an OIDC client
+  // and injects the values under these names at deploy time.
+  oidc?: {
+    redirectPath: string;
+    scopes: string[];
+    env: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+  };
+  // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.
+  ldap?: {
+    env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
+  };
+  // For `forward-auth`: optional access restriction by group.
+  forwardAuth?: { allowedGroups?: string[] };
+  // Optionally gate a `native-oidc`/no-auth app behind proxy login too.
+  fallback?: 'forward-auth';
+};
+
+// Opaque handle to the auth artifacts provisioned for a deployment, persisted on
+// its metadata so they can be reused (idempotent re-deploy) and torn down on delete.
+// Keyed on deploymentId (stable across releases), never releaseId.
+export type ProvisionedAuthRef = {
+  mode: AuthMode;
+  clientId?: string;
+  providerPk?: number;
+  applicationSlug?: string;
+  outpostPk?: number;
+  bindAccountPk?: number;
 };
 
 // ------------------------------------------------------
@@ -268,6 +313,9 @@ export type Draft = {
   appEnv: AppEnvVar[];
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
   composeOverride?: string;
+  // App auth capability seeded from the catalog bundle manifest (read-only; not
+  // user-editable). Carried through finalize so the deploy lifecycle can provision.
+  auth?: AppAuthConfig;
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 
@@ -716,6 +764,9 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     owner?: string;
     tags?: string[];
     notes?: string;
+    // Auth artifacts provisioned for this deployment (if any), so they can be
+    // reused on re-deploy and torn down on delete. Keyed on deploymentId.
+    auth?: { mode: AuthMode; ref: ProvisionedAuthRef };
   };
 };
 

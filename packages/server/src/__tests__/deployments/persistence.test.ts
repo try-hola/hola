@@ -16,6 +16,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { RealDeploymentService } from '../../services/core/deployment';
+import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
 import { RealRoutingService } from '../../services/core/routing';
@@ -90,7 +91,7 @@ describe('Deployment persistence (real service)', () => {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
-    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing, noLogging);
+    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing, noLogging, new MockProvisionerService());
     return { storage, drafts, routing, deployments };
   }
 

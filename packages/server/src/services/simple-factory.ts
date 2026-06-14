@@ -23,6 +23,8 @@ import { RealDraftService, MockDraftService, type DraftService } from './core/dr
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
 import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
 import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
+import { RealAuthentikProvisionerService, MockProvisionerService, type ProvisionerService } from './core/provisioner';
+import { authConfig } from '../config/auth';
 
 /**
  * Service collection interface
@@ -42,6 +44,7 @@ export interface Services {
   drafts: DraftService;
   validation: ValidationService;
   routing: RoutingService;
+  provisioner: ProvisionerService;
   deployments: DeploymentService;
 }
 
@@ -80,10 +83,11 @@ export function createServices(env: ServiceEnvironment): Services {
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
       routing: new MockRoutingService(),
+      provisioner: new MockProvisionerService(),
       deployments: new MockDeploymentService(jobs),
     };
   }
-  
+
   if (env === 'development') {
     // Mixed services for development: real services where possible, mocks for external dependencies
     const storage = new RealStorageService();
@@ -109,6 +113,9 @@ export function createServices(env: ServiceEnvironment): Services {
     // Shared draft service: the deployment service builds releases from its finalized artifacts.
     const drafts = new RealDraftService(storage, catalog, validation);
 
+    // Mock provisioner in development for safety (no calls to a real auth platform).
+    const provisioner = new MockProvisionerService();
+
     return {
       storage,
       config: new RealConfigService(storage),
@@ -124,10 +131,11 @@ export function createServices(env: ServiceEnvironment): Services {
       drafts,
       validation,
       routing,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging),
+      provisioner,
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner),
     };
   }
-  
+
   // All real services for production
   const storage = new RealStorageService();
   const database = new RealDatabaseService(storage);
@@ -156,6 +164,12 @@ export function createServices(env: ServiceEnvironment): Services {
   // Shared draft service: the deployment service builds releases from its finalized artifacts.
   const drafts = new RealDraftService(storage, catalog, validation);
 
+  // Provision auth artifacts against the configured platform; no-op when disabled.
+  const provisioner: ProvisionerService =
+    authConfig.mode === 'authentik'
+      ? new RealAuthentikProvisionerService(authConfig)
+      : new MockProvisionerService();
+
   return {
     storage,
     config: new RealConfigService(storage),
@@ -171,7 +185,8 @@ export function createServices(env: ServiceEnvironment): Services {
     drafts,
     validation,
     routing,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging),
+    provisioner,
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner),
   };
 }
 

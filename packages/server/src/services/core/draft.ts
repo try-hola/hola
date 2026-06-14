@@ -19,7 +19,8 @@ import type {
   EnhancedPreflightResponse,
   FinalizeDraftResponse,
   AppEnvVar,
-  DraftDefaults
+  DraftDefaults,
+  AppAuthConfig
 } from '@hola/shared';
 
 import { createHash } from 'crypto';
@@ -52,6 +53,9 @@ export interface FinalizedManifest {
   appEnv: AppEnvVar[];
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
   composeOverride: string;
+  // App auth capability carried from the catalog manifest so the deploy
+  // lifecycle can provision SSO without re-reading the bundle.
+  auth?: AppAuthConfig;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -313,6 +317,7 @@ export class RealDraftService implements DraftService {
         appEnv: defaults.env,
         ports: defaults.defaults.ports,
         composeOverride,
+        auth: defaults.auth,
         files: [],
       };
 
@@ -562,6 +567,7 @@ export class RealDraftService implements DraftService {
         appEnv: draft.appEnv,
         ports: draft.ports,
         composeOverride: draft.composeOverride ?? '',
+        auth: draft.auth,
         files: specFiles,
       };
 
@@ -639,13 +645,14 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
         env: versionDetail.defaultEnv,
         defaults: versionDetail.defaults,
         composeOverride: versionDetail.composeOverride ?? '',
+        auth: versionDetail.auth,
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
