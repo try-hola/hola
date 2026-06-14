@@ -253,6 +253,15 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     const user = await akGet(`/api/v3/core/users/${result.ref.bindAccountPk}/`);
     expect(user.status).toBe(200);
 
+    // ...and was granted directory-search rights (regression guard for the grant
+    // endpoint/codename — this is otherwise a best-effort, swallowed call).
+    const perms = (await akGet(`/api/v3/rbac/permissions/?user=${result.ref.bindAccountPk}`)) as {
+      status: number;
+      body: { results: Array<{ app_label: string; codename: string }> };
+    };
+    expect(perms.status).toBe(200);
+    expect(perms.body.results.some(p => p.app_label === 'authentik_providers_ldap' && p.codename === 'search_full_directory')).toBe(true);
+
     await svc.deprovision({ deploymentId: 'dep-ldap-0003abcd', ref: result.ref });
     expect((await akGet(`/api/v3/core/users/${result.ref.bindAccountPk}/`)).status).toBe(404);
   }, 120_000);
