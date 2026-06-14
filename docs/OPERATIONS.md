@@ -49,6 +49,13 @@ set `HOLA_TOKEN`. Development and test run with auth disabled. See ADR 0001.
 
 ## Deploy an app
 
+The web dashboard browses a remote **catalog** of installable apps, set via
+`HOLA_CATALOG_URL` in `.env` (a fresh install defaults to the official
+`try-hola/apps` catalog; blank it to disable, or point it at your own
+`catalog.json`). With it set, `GET /api/catalog/apps` lists the apps and the web
+catalog renders them. See the catalog notes in the compose
+[README](../packages/compose/README.md#app-catalog).
+
 Through the web dashboard (or the SDK/CLI against the API), an app moves through:
 
 ```
