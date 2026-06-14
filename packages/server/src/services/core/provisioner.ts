@@ -71,8 +71,10 @@ export interface ProvisionerService extends HealthCheckable {
 // Authentik REST backend
 // ---------------------------------------------------------------------------
 
+// Default flow slugs vary across Authentik versions, so we resolve by slug first
+// and fall back to the first flow of the right designation (see resolveFlowPk).
 const AUTHZ_FLOW_SLUG = 'default-provider-authorization-implicit-consent';
-const INVALIDATION_FLOW_SLUG = 'default-provider-invalidation';
+const INVALIDATION_FLOW_SLUG = 'default-provider-invalidation-flow';
 
 /** Sanitize a string into an Authentik slug (lowercase, alnum + hyphen). */
 function slugify(s: string): string {
@@ -178,8 +180,8 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const clientSecret = randomBytes(32).toString('hex');
 
     const [authFlow, invalidationFlow, propertyMappings] = await Promise.all([
-      this.resolveFlowPk(AUTHZ_FLOW_SLUG),
-      this.resolveFlowPk(INVALIDATION_FLOW_SLUG),
+      this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
+      this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
       this.resolveScopeMappingPks(oidc.scopes),
     ]);
 
@@ -242,8 +244,8 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
 
     const [authFlow, invalidationFlow] = await Promise.all([
-      this.resolveFlowPk(AUTHZ_FLOW_SLUG),
-      this.resolveFlowPk(INVALIDATION_FLOW_SLUG),
+      this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
+      this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
     ]);
 
     const provider = await this.api<{ pk: number }>('POST', '/api/v3/providers/proxy/', {
@@ -380,9 +382,24 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     };
   }
 
-  private async resolveFlowPk(slug: string): Promise<string> {
-    const flow = await this.api<{ pk: string }>('GET', `/api/v3/flows/instances/${encodeURIComponent(slug)}/`);
-    return flow.pk;
+  /**
+   * Resolve a flow pk by slug, falling back to the first flow of `designation`
+   * when the default slug differs across Authentik versions (e.g. the provider
+   * invalidation flow slug changed). `designation` is one of authentik's flow
+   * designations, e.g. `authorization` or `invalidation`.
+   */
+  private async resolveFlowPk(slug: string, designation: string): Promise<string> {
+    try {
+      const flow = await this.api<{ pk: string }>('GET', `/api/v3/flows/instances/${encodeURIComponent(slug)}/`);
+      return flow.pk;
+    } catch (error) {
+      const list = await this.api<{ results: Array<{ pk: string }> }>(
+        'GET',
+        `/api/v3/flows/instances/?designation=${encodeURIComponent(designation)}&ordering=slug`
+      );
+      if (list.results?.[0]?.pk) return list.results[0].pk;
+      throw error;
+    }
   }
 
   /** Best-effort: collect scope-mapping pks for the requested scope names. */
