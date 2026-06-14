@@ -298,6 +298,12 @@ export class RealDraftService implements DraftService {
       // Get default environment and configuration
       const defaults = await this.getDraftDefaults(request.appId, request.version);
 
+      // Seed the draft's compose from the catalog bundle so it can be deployed
+      // without the user pasting compose. Guard it through the same parse check
+      // as user-supplied compose so a bad bundle fails fast.
+      const composeOverride = defaults.composeOverride ?? '';
+      assertComposeParses(composeOverride, 'catalog bundle');
+
       // Create initial draft
       const draft: Draft = {
         draftId,
@@ -306,7 +312,7 @@ export class RealDraftService implements DraftService {
         systemOverrides: {},
         appEnv: defaults.env,
         ports: defaults.defaults.ports,
-        composeOverride: '',
+        composeOverride,
         files: [],
       };
 
@@ -633,17 +639,18 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
         env: versionDetail.defaultEnv,
         defaults: versionDetail.defaults,
+        composeOverride: versionDetail.composeOverride ?? '',
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
-      
-      // Fallback defaults
+
+      // Fallback defaults (no bundle compose available — the user supplies one)
       return {
         env: [
           { key: 'APP_PORT', value: '8080', isSecret: false, description: 'Application port' },
@@ -652,6 +659,7 @@ export class RealDraftService implements DraftService {
           ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
           volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
         },
+        composeOverride: '',
       };
     }
   }

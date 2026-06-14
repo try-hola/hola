@@ -175,10 +175,16 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // Parse compose.yaml to get additional defaults
       const composeDefaults = parseComposeDefaults(info.localPath);
 
+      // Carry the raw compose.yaml through so a catalog-created draft can be
+      // deployed without the user pasting compose. Same file the parser reads;
+      // a missing/unreadable compose throws here and falls through to the same
+      // catch (MANIFEST_UNAVAILABLE) + draft-side fallback — no new failure mode.
+      const composeOverride = readFileSync(join(info.localPath, 'compose.yaml'), 'utf8');
+
       // Merge compose and manifest defaults (manifest takes precedence)
       const merged = mergeDefaults(composeDefaults, manifestDefaults, manifestEnv);
 
-      return merged satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, composeOverride } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

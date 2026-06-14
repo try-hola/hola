@@ -251,6 +251,10 @@ export type DraftDefaults = {
 export type GetCatalogAppVersionDetailResponse = {
   defaultEnv: AppEnvVar[];
   defaults: DraftDefaults;
+  // The bundle's compose.yaml, used to seed a catalog-created draft's
+  // composeOverride so it can be deployed without the user pasting compose.
+  // Optional: clients that only need env/port defaults can ignore it.
+  composeOverride?: string;
 };
 
 // ------------------------------------------------------

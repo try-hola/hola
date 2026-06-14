@@ -8,7 +8,7 @@
     "start": "bun run src/server.ts",
     "build": "bun build src/server.ts --outdir=dist --target=bun --sourcemap",
     "test": "bun test",
-    "test:integration": "bun test ./src/__tests__/integration/docker-orchestration.it.ts ./src/__tests__/integration/smoke-workflow.it.ts",
+    "test:integration": "bun test ./src/__tests__/integration/docker-orchestration.it.ts ./src/__tests__/integration/smoke-workflow.it.ts ./src/__tests__/integration/catalog-deploy.it.ts",
     "typecheck": "tsc --noEmit",
     "lint": "bunx --bun eslint ."
   },
