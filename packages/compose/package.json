@@ -7,6 +7,7 @@
   "scripts": {
     "install:stack": "./scripts/install.sh",
     "up": "./scripts/up.sh",
+    "dev": "HOLA_DEV=1 ./scripts/up.sh",
     "down": "./scripts/down.sh",
     "restart": "./scripts/down.sh && ./scripts/up.sh",
     "logs": "./scripts/logs.sh",
