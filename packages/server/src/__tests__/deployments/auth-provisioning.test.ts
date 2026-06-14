@@ -94,6 +94,13 @@ class SpyProvisioner implements ProvisionerService {
         ref: input.existingRef ?? { mode: 'native-oidc', providerPk: 42, applicationSlug: 'gitea-x', clientId: 'cid-123' },
       };
     }
+    if (input.mode === 'forward-auth') {
+      return {
+        env: {},
+        ref: input.existingRef ?? { mode: 'forward-auth', providerPk: 7, applicationSlug: 'gitea-x', outpostPk: 1 },
+        middleware: { name: 'ak-gitea-x', outpostUrl: 'http://authentik-server:9000' },
+      };
+    }
     return { env: {}, ref: { mode: input.mode } };
   }
 
@@ -246,10 +253,11 @@ describe('Auth provisioning lifecycle', () => {
     const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
     await waitForJob(sys.jobs, created.jobId!);
 
-    await sys.deployments.deleteDeployment(created.deploymentId);
-    // Deletion completed despite the deprovision error.
+    // Deletion resolves (does not throw) despite the deprovision error, and the
+    // teardown was still attempted exactly once with the persisted ref.
+    await expect(sys.deployments.deleteDeployment(created.deploymentId)).resolves.toBeUndefined();
     expect(failingDeprovision.deprovisions).toHaveLength(1);
-    await expect(sys.deployments.getDeployment(created.deploymentId)).rejects.toThrow();
+    expect(failingDeprovision.deprovisions[0].ref?.providerPk).toBe(42);
   });
 
   // --- Post-deploy setup command (e.g. Gitea `gitea admin auth add-oauth`) -----
@@ -303,6 +311,35 @@ describe('Auth provisioning lifecycle', () => {
 
     // The app has no env mapping, so nothing was injected into the compose.
     expect(await readMaterializedEnv(sys.storage, created.deploymentId)).toEqual({});
+  });
+
+  test('forward-auth: gates the route with the Authentik outpost middleware', async () => {
+    const sys = makeSystem({ auth: { mode: 'forward-auth', forwardAuth: {} } });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    expect(spy.provisions[0].mode).toBe('forward-auth');
+
+    // The provisioned middleware persisted on deployment metadata...
+    const meta = JSON.parse(await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`));
+    expect(meta.metadata.auth.mode).toBe('forward-auth');
+    expect(meta.metadata.auth.middleware.name).toBe('ak-gitea-x');
+
+    // ...and was emitted into the Traefik dynamic config (gate + outpost router).
+    const dyn = await sys.storage.readFileAsString('runtime/traefik/dynamic.yml');
+    expect(dyn).toContain('ak-gitea-x');
+    expect(dyn).toContain('/outpost.goauthentik.io/auth/traefik');
+    expect(dyn).toContain('PathPrefix(`/outpost.goauthentik.io/`)');
+
+    // The route's rule carries forwardAuth so it survives a restart rebuild.
+    const map = JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json'));
+    expect(map['gitea.local.hola'].forwardAuth.name).toBe('ak-gitea-x');
+
+    // Delete tears the provider down.
+    await sys.deployments.deleteDeployment(created.deploymentId);
+    expect(spy.deprovisions[0].ref?.mode).toBe('forward-auth');
   });
 
   test('post-deploy setup is idempotent: skips the command when already configured', async () => {
