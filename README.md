@@ -102,7 +102,44 @@ Server (Bun):
 - Default port: 3001
 - Base path: `/api`
 
+## Install (production, single host)
+
+Run the server on a host with **Docker + Docker Compose v2 + git** (images build from
+source — no registry needed). Full details and operations in
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`packages/compose/README.md`](packages/compose/README.md).
+
+```bash
+# On the server host
+git clone https://github.com/try-hola/hola.git
+cd hola/packages/compose
+cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL
+./scripts/install.sh          # builds + runs the production stack (Traefik + web + server)
+
+# Retrieve the generated admin API key (unless you set HOLA_API_KEY in .env)
+docker compose exec server cat /data/config/admin-api-key
+```
+
+Point `HOLA_DOMAIN` (and app subdomains under `HOLA_BASE_DOMAIN`) at the host; Traefik
+obtains Let's Encrypt certificates automatically. The API is reached through the web
+origin (`https://<HOLA_DOMAIN>`); the server port is not published directly.
+
+### CLI on another machine
+
+The CLI talks to the server over the same API. Install it from the repo and point it at
+the server:
+
+```bash
+git clone https://github.com/try-hola/hola.git && cd hola
+bun install && bun --cwd packages/cli build
+export HOLA_API_URL=https://<HOLA_DOMAIN>     # the web origin (proxies /api to the server)
+export HOLA_TOKEN=<admin-api-key>             # from the server host, above
+./packages/cli/bin/hola --help
+```
+
 ## Getting Started
+
+> For local development. For deploying a real instance see
+> [Install (production, single host)](#install-production-single-host) above.
 
 Prerequisites
 - Bun installed matching `.bun-version` (1.3.14)
