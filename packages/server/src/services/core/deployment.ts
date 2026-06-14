@@ -1068,7 +1068,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   protected override async onActiveReleaseChanged(deploymentId: string): Promise<void> {
     const deployment = this.deployments.get(deploymentId);
     if (!deployment) return;
-    await this.routingService.activateRoute(this.routingRuleFor(deployment));
+    const rule = this.routingRuleFor(deployment);
+    // Avoid a brief unauthenticated window: if the app must be gated by forward-auth
+    // but the gate hasn't been provisioned yet (first deploy — no middleware on the
+    // rule), defer route activation to completeAuthWiring after the deploy job
+    // provisions it. Re-deploys/restarts already carry the persisted middleware, so
+    // they activate immediately with the gate.
+    if (!rule.forwardAuth) {
+      const auth = await this.readActiveAuth(deployment);
+      if (auth?.mode === 'forward-auth') {
+        this.logger.info('Deferring route activation until forward-auth is provisioned', { deploymentId });
+        return;
+      }
+    }
+    await this.routingService.activateRoute(rule);
   }
 
   protected override async onDeploymentRemoved(deploymentId: string): Promise<void> {

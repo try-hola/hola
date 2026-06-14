@@ -355,6 +355,27 @@ describe('Auth provisioning lifecycle', () => {
     expect(spy.deprovisions[0].ref?.mode).toBe('forward-auth');
   });
 
+  test('forward-auth: route activation is deferred until the gate is provisioned (no ungated window)', async () => {
+    const sys = makeSystem({ auth: { mode: 'forward-auth', forwardAuth: {} } });
+
+    // Create without auto-start: the release is promoted (route activation seam runs)
+    // but provisioning hasn't happened yet, so the route must NOT be live ungated.
+    const created = await sys.deployments.createFromDraft({
+      draftId: await finalizedDraft(sys.drafts),
+      name: 'gitea',
+      options: { autoStart: false },
+    });
+    const mapExists = await sys.storage.fileExists('runtime/traefik/routing-map.json');
+    const mapBefore = mapExists ? JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json')) : {};
+    expect(mapBefore['gitea.local.hola']).toBeUndefined();
+
+    // Once started, provisioning runs and the route appears WITH the gate.
+    const start = await sys.deployments.executeAction(created.deploymentId, { action: 'start' });
+    expect((await waitForJob(sys.jobs, start.jobId!)).status).toBe('completed');
+    const mapAfter = JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json'));
+    expect(mapAfter['gitea.local.hola']?.forwardAuth?.name).toBe('ak-gitea-x');
+  });
+
   test('native-ldap: injects the bind config into the ingress service', async () => {
     const sys = makeSystem({
       auth: {
