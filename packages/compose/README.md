@@ -127,6 +127,37 @@ HOLA_CATALOG_URL=https://raw.githubusercontent.com/try-hola/apps/main/catalog.js
 Apps are pulled from GHCR (`ghcr.io/try-hola/*`) as OCI bundles; the bundle's `compose.yaml`
 becomes the deployment. Pulling requires the package to be **public** (or a registry token).
 
+## Authentication & SSO
+Catalog apps can integrate with single sign-on. When enabled, Hola deploys **Authentik** (an
+all-in-one SSO platform) as part of the stack and **auto-provisions** each app's auth on install —
+e.g. for an app with native OIDC, Hola creates the OAuth2 client in Authentik and injects the
+issuer/client id/secret into the app, so SSO works on first boot with no manual setup.
+
+This is **opt-in** (Authentik needs ~2 GB RAM + Postgres). Enable it in `.env`:
+
+```bash
+HOLA_AUTH_MODE=authentik          # default is `none` (no SSO platform)
+HOLA_AUTHENTIK_DOMAIN=auth.example.com   # browser-facing login UI (needs DNS + TLS)
+```
+
+Then run `./scripts/install.sh`. It will:
+- generate per-install secrets into `.env` (`AUTHENTIK_SECRET_KEY`, `AUTHENTIK_PG_PASS`,
+  `AUTHENTIK_BOOTSTRAP_PASSWORD`, `AUTHENTIK_BOOTSTRAP_TOKEN`) — idempotent; existing values are kept;
+- reuse the bootstrap token as `HOLA_AUTHENTIK_API_TOKEN` (the server's provisioning credential);
+- set `HOLA_AUTHENTIK_PUBLIC_URL` and add `authentik` to `COMPOSE_PROFILES` so the stack starts.
+
+The Authentik services (`authentik-server`, `authentik-worker`, `authentik-postgres`) run under the
+`authentik` compose profile; the server reaches Authentik internally at `http://authentik-server:9000`
+and the login UI is served at `HOLA_AUTHENTIK_DOMAIN`. First admin login is `akadmin` with the
+generated `AUTHENTIK_BOOTSTRAP_PASSWORD`.
+
+Notes & limitations:
+- The bootstrap token is the **akadmin superuser** token. Acceptable for first delivery; a scoped
+  least-privilege service-account token is a planned hardening follow-up.
+- We **do not** mount the Docker socket into Authentik — Hola runs any outposts as its own services.
+- Currently only **native-OIDC** apps are auto-provisioned. `forward-auth` and `native-ldap` are
+  planned (see the auth/SSO epic). A lightweight Authelia+LLDAP backend is tracked separately.
+
 ## Deploying apps & routing
 When you deploy an app through Hola, the server writes a Traefik router/service for it into
 `/data/runtime/traefik/dynamic.yml`, which Traefik picks up automatically. For Traefik to reach the
@@ -147,5 +178,5 @@ covered by the integration test in issue #19.
 - `docker-compose.yml` — production stack (build, socket, data volume, Traefik file provider).
 - `docker-compose.dev.yml` — opt-in local dev overlay (Bun dev servers, HTTP only); `HOLA_DEV=1`.
 - `../server/Dockerfile`, `../web/Dockerfile`, `../web/nginx.conf` — images.
-- `.env.example` — domains, ports, auth, catalog URL.
+- `.env.example` — domains, ports, admin auth, catalog URL, SSO (Authentik) settings.
 - `scripts/` — install/up/down/logs/status helpers.

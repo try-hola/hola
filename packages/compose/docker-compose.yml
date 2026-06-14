@@ -72,6 +72,14 @@ services:
       # Remote app catalog (JSON). The turnkey default lives in .env.example; blank
       # disables the catalog. See README "App catalog".
       - HOLA_CATALOG_URL=${HOLA_CATALOG_URL:-}
+      # Auth/SSO: when HOLA_AUTH_MODE=authentik the server provisions per-app auth
+      # (OIDC clients, etc.) against the Authentik stack below. `none` disables it.
+      # See README "Authentication & SSO". URL is the internal compose DNS name;
+      # PUBLIC_URL/API_TOKEN are written into .env by scripts/install.sh.
+      - HOLA_AUTH_MODE=${HOLA_AUTH_MODE:-none}
+      - HOLA_AUTHENTIK_URL=${HOLA_AUTHENTIK_URL:-http://authentik-server:9000}
+      - HOLA_AUTHENTIK_PUBLIC_URL=${HOLA_AUTHENTIK_PUBLIC_URL:-}
+      - HOLA_AUTHENTIK_API_TOKEN=${HOLA_AUTHENTIK_API_TOKEN:-}
     volumes:
       # Orchestrate deployments by talking to the host Docker engine.
       # SECURITY: this grants control of the host's Docker - see README.
@@ -98,8 +106,93 @@ services:
       traefik.http.routers.hola-web.tls.certresolver: le
       traefik.http.services.hola-web.loadbalancer.server.port: "80"
 
+  # --- Authentik (SSO platform) -------------------------------------------
+  # Opt-in: only started when the `authentik` compose profile is active
+  # (scripts/install.sh sets COMPOSE_PROFILES=authentik when HOLA_AUTH_MODE=authentik).
+  # Server + worker + Postgres. Redis is NOT required (removed in Authentik 2025.10).
+  # The proxy outpost is embedded in authentik-server; the LDAP outpost (PR4) is added
+  # separately. We deliberately do NOT mount the Docker socket here — Hola runs any
+  # outposts as its own compose services rather than letting Authentik spawn them.
+  authentik-postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: authentik-postgres
+    profiles: [authentik]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: authentik
+      # Populated by scripts/install.sh when HOLA_AUTH_MODE=authentik. (Plain `:-`
+      # rather than `:?` so the default no-auth stack interpolates without these set.)
+      POSTGRES_PASSWORD: ${AUTHENTIK_PG_PASS:-}
+      POSTGRES_DB: authentik
+    volumes:
+      - authentik-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -d authentik -U authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    labels:
+      traefik.enable: "false"
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2025.10
+    container_name: authentik-server
+    profiles: [authentik]
+    restart: unless-stopped
+    command: server
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:-}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASS}
+      # Bootstrap a usable admin + API token on first boot (no interactive setup).
+      # The token doubles as HOLA_AUTHENTIK_API_TOKEN for the server's provisioner.
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:-}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@example.com}
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.authentik.rule: Host(`${HOLA_AUTHENTIK_DOMAIN:-auth.local.hola}`)
+      traefik.http.routers.authentik.entrypoints: websecure
+      traefik.http.routers.authentik.tls: "true"
+      traefik.http.routers.authentik.tls.certresolver: le
+      traefik.http.services.authentik.loadbalancer.server.port: "9000"
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2025.10
+    container_name: authentik-worker
+    profiles: [authentik]
+    restart: unless-stopped
+    command: worker
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_POSTGRESQL__HOST: authentik-postgres
+      AUTHENTIK_POSTGRESQL__USER: authentik
+      AUTHENTIK_POSTGRESQL__NAME: authentik
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASS}
+    depends_on:
+      authentik-postgres:
+        condition: service_healthy
+    volumes:
+      - authentik-media:/media
+      - authentik-templates:/templates
+      - authentik-certs:/certs
+    labels:
+      traefik.enable: "false"
+
 volumes:
   hola-data:
+  authentik-postgres:
+  authentik-media:
+  authentik-templates:
+  authentik-certs:
 
 networks:
   default:

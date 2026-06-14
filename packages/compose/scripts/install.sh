@@ -16,11 +16,61 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 
 # Prepare environment file
-if [[ ! -f "$ROOT_DIR/.env" ]]; then
+ENV_FILE="$ROOT_DIR/.env"
+if [[ ! -f "$ENV_FILE" ]]; then
   echo "[install] Creating .env from .env.example"
-  cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
+  cp "$ROOT_DIR/.env.example" "$ENV_FILE"
 else
   echo "[install] Using existing .env"
+fi
+
+# --- Authentik (SSO) bootstrap secrets ------------------------------------
+# When HOLA_AUTH_MODE=authentik, generate per-install secrets (idempotently) and
+# wire the derived values, so the Authentik stack comes up turnkey and the server
+# can provision against it immediately. No-op for HOLA_AUTH_MODE=none.
+env_get() { grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- || true; }
+env_set() { # set or replace KEY=VALUE without sed-escaping the value
+  local key="$1" val="$2" tmp
+  tmp="$(mktemp)"
+  grep -vE "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
+  printf '%s=%s\n' "$key" "$val" >> "$tmp"
+  mv "$tmp" "$ENV_FILE"
+}
+ensure_secret() { # generate only if currently blank/missing
+  local key="$1" val="$2"
+  if [[ -z "$(env_get "$key")" ]]; then
+    env_set "$key" "$val"
+    echo "[install]   generated $key"
+  fi
+}
+
+AUTH_MODE="$(env_get HOLA_AUTH_MODE | tr -d '"'"'"' ' | xargs || true)"
+if [[ "$AUTH_MODE" == "authentik" ]]; then
+  echo "[install] HOLA_AUTH_MODE=authentik: provisioning Authentik secrets"
+  if ! command -v openssl >/dev/null 2>&1; then
+    echo "[install] openssl is required to generate Authentik secrets. Please install it." >&2
+    exit 1
+  fi
+  ensure_secret AUTHENTIK_SECRET_KEY "$(openssl rand -base64 60 | tr -d '\n')"
+  ensure_secret AUTHENTIK_PG_PASS "$(openssl rand -hex 24)"
+  ensure_secret AUTHENTIK_BOOTSTRAP_PASSWORD "$(openssl rand -hex 24)"
+  ensure_secret AUTHENTIK_BOOTSTRAP_TOKEN "$(openssl rand -hex 32)"
+
+  # The bootstrap token doubles as the server's provisioning API token.
+  env_set HOLA_AUTHENTIK_API_TOKEN "$(env_get AUTHENTIK_BOOTSTRAP_TOKEN)"
+
+  # Derive the public issuer URL from the Authentik domain.
+  authentik_domain="$(env_get HOLA_AUTHENTIK_DOMAIN | xargs || true)"
+  authentik_domain="${authentik_domain:-auth.local.hola}"
+  env_set HOLA_AUTHENTIK_PUBLIC_URL "https://${authentik_domain}"
+
+  # Activate the `authentik` compose profile so the stack actually starts.
+  profiles="$(env_get COMPOSE_PROFILES | xargs || true)"
+  if [[ -z "$profiles" ]]; then
+    env_set COMPOSE_PROFILES "authentik"
+  elif [[ ",$profiles," != *",authentik,"* ]]; then
+    env_set COMPOSE_PROFILES "${profiles},authentik"
+  fi
 fi
 
 # Create basic data/logs dirs
@@ -34,9 +84,11 @@ fi
 # Dev-only hosts hint (production uses real, resolvable domains).
 if [[ "${HOLA_DEV:-}" == "1" || "${HOLA_DEV:-}" == "true" ]]; then
   if ! grep -q "app.local.hola" /etc/hosts 2>/dev/null; then
-    cat <<'HOSTS_HINT'
+    auth_hint=""
+    [[ "$AUTH_MODE" == "authentik" ]] && auth_hint=" auth.local.hola"
+    cat <<HOSTS_HINT
 [install] Hint: Add these to /etc/hosts for local dev domains:
-  127.0.0.1 app.local.hola traefik.local.hola
+  127.0.0.1 app.local.hola traefik.local.hola${auth_hint}
 HOSTS_HINT
   fi
 fi
@@ -50,3 +102,13 @@ cat <<'NEXT'
 generated admin API key with:
   docker compose exec server cat /data/config/admin-api-key
 NEXT
+
+if [[ "$AUTH_MODE" == "authentik" ]]; then
+  cat <<NEXT
+[install] Authentik SSO is enabled. The login UI is at https://${authentik_domain:-auth.local.hola}
+  Admin user: akadmin
+  Admin password: AUTHENTIK_BOOTSTRAP_PASSWORD in .env
+First boot takes a minute while Authentik runs migrations. Catalog apps that
+support SSO will have their auth provisioned automatically on install.
+NEXT
+fi
