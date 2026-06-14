@@ -105,18 +105,23 @@ Server (Bun):
 ## Install (production, single host)
 
 Run the server on a host with **Docker + Docker Compose v2 + git** (images build from
-source — no registry needed). Full details and operations in
-[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`packages/compose/README.md`](packages/compose/README.md).
+source — no registry needed). One command:
 
 ```bash
-# On the server host
-git clone https://github.com/try-hola/hola.git
-cd hola/packages/compose
-cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL
-./scripts/install.sh          # builds + runs the production stack (Traefik + web + server)
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/install.sh | sh
+```
 
-# Retrieve the generated admin API key (unless you set HOLA_API_KEY in .env)
-docker compose exec server cat /data/config/admin-api-key
+The installer clones Hola, prompts for your domain settings (or reads `HOLA_DOMAIN`,
+`HOLA_BASE_DOMAIN`, `LETSENCRYPT_EMAIL` from the environment), builds and starts the
+production stack (Traefik + web + server), and prints the generated admin API key.
+Re-running it upgrades an existing install. Full details and operations in
+[`docs/OPERATIONS.md`](docs/OPERATIONS.md) and [`packages/compose/README.md`](packages/compose/README.md).
+
+Non-interactive example:
+
+```bash
+HOLA_DOMAIN=app.example.com HOLA_BASE_DOMAIN=example.com LETSENCRYPT_EMAIL=you@example.com \
+  sh -c "$(curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/install.sh)"
 ```
 
 Point `HOLA_DOMAIN` (and app subdomains under `HOLA_BASE_DOMAIN`) at the host; Traefik
@@ -125,15 +130,14 @@ origin (`https://<HOLA_DOMAIN>`); the server port is not published directly.
 
 ### CLI on another machine
 
-The CLI talks to the server over the same API. Install it from the repo and point it at
-the server:
+Install the `hola` command with one line (downloads a prebuilt binary, or builds one with
+Bun if no release is published yet):
 
 ```bash
-git clone https://github.com/try-hola/hola.git && cd hola
-bun install && bun --cwd packages/cli build
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
 export HOLA_API_URL=https://<HOLA_DOMAIN>     # the web origin (proxies /api to the server)
-export HOLA_TOKEN=<admin-api-key>             # from the server host, above
-./packages/cli/bin/hola --help
+export HOLA_TOKEN=<admin-api-key>             # printed by the server installer
+hola --help
 ```
 
 ## Getting Started
