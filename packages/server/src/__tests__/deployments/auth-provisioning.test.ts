@@ -101,6 +101,19 @@ class SpyProvisioner implements ProvisionerService {
         middleware: { name: 'ak-gitea-x', outpostUrl: 'http://authentik-server:9000' },
       };
     }
+    if (input.mode === 'native-ldap' && input.ldap) {
+      const e = input.ldap.env;
+      return {
+        env: {
+          [e.host]: 'authentik-ldap',
+          [e.port]: '3389',
+          [e.bindDn]: 'cn=svc,ou=users,dc=hola,dc=internal',
+          [e.bindPassword]: 'ldap-pw',
+          [e.baseDn]: 'dc=hola,dc=internal',
+        },
+        ref: input.existingRef ?? { mode: 'native-ldap', bindAccountPk: 9 },
+      };
+    }
     return { env: {}, ref: { mode: input.mode } };
   }
 
@@ -340,6 +353,28 @@ describe('Auth provisioning lifecycle', () => {
     // Delete tears the provider down.
     await sys.deployments.deleteDeployment(created.deploymentId);
     expect(spy.deprovisions[0].ref?.mode).toBe('forward-auth');
+  });
+
+  test('native-ldap: injects the bind config into the ingress service', async () => {
+    const sys = makeSystem({
+      auth: {
+        mode: 'native-ldap',
+        ldap: { env: { host: 'LDAP_HOST', port: 'LDAP_PORT', bindDn: 'LDAP_BIND_DN', bindPassword: 'LDAP_BIND_PW', baseDn: 'LDAP_BASE_DN' } },
+      },
+    });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    expect(spy.provisions[0].mode).toBe('native-ldap');
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    expect(env.LDAP_HOST).toBe('authentik-ldap');
+    expect(env.LDAP_BIND_DN).toBe('cn=svc,ou=users,dc=hola,dc=internal');
+    expect(env.LDAP_BIND_PW).toBe('ldap-pw');
+
+    await sys.deployments.deleteDeployment(created.deploymentId);
+    expect(spy.deprovisions[0].ref?.mode).toBe('native-ldap');
   });
 
   test('post-deploy setup is idempotent: skips the command when already configured', async () => {
