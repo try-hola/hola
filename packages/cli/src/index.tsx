@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import sade from 'sade';
 
+import { CLI_VERSION } from './version';
+
 // Lazy command loaders to avoid unnecessary dependencies until invoked
 const load = async <T,>(p: Promise<T>): Promise<T> => p;
 
 const prog = sade('hola');
 
 prog
-  .version('0.2.0')
+  .version(CLI_VERSION)
   .describe('Hola CLI — install, deployments, and the bundle developer workflow');
 
 // init — guided first-time setup (writes .env on this machine; no server needed)
@@ -22,6 +24,23 @@ prog
   .action(async (opts) => {
     const { runInit } = await load(import('./commands/init/init'));
     await runInit(opts);
+  });
+
+// bootstrap — wizard + SSH into the host and run the full install
+prog
+  .command('bootstrap')
+  .describe('Set up Hola on a remote host over SSH (wizard + install)')
+  .option('--host', 'Target host, e.g. user@vm (required)')
+  .option('--repo', 'Hola git repo to clone', 'https://github.com/try-hola/hola.git')
+  .option('--ref', `Git ref to build on the host (default cli-v${CLI_VERSION})`)
+  .option('--dir', 'Install directory on the host', '~/hola')
+  .option('--env-file', 'Use an existing .env (skip the wizard)')
+  .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
+  .option('--dry-run', 'Print the plan without connecting', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (opts) => {
+    const { runBootstrap } = await load(import('./commands/bootstrap/bootstrap'));
+    await runBootstrap(opts);
   });
 
 // bundle validate

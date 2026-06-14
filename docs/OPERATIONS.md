@@ -34,6 +34,10 @@ cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_E
 ./scripts/install.sh          # builds + runs the production stack
 ```
 
+Or use the guided CLI, which validates the config up front and (optionally) installs on a
+remote host over SSH — `hola init` to generate a `.env`, or `hola bootstrap --host user@vm`
+for the full remote install. See the [compose README](../packages/compose/README.md#guided-recommended--the-hola-cli).
+
 ### Authenticate
 
 Auth is **on by default in production**. If you did not set `HOLA_API_KEY` in
