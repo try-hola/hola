@@ -69,6 +69,15 @@ router is emitted. Lifecycle actions — **start / stop / restart / delete** and
 deployment's list, detail, and history views. See the
 [deployment lifecycle](ARCHITECTURE.md#deployment-lifecycle) for the full path.
 
+### Single sign-on (SSO)
+
+Set `HOLA_AUTH_MODE=authentik` in `.env` to deploy **Authentik** alongside the
+stack and have Hola auto-provision each catalog app's auth on install (OIDC
+today). `install.sh` generates the bootstrap secrets and activates the
+`authentik` compose profile. It is opt-in (Authentik needs ~2 GB RAM + Postgres);
+the default `none` deploys apps without auth wiring. See the SSO notes in the
+compose [README](../packages/compose/README.md#authentication--sso).
+
 ### Routing generation
 
 When an app is deployed, the server writes a Traefik router/service for it into
