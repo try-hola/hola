@@ -491,7 +491,7 @@ export class RealDraftService implements DraftService {
       this.logger.error('Draft validation failed', error as Error, { draftId });
       return {
         ok: false,
-        errors: [{ message: error instanceof Error ? error.message : 'Validation failed' }],
+        errors: [{ code: 'VALIDATION_FAILED', severity: 'error', message: error instanceof Error ? error.message : 'Validation failed' }],
         warnings: [],
       };
     }
@@ -759,7 +759,7 @@ export class MockDraftService implements DraftService {
       ok: true,
       errors: [],
       warnings: [
-        { field: 'ports', message: 'Port 8080 may conflict with other services' },
+        { code: 'IMAGE_MISSING_TAG', severity: 'warning', field: 'ports', message: 'Port 8080 may conflict with other services' },
       ],
     };
   }

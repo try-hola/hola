@@ -286,8 +286,8 @@ export type DeleteDraftFileResponse = { ok: true };
 
 export type ValidateDraftResponse = {
   ok: boolean;
-  errors: Array<{ field?: string; message: string }>;
-  warnings: Array<{ field?: string; message: string }>;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
 };
 
 export type PreflightCheck = { name: string; status: 'pass' | 'warn' | 'fail'; detail?: string };
