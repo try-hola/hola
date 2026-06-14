@@ -75,8 +75,48 @@ Then open `http://app.local.hola`. (Auth is disabled in development.)
 ## TLS (production)
 - Set `LETSENCRYPT_EMAIL` and use real, internet-resolvable domains for `HOLA_DOMAIN` and
   `TRAEFIK_DASHBOARD_DOMAIN` pointing at the host.
-- `install.sh` creates `traefik/acme/acme.json` (chmod 600). Certs are issued via HTTP-01 on the
-  `web` entrypoint and stored there.
+- `install.sh` creates `traefik/acme/acme.json` (chmod 600). Certs are stored there.
+- **Default is HTTP-01** — a per-host cert is issued on demand for each domain (the UI, the
+  dashboard, the Authentik UI, and every deployed app at `<app>.<HOLA_BASE_DOMAIN>`). This
+  requires the host to be **reachable from the internet on port 80** so Let's Encrypt can
+  validate.
+
+### Private / homelab TLS (DNS-01)
+If the host is **not reachable from the internet** (e.g. a homelab box behind NAT), HTTP-01
+can't validate. Use **DNS-01** instead: Traefik proves domain control by writing a TXT record
+through your DNS provider's API, so no inbound port is needed — and it can issue a single
+**wildcard** cert (`*.<HOLA_BASE_DOMAIN>`) covering the UI, dashboard, Authentik, and every app.
+
+Your A records can point at private IPs (`10.x` / `192.168.x`); only the domain's *public DNS*
+needs to be API-manageable. (A made-up internal-only domain like `*.home`/`*.lan` won't work —
+Let's Encrypt can't sign names it can't validate; you'd need an internal CA for those.)
+
+Enable it in `.env`:
+
+```bash
+ACME_DNS_PROVIDER=route53            # or: cloudflare
+# Route 53:
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_REGION=us-east-1
+# AWS_HOSTED_ZONE_ID=...             # optional; pin if the account has several zones
+# Cloudflare instead:
+# CF_DNS_API_TOKEN=...               # scoped token with Zone:DNS:Edit
+```
+
+Then run `./scripts/install.sh` (or `./scripts/up.sh`). When `ACME_DNS_PROVIDER` is set, the
+DNS-01 overlay (`docker-compose.dns01.yml`) is included automatically and a wildcard cert is
+requested for `*.<HOLA_BASE_DOMAIN>`. Manually that's:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dns01.yml up -d
+```
+
+Example for `HOLA_BASE_DOMAIN=hola.get2know.io`: one `*.hola.get2know.io` cert serves
+`app.hola.get2know.io` (UI), `traefik.`/`auth.`, and `gitea.`/`n8n.`/… apps. The Route 53 IAM
+principal needs `route53:ChangeResourceRecordSets`, `GetChange`, `ListHostedZonesByName`, and
+`ListResourceRecordSets` on the zone. Note the wildcard is single-level, so deployed apps must
+be one label under the base (they are: `<app>.<HOLA_BASE_DOMAIN>`).
 
 ## Upgrade
 
@@ -199,6 +239,8 @@ covered by the integration test in issue #19.
 ## Files
 - `docker-compose.yml` — production stack (build, socket, data volume, Traefik file provider).
 - `docker-compose.dev.yml` — opt-in local dev overlay (Bun dev servers, HTTP only); `HOLA_DEV=1`.
+- `docker-compose.dns01.yml` — opt-in DNS-01 TLS overlay (wildcard cert for private/homelab
+  hosts); auto-included when `ACME_DNS_PROVIDER` is set.
 - `../server/Dockerfile`, `../web/Dockerfile`, `../web/nginx.conf` — images.
 - `.env.example` — domains, ports, admin auth, catalog URL, SSO (Authentik) settings.
 - `scripts/` — install/up/down/logs/status helpers.

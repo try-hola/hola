@@ -74,6 +74,28 @@ if [[ "$AUTH_MODE" == "authentik" ]]; then
   fi
 fi
 
+# --- TLS challenge sanity check ----------------------------------------------
+# DNS-01 (for private/homelab hosts) is opt-in via ACME_DNS_PROVIDER; _common.sh
+# auto-includes the overlay. Warn early if the provider is set but credentials are
+# missing, since cert issuance would otherwise fail silently after startup.
+ACME_DNS_PROVIDER="$(env_get ACME_DNS_PROVIDER | xargs || true)"
+if [[ -n "$ACME_DNS_PROVIDER" ]]; then
+  base_domain="$(env_get HOLA_BASE_DOMAIN | xargs || true)"
+  echo "[install] DNS-01 TLS enabled (provider: $ACME_DNS_PROVIDER) — wildcard *.${base_domain:-<HOLA_BASE_DOMAIN>}"
+  case "$ACME_DNS_PROVIDER" in
+    route53)
+      if [[ -z "$(env_get AWS_ACCESS_KEY_ID | xargs || true)" || -z "$(env_get AWS_SECRET_ACCESS_KEY | xargs || true)" ]]; then
+        echo "[install] WARNING: route53 selected but AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are blank in .env — cert issuance will fail." >&2
+      fi
+      ;;
+    cloudflare)
+      if [[ -z "$(env_get CF_DNS_API_TOKEN | xargs || true)" ]]; then
+        echo "[install] WARNING: cloudflare selected but CF_DNS_API_TOKEN is blank in .env — cert issuance will fail." >&2
+      fi
+      ;;
+  esac
+fi
+
 # Create basic data/logs dirs
 mkdir -p "$ROOT_DIR/logs" "$ROOT_DIR/data"
 mkdir -p "$ROOT_DIR/traefik/acme"

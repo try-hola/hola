@@ -173,8 +173,10 @@ list. Common cases:
 
 - **502 from the UI** — the `server` container isn't healthy yet;
   `docker compose logs server`.
-- **No TLS cert** — domains must be public and resolve to the host (Let's Encrypt
-  HTTP-01).
+- **No TLS cert** — with the default HTTP-01 the host must be internet-reachable on
+  port 80. For private/homelab hosts use DNS-01 instead (set `ACME_DNS_PROVIDER` +
+  provider credentials in `.env` for a wildcard cert — see the
+  [compose README](../packages/compose/README.md#private--homelab-tls-dns-01)).
 - **Deployed app not routable** — confirm its Compose joined the `hola` network
   and that `/data/runtime/traefik/dynamic.yml` contains its router.
 - **Validate config** — `docker compose config` validates the merged `.env`.
