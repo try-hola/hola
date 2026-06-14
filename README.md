@@ -10,26 +10,39 @@ This repository is a TypeScript-first monorepo powered by Bun workspaces contain
 - **SDK**: TypeScript client library for server API
 - **Compose**: Docker Compose stack for local deployment
 
-**Current Status**: 🚀 Core server implementation complete with deployment management, job tracking, and real-time updates.
+**Current Status**: Hola runs the supported workflow end to end — catalog →
+draft → validate → finalize → deploy → manage — through real Docker Compose
+orchestration and Traefik routing, with state that survives restarts. Some
+features remain on the roadmap (see [What Hola Does](#what-hola-does)).
 
 Available documentation:
-- UX specification: [`docs/UX_SPEC.md`](docs/UX_SPEC.md)
-- Implementation review: [`docs/HOLA_REVIEW.md`](docs/HOLA_REVIEW.md)
+- Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Operations guide (install, deploy, recover): [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- Authentication ADR: [`docs/adr/0001-authentication.md`](docs/adr/0001-authentication.md)
+- Production stack: [`packages/compose/README.md`](packages/compose/README.md)
 - Contributing guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- UX specification (pre-recovery, historical): [`docs/UX_SPEC.md`](docs/UX_SPEC.md)
+- Implementation review (pre-recovery, historical): [`docs/HOLA_REVIEW.md`](docs/HOLA_REVIEW.md)
 
 ## What Hola Does
 
-Hola streamlines self‑hosted app deployments for home lab hobbyists, tinkerers, and power users. The dashboard provides:
+Hola streamlines self‑hosted app deployments for home lab hobbyists, tinkerers, and power users.
+
+**Implemented today:**
 - App catalog browsing with search and details
-- A guided install wizard with:
-  - Environment variables editing
-  - Optional Docker Compose override upload
-  - Additional file uploads for config/secrets
-  - Advanced options (ports, volumes)
-- Deployment lifecycle controls: start/stop/restart/update/uninstall
-- Health, logs, and status views
+- A guided install wizard: environment-variable editing, optional Docker Compose
+  override + additional config/secret file uploads, with strict Compose
+  validation and preflight checks
+- Deployment lifecycle controls: start / stop / restart / delete, plus rollback
+- Traefik-based routing for deployed apps (no host-port publishing)
+- Health, logs (live job/log streaming), and status views
+- Durable state: drafts, deployments, releases, and routing survive restarts
+- Control-plane authentication via an admin API key (see the auth ADR)
+
+**Roadmap (not yet implemented):**
 - Notifications for updates/errors/backups
-- Backups and restores
+- Scheduled backups and UI-driven restores
+- Application SSO via an external identity provider (Traefik forward-auth)
 
 Non-goals (see full PRD for details):
 - Not a hosted SaaS; focuses on local/self-hosted environments
@@ -46,7 +59,7 @@ Non-goals (see full PRD for details):
 │   ├── cli/       # Command-line interface
 │   ├── sdk/       # TypeScript client library
 │   └── compose/   # Docker Compose stack
-├── docs/          # UX spec and implementation review
+├── docs/          # architecture, operations, ADRs (+ historical UX spec/review)
 ├── .bun-version   # Bun version pin
 ├── package.json   # Bun workspaces root
 └── tsconfig.json  # TS project references
@@ -125,9 +138,12 @@ bun run lint
 
 Run tests:
 ```bash
-bun test                    # All tests
-bun run test:web           # Web tests only
-bun run test:server        # Server tests only
+bun run test                # Server (Bun) + web (Vitest) suites
+bun run test:web            # Web tests only
+bun run test:server         # Server tests only
+
+# Real-Docker integration + end-to-end smoke (requires a Docker daemon)
+bun --cwd packages/server run test:integration
 ```
 
 Build:
