@@ -3,7 +3,7 @@
 // catalog.ts: anything malformed degrades to `undefined` (treated as no-auth)
 // rather than throwing, so a sloppy manifest never breaks catalog browsing.
 
-import type { AppAuthConfig, AuthMode } from '@hola/shared';
+import type { AppAuthConfig, AuthMode, OidcSetupCommand } from '@hola/shared';
 
 const AUTH_MODES: readonly AuthMode[] = ['none', 'native-oidc', 'native-ldap', 'forward-auth'];
 
@@ -34,6 +34,24 @@ function coerceEnvMap<K extends string>(v: unknown, keys: readonly K[]): Record<
   return out;
 }
 
+/** Coerce a post-deploy OIDC setup command. Requires a non-empty string[] command. */
+function coerceOidcSetup(value: unknown): OidcSetupCommand | undefined {
+  const rec = asRecord(value);
+  if (!rec) return undefined;
+  const command = asStringArray(rec.command);
+  if (!command) return undefined;
+  const setup: OidcSetupCommand = { command };
+  const service = asString(rec.service);
+  if (service) setup.service = service;
+  const user = asString(rec.user);
+  if (user) setup.user = user;
+  const check = asStringArray(rec.check);
+  if (check) setup.check = check;
+  const checkMatch = asString(rec.checkMatch);
+  if (checkMatch) setup.checkMatch = checkMatch;
+  return setup;
+}
+
 /**
  * Coerce an unknown manifest `auth` value into AppAuthConfig.
  * Returns undefined when absent or unusable (caller treats as `none`).
@@ -57,8 +75,10 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     const redirectPath = asString(oidc?.redirectPath);
     const scopes = asStringArray(oidc?.scopes);
     const env = coerceEnvMap(oidc?.env, ['issuer', 'clientId', 'clientSecret', 'redirectUri'] as const);
-    if (!redirectPath || !scopes || !env) return undefined;
-    result.oidc = { redirectPath, scopes, env };
+    const setup = coerceOidcSetup(oidc?.setup);
+    // Require redirectPath + scopes, and at least one wiring mechanism (env or setup).
+    if (!redirectPath || !scopes || (!env && !setup)) return undefined;
+    result.oidc = { redirectPath, scopes, ...(env ? { env } : {}), ...(setup ? { setup } : {}) };
   }
 
   if (m === 'native-ldap') {
