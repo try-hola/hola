@@ -212,6 +212,33 @@ export const appVersionsData: Record<string, CatalogAppVersion[]> = {
 };
 
 // App version details with environment variables and defaults
+// Representative bundle compose.yaml strings. Real catalog bundles carry a
+// compose.yaml (read by RealCatalogService.getVersionDetail and surfaced as
+// composeOverride); the mocks mirror that so a catalog-created draft gets a
+// non-empty composeOverride in the test/mock path too. Traefik-only ingress —
+// no host ports published.
+const NEXTCLOUD_COMPOSE = `services:
+  nextcloud:
+    image: nextcloud:30-apache
+    restart: unless-stopped
+    volumes:
+      - nextcloud:/var/www/html
+      - nextcloud-data:/var/www/html/data
+volumes:
+  nextcloud:
+  nextcloud-data:
+`;
+
+const GENERIC_COMPOSE = `services:
+  app:
+    image: nginx:1.27
+    restart: unless-stopped
+    volumes:
+      - app-data:/data
+volumes:
+  app-data:
+`;
+
 export const appVersionDetails: Record<string, GetCatalogAppVersionDetailResponse> = {
   nextcloud: {
     defaultEnv: [
@@ -231,6 +258,7 @@ export const appVersionDetails: Record<string, GetCatalogAppVersionDetailRespons
         { hostPath: './nextcloud-data', containerPath: '/var/www/html/data', readOnly: false }
       ],
     },
+    composeOverride: NEXTCLOUD_COMPOSE,
   },
   homeassistant: {
     defaultEnv: [
@@ -436,6 +464,7 @@ export function getCatalogAppVersionDetail(
         { hostPath: `./data`, containerPath: '/data', readOnly: false }
       ],
     },
+    composeOverride: GENERIC_COMPOSE,
   };
 }
 
