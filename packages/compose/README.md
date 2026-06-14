@@ -151,12 +151,31 @@ The Authentik services (`authentik-server`, `authentik-worker`, `authentik-postg
 and the login UI is served at `HOLA_AUTHENTIK_DOMAIN`. First admin login is `akadmin` with the
 generated `AUTHENTIK_BOOTSTRAP_PASSWORD`.
 
+**App auth styles.** Hola auto-provisions three integration styles per app:
+- **native-OIDC** — registers an OIDC client and injects (or, for CLI-configured apps like Gitea,
+  runs a setup command with) the issuer/client id/secret. Works out of the box.
+- **forward-auth** — protects apps with no native auth via the embedded proxy outpost (Traefik
+  forward-auth middleware). Works out of the box.
+- **native-LDAP** — for apps that bind to an LDAP directory; **needs one-time setup** (below).
+
+### native-LDAP one-time setup
+The bind-account half is automatic (Hola creates a per-app LDAP service account on install), but the
+shared LDAP directory needs an outpost you create once:
+1. In Authentik, create an **LDAP Provider** (set its **Base DN**, e.g. `dc=hola,dc=internal`) and an
+   **Outpost** of type *LDAP* bound to it.
+2. Copy the outpost's **token** into `AUTHENTIK_LDAP_OUTPOST_TOKEN` in `.env`, and set
+   `HOLA_AUTHENTIK_LDAP_BASE_DN` to the same Base DN.
+3. `docker compose up -d authentik-ldap` — the outpost connects and serves the directory at
+   `authentik-ldap:3389` on the `hola` network. native-LDAP apps then bind automatically.
+
+(Pinning the outpost token without this manual copy is a known Authentik gap; revisit when upstream
+supports it.)
+
 Notes & limitations:
 - The bootstrap token is the **akadmin superuser** token. Acceptable for first delivery; a scoped
   least-privilege service-account token is a planned hardening follow-up.
 - We **do not** mount the Docker socket into Authentik — Hola runs any outposts as its own services.
-- Currently only **native-OIDC** apps are auto-provisioned. `forward-auth` and `native-ldap` are
-  planned (see the auth/SSO epic). A lightweight Authelia+LLDAP backend is tracked separately.
+- A lightweight Authelia+LLDAP backend (for low-RAM hosts) is tracked separately.
 
 ## Deploying apps & routing
 When you deploy an app through Hola, the server writes a Traefik router/service for it into

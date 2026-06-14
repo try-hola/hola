@@ -18,6 +18,9 @@ const CONFIG: AuthConfig = {
   authentikPublicUrl: 'https://auth.example.com',
   authentikApiToken: 'test-token',
   fetchTimeoutMs: 5000,
+  ldapHost: 'authentik-ldap',
+  ldapPort: '3389',
+  ldapBaseDn: 'dc=hola,dc=internal',
 };
 
 interface RecordedCall {
@@ -68,6 +71,15 @@ function installFetch(handler?: (call: RecordedCall) => Response | undefined) {
     }
     if (method === 'GET' && url.pathname.startsWith('/api/v3/outposts/instances/')) {
       return json({ pk: 1, providers: [55] });
+    }
+    if (method === 'POST' && url.pathname === '/api/v3/core/users/') {
+      return json({ pk: 88, username: body.username }, 201);
+    }
+    if (method === 'POST' && /^\/api\/v3\/core\/users\/\d+\/set_password\/$/.test(url.pathname)) {
+      return new Response(null, { status: 204 });
+    }
+    if (method === 'POST' && /^\/api\/v3\/rbac\/permissions\/assigned\/users\/\d+\/assign\/$/.test(url.pathname)) {
+      return json({});
     }
     if (method === 'PATCH') {
       return json({ pk: 1 });
@@ -180,10 +192,53 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     ).resolves.toBeUndefined();
   });
 
-  test('native-ldap is not implemented yet', async () => {
+  const LDAP_INPUT = {
+    deploymentId: 'dep-abcdef0123456789',
+    appName: 'nextcloud',
+    mode: 'native-ldap' as const,
+    host: 'nextcloud.example.com',
+    ldap: {
+      env: { host: 'LDAP_HOST', port: 'LDAP_PORT', bindDn: 'LDAP_BIND_DN', bindPassword: 'LDAP_BIND_PW', baseDn: 'LDAP_BASE_DN' },
+    },
+  };
+
+  test('native-ldap provision creates a bind service account, sets its password, maps env', async () => {
     installFetch();
     const svc = new RealAuthentikProvisionerService(CONFIG);
-    await expect(svc.provision({ ...OIDC_INPUT, mode: 'native-ldap', oidc: undefined })).rejects.toThrow(/not implemented/);
+
+    const result = await svc.provision(LDAP_INPUT);
+
+    // A service-account user was created and given a password.
+    const userCall = calls.find(c => c.method === 'POST' && c.path === '/api/v3/core/users/')!;
+    expect(userCall).toBeDefined();
+    expect((userCall.body as Record<string, unknown>).type).toBe('service_account');
+    expect(calls.some(c => c.method === 'POST' && /\/api\/v3\/core\/users\/88\/set_password\/$/.test(c.path))).toBe(true);
+
+    // Env mapped onto the app's expected names, with a DN derived from the username.
+    expect(result.env.LDAP_HOST).toBe('authentik-ldap');
+    expect(result.env.LDAP_PORT).toBe('3389');
+    expect(result.env.LDAP_BASE_DN).toBe('dc=hola,dc=internal');
+    expect(result.env.LDAP_BIND_DN).toMatch(/^cn=hola-nextcloud-.*,ou=users,dc=hola,dc=internal$/);
+    expect(typeof result.env.LDAP_BIND_PW).toBe('string');
+    expect(result.ref).toMatchObject({ mode: 'native-ldap', bindAccountPk: 88 });
+  });
+
+  test('native-ldap re-provision reuses the bind account (only resets the password)', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({ ...LDAP_INPUT, existingRef: { mode: 'native-ldap', bindAccountPk: 88 } });
+
+    // No new user created; password re-set on the existing account.
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/core/users/')).toBe(false);
+    expect(calls.some(c => /\/api\/v3\/core\/users\/88\/set_password\/$/.test(c.path))).toBe(true);
+  });
+
+  test('native-ldap deprovision deletes the bind account', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+    await svc.deprovision({ deploymentId: 'x', ref: { mode: 'native-ldap', bindAccountPk: 88 } });
+    expect(calls.some(c => c.method === 'DELETE' && c.path === '/api/v3/core/users/88/')).toBe(true);
   });
 
   test('forward-auth provision creates a proxy provider, app, and binds the outpost', async () => {

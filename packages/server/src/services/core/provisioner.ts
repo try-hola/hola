@@ -104,7 +104,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       case 'forward-auth':
         return this.provisionForwardAuth(input);
       case 'native-ldap':
-        throw new ProvisioningError(`auth mode '${input.mode}' is not implemented yet`);
+        return this.provisionLdap(input);
       case 'none':
         return { env: {}, ref: { mode: 'none' } };
       default:
@@ -138,6 +138,13 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${ref.providerPk}/`);
       }
       this.logger.info('Deprovisioned forward-auth provider', { deploymentId: input.deploymentId, providerPk: ref.providerPk });
+      return;
+    }
+    if (ref.mode === 'native-ldap') {
+      if (ref.bindAccountPk != null) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/core/users/${ref.bindAccountPk}/`);
+      }
+      this.logger.info('Deprovisioned LDAP bind account', { deploymentId: input.deploymentId, bindAccountPk: ref.bindAccountPk });
     }
   }
 
@@ -301,6 +308,62 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
   }
 
+  // ---- native-ldap -------------------------------------------------------
+
+  private async provisionLdap(input: ProvisionInput): Promise<ProvisionResult> {
+    const ldap = input.ldap;
+    if (!ldap) throw new ProvisioningError('native-ldap requires an ldap config block');
+
+    const username = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}-ldap`);
+    const password = randomBytes(24).toString('hex');
+    const baseDn = this.config.ldapBaseDn;
+    const bindDn = `cn=${username},ou=users,${baseDn}`;
+
+    // Create the bind service account on first provision; reuse it on re-deploy.
+    let bindAccountPk = input.existingRef?.mode === 'native-ldap' ? input.existingRef.bindAccountPk : undefined;
+    if (bindAccountPk == null) {
+      const user = await this.api<{ pk: number }>('POST', '/api/v3/core/users/', {
+        username,
+        name: `Hola ${input.appName} LDAP bind`,
+        type: 'service_account',
+        path: 'goauthentik.io/outposts/ldap',
+        is_active: true,
+      });
+      bindAccountPk = user.pk;
+      await this.grantLdapSearch(bindAccountPk);
+    }
+    // (Re)set the bind password and inject it fresh each deploy.
+    await this.api('POST', `/api/v3/core/users/${bindAccountPk}/set_password/`, { password });
+
+    this.logger.info('Provisioned LDAP bind account', { deploymentId: input.deploymentId, bindAccountPk });
+
+    return {
+      env: {
+        [ldap.env.host]: this.config.ldapHost,
+        [ldap.env.port]: this.config.ldapPort,
+        [ldap.env.bindDn]: bindDn,
+        [ldap.env.bindPassword]: password,
+        [ldap.env.baseDn]: baseDn,
+      },
+      ref: { mode: 'native-ldap', bindAccountPk },
+    };
+  }
+
+  /** Grant the bind account directory-search rights. Best-effort: the permission
+   *  codename can vary by Authentik version, so a failure is logged, not fatal. */
+  private async grantLdapSearch(userPk: number): Promise<void> {
+    try {
+      await this.api('POST', `/api/v3/rbac/permissions/assigned/users/${userPk}/assign/`, {
+        permissions: ['authentik_providers_ldap.search_full_directory'],
+      });
+    } catch (error) {
+      this.logger.warn('Could not assign LDAP search permission (verify codename for your Authentik version)', {
+        userPk,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private oidcEnv(
     names: { issuer: string; clientId: string; clientSecret: string; redirectUri: string } | undefined,
     clientId: string,
@@ -431,6 +494,20 @@ export class MockProvisionerService implements ProvisionerService {
         env: {},
         ref: input.existingRef ?? { mode: 'forward-auth', providerPk: 2, applicationSlug: slug, outpostPk: 1 },
         middleware: { name: `ak-${slug}`, outpostUrl: 'http://authentik-server:9000' },
+      };
+    }
+    if (input.mode === 'native-ldap' && input.ldap) {
+      const username = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}-ldap`);
+      const e = input.ldap.env;
+      return {
+        env: {
+          [e.host]: 'authentik-ldap',
+          [e.port]: '3389',
+          [e.bindDn]: `cn=${username},ou=users,dc=hola,dc=internal`,
+          [e.bindPassword]: `mock-ldap-pw-${input.deploymentId.slice(0, 8)}`,
+          [e.baseDn]: 'dc=hola,dc=internal',
+        },
+        ref: input.existingRef ?? { mode: 'native-ldap', bindAccountPk: 3 },
       };
     }
     // none / unimplemented modes: no-op so a deploy proceeds without auth wiring.

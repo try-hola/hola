@@ -29,6 +29,12 @@ export interface AuthConfig {
   authentikApiToken?: string;
   /** Network timeout for Authentik API calls. */
   fetchTimeoutMs: number;
+  /** LDAP outpost service host apps bind to (compose DNS name). */
+  ldapHost: string;
+  /** LDAP outpost port (3389 plain / 6636 TLS). */
+  ldapPort: string;
+  /** Base DN of the shared LDAP directory served by the outpost. */
+  ldapBaseDn: string;
 }
 
 function stripTrailingSlash(url: string | undefined): string | undefined {
@@ -44,6 +50,9 @@ export const defaultAuthConfig: AuthConfig = {
     stripTrailingSlash(process.env.HOLA_AUTHENTIK_URL),
   authentikApiToken: process.env.HOLA_AUTHENTIK_API_TOKEN || undefined,
   fetchTimeoutMs: Number(process.env.HOLA_AUTHENTIK_FETCH_TIMEOUT_MS) || 5000,
+  ldapHost: process.env.HOLA_AUTHENTIK_LDAP_HOST || 'authentik-ldap',
+  ldapPort: process.env.HOLA_AUTHENTIK_LDAP_PORT || '3389',
+  ldapBaseDn: process.env.HOLA_AUTHENTIK_LDAP_BASE_DN || 'dc=hola,dc=internal',
 };
 
 export function loadAuthConfig(): AuthConfig {

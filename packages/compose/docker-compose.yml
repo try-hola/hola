@@ -80,6 +80,9 @@ services:
       - HOLA_AUTHENTIK_URL=${HOLA_AUTHENTIK_URL:-http://authentik-server:9000}
       - HOLA_AUTHENTIK_PUBLIC_URL=${HOLA_AUTHENTIK_PUBLIC_URL:-}
       - HOLA_AUTHENTIK_API_TOKEN=${HOLA_AUTHENTIK_API_TOKEN:-}
+      # Base DN of the shared LDAP directory (for native-ldap apps); host/port
+      # default to the authentik-ldap outpost service.
+      - HOLA_AUTHENTIK_LDAP_BASE_DN=${HOLA_AUTHENTIK_LDAP_BASE_DN:-dc=hola,dc=internal}
     volumes:
       # Orchestrate deployments by talking to the host Docker engine.
       # SECURITY: this grants control of the host's Docker - see README.
@@ -184,6 +187,24 @@ services:
       - authentik-media:/media
       - authentik-templates:/templates
       - authentik-certs:/certs
+    labels:
+      traefik.enable: "false"
+
+  # LDAP outpost — serves the shared directory that `native-ldap` apps bind to,
+  # reachable internally on the `hola` network at authentik-ldap:3389. Requires a
+  # one-time setup: create an LDAP provider + outpost in Authentik and copy the
+  # outpost token into AUTHENTIK_LDAP_OUTPOST_TOKEN (see README "Authentication & SSO").
+  authentik-ldap:
+    image: ghcr.io/goauthentik/ldap:2025.10
+    container_name: authentik-ldap
+    profiles: [authentik]
+    restart: unless-stopped
+    environment:
+      AUTHENTIK_HOST: http://authentik-server:9000
+      AUTHENTIK_INSECURE: "true"
+      AUTHENTIK_TOKEN: ${AUTHENTIK_LDAP_OUTPOST_TOKEN:-}
+    depends_on:
+      - authentik-server
     labels:
       traefik.enable: "false"
 
