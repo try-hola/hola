@@ -86,7 +86,12 @@ class SpyProvisioner implements ProvisionerService {
       const issuer = 'https://auth.example.com/application/o/gitea-x/';
       const names = input.oidc.env;
       const env = names
-        ? { [names.issuer]: issuer, [names.clientId]: 'cid-123', [names.clientSecret]: 'csecret-456', [names.redirectUri]: redirectUri }
+        ? {
+            [names.issuer]: issuer,
+            [names.clientId]: 'cid-123',
+            [names.clientSecret]: 'csecret-456',
+            ...(names.redirectUri ? { [names.redirectUri]: redirectUri } : {}),
+          }
         : {};
       return {
         env,

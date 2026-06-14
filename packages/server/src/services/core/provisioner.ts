@@ -35,8 +35,10 @@ export interface ProvisionInput {
     redirectPath: string;
     scopes: string[];
     /** The app's expected env-var NAMES for each OIDC setting (optional — apps that
-     *  configure OIDC via a setup command rather than env omit this). */
-    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+     *  configure OIDC via a setup command rather than env omit this). `redirectUri`
+     *  is optional: apps that derive their own redirect URI from their base URL have
+     *  no env var for the literal callback. */
+    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string };
   };
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
@@ -401,7 +403,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   }
 
   private oidcEnv(
-    names: { issuer: string; clientId: string; clientSecret: string; redirectUri: string } | undefined,
+    names: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string } | undefined,
     clientId: string,
     clientSecret: string,
     redirectUri: string,
@@ -412,7 +414,8 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       [names.issuer]: this.issuerUrl(slug),
       [names.clientId]: clientId,
       [names.clientSecret]: clientSecret,
-      [names.redirectUri]: redirectUri,
+      // Only inject the literal redirect URI when the app exposes an env var for it.
+      ...(names.redirectUri ? { [names.redirectUri]: redirectUri } : {}),
     };
   }
 
@@ -602,7 +605,12 @@ export class MockProvisionerService implements ProvisionerService {
       const issuer = `https://auth.mock/application/o/${slug}/`;
       const names = input.oidc.env;
       const env = names
-        ? { [names.issuer]: issuer, [names.clientId]: clientId, [names.clientSecret]: clientSecret, [names.redirectUri]: redirectUri }
+        ? {
+            [names.issuer]: issuer,
+            [names.clientId]: clientId,
+            [names.clientSecret]: clientSecret,
+            ...(names.redirectUri ? { [names.redirectUri]: redirectUri } : {}),
+          }
         : {};
       return {
         env,
