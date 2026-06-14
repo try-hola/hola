@@ -34,8 +34,9 @@ export interface ProvisionInput {
   oidc?: {
     redirectPath: string;
     scopes: string[];
-    /** The app's expected env-var NAMES for each OIDC setting. */
-    env: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+    /** The app's expected env-var NAMES for each OIDC setting (optional — apps that
+     *  configure OIDC via a setup command rather than env omit this). */
+    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
   };
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
@@ -44,8 +45,11 @@ export interface ProvisionInput {
 }
 
 export interface ProvisionResult {
-  /** Environment to inject, keyed by the app's expected var NAMES. */
+  /** Environment to inject, keyed by the app's expected var NAMES (empty if the app
+   *  has no env mapping and is wired by a setup command instead). */
   env: Record<string, string>;
+  /** Raw provisioned OIDC values, for post-deploy setup-command substitution. */
+  credentials?: { clientId: string; clientSecret: string; issuer: string; redirectUri: string };
   /** Opaque handle to persist for idempotent re-provision and teardown. */
   ref: ProvisionedAuthRef;
   /** forward-auth only (PR3): Traefik middleware descriptor for the router. */
@@ -140,8 +144,10 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
       });
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
+      const reuseSlug = existing.applicationSlug ?? slug;
       return {
-        env: this.oidcEnv(oidc.env, provider.client_id, provider.client_secret, redirectUri, existing.applicationSlug ?? slug),
+        env: this.oidcEnv(oidc.env, provider.client_id, provider.client_secret, redirectUri, reuseSlug),
+        credentials: { clientId: provider.client_id, clientSecret: provider.client_secret, issuer: this.issuerUrl(reuseSlug), redirectUri },
         ref: existing,
       };
     }
@@ -186,20 +192,26 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
     return {
       env: this.oidcEnv(oidc.env, clientId, clientSecret, redirectUri, slug),
+      credentials: { clientId, clientSecret, issuer: this.issuerUrl(slug), redirectUri },
       ref: { mode: 'native-oidc', providerPk: provider.pk, applicationSlug: slug, clientId },
     };
   }
 
+  private issuerUrl(slug: string): string {
+    const base = this.config.authentikPublicUrl || this.config.authentikUrl || '';
+    return `${base}/application/o/${slug}/`;
+  }
+
   private oidcEnv(
-    names: { issuer: string; clientId: string; clientSecret: string; redirectUri: string },
+    names: { issuer: string; clientId: string; clientSecret: string; redirectUri: string } | undefined,
     clientId: string,
     clientSecret: string,
     redirectUri: string,
     slug: string
   ): Record<string, string> {
-    const base = this.config.authentikPublicUrl || this.config.authentikUrl || '';
+    if (!names) return {};
     return {
-      [names.issuer]: `${base}/application/o/${slug}/`,
+      [names.issuer]: this.issuerUrl(slug),
       [names.clientId]: clientId,
       [names.clientSecret]: clientSecret,
       [names.redirectUri]: redirectUri,
@@ -303,14 +315,14 @@ export class MockProvisionerService implements ProvisionerService {
       const clientId = input.existingRef?.clientId ?? `mock-client-${input.deploymentId.slice(0, 8)}`;
       const clientSecret = `mock-secret-${input.deploymentId.slice(0, 8)}`;
       const redirectUri = `https://${input.host}${input.oidc.redirectPath}`;
+      const issuer = `https://auth.mock/application/o/${slug}/`;
       const names = input.oidc.env;
+      const env = names
+        ? { [names.issuer]: issuer, [names.clientId]: clientId, [names.clientSecret]: clientSecret, [names.redirectUri]: redirectUri }
+        : {};
       return {
-        env: {
-          [names.issuer]: `https://auth.mock/application/o/${slug}/`,
-          [names.clientId]: clientId,
-          [names.clientSecret]: clientSecret,
-          [names.redirectUri]: redirectUri,
-        },
+        env,
+        credentials: { clientId, clientSecret, issuer, redirectUri },
         ref: input.existingRef ?? { mode: 'native-oidc', providerPk: 1, applicationSlug: slug, clientId },
       };
     }

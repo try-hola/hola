@@ -60,6 +60,31 @@ describe('coerceManifestAuth', () => {
     expect(coerceManifestAuth({ mode: 'native-oidc' })).toBeUndefined();
   });
 
+  test('native-oidc with a setup command and no env is valid', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/cb',
+        scopes: ['openid'],
+        setup: { user: 'git', check: ['gitea', 'admin', 'auth', 'list'], checkMatch: 'authentik', command: ['gitea', 'admin', 'auth', 'add-oauth', '--key', '{{clientId}}'] },
+      },
+    });
+    expect(result).toEqual({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/cb',
+        scopes: ['openid'],
+        setup: { user: 'git', check: ['gitea', 'admin', 'auth', 'list'], checkMatch: 'authentik', command: ['gitea', 'admin', 'auth', 'add-oauth', '--key', '{{clientId}}'] },
+      },
+    });
+  });
+
+  test('native-oidc setup without a command argv degrades to undefined', () => {
+    expect(
+      coerceManifestAuth({ mode: 'native-oidc', oidc: { redirectPath: '/cb', scopes: ['openid'], setup: { check: ['x'] } } })
+    ).toBeUndefined();
+  });
+
   test('coerces native-ldap and forward-auth blocks', () => {
     expect(
       coerceManifestAuth({
