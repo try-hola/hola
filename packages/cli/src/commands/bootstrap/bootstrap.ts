@@ -1,0 +1,191 @@
+import { promises as fs } from 'fs';
+import path from 'path';
+
+import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
+import { parseEnv, renderEnv, schemaTemplate } from '../../install/render-env';
+import { secretKeys, type ConfigMap } from '../../install/schema';
+import { runWizard, WizardError } from '../../install/wizard';
+import type { CheckResult } from '../../install/checks';
+import { systemRunner, type Runner } from '../../lib/runner';
+import { CLI_VERSION } from '../../version';
+
+export interface BootstrapOptions {
+  host?: string;
+  repo?: string;
+  ref?: string;
+  dir?: string;
+  envFile?: string;
+  skipChecks?: boolean;
+  dryRun?: boolean;
+  json?: boolean;
+}
+
+export interface BootstrapResult {
+  host: string;
+  dir: string;
+  ref: string;
+  steps: string[];
+}
+
+class BootstrapAbort extends Error {}
+
+const DEFAULT_REPO = 'https://github.com/try-hola/hola.git';
+
+/**
+ * End-to-end remote install: collect config (wizard or --env-file), then over SSH
+ * preflight the host, clone/update the Hola repo, write the .env (streamed via
+ * stdin so secrets never hit argv), run scripts/install.sh, and verify. Returns
+ * the result, or undefined on failure (after setting a non-zero exit code).
+ */
+export async function runBootstrap(
+  opts: BootstrapOptions,
+  injected?: { prompter?: Prompter; runner?: Runner; checks?: (c: ConfigMap) => Promise<CheckResult[]> }
+): Promise<BootstrapResult | undefined> {
+  const prompter = injected?.prompter ?? clackPrompter();
+  const runner = injected?.runner ?? systemRunner();
+  const out = (msg: string) => { if (!opts.json) console.log(msg); };
+
+  const host = opts.host;
+  const repo = opts.repo ?? DEFAULT_REPO;
+  const ref = opts.ref ?? `cli-v${CLI_VERSION}`;
+  const dir = opts.dir ?? '~/hola';
+  const composeDir = `${dir}/packages/compose`;
+  const envPath = `${composeDir}/.env`;
+  const steps: string[] = [];
+
+  try {
+    if (!host) throw new BootstrapAbort('--host user@vm is required.');
+
+    // 1) Config → rendered .env (reuse an init-produced file, or run the wizard).
+    let rendered: string;
+    let config: ConfigMap;
+    if (opts.envFile) {
+      const p = path.resolve(process.cwd(), opts.envFile);
+      rendered = await fs.readFile(p, 'utf8');
+      config = parseEnv(rendered);
+      out(`Using ${p}`);
+    } else {
+      out('Hola setup — answer a few questions, then I will install on the host.\n');
+      const wiz = await runWizard({ prompter, skipChecks: opts.skipChecks, checks: injected?.checks });
+      config = wiz.config;
+      rendered = renderEnv(config, schemaTemplate());
+    }
+    const keyList = Object.keys(config);
+
+    // Helper: run a remote step (or describe it under --dry-run).
+    const ssh = async (title: string, cmd: string, o?: { input?: string; stream?: boolean }) => {
+      steps.push(title);
+      if (opts.dryRun) {
+        out(`# ${title}`);
+        out(`  ssh ${host} ${o?.input != null ? '(stdin: .env redacted) ' : ''}${cmd}`);
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      out(`==> ${title}`);
+      const r = await runner.ssh(host, cmd, {
+        input: o?.input,
+        stream: o?.stream ? (l) => out(`  ${l}`) : undefined,
+      });
+      return r;
+    };
+
+    // 2) Preflight (single remote probe → key=value lines).
+    const probe =
+      'for c in docker git; do command -v "$c" >/dev/null 2>&1 && echo "$c=ok" || echo "$c=missing"; done; ' +
+      'docker compose version >/dev/null 2>&1 && echo compose=ok || echo compose=missing; ' +
+      'docker ps >/dev/null 2>&1 && echo dockerperm=ok || echo dockerperm=fail';
+    if (opts.dryRun) {
+      await ssh('Preflight host', probe);
+    } else {
+      const r = await ssh('Preflight host', probe);
+      if (r.code !== 0) throw new BootstrapAbort(`Could not connect to ${host} (ssh exit ${r.code}).`);
+      const p = parsePreflight(r.stdout);
+      assertPreflight(p);
+      out('  host OK (docker, compose, git, permissions)');
+    }
+
+    // 3) Clone or update the repo at the target ref (full repo: compose builds from ../..).
+    const clone =
+      `if [ -d ${dir}/.git ]; then git -C ${dir} fetch --depth 1 origin ${ref} && git -C ${dir} checkout --force FETCH_HEAD; ` +
+      `else git clone --depth 1 --branch ${ref} ${repo} ${dir}; fi`;
+    const cloneRes = await ssh(`Fetch Hola ${ref} into ${dir}`, clone, { stream: true });
+    if (!opts.dryRun && cloneRes.code !== 0) {
+      throw new BootstrapAbort(`git clone/update failed (exit ${cloneRes.code}). Check --repo/--ref and host network.`);
+    }
+
+    // 4) Write .env — streamed over stdin so values never appear in argv/ps/history.
+    const writeRes = await ssh('Write .env (over stdin)', `cat > ${envPath} && chmod 600 ${envPath}`, { input: rendered });
+    if (!opts.dryRun && writeRes.code !== 0) throw new BootstrapAbort(`Writing ${envPath} failed (exit ${writeRes.code}).`);
+
+    // 5) Run the installer, streaming its output.
+    const installRes = await ssh('Run install.sh', `cd ${composeDir} && ./scripts/install.sh`, { stream: true });
+    if (!opts.dryRun && installRes.code !== 0) throw new BootstrapAbort(`install.sh failed (exit ${installRes.code}).`);
+
+    // 6) Best-effort verify (warn-only: DNS/cert may still be settling).
+    if (!opts.dryRun && config.HOLA_DOMAIN) {
+      const verify = await ssh(
+        `Verify https://${config.HOLA_DOMAIN}`,
+        `curl -sk -o /dev/null -w "%{http_code}" https://${config.HOLA_DOMAIN}/api/health || true`,
+      );
+      const codeStr = verify.stdout.trim();
+      out(codeStr === '200' ? '  UI is responding (200).' : `  UI not ready yet (got "${codeStr || 'no response'}") — may take a minute for TLS/DNS.`);
+    }
+
+    const result: BootstrapResult = { host, dir, ref, steps };
+    if (opts.json) {
+      console.log(JSON.stringify({ host, dir, ref, steps, keys: opts.dryRun ? keyList : undefined }, null, 2));
+    } else if (opts.dryRun) {
+      out(`\nDry run — would write a .env with ${keyList.length} keys: ${redactKeyList(keyList)}`);
+      out('No connection was made. Re-run without --dry-run to execute.');
+    } else {
+      out(`\nDone. Hola is installed on ${host}. Open https://${config.HOLA_DOMAIN ?? '<your HOLA_DOMAIN>'}`);
+    }
+    return result;
+  } catch (err) {
+    if (err instanceof BootstrapAbort || err instanceof WizardError || err instanceof PromptCancelled) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return undefined;
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`bootstrap failed: ${msg}`);
+    if (/ENOENT|spawn ssh/i.test(msg)) console.error('Hint: the `ssh` client must be installed and on PATH.');
+    process.exitCode = 1;
+    return undefined;
+  }
+}
+
+function parsePreflight(stdout: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of stdout.split('\n')) {
+    const t = line.trim();
+    const eq = t.indexOf('=');
+    if (eq > 0) out[t.slice(0, eq)] = t.slice(eq + 1);
+  }
+  return out;
+}
+
+function assertPreflight(p: Record<string, string>): void {
+  if (p.docker !== 'ok' || p.compose !== 'ok') {
+    throw new BootstrapAbort(
+      'Docker + the Compose v2 plugin are required on the host. Install with:\n' +
+        '  curl -fsSL https://get.docker.com | sh\n' +
+        'then re-run bootstrap.',
+    );
+  }
+  if (p.dockerperm !== 'ok') {
+    throw new BootstrapAbort(
+      "This SSH user can't run docker. Add them to the docker group:\n" +
+        '  sudo usermod -aG docker $USER   (then reconnect)\n' +
+        'then re-run bootstrap.',
+    );
+  }
+  if (p.git !== 'ok') {
+    throw new BootstrapAbort('git is required on the host (e.g. `sudo apt-get install -y git`), then re-run bootstrap.');
+  }
+}
+
+/** Show key names for dry-run, redacting secret values' keys to a count is unnecessary — keys aren't secret. */
+function redactKeyList(keys: string[]): string {
+  const secrets = secretKeys();
+  return keys.map((k) => (secrets.has(k) ? `${k}(secret)` : k)).join(', ');
+}

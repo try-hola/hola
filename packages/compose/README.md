@@ -29,6 +29,27 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
 
 ## Install (production)
 
+### Guided (recommended) — the `hola` CLI
+
+The CLI walks you through the config, **validates it before anything is applied** (DNS, TLS/DNS-01
+credentials, catalog reachability), and writes the `.env` for you:
+
+```bash
+# On your laptop — produce a validated .env (no server contact):
+hola init
+
+# …or do it all the way to a remote host over SSH (wizard → clone → install):
+hola bootstrap --host user@your-vm        # add --dry-run first to preview the plan
+```
+
+`hola bootstrap` SSHes in (reusing your ssh-agent / `~/.ssh/config`), checks the host has Docker +
+Compose v2, clones this repo at your CLI's release tag, writes the `.env` (streamed over stdin so
+secrets never hit the command line), and runs `./scripts/install.sh` — streaming the output back.
+Secrets (Authentik keys etc.) are generated **on the host** and never leave it. Re-running is an
+upgrade: it fetches the new ref and re-runs the idempotent installer.
+
+### Manual
+
 ```bash
 cd packages/compose
 cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL, ...
