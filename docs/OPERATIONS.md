@@ -8,19 +8,31 @@ system design see [ARCHITECTURE.md](ARCHITECTURE.md); for authentication see
 
 ## Install
 
-The production stack lives in `packages/compose` and is the canonical install
-path. Its [README](../packages/compose/README.md) is the authoritative,
-step-by-step reference (prerequisites, TLS, upgrade, troubleshooting); this
-section summarizes the workflow.
+Prerequisites: a host with **Docker**, the **Docker Compose v2** plugin, and
+**git**, with DNS pointing your domains at the host.
+
+### One-line install (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/install.sh | sh
+```
+
+This clones Hola (to `$HOLA_HOME`, default `$HOME/hola`), prompts for the domain
+settings (or reads `HOLA_DOMAIN` / `HOLA_BASE_DOMAIN` / `LETSENCRYPT_EMAIL` from
+the environment), builds and starts the production stack, and prints the admin
+API key. Re-running upgrades an existing install.
+
+### Manual install
+
+The production stack lives in `packages/compose`; its
+[README](../packages/compose/README.md) is the authoritative, step-by-step
+reference (prerequisites, TLS, upgrade, troubleshooting).
 
 ```bash
 cd packages/compose
 cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL, ...
-./scripts/install.sh          # prepares .env/acme and runs `docker compose up -d --build`
+./scripts/install.sh          # builds + runs the production stack
 ```
-
-Prerequisites: a host with **Docker** + the **Docker Compose v2** plugin, and
-DNS (or `/etc/hosts`) pointing your domains at the host.
 
 ### Authenticate
 
