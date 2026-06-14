@@ -298,7 +298,11 @@ export type AppAuthConfig = {
   oidc?: {
     redirectPath: string;
     scopes: string[];
-    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+    // `redirectUri` is optional: many apps derive their own redirect URI from
+    // their base URL and have no env var for the literal callback URL (e.g.
+    // Actual Budget uses ACTUAL_OPENID_SERVER_HOSTNAME). issuer/clientId/
+    // clientSecret are always required when an env map is present.
+    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string };
     setup?: OidcSetupCommand;
   };
   // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.

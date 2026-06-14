@@ -34,6 +34,20 @@ function coerceEnvMap<K extends string>(v: unknown, keys: readonly K[]): Record<
   return out;
 }
 
+/**
+ * Coerce the native-oidc env-var name map. issuer/clientId/clientSecret are
+ * required; redirectUri is optional (apps that derive their own redirect URI
+ * from their base URL — e.g. Actual Budget — have no env var for it).
+ */
+function coerceOidcEnv(
+  v: unknown
+): { issuer: string; clientId: string; clientSecret: string; redirectUri?: string } | undefined {
+  const required = coerceEnvMap(v, ['issuer', 'clientId', 'clientSecret'] as const);
+  if (!required) return undefined;
+  const redirectUri = asString(asRecord(v)?.redirectUri);
+  return { ...required, ...(redirectUri ? { redirectUri } : {}) };
+}
+
 /** Coerce a post-deploy OIDC setup command. Requires a non-empty string[] command. */
 function coerceOidcSetup(value: unknown): OidcSetupCommand | undefined {
   const rec = asRecord(value);
@@ -74,7 +88,7 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     const oidc = asRecord(rec.oidc);
     const redirectPath = asString(oidc?.redirectPath);
     const scopes = asStringArray(oidc?.scopes);
-    const env = coerceEnvMap(oidc?.env, ['issuer', 'clientId', 'clientSecret', 'redirectUri'] as const);
+    const env = coerceOidcEnv(oidc?.env);
     const setup = coerceOidcSetup(oidc?.setup);
     // Require redirectPath + scopes, and at least one wiring mechanism (env or setup).
     if (!redirectPath || !scopes || (!env && !setup)) return undefined;

@@ -47,6 +47,25 @@ describe('coerceManifestAuth', () => {
     });
   });
 
+  test('native-oidc env without redirectUri is valid (app derives its own redirect URI)', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/openid/callback',
+        scopes: ['openid', 'email', 'profile'],
+        env: { issuer: 'ACTUAL_OPENID_DISCOVERY_URL', clientId: 'ACTUAL_OPENID_CLIENT_ID', clientSecret: 'ACTUAL_OPENID_CLIENT_SECRET' },
+      },
+    });
+    expect(result).toEqual({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/openid/callback',
+        scopes: ['openid', 'email', 'profile'],
+        env: { issuer: 'ACTUAL_OPENID_DISCOVERY_URL', clientId: 'ACTUAL_OPENID_CLIENT_ID', clientSecret: 'ACTUAL_OPENID_CLIENT_SECRET' },
+      },
+    });
+  });
+
   test('native-oidc with an incomplete env mapping degrades to undefined', () => {
     expect(
       coerceManifestAuth({
