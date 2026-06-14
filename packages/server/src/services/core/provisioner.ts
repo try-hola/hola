@@ -76,6 +76,40 @@ export interface ProvisionerService extends HealthCheckable {
 const AUTHZ_FLOW_SLUG = 'default-provider-authorization-implicit-consent';
 const INVALIDATION_FLOW_SLUG = 'default-provider-invalidation-flow';
 
+// Scoped service account Hola self-bootstraps so provisioning runs with least
+// privilege instead of as the akadmin superuser.
+const PROVISIONER_USERNAME = 'hola-provisioner';
+const PROVISIONER_TOKEN_ID = 'hola-provisioner-token';
+
+// Global (model-level) permissions the provisioner needs — just enough to manage
+// providers/applications/users/outposts and read flows/scope mappings. NOT superuser.
+const PROVISIONER_PERMISSIONS = [
+  'authentik_providers_oauth2.add_oauth2provider',
+  'authentik_providers_oauth2.view_oauth2provider',
+  'authentik_providers_oauth2.change_oauth2provider',
+  'authentik_providers_oauth2.delete_oauth2provider',
+  'authentik_providers_proxy.add_proxyprovider',
+  'authentik_providers_proxy.view_proxyprovider',
+  'authentik_providers_proxy.change_proxyprovider',
+  'authentik_providers_proxy.delete_proxyprovider',
+  'authentik_providers_ldap.add_ldapprovider',
+  'authentik_providers_ldap.view_ldapprovider',
+  'authentik_core.add_application',
+  'authentik_core.view_application',
+  'authentik_core.change_application',
+  'authentik_core.delete_application',
+  'authentik_core.add_user',
+  'authentik_core.view_user',
+  'authentik_core.change_user',
+  'authentik_core.delete_user',
+  'authentik_core.reset_user_password',
+  'authentik_core.assign_user_permissions',
+  'authentik_core.view_propertymapping',
+  'authentik_outposts.view_outpost',
+  'authentik_outposts.change_outpost',
+  'authentik_flows.view_flow',
+];
+
 /** Sanitize a string into an Authentik slug (lowercase, alnum + hyphen). */
 function slugify(s: string): string {
   return s
@@ -355,7 +389,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
    *  codename can vary by Authentik version, so a failure is logged, not fatal. */
   private async grantLdapSearch(userPk: number): Promise<void> {
     try {
-      await this.api('POST', `/api/v3/rbac/permissions/assigned/users/${userPk}/assign/`, {
+      await this.api('POST', `/api/v3/rbac/permissions/assigned_by_users/${userPk}/assign/`, {
         permissions: ['authentik_providers_ldap.search_full_directory'],
       });
     } catch (error) {
@@ -422,11 +456,82 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     return pks;
   }
 
+  // ---- scoped-token bootstrap -------------------------------------------
+
+  /**
+   * Resolve the Bearer token for API calls. If a scoped token is configured, use
+   * it directly. Otherwise self-bootstrap a least-privilege service-account token
+   * from the admin bootstrap token (once per process, memoized) so day-to-day
+   * provisioning never runs as the superuser.
+   */
+  private async getApiToken(): Promise<string> {
+    if (this.config.authentikApiToken) return this.config.authentikApiToken;
+    if (this.config.authentikBootstrapToken) {
+      this.scopedTokenPromise ??= this.bootstrapScopedToken(this.config.authentikBootstrapToken).catch(err => {
+        // Don't cache a failed bootstrap — allow a later call to retry.
+        this.scopedTokenPromise = undefined;
+        throw err;
+      });
+      return this.scopedTokenPromise;
+    }
+    throw new ProvisioningError('no Authentik token configured (set HOLA_AUTHENTIK_API_TOKEN or HOLA_AUTHENTIK_BOOTSTRAP_TOKEN)');
+  }
+  private scopedTokenPromise?: Promise<string>;
+
+  /** Idempotently ensure the provisioner service account + perms + API token. */
+  private async bootstrapScopedToken(bootstrapToken: string): Promise<string> {
+    const userPk = await this.ensureProvisionerUser(bootstrapToken);
+    await this.request(bootstrapToken, 'POST', `/api/v3/rbac/permissions/assigned_by_users/${userPk}/assign/`, {
+      permissions: PROVISIONER_PERMISSIONS,
+    });
+    const key = await this.ensureProvisionerToken(bootstrapToken, userPk);
+    this.logger.info('Bootstrapped scoped provisioning token', { userPk });
+    return key;
+  }
+
+  private async ensureProvisionerUser(bootstrapToken: string): Promise<number> {
+    const existing = await this.request<{ results: Array<{ pk: number }> }>(
+      bootstrapToken,
+      'GET',
+      `/api/v3/core/users/?username=${encodeURIComponent(PROVISIONER_USERNAME)}`
+    );
+    if (existing.results?.[0]?.pk != null) return existing.results[0].pk;
+    const created = await this.request<{ user_pk: number }>(bootstrapToken, 'POST', '/api/v3/core/users/service_account/', {
+      name: PROVISIONER_USERNAME,
+      create_group: false,
+    });
+    return created.user_pk;
+  }
+
+  private async ensureProvisionerToken(bootstrapToken: string, userPk: number): Promise<string> {
+    // The service_account endpoint's token isn't API-usable (wrong intent), so we
+    // mint an explicit intent=api, non-expiring token and read its key back.
+    const viewKey = `/api/v3/core/tokens/${encodeURIComponent(PROVISIONER_TOKEN_ID)}/view_key/`;
+    try {
+      const existing = await this.request<{ key: string }>(bootstrapToken, 'GET', viewKey);
+      if (existing.key) return existing.key;
+    } catch (error) {
+      const status = error instanceof ProvisioningError ? (error.details as { status?: number })?.status : undefined;
+      if (status !== 404) throw error;
+    }
+    await this.request(bootstrapToken, 'POST', '/api/v3/core/tokens/', {
+      identifier: PROVISIONER_TOKEN_ID,
+      user: userPk,
+      intent: 'api',
+      expiring: false,
+    });
+    const minted = await this.request<{ key: string }>(bootstrapToken, 'GET', viewKey);
+    return minted.key;
+  }
+
   // ---- HTTP --------------------------------------------------------------
 
   private async api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+    return this.request<T>(await this.getApiToken(), method, path, body);
+  }
+
+  private async request<T = unknown>(token: string, method: string, path: string, body?: unknown): Promise<T> {
     if (!this.config.authentikUrl) throw new ProvisioningError('HOLA_AUTHENTIK_URL is not configured');
-    if (!this.config.authentikApiToken) throw new ProvisioningError('HOLA_AUTHENTIK_API_TOKEN is not configured');
 
     const controller = new AbortController();
     const tid = setTimeout(() => controller.abort(), this.config.fetchTimeoutMs);
@@ -434,7 +539,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       const res = await fetch(`${this.config.authentikUrl}${path}`, {
         method,
         headers: {
-          Authorization: `Bearer ${this.config.authentikApiToken}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
