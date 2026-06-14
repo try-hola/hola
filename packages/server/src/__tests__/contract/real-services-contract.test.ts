@@ -21,6 +21,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { RealDeploymentService } from '../../services/core/deployment';
+import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
 import { RealRoutingService } from '../../services/core/routing';
@@ -63,7 +64,7 @@ function makeSystem(dataRoot: string) {
   const systemMonitoring = new MockSystemMonitoringService();
   const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
   const drafts = new RealDraftService(storage, makeCatalog(), validation);
-  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging);
+  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
   return { storage, database, jobs, routing, docker, validation, drafts, deployments };
 }
 

@@ -35,7 +35,8 @@ export interface StorageService extends HealthCheckable {
   deleteDir(path: string, recursive?: boolean): Promise<void>;
   
   // File operations
-  writeFile(path: string, content: string | Buffer): Promise<void>;
+  // `mode` (e.g. 0o600) restricts permissions for files holding secrets.
+  writeFile(path: string, content: string | Buffer, mode?: number): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readFileAsString(path: string, encoding?: BufferEncoding): Promise<string>;
   deleteFile(path: string): Promise<void>;
@@ -170,7 +171,7 @@ export class RealStorageService implements StorageService {
   }
 
   // File operations
-  async writeFile(path: string, content: string | Buffer): Promise<void> {
+  async writeFile(path: string, content: string | Buffer, mode?: number): Promise<void> {
     path = this.resolveStoragePath(path);
 
     try {
@@ -179,13 +180,20 @@ export class RealStorageService implements StorageService {
       }
 
       if (this.config.atomicWrites) {
-        await this.writeFileAtomic(path, content);
+        await this.writeFileAtomic(path, content, mode);
       } else {
-        await fs.writeFile(path, content);
+        await fs.writeFile(path, content, mode !== undefined ? { mode } : undefined);
       }
 
-      this.logger.debug('File written', { 
-        path, 
+      // Atomic writes set the mode on the temp file before rename; for the
+      // non-atomic path the option above covers it. Re-assert for existing files
+      // (writeFile's mode is ignored when the file already exists).
+      if (mode !== undefined) {
+        await fs.chmod(path, mode);
+      }
+
+      this.logger.debug('File written', {
+        path,
         size: Buffer.isBuffer(content) ? content.length : content.length,
         atomic: this.config.atomicWrites,
       });
@@ -195,11 +203,11 @@ export class RealStorageService implements StorageService {
     }
   }
 
-  private async writeFileAtomic(path: string, content: string | Buffer): Promise<void> {
+  private async writeFileAtomic(path: string, content: string | Buffer, mode?: number): Promise<void> {
     const tempPath = `${path}.tmp.${randomUUID()}`;
-    
+
     try {
-      await fs.writeFile(tempPath, content);
+      await fs.writeFile(tempPath, content, mode !== undefined ? { mode } : undefined);
       await fs.rename(tempPath, path);
     } catch (error) {
       // Clean up temp file on failure
@@ -338,10 +346,10 @@ export class MockStorageService implements StorageService {
     this.logger.debug('Mock directory deleted', { path, recursive });
   }
 
-  async writeFile(path: string, content: string | Buffer): Promise<void> {
+  async writeFile(path: string, content: string | Buffer, mode?: number): Promise<void> {
     const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
     this.files.set(path, buffer);
-    this.logger.debug('Mock file written', { path, size: buffer.length });
+    this.logger.debug('Mock file written', { path, size: buffer.length, mode });
   }
 
   async readFile(path: string): Promise<Buffer> {

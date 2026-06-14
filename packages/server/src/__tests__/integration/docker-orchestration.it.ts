@@ -27,6 +27,7 @@ import { join } from 'path';
 import { fileURLToPath } from 'url';
 
 import { RealDeploymentService } from '../../services/core/deployment';
+import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
 import { RealRoutingService } from '../../services/core/routing';
@@ -178,7 +179,7 @@ describe.skipIf(!dockerOk)('Docker/Compose orchestration (real daemon)', () => {
     const jobs = new RealJobService(database, logging);
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
-    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging);
+    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
     return { storage, jobs, logging, drafts, deployments };
   }
 

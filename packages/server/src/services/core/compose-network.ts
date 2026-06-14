@@ -77,3 +77,53 @@ export function attachToHolaNetwork(composeYaml: string, opts: AttachOptions): s
 
   return stringify(doc);
 }
+
+/**
+ * Return the Compose YAML with the given environment merged into the ingress
+ * service's `environment` block (as a map). Used to inject provisioned auth
+ * settings (OIDC client id/secret/issuer/redirect) so the app picks them up on
+ * first boot. Injected values take precedence over the app's declared defaults.
+ *
+ * Throws if the YAML is not a parseable Compose document, or if no env was
+ * actually injected when some was requested — callers must NOT swallow this, so
+ * a failure fails the deploy rather than silently shipping an app without auth.
+ */
+export function injectEnvironment(
+  composeYaml: string,
+  env: Record<string, string>,
+  opts: { ingressService?: string }
+): string {
+  const keys = Object.keys(env);
+  if (keys.length === 0) return composeYaml;
+
+  const doc = (parse(composeYaml) ?? {}) as ComposeDoc;
+  const services = doc.services;
+  if (!services || typeof services !== 'object' || Object.keys(services).length === 0) {
+    throw new Error('cannot inject environment: compose document has no services');
+  }
+
+  const names = Object.keys(services);
+  const ingress = opts.ingressService && services[opts.ingressService] ? opts.ingressService : names[0];
+  const service = services[ingress];
+
+  // Normalize an existing `environment` (which may be a `KEY=value` array) to a map.
+  const existing = service.environment;
+  const envMap: Record<string, string> = {};
+  if (Array.isArray(existing)) {
+    for (const entry of existing) {
+      if (typeof entry !== 'string') continue;
+      const eq = entry.indexOf('=');
+      if (eq === -1) envMap[entry] = '';
+      else envMap[entry.slice(0, eq)] = entry.slice(eq + 1);
+    }
+  } else if (existing && typeof existing === 'object') {
+    for (const [k, v] of Object.entries(existing as Record<string, unknown>)) {
+      envMap[k] = v == null ? '' : String(v);
+    }
+  }
+
+  for (const k of keys) envMap[k] = env[k];
+  service.environment = envMap;
+
+  return stringify(doc);
+}

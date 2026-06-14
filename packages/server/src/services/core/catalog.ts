@@ -11,6 +11,7 @@ import type {
   CatalogApp,
   CatalogAppVersion,
 } from '@hola/shared';
+import { coerceManifestAuth } from './manifest-auth';
 
 // Shape of remote catalog JSON (minimal for now)
 type RemoteCatalog = {
@@ -139,6 +140,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ports?: Array<{ host?: unknown; container: unknown; protocol?: unknown }>;
           volumes?: Array<{ hostPath?: unknown; containerPath: unknown; readOnly?: unknown }>;
         };
+        auth?: unknown;
       };
 
       const manifest: Manifest = JSON.parse(raw) as unknown as Manifest;
@@ -184,7 +186,12 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // Merge compose and manifest defaults (manifest takes precedence)
       const merged = mergeDefaults(composeDefaults, manifestDefaults, manifestEnv);
 
-      return { ...merged, composeOverride } satisfies GetCatalogAppVersionDetailResponse;
+      // Coerce the optional auth block (drives SSO provisioning at deploy time).
+      // Unknown manifest fields are dropped here unless explicitly carried — so
+      // the auth block must be coerced or it silently vanishes downstream.
+      const auth = coerceManifestAuth(manifest.auth);
+
+      return { ...merged, composeOverride, auth } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

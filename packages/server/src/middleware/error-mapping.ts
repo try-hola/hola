@@ -103,6 +103,22 @@ export class TimeoutError extends Error implements ApiError {
   }
 }
 
+/**
+ * Raised when provisioning auth artifacts against the auth platform (Authentik)
+ * fails. 502 because the failure originates upstream, not in the client request.
+ */
+export class ProvisioningError extends Error implements ApiError {
+  code = 'PROVISIONING_ERROR';
+  status = 502;
+  details?: unknown;
+
+  constructor(message: string, details?: unknown) {
+    super(message);
+    this.name = 'ProvisioningError';
+    this.details = details;
+  }
+}
+
 export class RateLimitError extends Error implements ApiError {
   code = 'RATE_LIMIT_EXCEEDED';
   status = 429;
