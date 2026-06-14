@@ -120,8 +120,8 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect((appCall.body as Record<string, unknown>).provider).toBe(42);
 
     // Returned env is keyed by the app's expected names and matches the generated creds.
-    expect(result.env.GITEA_OIDC_CLIENT_ID).toBe(pbody.client_id);
-    expect(result.env.GITEA_OIDC_CLIENT_SECRET).toBe(pbody.client_secret);
+    expect(result.env.GITEA_OIDC_CLIENT_ID).toBe(pbody.client_id as string);
+    expect(result.env.GITEA_OIDC_CLIENT_SECRET).toBe(pbody.client_secret as string);
     expect(result.env.GITEA_OIDC_REDIRECT).toBe('https://gitea.example.com/user/oauth2/authentik/callback');
     expect(result.env.GITEA_OIDC_ISSUER).toBe(`https://auth.example.com/application/o/${result.ref.applicationSlug}/`);
 
