@@ -47,6 +47,8 @@ import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
 import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
+import { applyPlatformDefaults } from './compose-defaults';
+import { composeDefaultsConfig } from '../../config/compose-defaults';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
@@ -811,6 +813,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     content = content
       .replaceAll(APP_HOST_TOKEN, rule.host)
       .replaceAll(BASE_DOMAIN_TOKEN, rule.domain);
+
+    // Apply install-wide operational defaults (restart, log rotation,
+    // no-new-privileges hardening, optional TZ/limits) to every service. The app
+    // wins for fill-if-absent fields; hardening is additive. See compose-defaults.
+    content = applyPlatformDefaults(content, composeDefaultsConfig);
 
     // The runtime compose may hold a client secret in cleartext; restrict it.
     await this.storageService.writeFile(

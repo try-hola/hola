@@ -227,6 +227,41 @@ describe('Auth provisioning lifecycle', () => {
     expect(env.BASE).toBe('local.hola');
   });
 
+  test('applies platform defaults (restart/logging/no-new-privileges) to every service, app wins', async () => {
+    const sys = makeSystem({ auth: undefined });
+    // app sets its own restart on one service; a second (non-ingress) service has none.
+    const compose = [
+      'services:',
+      '  gitea:',
+      '    image: gitea/gitea:1.21.0',
+      '    restart: always',
+      '  db:',
+      '    image: postgres:16',
+      '',
+    ].join('\n');
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, { composeOverride: compose });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    const doc = parse(raw) as { services: Record<string, Record<string, unknown>> };
+
+    // App's restart is kept; default fills the service that had none.
+    expect(doc.services.gitea.restart).toBe('always');
+    expect(doc.services.db.restart).toBe('unless-stopped');
+    // Logging + hardening applied to BOTH services (defaults on).
+    for (const svc of ['gitea', 'db']) {
+      expect(doc.services[svc].logging).toEqual({
+        driver: 'json-file',
+        options: { 'max-size': '10m', 'max-file': '3' },
+      });
+      expect(doc.services[svc].security_opt).toEqual(['no-new-privileges:true']);
+    }
+  });
+
   test('no auth block: deploys normally with no provisioning and no injected env', async () => {
     const sys = makeSystem({ auth: undefined });
     const spy = sys.provisioner as SpyProvisioner;
