@@ -1,11 +1,12 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Package, 
-  Server, 
-  Shield, 
-  Bell, 
+import {
+  LayoutDashboard,
+  LayoutGrid,
+  Package,
+  Server,
+  Shield,
+  Bell,
   Settings,
   Activity,
   ChevronLeft,
@@ -17,6 +18,7 @@ import {
 } from 'lucide-react';
 
 const navigationItems = [
+  { name: 'Apps', path: '/apps', icon: LayoutGrid },
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { name: 'Catalog', path: '/catalog', icon: Package },
   { name: 'Deployments', path: '/deployments', icon: Server },

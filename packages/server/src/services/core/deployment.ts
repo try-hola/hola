@@ -323,6 +323,13 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void app;
   }
 
+  /** Public URL the app is reachable at; the real service derives it from routing. */
+  protected appUrl(deploymentId: string, app: string): string | undefined {
+    void deploymentId;
+    void app;
+    return undefined;
+  }
+
   /** Routing cleanup when a deployment is removed (issue #16). Default no-op. */
   protected async onDeploymentRemoved(deploymentId: string): Promise<void> {
     void deploymentId;
@@ -432,6 +439,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       await this.ensureLayout(deploymentId);
 
+      // Public URL the app is reachable at (Traefik routes <app>.<base-domain>);
+      // the Real service derives it from routing, the mock leaves it unset.
+      const url = this.appUrl(deploymentId, app);
+
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
         name: request.name || `deployment-${deploymentId.slice(0, 8)}`,
@@ -444,6 +455,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         resources: { cpu: '0%', memory: '0MB' },
         ports: [],
         version,
+        url,
         lastUpdated: now,
         metadata: {
           createdAt: now,
@@ -740,6 +752,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** Post-deploy auth-setup retry tuning (overridable in tests to avoid real waits). */
   authSetupMaxAttempts = 18;
   authSetupIntervalMs = 5000;
+
+  /** Public URL the app is reachable at (Traefik routes `<app>.<base-domain>`). */
+  protected override appUrl(deploymentId: string, app: string): string {
+    return `https://${this.routingService.generateRule({ deploymentId, appName: app }).host}`;
+  }
 
   /** Deterministic Compose project name (aligns with the routing network name). */
   private projectName(deploymentId: string): string {

@@ -6,6 +6,7 @@ import { VerySimpleStrictTest } from './pages/VerySimpleStrictTest';
 import { LiveFeaturesDemo } from './pages/LiveFeaturesDemo';
 import PerformanceOptimizationsDemo from './pages/PerformanceOptimizationsDemo';
 import ErrorHandlingDemo from './pages/ErrorHandlingDemo';
+import { Apps } from './pages/Apps';
 import { Catalog } from './pages/Catalog';
 import { Deployments } from './pages/Deployments';
 import { DeploymentDetail } from './pages/DeploymentDetail';
@@ -20,7 +21,8 @@ function App() {
       <div className="min-h-screen bg-surface-0 text-text-strong">
         <AppShell>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Navigate to="/apps" replace />} />
+            <Route path="/apps" element={<Apps />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/very-simple-strict" element={<VerySimpleStrictTest />} />
             <Route path="/live-features-demo" element={<LiveFeaturesDemo />} />
