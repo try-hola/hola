@@ -51,8 +51,8 @@ services:
     environment:
       APP_ENV: production
     volumes:
-      - data:/var/lib/app
-      - ./config:/etc/app:ro
+      - \${HOLA_APP_DATA}/app:/var/lib/app
+      - \${HOLA_APP_DATA}/config:/etc/app:ro
     networks:
       - backend
     secrets:
@@ -60,12 +60,9 @@ services:
   db:
     image: postgres:16
     volumes:
-      - db:/var/lib/postgresql/data
+      - \${HOLA_APP_DATA}/db:/var/lib/postgresql/data
     networks:
       - backend
-volumes:
-  data:
-  db:
 networks:
   backend:
 secrets:
@@ -212,7 +209,7 @@ services:
   });
 
   describe('undefined resource references', () => {
-    test('undefined named volume is rejected', () => {
+    test('named volumes are not allowed (must use the app-data root)', () => {
       const yaml = `
 services:
   web:
@@ -221,10 +218,10 @@ services:
       - data:/var/lib/app
 `;
       const errs = errors(validateComposeDocument(yaml));
-      expect(errs.map((e) => e.code)).toContain('UNDEFINED_VOLUME');
+      expect(errs.map((e) => e.code)).toContain('NAMED_VOLUME_NOT_ALLOWED');
     });
 
-    test('bind-mount paths do not require a top-level volume', () => {
+    test('bind mounts must be rooted at the app-data token', () => {
       const yaml = `
 services:
   web:
@@ -232,6 +229,18 @@ services:
     volumes:
       - ./config:/etc/app:ro
       - /var/run/docker.sock:/var/run/docker.sock
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('VOLUME_NOT_UNDER_APP_DATA');
+    });
+
+    test('bind mounts under the app-data root are accepted', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    volumes:
+      - \${HOLA_APP_DATA}/config:/etc/app:ro
+      - \${HOLA_APP_DATA}/data:/data
 `;
       expect(validateComposeDocument(yaml)).toEqual([]);
     });

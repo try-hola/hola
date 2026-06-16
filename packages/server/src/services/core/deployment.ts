@@ -45,7 +45,24 @@ import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draf
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
+import { APP_DATA_TOKEN } from '@hola/shared/compose-validate';
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
+
+/** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
+const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
+
+/**
+ * Build a human-readable, collision-safe deployment id: the app slug plus a
+ * short random suffix (e.g. `gitea-3f9a2c7b`). Stable for the install's life
+ * (reused across promote/rollback), so it keys the project name, routing, and
+ * the per-app data root. The random suffix keeps two installs of the same app
+ * distinct.
+ */
+function makeDeploymentId(appId: string): string {
+  const slug = appId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
+  const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
+  return `${slug}-${suffix}`;
+}
 
 type ProvisionCredentials = NonNullable<ProvisionResult['credentials']>;
 
@@ -390,21 +407,22 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
-    const deploymentId = crypto.randomUUID();
     const releaseId = crypto.randomUUID();
     const now = new Date().toISOString();
-
-    this.logger.info('Creating deployment from draft', {
-      deploymentId,
-      releaseId,
-      draftId: request.draftId,
-      name: request.name,
-    });
+    let deploymentId = '';
 
     try {
       // Build the release from the finalized draft FIRST so an unfinalized draft
       // fails before any deployment directory or record is created (no partial state).
       const artifacts = await this.loadFinalizedArtifacts(request.draftId);
+      // Mint a human-readable id from the app slug now that we know it.
+      deploymentId = makeDeploymentId(artifacts?.manifest.appId ?? 'app');
+      this.logger.info('Creating deployment from draft', {
+        deploymentId,
+        releaseId,
+        draftId: request.draftId,
+        name: request.name,
+      });
       const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
 
       // Reject a routing (host) conflict before creating any deployment state.
@@ -723,7 +741,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /** Deterministic Compose project name (aligns with the routing network name). */
   private projectName(deploymentId: string): string {
-    return `hola-${deploymentId.slice(0, 12)}`;
+    return `hola-${deploymentId}`;
   }
 
   /** Absolute working directory that holds the materialized docker-compose.yml. */
@@ -765,6 +783,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const hasSecret = Object.keys(injectedEnv).length > 0;
     if (hasSecret) {
       content = injectEnvironment(content, injectedEnv, { ingressService: deployment.app });
+    }
+
+    // Resolve the per-app data root: apps declare persistent storage under the
+    // `${HOLA_APP_DATA}` token (enforced by the compose validator), which we
+    // point at one stable per-install host directory so all of an app's data
+    // lives in a single backup-friendly folder (`<base>/<deploymentId>/...`).
+    // The base must be identity-mounted into the server (same path on host and
+    // in-container) so the path the server creates matches what the daemon binds
+    // into app containers — see packages/compose.
+    if (content.includes(APP_DATA_TOKEN)) {
+      const base = (process.env.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
+      const appRoot = `${base}/${deployment.id}`;
+      await this.storageService.ensureDir(appRoot);
+      content = content.replaceAll(APP_DATA_TOKEN, appRoot);
     }
 
     // The runtime compose may hold a client secret in cleartext; restrict it.

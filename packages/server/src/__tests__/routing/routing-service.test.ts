@@ -22,10 +22,11 @@ describe('RoutingService', () => {
   });
 
   test('generates a deterministic host-based rule', () => {
-    const rule = routing.generateRule({ deploymentId: 'deploy-abc123def456', appName: 'gitea', port: 3000 });
+    const rule = routing.generateRule({ deploymentId: 'gitea-abc123de', appName: 'gitea', port: 3000 });
     expect(rule.host).toBe('gitea.local.hola');
-    expect(rule.serviceName).toBe('gitea-deploy-abc12');
-    expect(rule.networkName).toBe('hola-deploy-abc12');
+    // The (already compact, unique) deployment id is used whole — not truncated.
+    expect(rule.serviceName).toBe('gitea-abc123de');
+    expect(rule.networkName).toBe('hola-gitea-abc123de');
     expect(rule.port).toBe(3000);
   });
 
@@ -54,14 +55,14 @@ describe('RoutingService', () => {
   });
 
   test('activate emits routing map and deterministic Traefik dynamic config', async () => {
-    const rule = routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea', port: 3000 });
+    const rule = routing.generateRule({ deploymentId: 'gitea-dep-a', appName: 'gitea', port: 3000 });
     await routing.activateRoute(rule);
 
     expect(await storage.fileExists('runtime/traefik/routing-map.json')).toBe(true);
     expect(await storage.fileExists('runtime/traefik/dynamic.yml')).toBe(true);
 
     const map = await routing.getRoutingMap();
-    expect(map['gitea.local.hola']?.deploymentId).toBe('dep-a');
+    expect(map['gitea.local.hola']?.deploymentId).toBe('gitea-dep-a');
 
     const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
     expect(dynamic.http.routers['gitea-dep-a'].rule).toBe('Host(`gitea.local.hola`)');
@@ -74,7 +75,7 @@ describe('RoutingService', () => {
   });
 
   test('forward-auth rule emits the outpost middleware + path-prefix router', async () => {
-    const base = routing.generateRule({ deploymentId: 'dep-a', appName: 'grafana', port: 3000 });
+    const base = routing.generateRule({ deploymentId: 'grafana-dep-a', appName: 'grafana', port: 3000 });
     const rule = { ...base, forwardAuth: { name: 'ak-grafana-dep-a', outpostUrl: 'http://authentik-server:9000' } };
     await routing.activateRoute(rule);
 

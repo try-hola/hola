@@ -89,11 +89,23 @@ services:
       # Base DN of the shared LDAP directory (for native-ldap apps); host/port
       # default to the authentik-ldap outpost service.
       - HOLA_AUTHENTIK_LDAP_BASE_DN=${HOLA_AUTHENTIK_LDAP_BASE_DN:-dc=hola,dc=internal}
+      # Per-app data root (default /srv/hola/apps). Apps declare persistent
+      # storage under the ${HOLA_APP_DATA} token (enforced by the compose
+      # validator); the server resolves it to <HOLA_APPS_BIND_ROOT>/<deploymentId>/
+      # so all of an app's data lives in one backup-friendly host folder. The
+      # path MUST be identity-mounted below (same path on host and in-container)
+      # because the daemon resolves bind sources on the host.
+      - HOLA_APPS_BIND_ROOT=${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}
     volumes:
       # Orchestrate deployments by talking to the host Docker engine.
       # SECURITY: this grants control of the host's Docker - see README.
       - /var/run/docker.sock:/var/run/docker.sock
       - hola-data:/data
+      # Identity mount for the per-app bind root (see HOLA_APPS_BIND_ROOT). The
+      # source and target are the SAME host path so paths the server creates
+      # match what the Docker daemon binds into app containers. No-op when the
+      # var is blank (defaults to a host dir that simply goes unused).
+      - ${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}:${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}
     # Internal only: reached through the web container's /api proxy, not exposed by Traefik.
     labels:
       traefik.enable: "false"
