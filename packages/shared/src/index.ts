@@ -670,7 +670,8 @@ export type ComposeIssueCode =
   | 'UNDEFINED_SECRET'
   | 'HOST_PORT_NOT_ALLOWED'
   | 'NAMED_VOLUME_NOT_ALLOWED'
-  | 'VOLUME_NOT_UNDER_APP_DATA';
+  | 'VOLUME_NOT_UNDER_APP_DATA'
+  | 'UNKNOWN_PLATFORM_TOKEN';
 
 /**
  * Codes emitted by the broader ValidationService (drafts, env, resources).

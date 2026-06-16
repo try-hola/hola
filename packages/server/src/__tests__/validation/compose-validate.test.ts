@@ -245,6 +245,32 @@ services:
       expect(validateComposeDocument(yaml)).toEqual([]);
     });
 
+    test('known platform tokens in env are accepted', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    environment:
+      DOMAIN: https://\${HOLA_APP_HOST}/
+      BASE: \${HOLA_BASE_DOMAIN}
+`;
+      expect(validateComposeDocument(yaml)).toEqual([]);
+    });
+
+    test('unknown HOLA_* token is warned (likely a typo)', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    environment:
+      DOMAIN: \${HOLA_APP_HSOT}
+`;
+      const issues = validateComposeDocument(yaml);
+      expect(codes(issues)).toContain('UNKNOWN_PLATFORM_TOKEN');
+      // Advisory only — does not block.
+      expect(issues.every((i) => i.severity !== 'error')).toBe(true);
+    });
+
     test('undefined network is rejected', () => {
       const yaml = `
 services:
