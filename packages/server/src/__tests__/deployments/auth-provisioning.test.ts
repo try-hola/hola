@@ -284,7 +284,8 @@ describe('Auth provisioning lifecycle', () => {
       expect((await waitForJob(sys.jobs, other.jobId!)).status).toBe('completed');
 
       const feed = join(process.env.HOLA_APPS_BIND_ROOT, consumer.deploymentId, 'registry.json');
-      const doc = JSON.parse(await readFile(feed, 'utf-8')) as { apps: Array<{ name: string; url?: string; status: string }> };
+      const doc = JSON.parse(await readFile(feed, 'utf-8')) as { version: number; apps: Array<{ name: string; url?: string; status: string }> };
+      expect(doc.version).toBe(1); // versioned feed
       const names = doc.apps.map((a) => a.name);
       expect(names).toEqual(['gitea', 'homepage']); // sorted, both present
       expect(doc.apps.find((a) => a.name === 'gitea')?.url).toBe('https://gitea.local.hola');

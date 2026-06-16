@@ -13,6 +13,14 @@ export const APP_REGISTRY_CAPABILITY = 'app-registry';
 /** File the feed is written as, inside the consumer's data root (`${HOLA_APP_DATA}`). */
 export const REGISTRY_FILENAME = 'registry.json';
 
+/**
+ * Schema version of the `registry.json` document. Consumers should read this and
+ * tolerate unknown fields (forward-compatible). Bump it when the shape changes
+ * in a way consumers must react to; purely additive fields can keep the version
+ * but a bump is the explicit signal that something changed.
+ */
+export const REGISTRY_SCHEMA_VERSION = 1;
+
 /** One installed app as seen by consumers. */
 export interface RegistryApp {
   /** Deployment id (`<slug>-<hash>`). */
@@ -35,7 +43,7 @@ export interface RegistryApp {
  */
 export function buildRegistry(apps: RegistryApp[]): string {
   const sorted = [...apps].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  return JSON.stringify({ apps: sorted }, null, 2) + '\n';
+  return JSON.stringify({ version: REGISTRY_SCHEMA_VERSION, apps: sorted }, null, 2) + '\n';
 }
 
 /** Coerce a manifest `consumes` field (string or string[]) to a clean list. */

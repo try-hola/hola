@@ -4,7 +4,7 @@
 
 import { describe, test, expect } from 'bun:test';
 
-import { buildRegistry, coerceConsumes, type RegistryApp } from '../../services/core/app-registry';
+import { buildRegistry, coerceConsumes, REGISTRY_SCHEMA_VERSION, type RegistryApp } from '../../services/core/app-registry';
 
 describe('buildRegistry', () => {
   const apps: RegistryApp[] = [
@@ -12,8 +12,9 @@ describe('buildRegistry', () => {
     { id: 'gitea-1', app: 'gitea', name: 'Gitea', url: 'https://gitea.x', icon: '📦', status: 'stopped' },
   ];
 
-  test('emits a deterministic, name-sorted document', () => {
+  test('emits a versioned, deterministic, name-sorted document', () => {
     const doc = JSON.parse(buildRegistry(apps));
+    expect(doc.version).toBe(REGISTRY_SCHEMA_VERSION);
     expect(doc.apps.map((a: RegistryApp) => a.name)).toEqual(['Gitea', 'Vaultwarden']);
     expect(doc.apps[0]).toEqual({
       id: 'gitea-1', app: 'gitea', name: 'Gitea', url: 'https://gitea.x', icon: '📦', status: 'stopped',

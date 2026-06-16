@@ -56,10 +56,12 @@ On every app-set change (install / uninstall), the server writes a canonical
 `registry.json` into that app's data root (`${HOLA_APP_DATA}/registry.json`):
 
 ```jsonc
-{ "apps": [ { "id", "app", "name", "url", "icon", "status" }, ... ] }
+{ "version": 1, "apps": [ { "id", "app", "name", "url", "icon", "status" }, ... ] }
 ```
 
-That schema is the **only** contract the server owns. It never learns what Homepage or
+The document carries a `version` so the schema can be revved later without breaking
+consumers (they read `version` and tolerate unknown fields). That schema is the
+**only** contract the server owns. It never learns what Homepage or
 Homer is, and adding a new dashboard app to the catalog requires **no server change**.
 
 **Rendering — turning the registry into an app's own config format — lives in the
