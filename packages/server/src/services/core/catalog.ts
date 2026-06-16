@@ -294,31 +294,23 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
   }
 }
 
+/**
+ * Empty catalog for the test environment. There is no bundled catalog — the only
+ * catalog is the remote one at try-hola/apps (RealCatalogService + HOLA_CATALOG_URL).
+ * Tests that need catalog data inject their own stub.
+ */
 export class MockCatalogService implements CatalogService {
-  // Delegate to existing mock-data to preserve contract fidelity
-  private modPromise = import('../../mock-data');
-
   async listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse> {
-    const { getCatalogApps } = await this.modPromise;
-    return getCatalogApps({ page: req.page ?? 1, limit: req.limit ?? 12, query: req.q || req.query, category: req.category });
+    return { items: [], page: req.page ?? 1, limit: req.limit ?? 12, total: 0 };
   }
-  async getApp(appId: string): Promise<GetCatalogAppResponse> {
-    const { getCatalogAppById } = await this.modPromise;
-    const app = getCatalogAppById(appId);
-    if (!app) throw new Error('APP_NOT_FOUND');
-    return app;
+  async getApp(): Promise<GetCatalogAppResponse> {
+    throw new Error('APP_NOT_FOUND');
   }
-  async getVersions(appId: string): Promise<GetCatalogAppVersionsResponse> {
-    const { getCatalogAppVersions } = await this.modPromise;
-    const versions = getCatalogAppVersions(appId);
-    if (!versions) throw new Error('APP_NOT_FOUND');
-    return versions;
+  async getVersions(): Promise<GetCatalogAppVersionsResponse> {
+    throw new Error('APP_NOT_FOUND');
   }
-  async getVersionDetail(appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse> {
-    const { getCatalogAppVersionDetail } = await this.modPromise;
-    const detail = getCatalogAppVersionDetail(appId, version);
-    if (!detail) throw new Error('VERSION_NOT_FOUND');
-    return detail;
+  async getVersionDetail(): Promise<GetCatalogAppVersionDetailResponse> {
+    throw new Error('VERSION_NOT_FOUND');
   }
-  async refresh(): Promise<void> { /* no-op for mocks */ }
+  async refresh(): Promise<void> { /* no-op */ }
 }

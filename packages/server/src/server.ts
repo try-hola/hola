@@ -64,11 +64,6 @@ import { createAuthMiddleware, getPrincipal } from './middleware/auth';
 
 // Import enhanced mock data
 import {
-  // Catalog (fallback mocks)
-  getCatalogApps,
-  getCatalogAppById,
-  getCatalogAppVersions,
-  getCatalogAppVersionDetail,
   // Jobs
   getJobById,
   getAllJobs,
@@ -352,9 +347,11 @@ async function route(url: URL, req: Request): Promise<Response> {
       const catalog = services.catalog;
       const payload = await catalog.listApps({ page, limit, q: query, category });
       return json(payload);
-  } catch {
-      const payload: GetCatalogAppsResponse = getCatalogApps({ page, limit, query, category });
-      return json(payload);
+    } catch (error) {
+      // No bundled fallback — the only catalog is the remote one (HOLA_CATALOG_URL).
+      // When it's unset/unreachable the catalog is simply empty.
+      logger.warn('Catalog list failed; returning empty catalog', { error: error instanceof Error ? error.message : String(error) });
+      return json({ items: [], page, limit, total: 0 } satisfies GetCatalogAppsResponse);
     }
   }
 
@@ -367,9 +364,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       const payload = await catalog.getApp(appId);
       return json(payload);
     } catch {
-      const payload = getCatalogAppById(appId);
-      if (!payload) return notFound();
-      return json(payload);
+      return notFound();
     }
   }
 
@@ -382,9 +377,7 @@ async function route(url: URL, req: Request): Promise<Response> {
       const payload = await catalog.getVersions(appId);
       return json(payload);
     } catch {
-      const payload = getCatalogAppVersions(appId);
-      if (!payload) return notFound();
-      return json(payload);
+      return notFound();
     }
   }
 
@@ -398,10 +391,8 @@ async function route(url: URL, req: Request): Promise<Response> {
       const payload = await catalog.getVersionDetail(appId, version);
       return json(payload);
     } catch (error) {
-      logger.warn('Catalog version detail via real service failed, using mock', { appId, version, error: error instanceof Error ? error.message : String(error) });
-      const payload = getCatalogAppVersionDetail(appId, version);
-      if (!payload) return notFound();
-      return json(payload);
+      logger.warn('Catalog version detail failed', { appId, version, error: error instanceof Error ? error.message : String(error) });
+      return notFound();
     }
   }
 
