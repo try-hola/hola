@@ -118,10 +118,18 @@ function validateEnvironment(env: unknown, basePath: string, issues: ValidationI
   issues.push(issue('INVALID_ENV_FORM', 'error', 'environment must be a list or a mapping', basePath));
 }
 
+/**
+ * The single host mount root every app's persistent storage must live under.
+ * Hola resolves this token to one stable per-install directory at deploy time,
+ * so all of an app's data lands in one backup-friendly folder. Apps mount
+ * sub-dirs of it (e.g. `${HOLA_APP_DATA}/data:/data`).
+ */
+export const APP_DATA_TOKEN = '${HOLA_APP_DATA}';
+
 function validateVolumes(
   vols: unknown,
   basePath: string,
-  defined: Set<string>,
+  _defined: Set<string>,
   issues: ValidationIssue[],
 ): void {
   if (!Array.isArray(vols)) return;
@@ -131,15 +139,29 @@ function validateVolumes(
     let isNamed = false;
     if (typeof entry === 'string') {
       source = entry.split(':')[0];
-      // A named volume has no path separators and is not relative/absolute.
-      isNamed = !!source && !source.includes('/') && !source.startsWith('.') && !source.startsWith('~');
+      // A named volume has no path separators and is not relative/absolute/interpolated.
+      isNamed =
+        !!source &&
+        !source.includes('/') &&
+        !source.startsWith('.') &&
+        !source.startsWith('~') &&
+        !source.startsWith('$');
     } else if (isPlainObject(entry)) {
       const type = entry.type;
+      if (type === 'tmpfs') return; // ephemeral; no host storage to anchor
       source = typeof entry.source === 'string' ? entry.source : undefined;
       isNamed = type === 'volume' && !!source;
     }
-    if (isNamed && source && !defined.has(source)) {
-      issues.push(issue('UNDEFINED_VOLUME', 'error', `Volume '${source}' is not defined under top-level 'volumes'`, path));
+
+    // Contract: persistent storage is bind-mounted under a single per-app root.
+    if (isNamed) {
+      issues.push(issue('NAMED_VOLUME_NOT_ALLOWED', 'error',
+        `Named volume '${source}' is not allowed; mount persistent storage under '${APP_DATA_TOKEN}' instead (e.g. '${APP_DATA_TOKEN}/data:/data')`, path));
+      return;
+    }
+    if (source !== undefined && !source.startsWith(APP_DATA_TOKEN)) {
+      issues.push(issue('VOLUME_NOT_UNDER_APP_DATA', 'error',
+        `Bind source '${source}' must be under '${APP_DATA_TOKEN}' so all of an app's data lives in one root`, path));
     }
   });
 }

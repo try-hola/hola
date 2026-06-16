@@ -49,14 +49,16 @@ export interface RoutingService extends HealthCheckable {
 /** Build a deterministic routing rule (pure; shared by real and mock services). */
 function buildRule(input: GenerateRuleInput, domain: string): TraefikRoutingRule {
   const host = `${input.appName}.${domain}`;
-  const shortId = input.deploymentId.slice(0, 12);
+  // The deployment id is already a compact, unique `<slug>-<hash>` (it embeds the
+  // app slug), so use it whole — truncating it would collide between two installs
+  // of the same app.
   return {
     deploymentId: input.deploymentId,
     appName: input.appName,
     host,
     domain,
-    serviceName: `${input.appName}-${shortId}`,
-    networkName: `hola-${shortId}`,
+    serviceName: input.deploymentId,
+    networkName: `hola-${input.deploymentId}`,
     port: input.port,
     createdAt: new Date().toISOString(),
   };
