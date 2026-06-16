@@ -45,7 +45,7 @@ import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draf
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
-import { APP_DATA_TOKEN } from '@hola/shared/compose-validate';
+import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
@@ -764,12 +764,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
     const raw = await this.storageService.readFileAsString(src);
 
+    // The routing rule gives us the install-specific values apps reference as
+    // tokens (public host, base domain) plus the network alias. generateRule is
+    // pure, so compute it once up front and reuse it below.
+    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app });
+
     // Attach the ingress service to the Traefik network so the emitted routing
     // config can reach it (the alias must match the routing service name).
     let content = raw;
     try {
-      const alias = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app }).serviceName;
-      content = attachToHolaNetwork(raw, { alias, ingressService: deployment.app });
+      content = attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService: deployment.app });
     } catch (error) {
       this.logger.warn('Could not attach app to Traefik network; deploying compose as-is', {
         deploymentId: deployment.id,
@@ -798,6 +802,15 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       await this.storageService.ensureDir(appRoot);
       content = content.replaceAll(APP_DATA_TOKEN, appRoot);
     }
+
+    // Resolve install-specific tokens apps reference in their env, so the catalog
+    // carries no hardcoded per-install values: the app's public host
+    // (`<app>.<base-domain>`) and the install base domain. Each app still names
+    // its own env key (e.g. `DOMAIN: https://${HOLA_APP_HOST}`); only the value
+    // is a token. (${HOLA_APP_DATA} above is the storage equivalent.)
+    content = content
+      .replaceAll(APP_HOST_TOKEN, rule.host)
+      .replaceAll(BASE_DOMAIN_TOKEN, rule.domain);
 
     // The runtime compose may hold a client secret in cleartext; restrict it.
     await this.storageService.writeFile(

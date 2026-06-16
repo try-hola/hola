@@ -201,6 +201,32 @@ describe('Auth provisioning lifecycle', () => {
     expect(meta.metadata.auth.ref.providerPk).toBe(42);
   });
 
+  test('resolves install tokens (${HOLA_APP_HOST} / ${HOLA_BASE_DOMAIN}) in app env', async () => {
+    const sys = makeSystem({ auth: undefined });
+    const compose = [
+      'services:',
+      '  gitea:',
+      '    image: gitea/gitea:1.21.0',
+      '    environment:',
+      '      ROOT_URL: https://${HOLA_APP_HOST}/',
+      '      ALLOWED_HOST: ${HOLA_APP_HOST}',
+      '      BASE: ${HOLA_BASE_DOMAIN}',
+      '',
+    ].join('\n');
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, { composeOverride: compose });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    // baseDomain is local.hola, app is gitea -> host gitea.local.hola
+    expect(env.ROOT_URL).toBe('https://gitea.local.hola/');
+    expect(env.ALLOWED_HOST).toBe('gitea.local.hola');
+    expect(env.BASE).toBe('local.hola');
+  });
+
   test('no auth block: deploys normally with no provisioning and no injected env', async () => {
     const sys = makeSystem({ auth: undefined });
     const spy = sys.provisioner as SpyProvisioner;

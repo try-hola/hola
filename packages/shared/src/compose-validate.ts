@@ -126,6 +126,40 @@ function validateEnvironment(env: unknown, basePath: string, issues: ValidationI
  */
 export const APP_DATA_TOKEN = '${HOLA_APP_DATA}';
 
+/**
+ * Install-specific values the server resolves into an app's compose at deploy
+ * time, so the catalog stays free of hardcoded per-install values:
+ *   ${HOLA_APP_HOST}     the app's public host (`<app>.<base-domain>`)
+ *   ${HOLA_BASE_DOMAIN}  the install's base domain
+ * Apps reference these (e.g. `DOMAIN: https://${HOLA_APP_HOST}`); each app still
+ * names its own env key, only the value is a token.
+ */
+export const APP_HOST_TOKEN = '${HOLA_APP_HOST}';
+export const BASE_DOMAIN_TOKEN = '${HOLA_BASE_DOMAIN}';
+
+/** Every `${HOLA_*}` token the server knows how to resolve. */
+export const KNOWN_PLATFORM_TOKENS: readonly string[] = [
+  APP_DATA_TOKEN,
+  APP_HOST_TOKEN,
+  BASE_DOMAIN_TOKEN,
+];
+
+/**
+ * Warn on `${HOLA_*}` tokens the server won't resolve — almost always a typo
+ * (e.g. `${HOLA_APP_HSOT}`) that would otherwise silently deploy as an empty
+ * string. Reserved prefix: only the platform mints `HOLA_*` tokens.
+ */
+function validatePlatformTokens(yamlText: string, issues: ValidationIssue[]): void {
+  const seen = new Set<string>();
+  for (const match of yamlText.matchAll(/\$\{(HOLA_[A-Z0-9_]+)\}/g)) {
+    const token = `\${${match[1]}}`;
+    if (seen.has(token) || KNOWN_PLATFORM_TOKENS.includes(token)) continue;
+    seen.add(token);
+    issues.push(issue('UNKNOWN_PLATFORM_TOKEN', 'warning',
+      `Unknown platform token '${token}'; the server won't resolve it (known: ${KNOWN_PLATFORM_TOKENS.join(', ')})`));
+  }
+}
+
 function validateVolumes(
   vols: unknown,
   basePath: string,
@@ -303,5 +337,7 @@ export function validateComposeDocument(yamlText: string): ValidationIssue[] {
   if (parsed === null || parsed === undefined) {
     return [issue('NO_SERVICES', 'error', "Compose document is empty; define at least one service under 'services'", 'services')];
   }
-  return validateComposeObject(parsed);
+  const issues = validateComposeObject(parsed);
+  validatePlatformTokens(yamlText, issues);
+  return issues;
 }
