@@ -9,7 +9,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { parse } from 'yaml';
@@ -48,13 +48,14 @@ const OIDC_AUTH: AppAuthConfig = {
   },
 };
 
-function makeCatalog(auth?: AppAuthConfig): CatalogArg {
+function makeCatalog(auth?: AppAuthConfig, consumes?: string[]): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Gitea', icon: '🍵' }),
     getVersionDetail: async () => ({
       defaultEnv: [],
       defaults: { ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }], volumes: [] },
       auth,
+      consumes,
     }),
   } as unknown as CatalogArg;
 }
@@ -148,13 +149,13 @@ describe('Auth provisioning lifecycle', () => {
     await rm(dataRoot, { recursive: true, force: true });
   });
 
-  function makeSystem(opts: { auth?: AppAuthConfig; provisioner?: ProvisionerService; docker?: DockerService } = {}) {
+  function makeSystem(opts: { auth?: AppAuthConfig; consumes?: string[]; provisioner?: ProvisionerService; docker?: DockerService } = {}) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
     const jobs = new RealJobService(database, logging);
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
-    const drafts = new RealDraftService(storage, makeCatalog(opts.auth), makeValidation());
+    const drafts = new RealDraftService(storage, makeCatalog(opts.auth, opts.consumes), makeValidation());
     const provisioner = opts.provisioner ?? new SpyProvisioner();
     const docker = opts.docker ?? new MockDockerService();
     const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner);
@@ -259,6 +260,37 @@ describe('Auth provisioning lifecycle', () => {
         options: { 'max-size': '10m', 'max-file': '3' },
       });
       expect(doc.services[svc].security_opt).toEqual(['no-new-privileges:true']);
+    }
+  });
+
+  test('writes registry.json into consumers (consumes: app-registry) on app-set change', async () => {
+    const prev = process.env.HOLA_APPS_BIND_ROOT;
+    process.env.HOLA_APPS_BIND_ROOT = join(dataRoot, 'apps');
+    try {
+      const sys = makeSystem({ consumes: ['app-registry'] });
+      const finalizeFor = async (appId: string): Promise<string> => {
+        const { draftId } = await sys.drafts.createDraft({ appId, version: '1.0.0' });
+        await sys.drafts.updateDraft(draftId, { composeOverride: COMPOSE });
+        await sys.drafts.finalizeDraft(draftId);
+        return draftId;
+      };
+
+      // A registry consumer (e.g. a dashboard) installs first... (distinct apps
+      // so their routing hosts don't collide).
+      const consumer = await sys.deployments.createFromDraft({ draftId: await finalizeFor('homepage'), name: 'homepage' });
+      expect((await waitForJob(sys.jobs, consumer.jobId!)).status).toBe('completed');
+      // ...then a second app installs, which must show up in the consumer's feed.
+      const other = await sys.deployments.createFromDraft({ draftId: await finalizeFor('gitea'), name: 'gitea' });
+      expect((await waitForJob(sys.jobs, other.jobId!)).status).toBe('completed');
+
+      const feed = join(process.env.HOLA_APPS_BIND_ROOT, consumer.deploymentId, 'registry.json');
+      const doc = JSON.parse(await readFile(feed, 'utf-8')) as { apps: Array<{ name: string; url?: string; status: string }> };
+      const names = doc.apps.map((a) => a.name);
+      expect(names).toEqual(['gitea', 'homepage']); // sorted, both present
+      expect(doc.apps.find((a) => a.name === 'gitea')?.url).toBe('https://gitea.local.hola');
+    } finally {
+      if (prev === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
+      else process.env.HOLA_APPS_BIND_ROOT = prev;
     }
   });
 

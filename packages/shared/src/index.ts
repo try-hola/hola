@@ -259,6 +259,10 @@ export type GetCatalogAppVersionDetailResponse = {
   // Drives provisioning at deploy time (see AppAuthConfig). Optional: apps
   // that don't declare it behave as `none` (no auth wiring).
   auth?: AppAuthConfig;
+  // Cross-app capabilities the app consumes, declared in its bundle manifest
+  // (e.g. `app-registry`). The server writes the corresponding feed into the
+  // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
+  consumes?: string[];
 };
 
 // ------------------------------------------------------
@@ -341,6 +345,9 @@ export type Draft = {
   // App auth capability seeded from the catalog bundle manifest (read-only; not
   // user-editable). Carried through finalize so the deploy lifecycle can provision.
   auth?: AppAuthConfig;
+  // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
+  // manifest and carried through finalize (ADR 0002).
+  consumes?: string[];
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 

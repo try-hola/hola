@@ -56,6 +56,9 @@ export interface FinalizedManifest {
   // App auth capability carried from the catalog manifest so the deploy
   // lifecycle can provision SSO without re-reading the bundle.
   auth?: AppAuthConfig;
+  // Cross-app capabilities consumed (e.g. `app-registry`); carried so the
+  // deploy lifecycle can publish the right feeds without re-reading the bundle.
+  consumes?: string[];
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -318,6 +321,7 @@ export class RealDraftService implements DraftService {
         ports: defaults.defaults.ports,
         composeOverride,
         auth: defaults.auth,
+        consumes: defaults.consumes,
         files: [],
       };
 
@@ -568,6 +572,7 @@ export class RealDraftService implements DraftService {
         ports: draft.ports,
         composeOverride: draft.composeOverride ?? '',
         auth: draft.auth,
+        consumes: draft.consumes,
         files: specFiles,
       };
 
@@ -645,7 +650,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[] }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
@@ -653,6 +658,7 @@ export class RealDraftService implements DraftService {
         defaults: versionDetail.defaults,
         composeOverride: versionDetail.composeOverride ?? '',
         auth: versionDetail.auth,
+        consumes: versionDetail.consumes,
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
