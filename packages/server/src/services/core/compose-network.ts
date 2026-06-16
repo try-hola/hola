@@ -20,15 +20,36 @@ export interface AttachOptions {
   networkName?: string;
 }
 
-interface ComposeService {
+export interface ComposeService {
   networks?: string[] | Record<string, unknown>;
   [key: string]: unknown;
 }
 
-interface ComposeDoc {
+export interface ComposeDoc {
   services?: Record<string, ComposeService>;
   networks?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+/**
+ * Normalize a service's `environment` (Compose allows a `KEY=value` array or a
+ * map) to a flat map. Shared by env injection and platform-defaults.
+ */
+export function toEnvMap(existing: unknown): Record<string, string> {
+  const envMap: Record<string, string> = {};
+  if (Array.isArray(existing)) {
+    for (const entry of existing) {
+      if (typeof entry !== 'string') continue;
+      const eq = entry.indexOf('=');
+      if (eq === -1) envMap[entry] = '';
+      else envMap[entry.slice(0, eq)] = entry.slice(eq + 1);
+    }
+  } else if (existing && typeof existing === 'object') {
+    for (const [k, v] of Object.entries(existing as Record<string, unknown>)) {
+      envMap[k] = v == null ? '' : String(v);
+    }
+  }
+  return envMap;
 }
 
 function toNetworkMap(networks: ComposeService['networks']): Record<string, unknown> {
@@ -107,21 +128,7 @@ export function injectEnvironment(
   const service = services[ingress];
 
   // Normalize an existing `environment` (which may be a `KEY=value` array) to a map.
-  const existing = service.environment;
-  const envMap: Record<string, string> = {};
-  if (Array.isArray(existing)) {
-    for (const entry of existing) {
-      if (typeof entry !== 'string') continue;
-      const eq = entry.indexOf('=');
-      if (eq === -1) envMap[entry] = '';
-      else envMap[entry.slice(0, eq)] = entry.slice(eq + 1);
-    }
-  } else if (existing && typeof existing === 'object') {
-    for (const [k, v] of Object.entries(existing as Record<string, unknown>)) {
-      envMap[k] = v == null ? '' : String(v);
-    }
-  }
-
+  const envMap = toEnvMap(service.environment);
   for (const k of keys) envMap[k] = env[k];
   service.environment = envMap;
 

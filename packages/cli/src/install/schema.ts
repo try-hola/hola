@@ -123,6 +123,13 @@ export const INSTALL_SCHEMA: InstallField[] = [
     validate: isUrlOrEmpty,
   },
   {
+    key: 'HOLA_DEFAULT_TZ',
+    type: 'text',
+    prompt: 'Default timezone for deployed apps (TZ, blank to leave unset)',
+    help: 'e.g. UTC or America/New_York; applied to apps that do not set TZ',
+    default: '',
+  },
+  {
     key: 'HOLA_AUTH_MODE',
     type: 'select',
     prompt: 'SSO platform for catalog apps',

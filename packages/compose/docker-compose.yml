@@ -96,6 +96,17 @@ services:
       # path MUST be identity-mounted below (same path on host and in-container)
       # because the daemon resolves bind sources on the host.
       - HOLA_APPS_BIND_ROOT=${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}
+      # Platform defaults applied to every deployed app's compose (the app wins
+      # for fill-if-absent fields; hardening is additive). Restart policy, log
+      # rotation, and no-new-privileges are on by default; TZ and resource limits
+      # are off unless set. See packages/server/src/config/compose-defaults.ts.
+      - HOLA_DEFAULT_RESTART_POLICY=${HOLA_DEFAULT_RESTART_POLICY:-unless-stopped}
+      - HOLA_DEFAULT_LOG_MAX_SIZE=${HOLA_DEFAULT_LOG_MAX_SIZE:-10m}
+      - HOLA_DEFAULT_LOG_MAX_FILE=${HOLA_DEFAULT_LOG_MAX_FILE:-3}
+      - HOLA_DEFAULT_NO_NEW_PRIVILEGES=${HOLA_DEFAULT_NO_NEW_PRIVILEGES:-true}
+      - HOLA_DEFAULT_TZ=${HOLA_DEFAULT_TZ:-}
+      - HOLA_DEFAULT_MEM_LIMIT=${HOLA_DEFAULT_MEM_LIMIT:-}
+      - HOLA_DEFAULT_CPUS=${HOLA_DEFAULT_CPUS:-}
     volumes:
       # Orchestrate deployments by talking to the host Docker engine.
       # SECURITY: this grants control of the host's Docker - see README.
