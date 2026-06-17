@@ -1,7 +1,8 @@
 import { HolaSdk } from '@hola/sdk';
-import type { PostDeploymentActionResponse, RollbackResponse } from '@hola/shared';
+import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse } from '@hola/shared';
 
 import { watchJob, reportDeployError } from '../../lib/deploy-flow';
+import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 
 export interface ActionOptions {
   noStream?: boolean;
@@ -78,6 +79,66 @@ export async function runRollback(
     if (status === 'failed') process.exitCode = 1;
     return res;
   } catch (err) {
+    return reportDeployError(err);
+  }
+}
+
+export interface UninstallOptions {
+  yes?: boolean;
+  json?: boolean;
+}
+
+/**
+ * Uninstall a deployment via DELETE /api/deployments/:id — stops its containers,
+ * deprovisions auth, and removes its record, releases, and data. Destructive and
+ * synchronous (no job to watch); confirms first unless `--yes`.
+ */
+export async function runUninstall(
+  deploymentId: string,
+  opts: UninstallOptions,
+  injected?: { sdk?: HolaSdk; prompter?: Prompter }
+): Promise<{ uninstalled: string } | undefined> {
+  const sdk = injected?.sdk ?? new HolaSdk();
+  const out = (m: string) => console.log(m);
+  try {
+    // Resolve the name up front: confirms the deployment exists (fail fast on a
+    // typo'd id) and makes the confirmation prompt unambiguous.
+    let name = deploymentId;
+    try {
+      const dep = (await sdk.deployments.byId(deploymentId)) as GetDeploymentResponse;
+      if (dep?.name) name = dep.name;
+    } catch (err) {
+      return reportDeployError(err);
+    }
+
+    if (!opts.yes) {
+      const prompter = injected?.prompter ?? clackPrompter();
+      const answer = await prompter.prompt({
+        key: 'confirm',
+        type: 'confirm',
+        message: `Uninstall ${name} (${deploymentId})? This removes its containers, data, and auth.`,
+        default: 'false',
+      });
+      if (answer !== 'true') {
+        out('Aborted.');
+        return undefined;
+      }
+    }
+
+    out(`Uninstalling ${deploymentId}…`);
+    await sdk.deployments.delete(deploymentId);
+
+    if (opts.json) {
+      console.log(JSON.stringify({ uninstalled: deploymentId }, null, 2));
+    } else {
+      out(`Uninstalled ${name}.`);
+    }
+    return { uninstalled: deploymentId };
+  } catch (err) {
+    if (err instanceof PromptCancelled) {
+      console.log('Aborted.');
+      return undefined;
+    }
     return reportDeployError(err);
   }
 }
