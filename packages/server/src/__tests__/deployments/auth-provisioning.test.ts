@@ -295,6 +295,32 @@ describe('Auth provisioning lifecycle', () => {
     }
   });
 
+  test('consumes: apps-data injects a read-only mount of the apps root', async () => {
+    const prev = process.env.HOLA_APPS_BIND_ROOT;
+    const base = join(dataRoot, 'apps');
+    process.env.HOLA_APPS_BIND_ROOT = base;
+    try {
+      const sys = makeSystem({ consumes: ['apps-data'] });
+      const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { volumes?: string[] }> };
+      expect(doc.services.gitea.volumes).toContain(`${base}:${base}:ro`);
+    } finally {
+      if (prev === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
+      else process.env.HOLA_APPS_BIND_ROOT = prev;
+    }
+  });
+
+  test('no apps-data capability: no apps-root mount injected', async () => {
+    const sys = makeSystem({ auth: undefined });
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    expect(raw).not.toContain(':ro');
+  });
+
   test('no auth block: deploys normally with no provisioning and no injected env', async () => {
     const sys = makeSystem({ auth: undefined });
     const spy = sys.provisioner as SpyProvisioner;
