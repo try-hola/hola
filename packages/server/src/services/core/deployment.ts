@@ -49,6 +49,7 @@ import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
+import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
@@ -816,8 +817,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // in-container) so the path the server creates matches what the daemon binds
     // into app containers — see packages/compose.
     if (content.includes(APP_DATA_TOKEN)) {
-      const base = (process.env.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
-      const appRoot = `${base}/${deployment.id}`;
+      const appRoot = this.appRootFor(deployment.id);
       await this.storageService.ensureDir(appRoot);
       content = content.replaceAll(APP_DATA_TOKEN, appRoot);
     }
@@ -856,6 +856,66 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       return manifest.auth;
     } catch {
       return undefined;
+    }
+  }
+
+  /** Cross-app capabilities the active release declares it consumes (ADR 0002). */
+  private async readActiveConsumes(deployment: EnhancedDeploymentDetail): Promise<string[]> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return [];
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return [];
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      return manifest.consumes ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Absolute host data root for a deployment (`<HOLA_APPS_BIND_ROOT>/<id>`). */
+  private appRootFor(deploymentId: string): string {
+    const base = (process.env.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
+    return `${base}/${deploymentId}`;
+  }
+
+  /**
+   * Publish the app registry feed (ADR 0002): build the canonical list of
+   * installed apps and write `registry.json` into the data root of every
+   * deployment that declares `consumes: app-registry`. Rendering into each app's
+   * own config format is a bundle bolt-on, not the server's concern. Never
+   * throws — a feed failure must not fail a deploy.
+   */
+  private async reconcileAppRegistry(): Promise<void> {
+    try {
+      const apps: RegistryApp[] = Array.from(this.deployments.values()).map((d) => ({
+        id: d.id,
+        app: d.app,
+        name: d.name,
+        url: d.url,
+        icon: d.icon,
+        status: d.status,
+      }));
+      const content = buildRegistry(apps);
+
+      for (const d of this.deployments.values()) {
+        const consumes = await this.readActiveConsumes(d);
+        if (!consumes.includes(APP_REGISTRY_CAPABILITY)) continue;
+        try {
+          const root = this.appRootFor(d.id);
+          await this.storageService.ensureDir(root);
+          await this.storageService.writeFile(`${root}/${REGISTRY_FILENAME}`, content);
+        } catch (error) {
+          this.logger.warn('Failed to write app registry feed', {
+            deploymentId: d.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    } catch (error) {
+      this.logger.warn('App registry reconcile failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -1056,6 +1116,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       this.deployments.set(deploymentId, deployment);
       await this.persistDeployment(deployment);
 
+      // App-set / status changed → refresh the registry feed for consumers.
+      await this.reconcileAppRegistry();
+
       await logBoth('info', `Deployment action '${action}' completed`);
       return true;
     } catch (error) {
@@ -1178,6 +1241,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   protected override async onDeploymentRemoved(deploymentId: string): Promise<void> {
     await this.routingService.deactivateRoute(deploymentId);
+    // The removed app drops out of the registry feed for remaining consumers.
+    await this.reconcileAppRegistry();
   }
 
   protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {

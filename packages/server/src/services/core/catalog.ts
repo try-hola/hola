@@ -12,6 +12,7 @@ import type {
   CatalogAppVersion,
 } from '@hola/shared';
 import { coerceManifestAuth } from './manifest-auth';
+import { coerceConsumes } from './app-registry';
 
 // Shape of remote catalog JSON (minimal for now)
 type RemoteCatalog = {
@@ -141,6 +142,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           volumes?: Array<{ hostPath?: unknown; containerPath: unknown; readOnly?: unknown }>;
         };
         auth?: unknown;
+        consumes?: unknown;
       };
 
       const manifest: Manifest = JSON.parse(raw) as unknown as Manifest;
@@ -191,7 +193,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // the auth block must be coerced or it silently vanishes downstream.
       const auth = coerceManifestAuth(manifest.auth);
 
-      return { ...merged, composeOverride, auth } satisfies GetCatalogAppVersionDetailResponse;
+      // Cross-app capabilities the app consumes (e.g. `app-registry`); generic,
+      // so new capability names need no server change (ADR 0002).
+      const consumes = coerceConsumes(manifest.consumes);
+
+      return { ...merged, composeOverride, auth, consumes } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });
