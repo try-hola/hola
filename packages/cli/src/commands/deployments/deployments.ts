@@ -1,5 +1,8 @@
 import { HolaSdk } from '@hola/sdk';
+import { API } from '@hola/shared';
 import type { GetDeploymentsResponse } from '@hola/shared';
+
+import { streamSSE } from '../../lib/sse';
 
 export interface DeploymentsListOptions {
   status?: string;
@@ -40,14 +43,21 @@ export async function runDeploymentsList(
 
 export interface DeploymentLogsOptions {
   json?: boolean;
+  follow?: boolean;
 }
 
-/** Print recent logs for a deployment (GET /api/deployments/:id/logs). */
+/** A streamer matching `streamSSE`, injectable for tests. */
+type Streamer = typeof streamSSE;
+
+/** Print recent logs for a deployment, or live-tail them with `--follow`. */
 export async function runDeploymentLogs(
   deploymentId: string,
   opts: DeploymentLogsOptions,
-  injected?: { sdk?: HolaSdk }
+  injected?: { sdk?: HolaSdk; stream?: Streamer }
 ): Promise<void> {
+  if (opts.follow) {
+    return followDeploymentLogs(deploymentId, injected?.stream ?? streamSSE);
+  }
   const sdk = injected?.sdk ?? new HolaSdk();
   try {
     const res = (await sdk.deployments.logs(deploymentId)) as {
@@ -67,6 +77,34 @@ export async function runDeploymentLogs(
     }
   } catch (err) {
     reportListError(err);
+  }
+}
+
+/** Live-tail a deployment's logs over SSE until Ctrl-C. */
+async function followDeploymentLogs(deploymentId: string, stream: Streamer): Promise<void> {
+  const base = process.env.HOLA_API_URL || 'http://localhost:3001';
+  const token = process.env.HOLA_TOKEN;
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.once('SIGINT', onSigint);
+  try {
+    await stream(
+      `${base}${API.deployments.logsStream(deploymentId)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined, signal: controller.signal },
+      (msg) => {
+        try {
+          const evt = JSON.parse(msg.data) as { data?: { message?: string; timestamp?: string } };
+          const d = evt?.data;
+          if (d?.message) console.log(`${d.timestamp ? `${d.timestamp} ` : ''}${d.message}`);
+        } catch {
+          // ignore non-JSON frames (heartbeats)
+        }
+      }
+    );
+  } catch (err) {
+    if (!controller.signal.aborted) reportListError(err);
+  } finally {
+    process.removeListener('SIGINT', onSigint);
   }
 }
 

@@ -81,14 +81,49 @@ prog
     await runDeploymentsList(opts);
   });
 
-// logs — print recent logs for a deployment
+// logs — print recent logs for a deployment (or live-tail with --follow)
 prog
   .command('logs <deploymentId>')
   .describe('Print recent logs for a deployment')
+  .option('--follow, -f', 'Live-tail logs over SSE until Ctrl-C', false)
   .option('--json', 'Print raw JSON output', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentLogs } = await load(import('./commands/deployments/deployments'));
     await runDeploymentLogs(deploymentId, opts);
+  });
+
+// stop / restart — lifecycle actions on a deployment
+prog
+  .command('stop <deploymentId>')
+  .describe('Stop a deployment')
+  .option('--no-stream', 'Do not watch the action job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
+    await runDeploymentAction('stop', deploymentId, opts);
+  });
+
+prog
+  .command('restart <deploymentId>')
+  .describe('Restart a deployment')
+  .option('--no-stream', 'Do not watch the action job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
+    await runDeploymentAction('restart', deploymentId, opts);
+  });
+
+// rollback — roll a deployment back to a previous release
+prog
+  .command('rollback <deploymentId>')
+  .describe('Roll a deployment back to a previous release')
+  .option('--to', 'Target release id (default: the previous release)')
+  .option('--reason', 'Reason recorded with the rollback')
+  .option('--no-stream', 'Do not watch the rollback job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runRollback } = await load(import('./commands/deployments/actions'));
+    await runRollback(deploymentId, opts);
   });
 
 // bundle validate
