@@ -43,6 +43,54 @@ prog
     await runBootstrap(opts);
   });
 
+// catalog — browse the app catalog
+prog
+  .command('catalog [query]')
+  .describe('Browse the app catalog (optionally filter by query)')
+  .option('--category', 'Filter by category')
+  .option('--limit', 'Max apps to list', 100)
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (query, opts) => {
+    const { runCatalog } = await load(import('./commands/catalog/catalog'));
+    await runCatalog(query, opts);
+  });
+
+// install — install a catalog app by id (draft from catalog → finalize → deploy)
+prog
+  .command('install <appId>')
+  .describe('Install a catalog app: draft from catalog → validate → finalize → deploy → watch')
+  .option('--version', 'App version', 'latest')
+  .option('--name', 'Deployment name (default: the app id)')
+  .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
+  .option('--strict', 'Fail on validation warnings', false)
+  .option('--no-stream', 'Do not watch the deployment job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (appId, opts) => {
+    const { runInstall } = await load(import('./commands/install/install'));
+    await runInstall(appId, opts);
+  });
+
+// deployments — list installed deployments
+prog
+  .command('deployments')
+  .describe('List deployments')
+  .option('--status', 'Filter by status (running, stopped, error, …)')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (opts) => {
+    const { runDeploymentsList } = await load(import('./commands/deployments/deployments'));
+    await runDeploymentsList(opts);
+  });
+
+// logs — print recent logs for a deployment
+prog
+  .command('logs <deploymentId>')
+  .describe('Print recent logs for a deployment')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (deploymentId, opts) => {
+    const { runDeploymentLogs } = await load(import('./commands/deployments/deployments'));
+    await runDeploymentLogs(deploymentId, opts);
+  });
+
 // bundle validate
 prog
   .command('bundle validate')
@@ -75,7 +123,7 @@ prog
 // Fallback banner when no args
 if (process.argv.length <= 2) {
   // Minimal banner when no args
-  console.log('Hola CLI ready. Try: hola bundle validate -p ./bundle or hola bundle deploy -p ./bundle');
+  console.log('Hola CLI ready. Try: hola catalog · hola install <app> · hola deployments');
 } else {
   prog.parse(process.argv);
 }

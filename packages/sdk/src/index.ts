@@ -8,9 +8,12 @@ import {
   // Phase 7 Deployment types
   CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
-  PatchDeploymentRequest, PatchDeploymentResponse, 
+  PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
-  RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse
+  RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
+  // Catalog types
+  GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
+  GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse
 } from '@hola/shared';
 
 export type SdkInitOptions = {
@@ -79,6 +82,13 @@ export class HolaSdk {
   health() { return this.get(API.health); }
   me() { return this.get(API.me); }
   summary() { return this.get(API.summary); }
+
+  catalog = {
+    apps: (qs?: GetCatalogAppsRequest) => this.get<GetCatalogAppsResponse>(`${API.catalog.apps}${buildQuery(qs as Record<string, string | number | boolean | undefined>)}`),
+    app: (appId: string) => this.get<GetCatalogAppResponse>(API.catalog.appById(appId)),
+    versions: (appId: string) => this.get<GetCatalogAppVersionsResponse>(API.catalog.versions(appId)),
+    versionDetail: (appId: string, version: string) => this.get<GetCatalogAppVersionDetailResponse>(API.catalog.versionDetail(appId, version)),
+  };
 
   drafts = {
     create: (data: CreateDraftRequest) => this.post<CreateDraftResponse>(API.drafts.create, data),
