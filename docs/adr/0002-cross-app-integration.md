@@ -76,6 +76,25 @@ each app's data-root) and includes those paths in its backup set — again, bund
 The server has an **internal** event (app-set change → rewrite registry feeds). Subscribers
 are the server's own feed-writer, never the apps.
 
+### 3. Privileged data access is a separate, gated primitive (`apps-data`)
+
+Some consumers (a **backup** tool, future monitoring/AV) need to *read other apps' data*,
+not just their metadata. That can't be a bundle bolt-on — only the server can grant
+cross-app access. An app declares `consumes: apps-data`; at materialization the server
+injects a **read-only, identity-mapped** bind mount of the apps root
+(`<HOLA_APPS_BIND_ROOT>:<…>:ro`) into the app's services (like the other injections,
+post-validation — a deliberate grant, not user-authored).
+
+This is the most privileged capability: the consumer can read every app's data and (for
+backup) holds the off-site destination + encryption key. It is **read-only** and **gated**
+by the explicit manifest declaration; reserve it for trusted catalog apps. (Future: an
+operator approval flow for privileged capabilities.)
+
+**Backup (Phase 2)** uses this primitive, not the registry feed: the `backrest` app
+(restic + web UI) gets the read-only apps-root mount and the operator configures one backup
+plan over it. Registry-driven *per-app* plans remain a future option; consistent backups of
+running DB-backed apps are tracked separately (per-app pre/post-backup hooks).
+
 ### Rejected alternatives
 
 - **App-to-app notification bus** — apps subscribe to system events and react. Turns

@@ -55,6 +55,15 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   is empty when `HOLA_CATALOG_URL` is unset/unreachable (no fake-app fallback).
   `MockCatalogService` (test env) is an empty catalog; tests inject their own
   stub when they need catalog data.
+- **Cross-app integration (ADR 0002).** An app declares capabilities in its
+  manifest `consumes` array and the server reconciles a generic primitive at
+  deploy time — never per-app/format-specific logic. `app-registry` → the server
+  writes `registry.json` (installed apps) into the app's data root on app-set
+  change (a bundle bolt-on renders it, e.g. Homepage's dashboard). `apps-data` →
+  the server injects a **read-only** identity mount of the apps root
+  (`materializeCompose` → `compose-mounts.ts`), granting a trusted app (e.g. the
+  `backrest` backup app) read access to all app data. `apps-data` is privileged;
+  reserve it for trusted catalog apps.
 - **Auth/SSO (Authentik).** `ProvisionerService` (`services/core/provisioner.ts`)
   provisions per-app auth at deploy time for three modes declared in the app
   manifest's `auth` block: `native-oidc` (env injection and/or a post-deploy setup

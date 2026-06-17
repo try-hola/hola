@@ -50,6 +50,7 @@ import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
+import { APPS_DATA_CAPABILITY, injectReadonlyMount } from './compose-mounts';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
@@ -836,6 +837,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // wins for fill-if-absent fields; hardening is additive. See compose-defaults.
     content = applyPlatformDefaults(content, composeDefaultsConfig);
 
+    // Grant a trusted app (e.g. a backup tool) read-only access to ALL apps'
+    // data when its manifest declares `consumes: apps-data`. Identity-mapped so
+    // absolute host paths resolve unchanged. Read-only; gated by the capability.
+    const consumes = await this.readActiveConsumes(deployment);
+    if (consumes.includes(APPS_DATA_CAPABILITY)) {
+      content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
+    }
+
     // The runtime compose may hold a client secret in cleartext; restrict it.
     await this.storageService.writeFile(
       `deployments/${deployment.id}/runtime/docker-compose.yml`,
@@ -873,10 +882,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
+  /** Absolute host base that holds every app's data root. */
+  private appsBindRoot(): string {
+    return (process.env.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
+  }
+
   /** Absolute host data root for a deployment (`<HOLA_APPS_BIND_ROOT>/<id>`). */
   private appRootFor(deploymentId: string): string {
-    const base = (process.env.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
-    return `${base}/${deploymentId}`;
+    return `${this.appsBindRoot()}/${deploymentId}`;
   }
 
   /**
