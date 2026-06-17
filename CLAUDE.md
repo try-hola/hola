@@ -46,10 +46,15 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   Per-deploy work (auth provisioning, env injection) belongs there, not at create time.
 - **Services use a Real/Mock pair** registered in `services/simple-factory.ts`
   (test/dev → Mock, production → Real). Follow that convention for new services.
-- **Catalog → deploy.** `RealCatalogService` fetches a remote `catalog.json`
-  (`HOLA_CATALOG_URL`); app compose/manifest live in OCI bundles pulled via `oras`.
-  Per-app metadata (incl. the `auth` block) comes from the bundle `manifest.json`,
-  not `catalog.json`.
+- **Catalog → deploy.** The **only** catalog is the remote one at
+  [`try-hola/apps`](https://github.com/try-hola/apps) (the default
+  `HOLA_CATALOG_URL`). There is **no bundled/built-in catalog** in this repo —
+  `RealCatalogService` fetches the remote `catalog.json`; app compose/manifest
+  live in OCI bundles pulled via `oras`. Per-app metadata (incl. the `auth`
+  block) comes from the bundle `manifest.json`, not `catalog.json`. The catalog
+  is empty when `HOLA_CATALOG_URL` is unset/unreachable (no fake-app fallback).
+  `MockCatalogService` (test env) is an empty catalog; tests inject their own
+  stub when they need catalog data.
 - **Auth/SSO (Authentik).** `ProvisionerService` (`services/core/provisioner.ts`)
   provisions per-app auth at deploy time for three modes declared in the app
   manifest's `auth` block: `native-oidc` (env injection and/or a post-deploy setup

@@ -1,6 +1,5 @@
 // Main exports and configuration for mock data
 export * from './deployments';
-export * from './catalog';
 export * from './jobs';
 export * from './system';
 export * from './notifications';
