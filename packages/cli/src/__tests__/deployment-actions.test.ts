@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { runDeploymentAction, runRollback } from '../commands/deployments/actions';
+import { runDeploymentAction, runRollback, runUninstall } from '../commands/deployments/actions';
 import type { HolaSdk } from '@hola/sdk';
+import { scriptedPrompter } from '../install/prompter';
 
 function makeSdk(overrides: { deployments?: Record<string, unknown>; jobs?: Record<string, unknown> } = {}) {
   const calls: string[] = [];
@@ -13,6 +14,8 @@ function makeSdk(overrides: { deployments?: Record<string, unknown>; jobs?: Reco
         calls.push('rollback');
         return { jobId: 'j1', targetReleaseId: 'r0', previousReleaseId: 'r1' };
       }),
+      byId: vi.fn(async () => { calls.push('byId'); return { id: 'dep1', name: 'Gitea' }; }),
+      delete: vi.fn(async () => { calls.push('delete'); }),
       ...(overrides.deployments ?? {}),
     },
     jobs: { byId: vi.fn(async () => ({ status: 'completed' })), ...(overrides.jobs ?? {}) },
@@ -69,5 +72,44 @@ describe('deployment lifecycle actions', () => {
     const sdk = makeSdk();
     await runRollback('dep1', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
     expect(sdk.deployments.rollback).toHaveBeenCalledWith('dep1', {});
+  });
+
+  it('uninstall deletes after confirmation', async () => {
+    const sdk = makeSdk();
+    const res = await runUninstall('dep1', {}, {
+      sdk: sdk as unknown as HolaSdk,
+      prompter: scriptedPrompter({ confirm: 'true' }),
+    });
+    expect(sdk.deployments.byId).toHaveBeenCalledWith('dep1');
+    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1');
+    expect(res?.uninstalled).toBe('dep1');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('uninstall aborts (no delete) when the confirmation is declined', async () => {
+    const sdk = makeSdk();
+    const res = await runUninstall('dep1', {}, {
+      sdk: sdk as unknown as HolaSdk,
+      prompter: scriptedPrompter({ confirm: 'false' }),
+    });
+    expect(sdk.deployments.delete).not.toHaveBeenCalled();
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('uninstall --yes skips the prompt and deletes', async () => {
+    const sdk = makeSdk();
+    await runUninstall('dep1', { yes: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1');
+  });
+
+  it('uninstall fails fast (exit 1, no delete) on an unknown deployment', async () => {
+    const sdk = makeSdk({
+      deployments: { byId: vi.fn(async () => { throw new Error('HTTP 404 Not Found'); }) },
+    });
+    const res = await runUninstall('nope', { yes: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res).toBeUndefined();
+    expect(sdk.deployments.delete).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 });

@@ -113,6 +113,17 @@ prog
     await runDeploymentAction('restart', deploymentId, opts);
   });
 
+// uninstall — remove a deployment (containers, data, auth) — destructive
+prog
+  .command('uninstall <deploymentId>')
+  .describe('Uninstall a deployment: stop it and remove its containers, data, and auth')
+  .option('--yes, -y', 'Skip the confirmation prompt', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runUninstall } = await load(import('./commands/deployments/actions'));
+    await runUninstall(deploymentId, opts);
+  });
+
 // rollback — roll a deployment back to a previous release
 prog
   .command('rollback <deploymentId>')

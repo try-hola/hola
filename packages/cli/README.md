@@ -44,6 +44,7 @@ Commands are registered in `src/index.tsx` with lazy loaders and implemented und
 - `hola stop <deploymentId>` — stop a deployment. Options: `--no-stream`, `--json`.
 - `hola restart <deploymentId>` — restart a deployment. Options: `--no-stream`, `--json`.
 - `hola rollback <deploymentId>` — roll back to a previous release. Options: `--to <releaseId>` (defaults to the previous release), `--reason <text>`, `--no-stream`, `--json`.
+- `hola uninstall <deploymentId>` — **destructive**: stop the deployment and remove its containers, data, and auth. Prompts for confirmation unless `--yes`/`-y`. Options: `--yes`, `--json`.
 
 Lifecycle commands (`install`/`stop`/`restart`/`rollback`) watch the resulting job and stream its progress unless `--no-stream` is passed, and exit non-zero if the job fails.
 
