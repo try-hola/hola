@@ -207,6 +207,13 @@ services:
       AUTHENTIK_POSTGRESQL__USER: authentik
       AUTHENTIK_POSTGRESQL__NAME: authentik
       AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_PG_PASS}
+      # The WORKER runs the bootstrap that creates the akadmin user and the API
+      # token from AUTHENTIK_BOOTSTRAP_TOKEN. Without these here the token is never
+      # created, and the server's provisioner credential (same value) is rejected
+      # by Authentik (403), failing every SSO deploy. Must match authentik-server.
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:-}
+      AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:-}
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-admin@example.com}
     depends_on:
       authentik-postgres:
         condition: service_healthy
