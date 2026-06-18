@@ -17,9 +17,9 @@ services:
     # `command` REPLACES the base command (compose does not merge lists), so the
     # full set is restated here with DNS-01 + the wildcard request.
     command:
+      - --api=true
       - --api.dashboard=true
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
+      # File provider ONLY (no Docker provider/socket) — see docker-compose.yml.
       - --providers.file.directory=/data/runtime/traefik
       - --providers.file.watch=true
       - --entrypoints.web.address=:80

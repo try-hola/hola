@@ -5,6 +5,9 @@
  * - generating a deterministic Traefik routing rule for a deployment,
  * - validating host conflicts against the active routing map,
  * - emitting deterministic Traefik dynamic (file-provider) configuration,
+ * - emitting the platform's own "core" routes (the Hola UI, the Traefik
+ *   dashboard, and — when SSO is on — the Authentik login UI) into the same
+ *   file provider, so Traefik needs no Docker provider and no Docker socket,
  * - atomically activating/removing routes on promote/rollback/delete, and
  * - reconciling routing from persisted deployments on restart.
  *
@@ -21,6 +24,10 @@ import type { StorageService } from './storage';
 
 const ROUTING_MAP_PATH = 'runtime/traefik/routing-map.json';
 const DYNAMIC_CONFIG_PATH = 'runtime/traefik/dynamic.yml';
+// Platform routes (UI / dashboard / Authentik) live in their OWN file so the
+// per-app `persist()` (which rewrites dynamic.yml) never clobbers them. Traefik's
+// file provider merges every file in the watched directory.
+const CORE_CONFIG_PATH = 'runtime/traefik/core.yml';
 const DEFAULT_BASE_DOMAIN = 'local.hola';
 
 export interface GenerateRuleInput {
@@ -28,6 +35,43 @@ export interface GenerateRuleInput {
   appName: string;
   /** Internal container/service port Traefik forwards to (defaults to 80). */
   port?: number;
+}
+
+/**
+ * A platform-owned ("core") Traefik route. These are the Hola server's own
+ * services — not deployed apps — that used to be discovered via Docker labels.
+ * Emitting them through the file provider lets the stack drop the Docker
+ * provider and the mounted Docker socket from Traefik entirely.
+ */
+export interface CoreRoute {
+  /** Stable router/service key, e.g. `hola-web`. */
+  name: string;
+  /** Host the router matches, e.g. `app.example.com`. */
+  host: string;
+  /** Upstream URL (e.g. `http://hola-web:80`). Omit when `service` is set. */
+  url?: string;
+  /** Reference a built-in Traefik service instead of a load balancer
+   *  (e.g. `api@internal` for the dashboard). Mutually exclusive with `url`. */
+  service?: string;
+}
+
+/**
+ * Build the platform's core routes from the process environment. Hosts that are
+ * unset are skipped (e.g. dev without a real domain); the Authentik route is
+ * only emitted when SSO is enabled.
+ */
+export function coreRoutesFromEnv(env: NodeJS.ProcessEnv = process.env): CoreRoute[] {
+  const routes: CoreRoute[] = [];
+  const uiHost = env.HOLA_DOMAIN?.trim();
+  if (uiHost) routes.push({ name: 'hola-web', host: uiHost, url: 'http://hola-web:80' });
+  const dashboardHost = env.TRAEFIK_DASHBOARD_DOMAIN?.trim();
+  // The dashboard is Traefik's built-in api@internal service (enabled by --api).
+  if (dashboardHost) routes.push({ name: 'traefik-dashboard', host: dashboardHost, service: 'api@internal' });
+  if ((env.HOLA_AUTH_MODE?.trim() || 'none') === 'authentik') {
+    const authHost = env.HOLA_AUTHENTIK_DOMAIN?.trim();
+    if (authHost) routes.push({ name: 'authentik', host: authHost, url: 'http://authentik-server:9000' });
+  }
+  return routes;
 }
 
 export interface RoutingService extends HealthCheckable {
@@ -44,6 +88,9 @@ export interface RoutingService extends HealthCheckable {
   /** Replace the entire routing map (used to rebuild from persisted state). */
   reconcile(rules: TraefikRoutingRule[]): Promise<void>;
   getRoutingMap(): Promise<TraefikRoutingMap>;
+  /** (Re)write the platform's core routes (UI/dashboard/Authentik) into the
+   *  file provider. Idempotent; called once at startup. */
+  emitCoreRoutes(routes: CoreRoute[]): Promise<void>;
 }
 
 /** Build a deterministic routing rule (pure; shared by real and mock services). */
@@ -153,6 +200,30 @@ function renderDynamicConfig(map: TraefikRoutingMap): string {
   return stringifyYAML({ http });
 }
 
+/** Render the file-provider config for the platform's core routes (deterministic). */
+function renderCoreConfig(routes: CoreRoute[]): string {
+  const routers: Record<string, unknown> = {};
+  const services: Record<string, unknown> = {};
+  for (const route of [...routes].sort((a, b) => a.name.localeCompare(b.name))) {
+    routers[route.name] = {
+      rule: `Host(\`${route.host}\`)`,
+      // Built-in services (api@internal) are referenced directly; everything else
+      // gets a load balancer pointing at the upstream URL below.
+      service: route.service ?? route.name,
+      entryPoints: ['websecure'],
+      // Empty TLS block inherits the entrypoint's default cert resolver (and the
+      // DNS-01 wildcard domains), exactly like the server-emitted app routes.
+      tls: {},
+    };
+    if (!route.service) {
+      services[route.name] = { loadBalancer: { servers: [{ url: route.url }] } };
+    }
+  }
+  const http: Record<string, unknown> = { routers };
+  if (Object.keys(services).length > 0) http.services = services;
+  return stringifyYAML({ http });
+}
+
 export class RealRoutingService implements RoutingService {
   private logger = getLogger().child({ service: 'RoutingService' });
   private domain: string;
@@ -244,6 +315,15 @@ export class RealRoutingService implements RoutingService {
     return { ...this.map };
   }
 
+  async emitCoreRoutes(routes: CoreRoute[]): Promise<void> {
+    await this.storageService.ensureDir('runtime/traefik');
+    await this.storageService.writeFile(CORE_CONFIG_PATH, renderCoreConfig(routes));
+    this.logger.info('Emitted core Traefik routes', {
+      count: routes.length,
+      hosts: routes.map(r => r.host),
+    });
+  }
+
   /** Persist the routing map and re-emit the Traefik dynamic config (atomic writes). */
   private async persist(): Promise<void> {
     await this.storageService.ensureDir('runtime/traefik');
@@ -301,5 +381,9 @@ export class MockRoutingService implements RoutingService {
 
   async getRoutingMap(): Promise<TraefikRoutingMap> {
     return { ...this.map };
+  }
+
+  async emitCoreRoutes(): Promise<void> {
+    // No file emission in tests/dev.
   }
 }

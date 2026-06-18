@@ -9,7 +9,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { parse as parseYAML } from 'yaml';
 
-import { RealRoutingService } from '../../services/core/routing';
+import { RealRoutingService, coreRoutesFromEnv } from '../../services/core/routing';
 import { MockStorageService } from '../../services/core/storage';
 
 describe('RoutingService', () => {
@@ -128,5 +128,54 @@ describe('RoutingService', () => {
     const map = await fresh.getRoutingMap();
     expect(Object.keys(map).sort()).toEqual(['grafana.local.hola', 'vaultwarden.local.hola']);
     expect(map['gitea.local.hola']).toBeUndefined();
+  });
+
+  describe('core routes (platform UI/dashboard/Authentik)', () => {
+    test('coreRoutesFromEnv builds UI + dashboard, and Authentik only when SSO is on', () => {
+      const base = {
+        HOLA_DOMAIN: 'app.example.com',
+        TRAEFIK_DASHBOARD_DOMAIN: 'traefik.example.com',
+        HOLA_AUTHENTIK_DOMAIN: 'auth.example.com',
+      };
+
+      // SSO off -> no Authentik route.
+      expect(coreRoutesFromEnv({ ...base, HOLA_AUTH_MODE: 'none' }).map(r => r.name).sort())
+        .toEqual(['hola-web', 'traefik-dashboard']);
+
+      // SSO on -> Authentik route added.
+      const withAuth = coreRoutesFromEnv({ ...base, HOLA_AUTH_MODE: 'authentik' });
+      expect(withAuth.map(r => r.name).sort()).toEqual(['authentik', 'hola-web', 'traefik-dashboard']);
+      expect(withAuth.find(r => r.name === 'authentik')?.url).toBe('http://authentik-server:9000');
+
+      // Unset hosts are skipped entirely.
+      expect(coreRoutesFromEnv({})).toEqual([]);
+    });
+
+    test('emitCoreRoutes writes deterministic file-provider config', async () => {
+      await routing.emitCoreRoutes([
+        { name: 'hola-web', host: 'app.example.com', url: 'http://hola-web:80' },
+        { name: 'traefik-dashboard', host: 'traefik.example.com', service: 'api@internal' },
+      ]);
+
+      const core = parseYAML(await storage.readFileAsString('runtime/traefik/core.yml'));
+
+      // UI router -> its own load-balancer service.
+      expect(core.http.routers['hola-web'].rule).toBe('Host(`app.example.com`)');
+      expect(core.http.routers['hola-web'].entryPoints).toEqual(['websecure']);
+      expect(core.http.routers['hola-web'].tls).toEqual({});
+      expect(core.http.services['hola-web'].loadBalancer.servers[0].url).toBe('http://hola-web:80');
+
+      // Dashboard router references the built-in service and emits NO load balancer.
+      expect(core.http.routers['traefik-dashboard'].service).toBe('api@internal');
+      expect(core.http.services['traefik-dashboard']).toBeUndefined();
+
+      // Deterministic: re-emitting identical input yields identical output.
+      const first = await storage.readFileAsString('runtime/traefik/core.yml');
+      await routing.emitCoreRoutes([
+        { name: 'hola-web', host: 'app.example.com', url: 'http://hola-web:80' },
+        { name: 'traefik-dashboard', host: 'traefik.example.com', service: 'api@internal' },
+      ]);
+      expect(await storage.readFileAsString('runtime/traefik/core.yml')).toBe(first);
+    });
   });
 });

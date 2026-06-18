@@ -10,9 +10,11 @@ reachable at `<app>.<HOLA_BASE_DOMAIN>`.
 - **Single origin** — the `web` container (nginx) serves the SPA and reverse-proxies `/api`
   (including SSE log streams) to `hola-server:3001`. The browser only ever talks to one origin,
   so there is no CORS and only **one Hola domain** (`HOLA_DOMAIN`) to configure.
-- **Traefik** terminates TLS, routes `HOLA_DOMAIN` → web, redirects HTTP→HTTPS at the
-  entrypoint, and reads the server-emitted dynamic config from `/data/runtime/traefik` (file
-  provider) to route each deployed app.
+- **Traefik** terminates TLS, redirects HTTP→HTTPS at the entrypoint, and routes everything
+  from the **file provider** at `/data/runtime/traefik` — both the server-emitted per-app routes
+  (`dynamic.yml`) and the platform's own routes (`core.yml`: the UI at `HOLA_DOMAIN`, the
+  dashboard, and the Authentik login UI). Traefik uses **no Docker provider and mounts no Docker
+  socket**; the server is the single source of routing truth.
 - **Persistence** — all server state (deployments, releases, sqlite, logs, generated Traefik
   config) lives in the `hola-data` named volume mounted at `/data`. It survives restarts and is
   the single thing to back up.
@@ -248,6 +250,13 @@ app container, the app's Compose services must join the external `hola` network 
 name Hola expects. Validating this end-to-end (e.g. deploying Gitea) on a real Docker host is
 covered by the integration test in issue #19.
 
+The platform's own services route the same way: at startup the server emits `core.yml` next to
+`dynamic.yml`, with file-provider routers for the UI (`HOLA_DOMAIN` → `hola-web:80`), the Traefik
+dashboard (`TRAEFIK_DASHBOARD_DOMAIN` → the built-in `api@internal`), and — when
+`HOLA_AUTH_MODE=authentik` — the Authentik login UI (`HOLA_AUTHENTIK_DOMAIN` →
+`authentik-server:9000`). Because everything comes from the file provider, **Traefik mounts no
+Docker socket** (only the `server` container does, to orchestrate deployments).
+
 ## Troubleshooting
 - `docker compose config` — validate your `.env` and merged configuration.
 - `./scripts/logs.sh` / `docker compose logs -f traefik server web` — follow logs.
@@ -258,7 +267,7 @@ covered by the integration test in issue #19.
   `/data/runtime/traefik/dynamic.yml` contains its router.
 
 ## Files
-- `docker-compose.yml` — production stack (build, socket, data volume, Traefik file provider).
+- `docker-compose.yml` — production stack (build, server socket, data volume, Traefik file provider only).
 - `docker-compose.dev.yml` — opt-in local dev overlay (Bun dev servers, HTTP only); `HOLA_DEV=1`.
 - `docker-compose.dns01.yml` — opt-in DNS-01 TLS overlay (wildcard cert for private/homelab
   hosts); auto-included when `ACME_DNS_PROVIDER` is set.

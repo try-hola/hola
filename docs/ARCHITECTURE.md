@@ -39,9 +39,11 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
 - **Single origin.** The `web` container serves the SPA and reverse-proxies
   `/api` (including SSE log streams) to the server, so the browser talks to one
   origin — no CORS, one `HOLA_DOMAIN` to configure.
-- **Traefik** terminates TLS, routes `HOLA_DOMAIN` → web, and reads the
-  server-emitted dynamic config (file provider) to route each deployed app at
-  `<app>.<HOLA_BASE_DOMAIN>`.
+- **Traefik** terminates TLS and routes everything from the server-emitted file
+  provider at `/data/runtime/traefik`: the platform's own routes (`core.yml` — the
+  UI at `HOLA_DOMAIN`, the dashboard, the Authentik UI) and each deployed app at
+  `<app>.<HOLA_BASE_DOMAIN>` (`dynamic.yml`). Traefik runs **no Docker provider and
+  mounts no Docker socket** — only the server holds the socket.
 - **Ingress is Traefik-only.** Apps are reachable through Traefik routing, not
   by publishing host ports. There is no host-port registry; the Compose
   validator rejects `ports:` exposure (use `expose:` for container-internal
@@ -117,7 +119,9 @@ Key locations:
 - `deployments/<id>/` — deployment record, releases, materialized
   `runtime/docker-compose.yml`.
 - `runtime/traefik/{routing-map.json,dynamic.yml}` — canonical routing state and
-  the Traefik file-provider config.
+  the Traefik file-provider config for deployed apps.
+- `runtime/traefik/core.yml` — file-provider routes for the platform's own
+  services (UI, dashboard, Authentik), emitted at server startup.
 - `data/hola.db` — SQLite (jobs, durable records).
 - `config/admin-api-key` — generated admin key (first-boot bootstrap).
 - `logs/` — server logs.
