@@ -64,6 +64,11 @@ services:
     restart: unless-stopped
     environment:
       - NODE_ENV=production
+      # The mock-data subsystem (src/mock-data) defaults ON unless USE_MOCK_DATA is
+      # exactly "false", so it stays active even with NODE_ENV=production — which
+      # simulates deploys (fake logs, random job "errors") instead of running real
+      # `docker compose`. Force it off for the production stack.
+      - USE_MOCK_DATA=false
       - HOLA_DATA_DIR=/data
       - HOLA_USE_AUTH=${HOLA_USE_AUTH:-true}
       # Optional fixed admin key; if unset, the server generates one on first boot
