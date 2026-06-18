@@ -37,6 +37,15 @@ services:
       # DNS-01 instead of HTTP-01 — no inbound :80 reachability required.
       - --certificatesresolvers.le.acme.dnschallenge=true
       - --certificatesresolvers.le.acme.dnschallenge.provider=${ACME_DNS_PROVIDER}
+      # Split-horizon / DNS-redirection safety. lego's default propagation check
+      # queries the zone's AUTHORITATIVE nameservers directly on :53; on homelab
+      # networks that redirect/intercept outbound DNS (UniFi/pfSense "redirect all
+      # DNS to the gateway", NAT hairpin on :53) those queries are REFUSED and
+      # issuance hangs until it times out — the classic "needed a separate ACME
+      # container" failure. Skip the authoritative-NS check and verify against
+      # public recursive resolvers instead (override ACME_DNS_RESOLVERS in .env).
+      - --certificatesresolvers.le.acme.dnschallenge.propagation.disableanschecks=true
+      - --certificatesresolvers.le.acme.dnschallenge.resolvers=${ACME_DNS_RESOLVERS:-1.1.1.1:53,9.9.9.9:53}
     environment:
       # Credentials for the DNS provider's API. lego reads only the vars the chosen
       # ACME_DNS_PROVIDER needs; the others stay empty and are ignored.
