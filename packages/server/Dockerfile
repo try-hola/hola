@@ -3,10 +3,11 @@
 FROM oven/bun:1 AS base
 WORKDIR /app
 
-# ORAS CLI — the server pulls catalog app bundles from GHCR via `oras pull`
-# (RealBundleService.ensurePulled). The oven/bun:1 base is Debian-based but ships
-# without oras/curl, so install a pinned, arch-correct release here. Placed before
-# the source COPY so this layer caches independently of application changes.
+# Runtime CLIs the server shells out to: the Docker CLI + compose plugin (deploy
+# lifecycle) and ORAS (pulls catalog app bundles from GHCR via `oras pull`,
+# RealBundleService.ensurePulled). The oven/bun:1 base is Debian-based but ships
+# none of these, so install them here — before the source COPY so this layer
+# caches independently of application changes.
 #
 # Signing (cosign) is intentionally NOT installed: the default signaturePolicy is
 # 'optional', under which a missing cosign only warns (verifySignature degrades
@@ -18,9 +19,21 @@ WORKDIR /app
 ARG ORAS_VERSION=1.2.3
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends curl ca-certificates; \
-    rm -rf /var/lib/apt/lists/*; \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg; \
     arch="$(dpkg --print-architecture)"; \
+    # --- Docker CLI + compose plugin (from Docker's official apt repo) ---
+    # The deploy lifecycle shells out to `docker compose up` / `docker version`
+    # (services/core/docker.ts) against the host engine via the mounted
+    # /var/run/docker.sock. Without these, every app install fails preflight with
+    # "docker: not found".
+    install -m 0755 -d /etc/apt/keyrings; \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc; \
+    chmod a+r /etc/apt/keyrings/docker.asc; \
+    codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"; \
+    echo "deb [arch=${arch} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${codename} stable" > /etc/apt/sources.list.d/docker.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin; \
+    # --- ORAS CLI (pulls catalog app bundles from GHCR) ---
     case "$arch" in \
       amd64) oras_arch="amd64" ;; \
       arm64) oras_arch="arm64" ;; \
@@ -30,7 +43,8 @@ RUN set -eux; \
       "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${oras_arch}.tar.gz"; \
     tar -xzf /tmp/oras.tar.gz -C /usr/local/bin oras; \
     rm -f /tmp/oras.tar.gz; \
-    oras version
+    rm -rf /var/lib/apt/lists/*; \
+    oras version; docker --version; docker compose version
 
 # Install workspace dependencies against the committed lockfile (reproducible).
 COPY . .
