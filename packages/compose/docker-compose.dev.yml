@@ -10,6 +10,9 @@
 
 services:
   traefik:
+    # Development keeps the Docker provider + labels for simple HTTP-only routing
+    # (no TLS, no server-emitted core.yml). Production drops both; this overlay
+    # restates the full command AND re-mounts the socket the base no longer mounts.
     command:
       - --api.dashboard=true
       - --providers.docker=true
@@ -17,10 +20,16 @@ services:
       - --providers.file.directory=/data/runtime/traefik
       - --providers.file.watch=true
       - --entrypoints.web.address=:80
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - hola-data:/data:ro
     labels:
       # Dashboard over plain HTTP in development.
+      traefik.enable: "true"
       traefik.http.routers.traefik.entrypoints: web
       traefik.http.routers.traefik.tls: "false"
+      traefik.http.routers.traefik.rule: Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)
+      traefik.http.routers.traefik.service: api@internal
 
   server:
     build: !reset null

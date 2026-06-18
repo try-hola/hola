@@ -54,6 +54,7 @@ import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext, type RequestContext } from './middleware/request';
 import { getServices, resetServices } from './services/simple-factory';
+import { coreRoutesFromEnv } from './services/core/routing';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
@@ -106,7 +107,11 @@ async function initializeInfrastructure() {
   
   try {
     // Initialize services using simplified factory
-    getServices();
+    const services = getServices();
+    // Emit the platform's own Traefik routes (UI, dashboard, Authentik) into the
+    // file provider so Traefik needs neither the Docker provider nor the socket.
+    // Mock routing (test/dev) no-ops; production writes /data/runtime/traefik/core.yml.
+    await services.routing.emitCoreRoutes(coreRoutesFromEnv());
   } catch (error) {
     console.error('');
     console.error('❌ Server startup failed:');
