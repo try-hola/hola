@@ -15,6 +15,20 @@ draft → validate → finalize → deploy → manage — through real Docker Co
 orchestration and Traefik routing, with state that survives restarts. Some
 features remain on the roadmap (see [What Hola Does](#what-hola-does)).
 
+## Install the CLI
+
+Install the `hola` command with one line (downloads the prebuilt binary for your
+platform from the latest release; builds from source with Bun if none is published):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
+```
+
+Then set up a server with `hola bootstrap --host user@your-vm`, or point the CLI at an
+existing one (`HOLA_API_URL` + `HOLA_TOKEN`). See
+[Install (production)](#install-production-single-host) and
+[CLI on another machine](#cli-on-another-machine) for details.
+
 Available documentation:
 - Architecture overview: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
 - Operations guide (install, deploy, recover): [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
