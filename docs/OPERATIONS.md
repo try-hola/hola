@@ -17,10 +17,11 @@ Prerequisites: a host with **Docker**, the **Docker Compose v2** plugin, and
 curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/install.sh | sh
 ```
 
-This clones Hola (to `$HOLA_HOME`, default `$HOME/hola`), prompts for the domain
-settings (or reads `HOLA_DOMAIN` / `HOLA_BASE_DOMAIN` / `LETSENCRYPT_EMAIL` from
-the environment), builds and starts the production stack, and prints the admin
-API key. Re-running upgrades an existing install.
+This clones Hola (to `$HOLA_HOME`, default `/opt/hola` — created with `sudo` +
+`chown` to your user when needed), prompts for the domain settings (or reads
+`HOLA_DOMAIN` / `HOLA_BASE_DOMAIN` / `LETSENCRYPT_EMAIL` from the environment),
+builds and starts the production stack, and prints the admin API key. Re-running
+upgrades an existing install.
 
 ### Manual install
 

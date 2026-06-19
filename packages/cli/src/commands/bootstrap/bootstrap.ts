@@ -32,6 +32,7 @@ export interface BootstrapResult {
 class BootstrapAbort extends Error {}
 
 const DEFAULT_REPO = 'https://github.com/try-hola/hola.git';
+const DEFAULT_DIR = '/opt/hola';
 
 /** Strip a leading `cli-v` from a release tag to get the bare version (cli-v0.3.0 → 0.3.0). */
 function versionFromRef(ref: string): string {
@@ -64,7 +65,7 @@ export async function runBootstrap(
   const version = versionFromRef(ref);
   // The bundle extracts compose's contents directly into `dir` — no git checkout,
   // so there's no packages/compose nesting on the host.
-  const dir = opts.dir ?? '~/hola';
+  const dir = opts.dir ?? DEFAULT_DIR;
   const composeDir = dir;
   const envPath = `${composeDir}/.env`;
   const tarballUrl = opts.tarballUrl ?? `${releaseBase(repo)}/releases/download/${ref}/hola-compose-${version}.tar.gz`;
@@ -123,10 +124,27 @@ export async function runBootstrap(
 
     // 3) Download + extract the version-pinned compose bundle (no git, no source
     //    build on the host — the images are prebuilt and pulled at `up` time).
+    //    The default dir (/opt/hola) lives under a root-owned parent, so create
+    //    it with sudo + chown to this user when the parent isn't writable; an
+    //    unprivileged dir (e.g. ~/hola) skips sudo entirely. Exit 13 = needs a
+    //    one-time manual pre-create (no write access and no passwordless sudo).
     const fetchStack =
-      `set -e; mkdir -p ${composeDir}; ` +
-      `curl -fsSL ${tarballUrl} | tar xz -C ${composeDir}`;
+      `set -e; ` +
+      `if [ ! -d ${dir} ]; then ` +
+      `  parent=$(dirname ${dir}); ` +
+      `  if [ -w "$parent" ]; then mkdir -p ${dir}; ` +
+      `  elif sudo -n true 2>/dev/null; then sudo mkdir -p ${dir} && sudo chown "$(id -u):$(id -g)" ${dir}; ` +
+      `  else exit 13; fi; ` +
+      `fi; ` +
+      `curl -fsSL ${tarballUrl} | tar xz -C ${dir}`;
     const fetchRes = await ssh(`Download Hola ${version} stack into ${composeDir}`, fetchStack, { stream: true });
+    if (!opts.dryRun && fetchRes.code === 13) {
+      throw new BootstrapAbort(
+        `Cannot create ${dir}: no write access to its parent and no passwordless sudo.\n` +
+          `Pre-create it once, then re-run bootstrap:\n` +
+          `  ssh ${host} 'sudo mkdir -p ${dir} && sudo chown $(id -u):$(id -g) ${dir}'`,
+      );
+    }
     if (!opts.dryRun && fetchRes.code !== 0) {
       throw new BootstrapAbort(
         `Downloading the compose bundle failed (exit ${fetchRes.code}). ` +

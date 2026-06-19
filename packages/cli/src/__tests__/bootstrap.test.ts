@@ -48,7 +48,7 @@ describe('hola bootstrap', () => {
 
     expect(res?.steps).toEqual([
       'Preflight host',
-      'Download Hola 0.2.0 stack into ~/hola',
+      'Download Hola 0.2.0 stack into /opt/hola',
       'Write .env (over stdin)',
       'Run install.sh',
       'Verify https://app.hola.example.com',
@@ -75,6 +75,11 @@ describe('hola bootstrap', () => {
     ).toBe(true);
     expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/.env'))).toBe(true);
     expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola && ./scripts/install.sh'))).toBe(true);
+    // /opt is root-owned: the fetch step creates the dir with sudo + chown when
+    // the parent isn't writable (and plain mkdir when it is).
+    const fetch = runner.calls.find((c) => c.cmd.includes('tar xz -C /opt/hola'))!;
+    expect(fetch.cmd).toContain('sudo mkdir -p /opt/hola');
+    expect(fetch.cmd).toContain('chown');
   });
 
   it('honors --tarball-url for the bundle download', async () => {

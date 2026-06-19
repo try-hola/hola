@@ -12,7 +12,7 @@
 # defaults when run non-interactively).
 #
 # Environment overrides:
-#   HOLA_HOME           install directory                 (default: $HOME/hola)
+#   HOLA_HOME           install directory                 (default: /opt/hola)
 #   HOLA_DOMAIN         UI/API domain                     (e.g. app.example.com)
 #   HOLA_BASE_DOMAIN    base domain for deployed apps     (e.g. example.com)
 #   LETSENCRYPT_EMAIL   email for Let's Encrypt           (e.g. you@example.com)
@@ -23,7 +23,7 @@ set -eu
 
 REPO="${HOLA_REPO:-https://github.com/try-hola/hola.git}"
 BRANCH="${HOLA_BRANCH:-main}"
-HOLA_HOME="${HOLA_HOME:-$HOME/hola}"
+HOLA_HOME="${HOLA_HOME:-/opt/hola}"
 
 info() { printf '\033[1;36m[hola]\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m[hola]\033[0m %s\n' "$1" >&2; }
@@ -33,6 +33,22 @@ die()  { printf '\033[1;31m[hola] error:\033[0m %s\n' "$1" >&2; exit 1; }
 command -v git >/dev/null 2>&1 || die "git not found. Install git and re-run."
 command -v docker >/dev/null 2>&1 || die "Docker not found. See https://docs.docker.com/engine/install/"
 docker compose version >/dev/null 2>&1 || die "Docker Compose v2 plugin not found. Update Docker to include 'docker compose'."
+
+# --- ensure the install dir exists and is owned by us ----------------------
+# The default (/opt/hola) lives under a root-owned parent, so create it with
+# sudo + chown once; everything after runs unprivileged. An unprivileged dir
+# (e.g. HOLA_HOME=$HOME/hola) skips sudo entirely.
+if [ ! -d "$HOLA_HOME" ]; then
+  parent=$(dirname "$HOLA_HOME")
+  if [ -w "$parent" ]; then
+    mkdir -p "$HOLA_HOME"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    info "Creating $HOLA_HOME (sudo)"
+    sudo mkdir -p "$HOLA_HOME" && sudo chown "$(id -u):$(id -g)" "$HOLA_HOME"
+  else
+    die "cannot create $HOLA_HOME (no write access to $parent, no passwordless sudo). Pre-create it: sudo mkdir -p $HOLA_HOME && sudo chown \$USER $HOLA_HOME"
+  fi
+fi
 
 # --- fetch or update the repo ----------------------------------------------
 if [ -d "$HOLA_HOME/.git" ]; then

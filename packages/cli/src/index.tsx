@@ -35,7 +35,7 @@ prog
   .option('--repo', 'Hola repo to download release assets from', 'https://github.com/try-hola/hola.git')
   .option('--ref', `Release tag to install (default cli-v${CLI_VERSION})`)
   .option('--tarball-url', 'Override the compose-bundle download URL (advanced)')
-  .option('--dir', 'Install directory on the host', '~/hola')
+  .option('--dir', 'Install directory on the host', '/opt/hola')
   .option('--env-file', 'Use an existing .env (skip the wizard)')
   .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
   .option('--dry-run', 'Print the plan without connecting', false)
