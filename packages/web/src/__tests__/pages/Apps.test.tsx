@@ -50,7 +50,23 @@ describe('Apps landing', () => {
     expect(link).toHaveAttribute('target', '_blank');
     expect(screen.getByText('Gitea')).toBeInTheDocument();
     expect(screen.getByText('🍵')).toBeInTheDocument(); // catalog icon wins over fallback
-    expect(screen.getByText('running')).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument(); // status pill label
+  });
+
+  it('renders every installed app, not just running ones', async () => {
+    mockApi(
+      [
+        { id: 'a-1', name: 'RunningApp', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
+        { id: 'b-1', name: 'StoppedApp', app: 'b', icon: '📦', status: 'stopped', ports: [], lastUpdated: 'now' },
+      ],
+      [],
+    );
+
+    renderApps();
+
+    // Running app opens externally; stopped app links to its detail page.
+    expect(await screen.findByTitle('Open RunningApp')).toHaveAttribute('href', 'https://a.local.hola');
+    expect(screen.getByTitle('StoppedApp')).toHaveAttribute('href', '/deployments/b-1');
   });
 
   it('falls back to the deployment detail link when no URL is set', async () => {

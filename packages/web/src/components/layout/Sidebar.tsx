@@ -8,13 +8,8 @@ import {
   Shield,
   Bell,
   Settings,
-  Activity,
-  ChevronLeft,
-  ChevronRight,
-  Code,
-  Bug,
-  Zap,
-  AlertTriangle
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 
 const navigationItems = [
@@ -27,14 +22,6 @@ const navigationItems = [
   { name: 'Settings', path: '/settings', icon: Settings },
 ];
 
-const developmentItems = [
-  { name: 'Live Features Demo', path: '/live-features-demo', icon: Zap },
-  { name: 'Performance Demo', path: '/performance-optimizations-demo', icon: Activity },
-  { name: 'Error Handling Demo', path: '/error-handling-demo', icon: AlertTriangle },
-  { name: 'Development Tools', path: '/development-dashboard', icon: Code },
-  { name: 'Advanced Debugging', path: '/advanced-debugging', icon: Bug },
-];
-
 interface SidebarProps {
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -44,99 +31,75 @@ export const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, onToggleCollapse 
   const location = useLocation();
 
   const isActive = (path: string) => {
-    if (path === '/dashboard') {
-      return location.pathname === '/' || location.pathname === '/dashboard';
+    if (path === '/apps') {
+      return location.pathname === '/' || location.pathname.startsWith('/apps');
     }
     return location.pathname.startsWith(path);
   };
 
   return (
-    <div className={`${isCollapsed ? 'w-16' : 'w-56'} bg-surface-1 border-r border-border flex flex-col transition-all duration-300 relative`}>
-      {/* Collapse Toggle - positioned at top right */}
-      <button
-        onClick={onToggleCollapse}
-        className="absolute top-4 -right-3 z-10 w-6 h-6 bg-surface-1 border border-border rounded-full flex items-center justify-center text-text-muted hover:text-text-strong hover:bg-surface-2 transition-colors shadow-sm"
-        title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-      >
-        {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronLeft className="w-3 h-3" />}
-      </button>
+    <aside
+      className={`${
+        isCollapsed ? 'w-[64px]' : 'w-[228px]'
+      } flex-none bg-surface-1 border-r border-border flex flex-col transition-[width] duration-200 overflow-hidden`}
+    >
+      {/* Brand */}
+      <div className="h-[60px] flex-none flex items-center gap-3 px-[18px] border-b border-border-soft">
+        <div className="w-[30px] h-[30px] flex-none rounded-lg bg-gradient-to-br from-primary to-violet flex items-center justify-center text-white font-bold text-[17px] shadow-[0_2px_10px_rgba(91,140,255,0.4)]">
+          h
+        </div>
+        {!isCollapsed && <div className="font-semibold text-[17px] tracking-[-0.01em]">Hola</div>}
+      </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-4 pt-6 space-y-2">
+      <nav className="flex-1 px-3 py-3 flex flex-col gap-[3px] overflow-y-auto">
         {navigationItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.path);
-          
           return (
             <Link
               key={item.name}
               to={item.path}
-              className={`flex items-center ${isCollapsed ? 'justify-center' : 'justify-between'} px-3 py-2 rounded-lg text-sm font-medium transition-colors relative ${
+              title={item.name}
+              className={`relative flex items-center gap-3 px-[11px] py-[9px] rounded-[9px] text-[13.5px] font-medium whitespace-nowrap transition-colors ${
                 active
-                  ? 'bg-primary/10 text-primary border border-primary/20'
-                  : 'text-text-muted hover:text-text-strong hover:bg-surface-2'
+                  ? 'bg-primary-weak text-primary'
+                  : 'text-text-muted hover:bg-surface-2 hover:text-text-strong'
               }`}
-              title={isCollapsed ? item.name : undefined}
             >
-              <div className={`flex items-center ${isCollapsed ? '' : 'space-x-3'}`}>
-                <Icon className="w-4 h-4" />
-                {!isCollapsed && <span>{item.name}</span>}
-              </div>
+              <span className={`flex flex-none ${active ? 'text-primary' : ''}`}>
+                <Icon className="w-[18px] h-[18px]" />
+              </span>
+              {!isCollapsed && <span className="flex-1">{item.name}</span>}
               {item.badge && !isCollapsed && (
-                <span className="bg-danger text-white text-xs px-2 py-0.5 rounded-full min-w-[1.25rem] h-5 flex items-center justify-center">
+                <span className="flex-none min-w-[18px] h-[18px] px-[5px] rounded-full bg-primary text-white text-[11px] font-semibold font-mono flex items-center justify-center">
                   {item.badge}
                 </span>
               )}
               {item.badge && isCollapsed && (
-                <span className="absolute -top-1 -right-1 bg-danger text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">
-                  {item.badge}
-                </span>
+                <span className="absolute top-0 right-0 w-2 h-2 rounded-full bg-primary" />
               )}
-            </Link>
-          );
-        })}
-
-        {/* Development Tools Section */}
-        {!isCollapsed && (
-          <div className="pt-4">
-            <div className="px-3 py-2 text-xs font-semibold text-text-muted uppercase tracking-wider">
-              Development Tools
-            </div>
-          </div>
-        )}
-        
-        {developmentItems.map((item) => {
-          const Icon = item.icon;
-          const active = isActive(item.path);
-          
-          return (
-            <Link
-              key={item.name}
-              to={item.path}
-              className={`flex items-center ${isCollapsed ? 'justify-center' : 'space-x-3'} px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                active
-                  ? 'bg-primary/10 text-primary border border-primary/20'
-                  : 'text-text-muted hover:text-text-strong hover:bg-surface-2'
-              }`}
-              title={isCollapsed ? item.name : undefined}
-            >
-              <Icon className="w-4 h-4" />
-              {!isCollapsed && <span>{item.name}</span>}
             </Link>
           );
         })}
       </nav>
 
-      {/* System Status */}
-      <div className={`p-4 border-t border-border ${isCollapsed ? 'text-center' : ''}`}>
-        <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'space-x-2'} text-sm text-text-muted`}>
-          <Activity className="w-4 h-4 text-success" />
-          {!isCollapsed && <span>System Healthy</span>}
-        </div>
-        {!isCollapsed && <div className="text-xs text-text-muted mt-1">
-          5 deployments running
-        </div>}
+      {/* Collapse */}
+      <div className="flex-none p-3 border-t border-border-soft">
+        <button
+          onClick={onToggleCollapse}
+          className="w-full flex items-center gap-3 px-[11px] py-[9px] rounded-[9px] cursor-pointer text-text-muted text-[13.5px] hover:bg-surface-2 hover:text-text-strong transition-colors"
+        >
+          <span className="flex flex-none">
+            {isCollapsed ? (
+              <PanelLeftOpen className="w-[18px] h-[18px]" />
+            ) : (
+              <PanelLeftClose className="w-[18px] h-[18px]" />
+            )}
+          </span>
+          {!isCollapsed && <span>Collapse</span>}
+        </button>
       </div>
-    </div>
+    </aside>
   );
 };

@@ -1,25 +1,21 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Package } from 'lucide-react';
+import { ExternalLink, Package, Plus } from 'lucide-react';
 
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { useCatalogAppsApi } from '../hooks/useCatalogApi';
-import type { DeploymentStatus, GetDeploymentsRequest } from '@hola/shared';
+import { AppIcon } from '../components/ui/AppIcon';
+import { StatusBadge } from '../components/ui/StatusBadge';
+import type { GetDeploymentsRequest } from '@hola/shared';
 
 /**
- * Apps — the default landing: a read-only launcher for installed apps.
+ * Apps — the default landing: a launcher for installed apps.
  *
  * Everything here is data the server already owns (deployments + the catalog for
- * icons), joined client-side — no separate dashboard app to keep in sync.
+ * icons), joined client-side — no separate dashboard app to keep in sync. Every
+ * installed app is shown: running apps with a URL open in a new tab; the rest
+ * link to their deployment detail so a tile is never a dead end.
  */
-
-const STATUS_STYLES: Record<DeploymentStatus, string> = {
-  running: 'bg-success/10 text-success border-success/20',
-  installing: 'bg-info/10 text-info border-info/20',
-  updating: 'bg-info/10 text-info border-info/20',
-  stopped: 'bg-surface-2 text-text-muted border-border',
-  error: 'bg-danger/10 text-danger border-danger/20',
-};
 
 const DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 100 };
 const CATALOG_PARAMS = { page: 1, limit: 100 };
@@ -35,75 +31,101 @@ export const Apps: React.FC = () => {
     return map;
   }, [catalogData]);
 
-  const apps = deploymentsData?.items ?? [];
+  const apps = React.useMemo(() => deploymentsData?.items ?? [], [deploymentsData]);
+  const runningCount = React.useMemo(
+    () => apps.filter((a) => a.status === 'running').length,
+    [apps],
+  );
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-text-strong">Apps</h1>
-        <p className="text-text-muted mt-1">Your installed apps. Click a tile to open it.</p>
+    <div className="animate-fadein">
+      <div className="flex items-end gap-3.5 mb-[22px]">
+        <div>
+          <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Your apps</h1>
+          <p className="mt-1.5 text-text-muted text-sm">
+            {apps.length === 0
+              ? 'Nothing installed yet.'
+              : `${runningCount} running · ${apps.length} installed`}
+          </p>
+        </div>
+        <div className="flex-1" />
+        <Link
+          to="/catalog"
+          className="flex items-center gap-2 h-10 px-4 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 transition"
+        >
+          <Plus className="w-[18px] h-[18px]" />
+          <span>Install app</span>
+        </Link>
       </div>
 
-      {loading && apps.length === 0 && (
-        <div className="text-text-muted">Loading apps…</div>
-      )}
+      {loading && apps.length === 0 && <div className="text-text-muted text-sm">Loading apps…</div>}
 
       {error && (
-        <div className="bg-danger/10 border border-danger/20 text-danger rounded-lg p-4">
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm">
           Could not load apps: {error}
         </div>
       )}
 
-      {!loading && !error && apps.length === 0 && (
-        <div className="bg-surface-1 border border-border rounded-lg p-8 text-center">
-          <Package className="w-8 h-8 text-text-muted mx-auto mb-3" />
-          <p className="text-text-strong font-medium">No apps installed yet</p>
-          <p className="text-text-muted mt-1">
-            Browse the <Link to="/catalog" className="text-primary hover:underline">catalog</Link> to install your first app.
-          </p>
-        </div>
-      )}
-
-      {apps.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      {!loading && !error && apps.length > 0 && (
+        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(212px,1fr))]">
           {apps.map((app) => {
-            const icon = iconByApp.get(app.app) || app.icon || '📦';
+            const icon = iconByApp.get(app.app) || app.icon || '';
+            const openable = app.status === 'running' && !!app.url;
+
             const tile = (
-              <div className="bg-surface-1 rounded-lg border border-border p-4 h-full hover:border-primary/50 transition-colors flex items-center space-x-3">
-                <div className="text-3xl leading-none">{icon}</div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center justify-between gap-2">
-                    <h3 className="font-medium text-text-strong truncate">{app.name}</h3>
-                    {app.url && <ExternalLink className="w-4 h-4 text-text-muted shrink-0" />}
-                  </div>
-                  <div className="mt-1">
-                    <span className={`text-xs px-2 py-0.5 rounded border capitalize ${STATUS_STYLES[app.status]}`}>
-                      {app.status}
-                    </span>
-                  </div>
+              <div className="group relative h-full bg-surface-1 border border-border rounded-[14px] p-[22px] transition hover:-translate-y-[3px] hover:border-primary hover:shadow-elevation-4">
+                <div className="flex items-start justify-between">
+                  <AppIcon name={app.name} emoji={icon} size={54} />
+                  {openable && (
+                    <ExternalLink className="w-4 h-4 text-text-faint group-hover:text-primary transition-colors" />
+                  )}
                 </div>
+                <div className="mt-4 font-semibold text-base truncate">{app.name}</div>
+                <div className="mt-2">
+                  <StatusBadge status={app.status} />
+                </div>
+                {app.url && (
+                  <div className="mt-2 font-mono text-[11.5px] text-text-faint truncate">{app.url}</div>
+                )}
               </div>
             );
 
-            // Link out to the running app when we have a URL; otherwise the tile
-            // links to its deployment detail so it's never a dead end.
-            return app.url ? (
+            return openable ? (
               <a
                 key={app.id}
-                href={app.url}
+                href={app.url!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="block"
                 title={`Open ${app.name}`}
+                className="block"
               >
                 {tile}
               </a>
             ) : (
-              <Link key={app.id} to={`/deployments/${app.id}`} className="block" title={app.name}>
+              <Link key={app.id} to={`/deployments/${app.id}`} title={app.name} className="block">
                 {tile}
               </Link>
             );
           })}
+        </div>
+      )}
+
+      {!loading && !error && apps.length === 0 && (
+        <div className="flex flex-col items-center justify-center text-center px-5 py-20 bg-surface-1 border border-dashed border-border rounded-[14px]">
+          <div className="w-16 h-16 rounded-2xl bg-primary-weak text-primary flex items-center justify-center mb-[18px]">
+            <Package className="w-8 h-8" />
+          </div>
+          <h2 className="m-0 text-[19px] font-semibold">No apps installed yet</h2>
+          <p className="mt-2 mb-5 text-text-muted text-sm max-w-[380px]">
+            Browse the catalog to install your first app. Pick something, configure it, and Hola
+            brings it up at its own subdomain.
+          </p>
+          <Link
+            to="/catalog"
+            className="flex items-center gap-2 h-[42px] px-[18px] bg-primary text-white rounded-[10px] text-sm font-semibold"
+          >
+            <Plus className="w-[18px] h-[18px]" /> Browse the catalog
+          </Link>
         </div>
       )}
     </div>

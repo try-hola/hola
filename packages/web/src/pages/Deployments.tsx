@@ -1,24 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
 import {
-  Server,
-  Play,
-  Square,
-  RotateCcw,
+  Plus,
+  Search,
+  RefreshCw,
   Trash2,
   ExternalLink,
-  Search,
-  MoreVertical,
-  Activity,
-  Settings,
-  Download,
-  Copy,
-  Archive,
   ChevronLeft,
-  ChevronRight,
-  AlertTriangle
+  ChevronRight
 } from 'lucide-react';
 import type {
   DeploymentStatus,
@@ -28,52 +18,31 @@ import type {
 } from '@hola/shared';
 import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
+import { AppIcon } from '../components/ui/AppIcon';
+import { StatusBadge } from '../components/ui/StatusBadge';
 
+const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'running', label: 'Running' },
+  { value: 'installing', label: 'Installing' },
+  { value: 'stopped', label: 'Stopped' },
+  { value: 'updating', label: 'Updating' },
+  { value: 'error', label: 'Error' }
+];
 
-
-const getStatusColor = (status: DeploymentStatus) => {
-  switch (status) {
-    case 'running':
-      return 'text-success bg-success/10 border-success/20';
-    case 'stopped':
-      return 'text-text-muted bg-surface-2 border-border';
-    case 'updating':
-    case 'installing':
-      return 'text-warning bg-warning/10 border-warning/20';
-    case 'error':
-      return 'text-danger bg-danger/10 border-danger/20';
-    default:
-      return 'text-text-muted bg-surface-2 border-border';
-  }
-};
-
-const getStatusIcon = (status: DeploymentStatus) => {
-  switch (status) {
-    case 'running':
-      return <div className="w-2 h-2 bg-success rounded-full animate-pulse" />;
-    case 'stopped':
-      return <div className="w-2 h-2 bg-text-muted rounded-full" />;
-    case 'updating':
-    case 'installing':
-      return <div className="w-2 h-2 bg-warning rounded-full animate-pulse" />;
-    case 'error':
-      return <div className="w-2 h-2 bg-danger rounded-full animate-pulse" />;
-    default:
-      return <div className="w-2 h-2 bg-text-muted rounded-full" />;
-  }
-};
+const GRID_COLS =
+  'grid grid-cols-[2.4fr_1.1fr_0.9fr_1.9fr_0.9fr_130px] gap-[14px] px-[18px]';
 
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<DeploymentStatus | 'all'>('all');
-  const [showLogsFor, setShowLogsFor] = useState<string | null>(null);
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
-  
+
   // Pagination state
   const [page, setPage] = useState(1);
   const [limit] = useState(12); // Number of deployments per page
-  
+
   // Load deployments from API with search and filters using working StrictMode-compatible hook
   const params: GetDeploymentsRequest = React.useMemo(() => ({
     page,
@@ -81,7 +50,7 @@ export const Deployments: React.FC = () => {
     q: searchTerm || undefined,
     status: statusFilter === 'all' ? undefined : statusFilter
   }), [page, limit, searchTerm, statusFilter]);
-  
+
   const {
     data: deploymentsResponse,
     loading,
@@ -96,12 +65,12 @@ export const Deployments: React.FC = () => {
     try {
       const request: PostDeploymentActionRequest = { action };
       const result = await api.deployments.action(deploymentId, request) as PostDeploymentActionResponse;
-      
+
       // If a job was created, track it
       if (result.jobId) {
         console.log(`Job ${result.jobId} started for ${action} on ${deploymentId}`);
       }
-      
+
       // Refresh deployments list
       await refetch();
     } catch (error) {
@@ -116,57 +85,69 @@ export const Deployments: React.FC = () => {
   const hasPrevPage = page > 1;
 
   return (
-    <div className="space-y-6">
+    <div className="animate-fadein">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold">Deployments</h1>
-          <p className="text-text-muted mt-1">Manage your deployed applications</p>
+          <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Deployments</h1>
+          <p className="mt-1.5 text-text-muted text-sm">
+            {totalDeployments} deployments across your server.
+          </p>
         </div>
+        <div className="flex-1" />
         <Link
           to="/catalog"
-          className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          className="flex items-center gap-2 h-10 px-4 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 transition"
         >
-          Deploy New App
+          <Plus className="w-[18px] h-[18px]" />
+          <span>Install app</span>
         </Link>
       </div>
 
-      {/* Search and Filters */}
-      <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-        <div className="relative flex-grow">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
+      {/* Toolbar: search + segmented status filter */}
+      <div className="flex items-center gap-3 mb-4 flex-wrap">
+        <div className="relative flex items-center">
+          <span className="absolute left-[11px] flex text-text-faint">
+            <Search className="w-4 h-4" />
+          </span>
           <input
             type="text"
-            placeholder="Search deployments..."
+            placeholder="Search deployments…"
             value={searchTerm}
             onChange={(e) => {
               setSearchTerm(e.target.value);
               setPage(1); // Reset to first page when searching
             }}
-            className="w-full pl-10 pr-4 py-2 bg-surface-1 border border-border rounded-lg text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+            className="h-[38px] w-60 bg-surface-1 border border-border rounded-[9px] text-text-strong pl-[34px] pr-3 text-[13.5px] outline-none focus:border-primary"
           />
         </div>
 
-        <select
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value as DeploymentStatus | 'all');
-            setPage(1); // Reset to first page when filtering
-          }}
-          className="px-3 py-2 bg-surface-1 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-        >
-          <option value="all">All Status</option>
-          <option value="running">Running</option>
-          <option value="stopped">Stopped</option>
-          <option value="installing">Installing</option>
-          <option value="updating">Updating</option>
-          <option value="error">Error</option>
-        </select>
+        <div className="flex gap-[3px] p-[3px] bg-surface-1 border border-border rounded-[9px]">
+          {STATUS_FILTERS.map((f) => {
+            const active = statusFilter === f.value;
+            return (
+              <div
+                key={f.value}
+                onClick={() => {
+                  setStatusFilter(f.value);
+                  setPage(1); // Reset to first page when filtering
+                }}
+                className={`h-[30px] px-[13px] flex items-center rounded-[7px] text-[13px] font-medium cursor-pointer ${
+                  active
+                    ? 'bg-primary-weak text-primary'
+                    : 'text-text-muted hover:text-text-strong'
+                }`}
+              >
+                {f.label}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Job Tracker */}
-      <div className="mb-6">
-        <JobTracker 
+      <div className="mb-4">
+        <JobTracker
           maxJobs={5}
           autoRefresh={true}
           onJobClick={(job) => {
@@ -179,15 +160,12 @@ export const Deployments: React.FC = () => {
 
       {/* Error state */}
       {error && (
-        <div className="bg-danger/10 border border-danger/20 text-danger rounded-lg p-4 mb-6">
-          <div className="flex items-center space-x-2">
-            <AlertTriangle className="w-5 h-5" />
-            <span className="font-medium">Error loading deployments</span>
-          </div>
-          <p className="text-sm mt-1">{error}</p>
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm mb-4">
+          <div className="font-medium">Error loading deployments</div>
+          <p className="mt-1">{error}</p>
           <button
             onClick={refetch}
-            className="mt-2 px-3 py-1 bg-danger text-white rounded text-sm hover:bg-danger/90 transition-colors"
+            className="mt-2 px-3 py-1 bg-danger text-white rounded-[7px] text-sm hover:brightness-110 transition"
           >
             Retry
           </button>
@@ -196,282 +174,124 @@ export const Deployments: React.FC = () => {
 
       {/* Loading state */}
       {loading && deployments.length === 0 && (
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-text-muted">Loading deployments...</p>
-        </div>
+        <div className="text-text-muted text-sm">Loading deployments…</div>
       )}
 
-      {/* Deployments Grid */}
-      {!loading && deployments.length > 0 && (
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {deployments.map(deployment => (
-          <div key={deployment.id} className="bg-surface-1 rounded-lg border border-border overflow-hidden hover:border-primary/50 transition-colors">
-            {/* Header */}
-            <div className="p-4 border-b border-border">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-3">
-                  <div className="text-xl">{deployment.icon}</div>
-                  <div>
-                    <h3 className="font-medium">{deployment.name}</h3>
-                    <div className="flex items-center space-x-2 mt-1">
-                      {getStatusIcon(deployment.status)}
-                      <span className={`text-xs px-2 py-1 rounded border capitalize ${getStatusColor(deployment.status)}`}>
-                        {deployment.status}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="flex items-center space-x-1">
-                  {deployment.url && (
-                    <a 
-                      href={deployment.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-1.5 text-text-muted hover:text-text-strong transition-colors"
-                      title="Open App"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  )}
-                  <div className="relative">
-                    <button 
-                      onClick={() => setOpenDropdown(openDropdown === deployment.id ? null : deployment.id)}
-                      className="p-1.5 text-text-muted hover:text-text-strong transition-colors"
-                    >
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
-                    
-                    {openDropdown === deployment.id && (
-                      <div className="absolute right-0 top-8 w-48 bg-surface-1 border border-border rounded-lg shadow-lg z-10">
-                        <div className="py-1">
-                          <Link
-                            to={`/deployments/${deployment.id}?tab=configuration`}
-                            className="flex items-center space-x-2 px-3 py-2 text-sm hover:bg-surface-2 transition-colors"
-                            onClick={() => setOpenDropdown(null)}
-                          >
-                            <Settings className="w-4 h-4" />
-                            <span>Edit Configuration</span>
-                          </Link>
-                          
-                          <button
-                            onClick={() => {
-                              // TODO: Implement duplicate functionality
-                              setOpenDropdown(null);
-                            }}
-                            className="flex items-center space-x-2 px-3 py-2 text-sm hover:bg-surface-2 transition-colors w-full text-left"
-                          >
-                            <Copy className="w-4 h-4" />
-                            <span>Duplicate</span>
-                          </button>
-                          
-                          <button
-                            onClick={() => {
-                              // TODO: Implement export functionality
-                              setOpenDropdown(null);
-                            }}
-                            className="flex items-center space-x-2 px-3 py-2 text-sm hover:bg-surface-2 transition-colors w-full text-left"
-                          >
-                            <Download className="w-4 h-4" />
-                            <span>Export Config</span>
-                          </button>
-                          
-                          <div className="border-t border-border my-1"></div>
-                          
-                          <button
-                            onClick={() => {
-                              // TODO: Implement archive functionality
-                              setOpenDropdown(null);
-                            }}
-                            className="flex items-center space-x-2 px-3 py-2 text-sm hover:bg-surface-2 transition-colors w-full text-left text-warning"
-                          >
-                            <Archive className="w-4 h-4" />
-                            <span>Archive</span>
-                          </button>
-                          
-                          <button
-                            onClick={() => {
-                              handleAction(deployment.id, 'delete');
-                              setOpenDropdown(null);
-                            }}
-                            className="flex items-center space-x-2 px-3 py-2 text-sm hover:bg-surface-2 transition-colors w-full text-left text-danger"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                            <span>Delete</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Content */}
-            <div className="p-4 space-y-4">
-              {/* Stats */}
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <span className="text-text-muted">Uptime</span>
-                  <div className="font-medium">{deployment.uptime}</div>
-                </div>
-                <div>
-                  <span className="text-text-muted">Version</span>
-                  <div className="font-medium">{deployment.version}</div>
-                </div>
-                <div>
-                  <span className="text-text-muted">CPU</span>
-                  <div className="font-medium">{deployment.resources?.cpu ?? '—'}</div>
-                </div>
-                <div>
-                  <span className="text-text-muted">Memory</span>
-                  <div className="font-medium">{deployment.resources?.memory ?? '—'}</div>
-                </div>
-              </div>
-
-              {/* Ports */}
-              <div>
-                <span className="text-text-muted text-sm">Ports</span>
-                <div className="flex flex-wrap gap-1 mt-1">
-                  {deployment.ports.map((port: string) => (
-                    <span key={port} className="text-xs bg-surface-2 px-2 py-1 rounded">
-                      {port}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center justify-between pt-2 border-t border-border">
-                <div className="flex space-x-2">
-                  {deployment.status === 'running' ? (
-                    <button 
-                      onClick={() => handleAction(deployment.id, 'stop')}
-                      className="p-1.5 text-text-muted hover:text-danger transition-colors" 
-                      title="Stop"
-                    >
-                      <Square className="w-4 h-4" />
-                    </button>
-                  ) : (
-                    <button 
-                      onClick={() => handleAction(deployment.id, 'start')}
-                      className="p-1.5 text-text-muted hover:text-success transition-colors" 
-                      title="Start"
-                    >
-                      <Play className="w-4 h-4" />
-                    </button>
-                  )}
-                  <button 
-                    onClick={() => handleAction(deployment.id, 'restart')}
-                    className="p-1.5 text-text-muted hover:text-info transition-colors" 
-                    title="Restart"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={() => handleAction(deployment.id, 'delete')}
-                    className="p-1.5 text-text-muted hover:text-danger transition-colors" 
-                    title="Delete"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                  <button 
-                    onClick={() => setShowLogsFor(showLogsFor === deployment.id ? null : deployment.id)}
-                    className="p-1.5 text-text-muted hover:text-info transition-colors" 
-                    title="View Logs"
-                  >
-                    <Activity className="w-4 h-4" />
-                  </button>
-                </div>
-
-                <Link
-                  to={`/deployments/${deployment.id}`}
-                  className="text-sm text-primary hover:text-primary/90 font-medium"
-                >
-                  View Details
-                </Link>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-4 py-2 bg-surface-2 text-xs text-text-muted">
-              Last updated: {deployment.lastUpdated}
-            </div>
-          </div>
-
-        ))}
-      </div>
-      )}
-
-      {/* Pagination */}
-      {!loading && totalDeployments > limit && (
-        <div className="flex items-center justify-between mt-6">
-          <div className="text-sm text-text-muted">
-            Showing {((page - 1) * limit) + 1} to {Math.min(page * limit, totalDeployments)} of {totalDeployments} deployments
-          </div>
-          
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setPage(page - 1)}
-              disabled={!hasPrevPage}
-              className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Previous page"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-            
-            <span className="px-3 py-1 text-sm">
-              Page {page} of {totalPages}
-            </span>
-            
-            <button
-              onClick={() => setPage(page + 1)}
-              disabled={!hasNextPage}
-              className="p-2 text-text-muted hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
-              title="Next page"
-            >
-              <ChevronRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Inline Logs Viewer */}
-      {showLogsFor && (
-        <div className="mt-6">
-          <LogsViewer 
-            deploymentId={showLogsFor}
-            title={`${deployments.find(d => d.id === showLogsFor)?.name} Logs`}
-            maxHeight="max-h-96"
-          />
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!loading && deployments.length === 0 && (
-        <div className="text-center py-12">
-          <Server className="w-12 h-12 text-text-muted mx-auto mb-4" />
-          <h3 className="text-lg font-medium mb-2">No deployments found</h3>
-          <p className="text-text-muted mb-4">
-            {searchTerm || statusFilter !== 'all' 
-              ? 'Try adjusting your search criteria' 
-              : 'Deploy your first app to get started'
-            }
-          </p>
-          <Link
-            to="/catalog"
-            className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors inline-flex items-center space-x-2"
+      {/* Deployments table */}
+      {!loading && (
+        <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+          {/* Header row */}
+          <div
+            className={`${GRID_COLS} py-3 border-b border-border text-[11.5px] font-semibold text-text-faint uppercase tracking-[0.04em]`}
           >
-            <span>Browse Catalog</span>
-          </Link>
+            <div>App</div>
+            <div>Status</div>
+            <div>Version</div>
+            <div>URL</div>
+            <div>Updated</div>
+            <div className="text-right">Actions</div>
+          </div>
+
+          {/* Body rows */}
+          {deployments.map((deployment) => (
+            <div
+              key={deployment.id}
+              onClick={() => navigate(`/deployments/${deployment.id}`)}
+              className={`${GRID_COLS} py-[13px] border-b border-border-soft items-center cursor-pointer hover:bg-surface-2`}
+            >
+              <div className="flex items-center gap-[11px] min-w-0">
+                <AppIcon name={deployment.name} emoji={deployment.icon} size={34} />
+                <span className="font-semibold text-sm truncate">{deployment.name}</span>
+              </div>
+              <div>
+                <StatusBadge status={deployment.status} />
+              </div>
+              <div className="font-mono text-[12.5px] text-text-muted truncate">
+                {deployment.version || '—'}
+              </div>
+              <div className="font-mono text-[12px] text-text-muted truncate">
+                {deployment.url || '—'}
+              </div>
+              <div className="text-[12.5px] text-text-faint truncate">
+                {deployment.lastUpdated}
+              </div>
+              <div className="flex items-center gap-1 justify-end">
+                {deployment.status === 'running' && deployment.url && (
+                  <a
+                    href={deployment.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Open"
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-primary hover:bg-primary-weak transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </a>
+                )}
+                <button
+                  title="Restart"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleAction(deployment.id, 'restart');
+                  }}
+                  className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-text-strong hover:bg-surface-3 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <button
+                  title="Remove"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleAction(deployment.id, 'delete');
+                  }}
+                  className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-danger hover:bg-danger-weak transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {/* Empty state */}
+          {deployments.length === 0 && (
+            <div className="px-12 py-[50px] text-center text-text-muted text-sm">
+              {searchTerm || statusFilter !== 'all'
+                ? 'No deployments match your filter.'
+                : 'No deployments yet. Install an app to get started.'}
+            </div>
+          )}
+
+          {/* Footer / pager */}
+          <div className="flex items-center justify-between px-[18px] py-[13px] text-[12.5px] text-text-faint">
+            <span className="font-mono">
+              Showing {deployments.length} of {totalDeployments}
+            </span>
+            <div className="flex gap-[6px]">
+              <button
+                onClick={() => setPage(page - 1)}
+                disabled={!hasPrevPage}
+                title="Previous page"
+                className="w-7 h-7 flex items-center justify-center border border-border rounded-[7px] text-text-faint hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => setPage(page + 1)}
+                disabled={!hasNextPage}
+                title="Next page"
+                className="w-7 h-7 flex items-center justify-center border border-border rounded-[7px] text-text-faint hover:text-text-strong disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
         </div>
       )}
-      
+
       {/* Click outside to close dropdown */}
       {openDropdown && (
-        <div 
-          className="fixed inset-0 z-0" 
+        <div
+          className="fixed inset-0 z-0"
           onClick={() => setOpenDropdown(null)}
         />
       )}

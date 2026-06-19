@@ -1,23 +1,19 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { 
-  Search, 
-  Grid, 
-  List, 
-  Star, 
-  Download, 
-  Package, 
-  Eye, 
-  ChevronLeft,
-  ChevronRight,
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  Search,
+  Plus,
+  Star,
+  Download,
   RefreshCw,
-  AlertCircle 
+  AlertCircle,
 } from 'lucide-react';
-import type { 
+import type {
   CatalogApp,
   GetCatalogAppsRequest,
 } from '@hola/shared';
 import { useCatalogAppsApi, useCatalogAppVersionsApi } from '../hooks/useCatalogApi';
+import { AppIcon } from '../components/ui/AppIcon';
 
 const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database', 'Infrastructure', 'Networking'];
 
@@ -174,10 +170,10 @@ const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose })
 };
 
 export const Catalog: React.FC = () => {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState(searchParams.get('query') || '');
   const [selectedCategory, setSelectedCategory] = useState(searchParams.get('category') || 'All');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [appsPerPage] = useState(12);
@@ -239,8 +235,13 @@ export const Catalog: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const featuredIds = useMemo(
+    () => new Set(featuredApps.map((app) => app.id)),
+    [featuredApps],
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="animate-fadein">
       {/* App Detail Modal */}
       {selectedApp && (
         <AppDetailModal
@@ -251,248 +252,143 @@ export const Catalog: React.FC = () => {
       )}
 
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold">App Catalog</h1>
-        <p className="text-text-muted mt-1">Discover and install applications for your home lab</p>
-      </div>
-
-      {/* Search and Filters */}
-      <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-        <div className="relative flex-grow">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
+      <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
+        <div>
+          <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Catalog</h1>
+          <p className="mt-1.5 text-text-muted text-sm">
+            {appsData?.total || 0} apps available — install with one click.
+          </p>
+        </div>
+        <div className="flex-1" />
+        <div className="relative flex items-center">
+          <Search className="absolute left-[11px] w-4 h-4 text-text-faint pointer-events-none" />
           <input
             type="text"
-            placeholder="Search applications..."
+            placeholder="Search apps…"
             value={searchTerm}
             onChange={(e) => handleSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 bg-surface-1 border border-border rounded-lg text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+            className="h-[38px] w-60 bg-surface-1 border border-border rounded-[9px] text-text-strong pl-[34px] pr-3 text-[13.5px] outline-none focus:border-primary"
           />
         </div>
+      </div>
 
-        <div className="flex space-x-2">
-          <select
-            value={selectedCategory}
-            onChange={(e) => handleCategoryChange(e.target.value)}
-            className="px-3 py-2 bg-surface-1 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-          >
-            {categories.map(category => (
-              <option key={category} value={category}>{category}</option>
-            ))}
-          </select>
-
-          <div className="flex border border-border rounded-lg overflow-hidden">
+      {/* Category chips */}
+      <div className="flex gap-2 flex-wrap mb-5">
+        {categories.map((category) => {
+          const active = selectedCategory === category;
+          return (
             <button
-              onClick={() => setViewMode('grid')}
-              className={`p-2 ${viewMode === 'grid' ? 'bg-primary text-primary-contrast' : 'bg-surface-1 text-text-muted hover:text-text-strong'}`}
+              key={category}
+              onClick={() => handleCategoryChange(category)}
+              className={`h-8 px-[13px] flex items-center rounded-lg text-[13px] font-medium cursor-pointer border transition ${
+                active
+                  ? 'bg-primary-weak text-primary border-primary'
+                  : 'bg-surface-1 text-text-muted border-border hover:text-text-strong'
+              }`}
             >
-              <Grid className="w-4 h-4" />
+              {category}
             </button>
-            <button
-              onClick={() => setViewMode('list')}
-              className={`p-2 ${viewMode === 'list' ? 'bg-primary text-primary-contrast' : 'bg-surface-1 text-text-muted hover:text-text-strong'}`}
-            >
-              <List className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+          );
+        })}
       </div>
 
       {/* Loading State */}
       {loading && (
-        <div className="flex items-center justify-center py-12">
-          <RefreshCw className="w-6 h-6 animate-spin text-text-muted mr-2" />
-          <span className="text-text-muted">Loading applications...</span>
+        <div className="flex items-center gap-2 text-text-muted text-sm py-2">
+          <RefreshCw className="w-4 h-4 animate-spin" />
+          <span>Loading applications…</span>
         </div>
       )}
 
       {/* Error State */}
       {error && (
-        <div className="bg-error/10 border border-error/20 rounded-lg p-4">
-          <div className="flex items-center space-x-2 text-error">
-            <AlertCircle className="w-5 h-5" />
-            <span>{error}</span>
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 flex-none" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!loading && !error && apps.length === 0 && (
+        <div className="px-5 py-[60px] text-center bg-surface-1 border border-dashed border-border rounded-[14px] text-text-muted">
+          <div className="font-semibold text-text-strong mb-1.5">No matching apps</div>
+          <div className="text-[13.5px]">
+            Try another search or category. You can also install by pasting a Compose file.
           </div>
         </div>
       )}
 
-      {/* Featured Apps */}
-      {!loading && !error && selectedCategory === 'All' && searchTerm === '' && featuredApps.length > 0 && (
-        <div>
-          <h2 className="text-lg font-medium mb-4">Featured Applications</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-            {featuredApps.slice(0, 3).map((app: CatalogApp) => (
-              <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-6 hover:border-primary/50 transition-colors group">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center space-x-3">
-                    <div className="text-2xl">{app.icon}</div>
-                    <div>
-                      <h3 className="font-medium group-hover:text-primary transition-colors">{app.name}</h3>
-                      <span className="text-xs text-text-muted bg-surface-2 px-2 py-1 rounded">{app.category}</span>
+      {/* Card grid */}
+      {!loading && !error && apps.length > 0 && (
+        <>
+          <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
+            {apps.map((app: CatalogApp) => {
+              const installTo = `/catalog/${app.id}/install`;
+              return (
+                <div
+                  key={app.id}
+                  onClick={() => navigate(installTo)}
+                  className="bg-surface-1 border border-border rounded-card p-[18px] flex flex-col cursor-pointer transition hover:border-primary hover:-translate-y-[2px]"
+                >
+                  <div className="flex items-start gap-[13px] mb-[13px]">
+                    <AppIcon name={app.name} emoji={app.icon} size={44} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-[15.5px] truncate">{app.name}</span>
+                        {featuredIds.has(app.id) && (
+                          <Star className="w-3.5 h-3.5 text-warning fill-current flex-none" />
+                        )}
+                      </div>
+                      <div className="text-xs text-text-faint mt-px">{app.category}</div>
                     </div>
-                  </div>
-                  <Star className="w-4 h-4 text-warning fill-current" />
-                </div>
-                
-                <p className="text-sm text-text-muted mb-4 line-clamp-2">{app.description}</p>
-                
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center space-x-4 text-xs text-text-muted">
-                    <span className="flex items-center space-x-1">
-                      <Star className="w-3 h-3" />
-                      <span>{app.rating}</span>
-                    </span>
-                    <span className="flex items-center space-x-1">
+                    <span className="font-mono text-[11px] text-text-faint flex items-center gap-1 flex-none">
                       <Download className="w-3 h-3" />
-                      <span>{app.downloads}</span>
+                      {app.downloads}
                     </span>
                   </div>
-                  <button
-                    onClick={() => setSelectedAppId(app.id)}
-                    className="text-text-muted hover:text-primary transition-colors"
-                    title="View details"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
-                </div>
 
-                <div className="flex space-x-2">
-                  <Link 
-                    to={`/catalog/${app.id}/install`}
-                    className="flex-1 bg-primary text-primary-contrast py-2 px-4 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors text-center"
-                  >
-                    Install
-                  </Link>
-                  <button
-                    onClick={() => setSelectedAppId(app.id)}
-                    className="bg-surface-2 text-text-strong py-2 px-3 rounded-lg text-sm font-medium hover:bg-surface-3 transition-colors"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+                  <p className="m-0 text-[13px] text-text-muted leading-relaxed flex-1">
+                    {app.description}
+                  </p>
 
-      {/* All Apps */}
-      {!loading && !error && (
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-medium">
-              {selectedCategory === 'All' ? 'All Applications' : selectedCategory} 
-              <span className="text-text-muted font-normal ml-2">({appsData?.total || 0})</span>
-            </h2>
-          </div>
-
-          {viewMode === 'grid' ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {apps.map((app: CatalogApp) => (
-                <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-4 hover:border-primary/50 transition-colors group">
-                  <div className="flex items-center space-x-3 mb-3">
-                    <div className="text-xl">{app.icon}</div>
-                    <div className="flex-grow min-w-0">
-                      <h3 className="font-medium group-hover:text-primary transition-colors truncate">{app.name}</h3>
-                      <span className="text-xs text-text-muted bg-surface-2 px-2 py-0.5 rounded">{app.category}</span>
-                    </div>
-                    <button
-                      onClick={() => setSelectedAppId(app.id)}
-                      className="text-text-muted hover:text-primary transition-colors"
-                      title="View details"
+                  <div className="flex items-center gap-[10px] mt-4 pt-[14px] border-t border-border-soft">
+                    <span className="inline-flex items-center gap-1.5 text-[11.5px] text-warning font-medium">
+                      <Star className="w-3.5 h-3.5 fill-current" />
+                      {app.rating}
+                    </span>
+                    <div className="flex-1" />
+                    <Link
+                      to={installTo}
+                      onClick={(e) => e.stopPropagation()}
+                      className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition"
                     >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                  </div>
-                  
-                  <p className="text-sm text-text-muted mb-3 line-clamp-2">{app.description}</p>
-                  
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center space-x-3 text-xs text-text-muted">
-                      <span className="flex items-center space-x-1">
-                        <Star className="w-3 h-3" />
-                        <span>{app.rating}</span>
-                      </span>
-                      <span>{app.downloads}</span>
-                    </div>
-                  </div>
-
-                  <Link 
-                    to={`/catalog/${app.id}/install`}
-                    className="w-full bg-surface-2 text-text-strong py-1.5 px-3 rounded text-sm font-medium hover:bg-primary hover:text-primary-contrast transition-colors flex items-center justify-center"
-                  >
-                    Install
-                  </Link>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {apps.map((app: CatalogApp) => (
-                <div key={app.id} className="bg-surface-1 rounded-lg border border-border p-4 hover:border-primary/50 transition-colors group">
-                  <div className="flex items-center space-x-4">
-                    <div className="text-xl">{app.icon}</div>
-                    
-                    <div className="flex-grow min-w-0">
-                      <div className="flex items-center space-x-3 mb-1">
-                        <h3 className="font-medium group-hover:text-primary transition-colors">{app.name}</h3>
-                        <span className="text-xs text-text-muted bg-surface-2 px-2 py-0.5 rounded">{app.category}</span>
-                        {app.featured && <Star className="w-4 h-4 text-warning fill-current" />}
-                      </div>
-                      <p className="text-sm text-text-muted mb-2">{app.description}</p>
-                      <div className="flex items-center space-x-4 text-xs text-text-muted">
-                        <span className="flex items-center space-x-1">
-                          <Star className="w-3 h-3" />
-                          <span>{app.rating}</span>
-                        </span>
-                        <span className="flex items-center space-x-1">
-                          <Download className="w-3 h-3" />
-                          <span>{app.downloads}</span>
-                        </span>
-                        <div className="flex space-x-1">
-                          {app.tags.slice(0, 3).map((tag: string) => (
-                            <span key={tag} className="bg-surface-2 px-2 py-0.5 rounded text-xs">{tag}</span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex-shrink-0 flex space-x-2">
-                      <button
-                        onClick={() => setSelectedAppId(app.id)}
-                        className="bg-surface-2 text-text-strong py-2 px-3 rounded-lg text-sm font-medium hover:bg-surface-3 transition-colors"
-                        title="View details"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <Link 
-                        to={`/catalog/${app.id}/install`}
-                        className="bg-primary text-primary-contrast py-2 px-4 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
-                      >
-                        Install
-                      </Link>
-                    </div>
+                      <Plus className="w-4 h-4" />
+                      Install
+                    </Link>
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
 
           {/* Pagination */}
           {totalPages > 1 && (
             <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
               <div className="text-sm text-text-muted">
-                Showing {(currentPage - 1) * appsPerPage + 1}-{Math.min(currentPage * appsPerPage, appsData?.total || 0)} of {appsData?.total || 0} applications
+                Showing {(currentPage - 1) * appsPerPage + 1}-
+                {Math.min(currentPage * appsPerPage, appsData?.total || 0)} of {appsData?.total || 0}{' '}
+                applications
               </div>
-              
-              <div className="flex items-center space-x-2">
+
+              <div className="flex items-center gap-2">
                 <button
                   onClick={() => handlePageChange(currentPage - 1)}
                   disabled={currentPage === 1}
-                  className="p-2 rounded-lg border border-border text-text-muted hover:text-text-strong hover:border-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="h-8 px-3 flex items-center rounded-lg border border-border text-[13px] text-text-muted hover:text-text-strong hover:border-primary disabled:opacity-50 disabled:cursor-not-allowed transition"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  Prev
                 </button>
-                
+
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum;
                   if (totalPages <= 5) {
@@ -504,42 +400,33 @@ export const Catalog: React.FC = () => {
                   } else {
                     pageNum = currentPage - 2 + i;
                   }
-                  
+
                   return (
                     <button
                       key={pageNum}
                       onClick={() => handlePageChange(pageNum)}
-                      className={`px-3 py-2 text-sm rounded-lg transition-colors ${
+                      className={`h-8 px-[11px] flex items-center text-[13px] rounded-lg border transition ${
                         currentPage === pageNum
-                          ? 'bg-primary text-primary-contrast'
-                          : 'text-text-muted hover:text-text-strong hover:bg-surface-2'
+                          ? 'bg-primary-weak text-primary border-primary'
+                          : 'bg-surface-1 text-text-muted border-border hover:text-text-strong'
                       }`}
                     >
                       {pageNum}
                     </button>
                   );
                 })}
-                
+
                 <button
                   onClick={() => handlePageChange(currentPage + 1)}
                   disabled={currentPage === totalPages}
-                  className="p-2 rounded-lg border border-border text-text-muted hover:text-text-strong hover:border-primary/50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  className="h-8 px-3 flex items-center rounded-lg border border-border text-[13px] text-text-muted hover:text-text-strong hover:border-primary disabled:opacity-50 disabled:cursor-not-allowed transition"
                 >
-                  <ChevronRight className="w-4 h-4" />
+                  Next
                 </button>
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* No Results */}
-      {!loading && !error && apps.length === 0 && (
-        <div className="text-center py-12">
-          <Package className="w-12 h-12 text-text-muted mx-auto mb-4" />
-          <h3 className="text-lg font-medium mb-2">No applications found</h3>
-          <p className="text-text-muted">Try adjusting your search or filter criteria</p>
-        </div>
+        </>
       )}
     </div>
   );
