@@ -20,6 +20,7 @@ import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
 import { useSystemStatusApi } from '../hooks/useSettingsApi';
 import { useTheme, type ThemePref } from '../hooks/useTheme';
+import { useAuth } from '../hooks/useAuth';
 
 export const Settings: React.FC = () => {
   // API hooks for data management
@@ -46,6 +47,7 @@ export const Settings: React.FC = () => {
   // Theme is owned by the shared ThemeProvider (single source of truth shared
   // with the Topbar toggle), so the selector always reflects the applied theme.
   const { theme, setTheme } = useTheme();
+  const { user, mode } = useAuth();
 
   // Local UI state
   const [notifications, setNotifications] = useState({
@@ -181,18 +183,22 @@ export const Settings: React.FC = () => {
       )}
 
       <div className="flex flex-col gap-4">
-        {/* Profile */}
+        {/* Profile — the signed-in identity, from the auth provider. */}
         <div className="bg-surface-1 border border-border rounded-card p-5">
           <div className="font-semibold text-[15px] mb-1">Profile</div>
-          <p className="text-[13px] text-text-muted mb-3.5">Managed by Authentik. Edit details in the Authentik dashboard.</p>
+          <p className="text-[13px] text-text-muted mb-3.5">
+            {mode === 'oidc'
+              ? 'Managed by your identity provider. Edit details there.'
+              : 'The identity signed in to this dashboard.'}
+          </p>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <div className={labelClass}>Username</div>
-              <input value="admin" readOnly className={inputClass} />
+              <div className={labelClass}>Name</div>
+              <input value={user?.name ?? '—'} readOnly className={inputClass} />
             </div>
             <div>
               <div className={labelClass}>Email</div>
-              <input value="admin@localhost" readOnly className={inputClass} />
+              <input value={user?.email ?? '—'} readOnly className={inputClass} />
             </div>
           </div>
         </div>

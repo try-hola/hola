@@ -110,12 +110,9 @@ export class DatabaseSettingsRepository implements SettingsRepository {
   private logger = getLogger().child({ service: 'DatabaseSettingsRepository' });
   private db: DatabaseService;
 
-  // Default settings
+  // Default settings (no placeholder system variables).
   private defaultSystemSettings: SystemSettings = {
-    systemEnv: [
-      { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-      { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-    ],
+    systemEnv: [],
     docker: { host: '/var/run/docker.sock' },
     tls: { email: '' },
     notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },

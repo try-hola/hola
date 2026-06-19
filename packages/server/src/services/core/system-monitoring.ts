@@ -7,7 +7,8 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { statSync } from 'fs';
+import { statSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
@@ -15,6 +16,23 @@ import type { ServiceHealth, HealthCheckable } from './types';
 import type { SystemStatus } from '@hola/shared';
 
 const execAsync = promisify(exec);
+
+/**
+ * The running Hola version. Prefer HOLA_VERSION (the image tag the deploy
+ * scripts export from the bundle's VERSION file), falling back to the server
+ * package.json version for source checkouts. Never a hardcoded placeholder.
+ */
+const HOLA_VERSION: string = (() => {
+  const env = process.env.HOLA_VERSION?.trim();
+  if (env) return env;
+  try {
+    const pkgPath = join(import.meta.dir, '../../../package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 export interface DiskUsage {
   freeBytes: number;
@@ -336,8 +354,8 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
         totalBytes: resources.disk.totalBytes,
       },
       version: {
-    hola: '1.0.0', // TODO: Read from package.json
-    compose: composeVersion || 'unknown',
+        hola: HOLA_VERSION,
+        compose: composeVersion || 'unknown',
       },
     };
     
