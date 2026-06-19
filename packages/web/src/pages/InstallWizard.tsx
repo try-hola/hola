@@ -88,9 +88,14 @@ export const InstallWizard: React.FC = () => {
     };
   }, []);
 
-  // Create draft when component mounts
+  // Create draft when component mounts. `createDraftHook` is a fresh object each
+  // render, so this effect re-runs on every render; the ref guard ensures the
+  // draft is created exactly once (without it, the in-flight window before
+  // `data` is set races dozens of duplicate createDraft calls).
+  const creatingDraftRef = React.useRef(false);
   useEffect(() => {
-    if (!appId || createDraftHook.data) return; // Don't create if already exists
+    if (!appId || createDraftHook.data || creatingDraftRef.current) return;
+    creatingDraftRef.current = true;
 
     const initializeDraft = async () => {
       try {
@@ -103,6 +108,7 @@ export const InstallWizard: React.FC = () => {
         setVolumes(result.defaults.volumes);
 
       } catch (err) {
+        creatingDraftRef.current = false; // allow a retry on failure
         console.error('Failed to create draft:', err);
       }
     };
