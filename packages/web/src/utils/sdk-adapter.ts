@@ -12,8 +12,9 @@ import type {
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   // Deployment types
+  CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
-  PatchDeploymentRequest, PatchDeploymentResponse, 
+  PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   GetDeploymentHistoryResponse,
   // Job types
@@ -372,12 +373,15 @@ export class SdkAdapter {
 
   // Deployments with optimistic cache management
   deployments = {
+    create: (data: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> =>
+      this.enhancedRequest('POST', '/api/deployments', () => this.sdk.deployments.create(data), data, true),
+
     list: (params?: GetDeploymentsRequest): Promise<GetDeploymentsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments${query}`;
       return this.getWithCache(path, () => this.sdk.deployments.list(params));
     },
-    
+
     byId: (deploymentId: string): Promise<GetDeploymentResponse> => {
       const path = `/api/deployments/${deploymentId}`;
       return this.getWithCache(path, () => this.sdk.deployments.byId(deploymentId));
