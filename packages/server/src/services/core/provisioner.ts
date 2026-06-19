@@ -119,6 +119,10 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_providers_oauth2.view_oauth2provider',
   'authentik_providers_oauth2.change_oauth2provider',
   'authentik_providers_oauth2.delete_oauth2provider',
+  // Read OAuth2 scope mappings to attach openid/profile/email to provisioned
+  // clients (the generic core.view_propertymapping is insufficient for the
+  // provider/scope subclass endpoint — Authentik returns 403 without this).
+  'authentik_providers_oauth2.view_scopemapping',
   'authentik_providers_proxy.add_proxyprovider',
   'authentik_providers_proxy.view_proxyprovider',
   'authentik_providers_proxy.change_proxyprovider',
@@ -303,8 +307,17 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const existing = await this.findApplication(DASHBOARD_SLUG);
     if (existing?.provider != null) {
       const provider = await this.api<AuthentikOAuth2Provider>('GET', `/api/v3/providers/oauth2/${existing.provider}/`);
+      // Self-heal on every startup: refresh the redirect URI, and (re)attach the
+      // scope mappings + signing key so a client created before a permission/config
+      // fix converges without manual deletion.
+      const [propertyMappings, signingKey] = await Promise.all([
+        this.resolveScopeMappingPks(input.scopes),
+        this.resolveSigningKeyPk(),
+      ]);
       await this.api('PATCH', `/api/v3/providers/oauth2/${existing.provider}/`, {
         redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
+        ...(propertyMappings.length ? { property_mappings: propertyMappings } : {}),
+        ...(signingKey ? { signing_key: signingKey } : {}),
       });
       this.logger.info('Reused dashboard OIDC client', { clientId: provider.client_id });
       return { issuer, clientId: provider.client_id, redirectUri, audience: provider.client_id };
