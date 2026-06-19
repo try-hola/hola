@@ -57,10 +57,11 @@ services:
       - ./traefik/acme:/letsencrypt
 
   server:
-    image: hola/server:latest
-    build:
-      context: ../..
-      dockerfile: packages/server/Dockerfile
+    # Prebuilt, version-pinned image published by the CLI release workflow.
+    # HOLA_VERSION is exported by scripts/_common.sh from the bundle's VERSION
+    # file (a source checkout has none, so it falls back to :latest). Build the
+    # image locally instead with the opt-in overlay: HOLA_BUILD=1 ./scripts/up.sh --build.
+    image: ghcr.io/try-hola/server:${HOLA_VERSION:-latest}
     container_name: hola-server
     restart: unless-stopped
     environment:
@@ -133,10 +134,9 @@ services:
     # Traefik (no Docker provider; only core.yml/app routes are served).
 
   web:
-    image: hola/web:latest
-    build:
-      context: ../..
-      dockerfile: packages/web/Dockerfile
+    # Prebuilt, version-pinned image (see the server service above for HOLA_VERSION
+    # and the HOLA_BUILD=1 local-build overlay).
+    image: ghcr.io/try-hola/web:${HOLA_VERSION:-latest}
     container_name: hola-web
     restart: unless-stopped
     depends_on:

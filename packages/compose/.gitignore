@@ -7,3 +7,7 @@ data/
 
 # Traefik ACME certificate store (contains private keys)
 traefik/acme/
+
+# Release version stamp — written into the bundle by CI (cli-release.yml), read
+# by scripts/_common.sh to pin image tags on the host. Never committed.
+VERSION

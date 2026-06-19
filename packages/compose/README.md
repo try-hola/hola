@@ -18,6 +18,11 @@ reachable at `<app>.<HOLA_BASE_DOMAIN>`.
 - **Persistence** — all server state (deployments, releases, sqlite, logs, generated Traefik
   config) lives in the `hola-data` named volume mounted at `/data`. It survives restarts and is
   the single thing to back up.
+- **Prebuilt images** — the `server` and `web` services run published, version-pinned images
+  (`ghcr.io/try-hola/server:<version>`, `ghcr.io/try-hola/web:<version>`) built by the CLI release
+  workflow, so the host **pulls** them rather than building from source. `HOLA_VERSION` (set by
+  `scripts/_common.sh` from the bundle's `VERSION` file) selects the tag. To build locally instead,
+  opt into the build overlay: `HOLA_BUILD=1 ./scripts/up.sh --build`.
 
 ```
 browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ──▶ server ──┬─▶ Docker engine (deploys apps)
@@ -40,30 +45,37 @@ credentials, catalog reachability), and writes the `.env` for you:
 # On your laptop — produce a validated .env (no server contact):
 hola init
 
-# …or do it all the way to a remote host over SSH (wizard → clone → install):
+# …or do it all the way to a remote host over SSH (wizard → download → install):
 hola bootstrap --host user@your-vm        # add --dry-run first to preview the plan
 ```
 
 `hola bootstrap` SSHes in (reusing your ssh-agent / `~/.ssh/config`), checks the host has Docker +
-Compose v2, clones this repo at your CLI's release tag, writes the `.env` (streamed over stdin so
-secrets never hit the command line), and runs `./scripts/install.sh` — streaming the output back.
-Secrets (Authentik keys etc.) are generated **on the host** and never leave it. Re-running is an
-upgrade: it fetches the new ref and re-runs the idempotent installer.
+Compose v2 (plus `curl`/`tar` — **no git or build toolchain needed**), downloads the compose
+bundle for your CLI's release version, writes the `.env` (streamed over stdin so secrets never hit
+the command line), and runs `./scripts/install.sh` — which pulls the matching `ghcr.io/try-hola`
+images and brings the stack up, streaming the output back. Secrets (Authentik keys etc.) are
+generated **on the host** and never leave it. Re-running with a newer CLI is an upgrade: it
+downloads the new bundle and re-runs the idempotent installer.
 
 ### Manual
 
+From a source checkout you can install directly (this builds the images locally, since a checkout
+has no `VERSION` file pinning a published tag):
+
 ```bash
 cd packages/compose
-cp .env.example .env          # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL, ...
-./scripts/install.sh          # prepares .env/acme and runs `up.sh --build` (production)
+cp .env.example .env                       # set HOLA_DOMAIN, HOLA_BASE_DOMAIN, LETSENCRYPT_EMAIL, ...
+HOLA_BUILD=1 ./scripts/up.sh --build       # build server/web from source and start (production)
 # or manually:
-docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-`./scripts/install.sh` defaults to the **production** stack and builds the images on first run.
-The dev overlay (`docker-compose.dev.yml`) is opt-in via `HOLA_DEV=1`, and because it is named
-`*.dev.yml` (not `*.override.yml`) `docker compose` never auto-merges it — so a fresh-host install
-is always production.
+`./scripts/install.sh` defaults to the **production** stack. On a released host (the bundle ships a
+`VERSION` file) it **pulls** the version-pinned `ghcr.io/try-hola` images; from a source checkout,
+opt into the build overlay (`HOLA_BUILD=1`) as above to build them locally. The dev overlay
+(`docker-compose.dev.yml`) is opt-in via `HOLA_DEV=1`, and because the overlays are named `*.dev.yml`
+/ `*.build.yml` (not `*.override.yml`) `docker compose` never auto-merges them — so a fresh-host
+install is always production-pull.
 
 ### Retrieve the admin API key
 Auth is **on by default in production**. If you did not set `HOLA_API_KEY` in `.env`, the server
@@ -143,12 +155,15 @@ be one label under the base (they are: `<app>.<HOLA_BASE_DOMAIN>`).
 
 ## Upgrade
 
+The supported upgrade path is `hola bootstrap` with a newer CLI — it downloads the new bundle
+(which pins the new image tags) and re-runs the idempotent installer. On the host directly:
+
 ```bash
-git pull
 cd packages/compose
-docker compose -f docker-compose.yml up -d --build   # rebuild images and recreate changed services
+./scripts/up.sh --pull always   # pull the version-pinned images and recreate changed services
 ```
 
+(From a source checkout, `git pull` then `HOLA_BUILD=1 ./scripts/up.sh --build` to rebuild locally.)
 State in the `hola-data` volume is preserved across upgrades.
 
 ## Backup & restore

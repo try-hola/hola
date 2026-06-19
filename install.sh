@@ -3,10 +3,13 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/install.sh | sh
 #
-# Clones (or updates) Hola, configures the production Compose stack, builds and
-# starts it, then prints the admin API key. Re-running upgrades an existing
-# install. Config is taken from environment variables when set, otherwise the
-# script prompts (falling back to defaults when run non-interactively).
+# Clones (or updates) Hola from source, configures the production Compose stack,
+# builds the server/web images locally from that checkout (HOLA_BUILD=1), starts
+# it, then prints the admin API key. This is the from-source path tracking `main`
+# — for a version-pinned install that pulls prebuilt images instead, use
+# `hola bootstrap`. Re-running upgrades an existing install. Config is taken from
+# environment variables when set, otherwise the script prompts (falling back to
+# defaults when run non-interactively).
 #
 # Environment overrides:
 #   HOLA_HOME           install directory                 (default: $HOME/hola)
@@ -87,8 +90,11 @@ else
 fi
 
 # --- build and start -------------------------------------------------------
+# This installer tracks `main`, which may be ahead of any published image, so it
+# builds the server/web images from the checkout. HOLA_BUILD=1 makes the compose
+# stack add the build overlay and build (rather than pull the GHCR images).
 info "Building and starting the production stack (first run can take a few minutes)..."
-( cd "$COMPOSE_DIR" && ./scripts/install.sh )
+( cd "$COMPOSE_DIR" && HOLA_BUILD=1 ./scripts/install.sh )
 
 # --- admin key + next steps ------------------------------------------------
 info "Waiting for the admin API key to be provisioned..."

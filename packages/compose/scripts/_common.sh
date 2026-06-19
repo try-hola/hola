@@ -9,6 +9,17 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 ENV_FILE="$ROOT_DIR/.env"
 DEV_FILE="$ROOT_DIR/docker-compose.dev.yml"
 DNS01_FILE="$ROOT_DIR/docker-compose.dns01.yml"
+BUILD_FILE="$ROOT_DIR/docker-compose.build.yml"
+VERSION_FILE="$ROOT_DIR/VERSION"
+
+# Pin the platform images (server/web) to the released version. The release
+# bundle ships a VERSION file; a plain source checkout has none, so dev/local
+# falls back to :latest (the dev overlay swaps these images for oven/bun:1
+# anyway). An explicit HOLA_VERSION in the environment always wins.
+if [[ -z "${HOLA_VERSION:-}" && -f "$VERSION_FILE" ]]; then
+  HOLA_VERSION=$(tr -d ' \t\r\n' < "$VERSION_FILE")
+fi
+export HOLA_VERSION=${HOLA_VERSION:-latest}
 
 # Read a key from .env without sourcing it (values may contain spaces/quotes).
 env_file_get() { [[ -f "$ENV_FILE" ]] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | xargs || true; }
@@ -28,6 +39,19 @@ if [[ "${HOLA_DEV:-}" == "1" || "${HOLA_DEV:-}" == "true" ]]; then
   fi
 fi
 export HOLA_MODE
+
+# Local image-build overlay (opt-in via HOLA_BUILD=1). Restores the build context
+# so the production stack builds server/web from source instead of pulling the
+# published GHCR images. Pair with `up.sh --build`. Production only — dev already
+# runs from source via the Bun dev servers.
+if [[ "$HOLA_MODE" == "production" && ( "${HOLA_BUILD:-}" == "1" || "${HOLA_BUILD:-}" == "true" ) ]]; then
+  if [[ -f "$BUILD_FILE" ]]; then
+    COMPOSE_FILES+=("-f" "$BUILD_FILE")
+    echo "[compose] Local image build enabled (docker-compose.build.yml)" >&2
+  else
+    echo "[compose] HOLA_BUILD set but $BUILD_FILE not found; pulling published images" >&2
+  fi
+fi
 
 # DNS-01 TLS overlay (opt-in): activated when ACME_DNS_PROVIDER is set in .env.
 # For private/homelab hosts not reachable on :80 — issues a wildcard cert via the

@@ -32,7 +32,6 @@ services:
       traefik.http.routers.traefik.service: api@internal
 
   server:
-    build: !reset null
     image: oven/bun:1
     container_name: hola-server-dev
     working_dir: /app/packages/server
@@ -45,7 +44,6 @@ services:
       - hola-data:/data
 
   web:
-    build: !reset null
     image: oven/bun:1
     container_name: hola-web-dev
     working_dir: /app/packages/web

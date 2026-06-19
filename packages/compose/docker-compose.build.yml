@@ -1,0 +1,24 @@
+# Local image-build overlay — OPT-IN, layered on top of docker-compose.yml.
+#
+# The production stack pulls prebuilt, version-pinned images from GHCR
+# (ghcr.io/try-hola/{server,web}:<version>), published by the CLI release
+# workflow. This overlay restores the build context so you can build those
+# images locally from source instead — for testing the production stack before
+# a release, or running it on an unpublished commit.
+#
+# Enable it with `HOLA_BUILD=1 ./scripts/up.sh --build` (scripts/_common.sh adds
+# this file when HOLA_BUILD is set), or directly:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+#
+# Named *.build.yml (not *.override.yml) so `docker compose` never auto-merges
+# it — the default stack pulls images and never builds.
+
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: packages/server/Dockerfile
+  web:
+    build:
+      context: ../..
+      dockerfile: packages/web/Dockerfile
