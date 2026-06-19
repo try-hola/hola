@@ -39,8 +39,9 @@ describe('Backups Error Handling', () => {
 
     render(<BackupsWithRouter />);
 
+    // The authenticated fetch layer surfaces the server's ErrorResponse message.
     await waitFor(() => {
-      expect(screen.getByText(/failed to fetch backups.*403/i)).toBeInTheDocument();
+      expect(screen.getByText(/permission denied/i)).toBeInTheDocument();
     });
   });
 
@@ -57,8 +58,9 @@ describe('Backups Error Handling', () => {
 
     render(<BackupsWithRouter />);
 
+    // A non-JSON 5xx falls back to the status-based server-error message.
     await waitFor(() => {
-      expect(screen.getByText(/failed to fetch backups.*500/i)).toBeInTheDocument();
+      expect(screen.getByText(/server encountered an error/i)).toBeInTheDocument();
     });
   });
 
@@ -90,8 +92,11 @@ describe('Backups Error Handling', () => {
     render(<BackupsWithRouter />);
 
     await waitFor(() => {
+      // Routed through the authenticated fetch layer, so the request carries
+      // same-origin credentials (and a Bearer token when an OIDC session exists).
       expect(global.fetch).toHaveBeenCalledWith(
-        "/api/backups?page=1&limit=10"
+        "/api/backups?page=1&limit=10",
+        expect.objectContaining({ credentials: 'include' })
       );
     });
   });

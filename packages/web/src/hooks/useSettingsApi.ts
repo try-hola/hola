@@ -1,4 +1,5 @@
 import React from 'react';
+import { safeFetchEnhanced } from '../utils/error-enhanced';
 import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
 import type { 
@@ -37,7 +38,7 @@ export function useSettingsApi() {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const response = await fetch(API.settings.base);
+      const response = await safeFetchEnhanced(API.settings.base);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch settings: ${response.status} ${response.statusText}`);
@@ -61,7 +62,7 @@ export function useSettingsApi() {
 
   // Update settings
   const updateSettings = React.useCallback(async (request: PatchSettingsRequest) => {
-    const response = await fetch(API.settings.base, {
+    const response = await safeFetchEnhanced(API.settings.base, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -112,7 +113,7 @@ export function useBackupSettingsApi() {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const response = await fetch(API.settings.backup);
+      const response = await safeFetchEnhanced(API.settings.backup);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch backup settings: ${response.status} ${response.statusText}`);
@@ -136,7 +137,7 @@ export function useBackupSettingsApi() {
 
   // Update backup settings
   const updateBackupSettings = React.useCallback(async (request: PatchBackupSettingsRequest) => {
-    const response = await fetch(API.settings.backup, {
+    const response = await safeFetchEnhanced(API.settings.backup, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -187,7 +188,7 @@ export function useSystemStatusApi() {
     setState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const response = await fetch(API.system.status);
+      const response = await safeFetchEnhanced(API.system.status);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch system status: ${response.status} ${response.statusText}`);
