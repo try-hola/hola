@@ -32,7 +32,18 @@ jobs:
 
       - name: Resolve version
         id: ver
-        run: echo "version=${GITHUB_REF_NAME#cli-v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # A pre-release version (e.g. 0.5.0-rc.1) must not move the :latest tag —
+          # only stable releases become the default a fresh `docker compose up` pulls.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "server_tags=ghcr.io/try-hola/server:$VERSION" >> "$GITHUB_OUTPUT"
+            echo "web_tags=ghcr.io/try-hola/web:$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "server_tags=ghcr.io/try-hola/server:$VERSION,ghcr.io/try-hola/server:latest" >> "$GITHUB_OUTPUT"
+            echo "web_tags=ghcr.io/try-hola/web:$VERSION,ghcr.io/try-hola/web:latest" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -54,9 +65,7 @@ jobs:
           file: packages/server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/try-hola/server:${{ steps.ver.outputs.version }}
-            ghcr.io/try-hola/server:latest
+          tags: ${{ steps.ver.outputs.server_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -67,9 +76,7 @@ jobs:
           file: packages/web/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/try-hola/web:${{ steps.ver.outputs.version }}
-            ghcr.io/try-hola/web:latest
+          tags: ${{ steps.ver.outputs.web_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -92,7 +99,11 @@ jobs:
 
       - name: Resolve version
         id: ver
-        run: echo "version=${GITHUB_REF_NAME#cli-v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Pre-release versions (e.g. 0.5.0-rc.1) are published as GitHub prereleases.
+          [[ "$VERSION" == *-* ]] && echo "prerelease=true" >> "$GITHUB_OUTPUT" || echo "prerelease=false" >> "$GITHUB_OUTPUT"
 
       - name: Compile binaries (cross-target)
         run: |
@@ -123,6 +134,7 @@ jobs:
           # Create the release if it does not exist, then upload (clobbering) the assets.
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
+              ${{ steps.ver.outputs.prerelease == 'true' && '--prerelease' || '' }} \
               --title "Hola CLI $GITHUB_REF_NAME" \
               --notes "Standalone \`hola\` CLI binaries. Install with:
           \`\`\`
