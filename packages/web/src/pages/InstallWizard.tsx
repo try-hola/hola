@@ -12,6 +12,7 @@ import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
 import { useDraftUpload } from '../hooks/useDraftUpload';
 import { useDraftFinalization } from '../hooks/useDraftFinalization';
+import { api } from '../utils/api-hybrid';
 
 const steps = [
   { id: 'env', name: 'Environment Variables', description: 'Configure application settings' },
@@ -66,33 +67,46 @@ export const InstallWizard: React.FC = () => {
   const [editMode, setEditMode] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // Mock app data (would be loaded from catalog in real implementation)
-  const app = {
-    id: appId,
-    name: 'Nextcloud',
-    icon: '☁️',
-    description: 'Self-hosted productivity platform with file sync, calendar, and collaboration tools',
-  };
+  // Real app metadata, resolved from the catalog when the draft is created.
+  // Falls back to the route's appId for the brief window before the draft loads.
+  const app = createDraftHook.data?.app ?? { id: appId ?? '', name: appId ?? 'app', icon: '📦' };
+  // The catalog version this draft pins (defaults to 'latest' when unversioned).
+  const version = draftApi.data?.version ?? 'latest';
+
+  // Track the active draft + whether it was installed, so an abandoned wizard
+  // can clean up its orphaned draft on unmount without deleting an installed one.
+  const draftIdRef = React.useRef<string | null>(null);
+  const installedRef = React.useRef(false);
+  React.useEffect(() => { draftIdRef.current = draftId; }, [draftId]);
+  React.useEffect(() => {
+    return () => {
+      const id = draftIdRef.current;
+      if (id && !installedRef.current) {
+        // Best-effort: drop the draft the user never finished installing.
+        void api.drafts.remove(id).catch(() => {});
+      }
+    };
+  }, []);
 
   // Create draft when component mounts
   useEffect(() => {
     if (!appId || createDraftHook.data) return; // Don't create if already exists
-    
+
     const initializeDraft = async () => {
       try {
         const result = await createDraftHook.createDraft({ appId });
-        
+
         // Update state with draft data
         setSystemEnvVars(result.systemEnv);
         setEnvVars(result.appEnv);
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
-        
+
       } catch (err) {
         console.error('Failed to create draft:', err);
       }
     };
-    
+
     initializeDraft();
   }, [appId, createDraftHook]); // Include the whole hook object
 
@@ -191,6 +205,8 @@ export const InstallWizard: React.FC = () => {
   const handleInstall = async () => {
     const success = await finalizeDraft();
     if (success) {
+      // Mark installed so the unmount cleanup doesn't delete this draft.
+      installedRef.current = true;
       navigate('/deployments');
     }
   };
@@ -472,7 +488,9 @@ services:
               Defaults are pre-filled from the catalog. Override system defaults only when needed. Secrets are masked — reveal to check.
             </p>
 
-            {/* System Environment Variables */}
+            {/* System Environment Variables — only shown when the operator has
+                defined platform-wide vars (none by default). */}
+            {systemEnvVars.length > 0 && (
             <div className="mb-6">
               <div className="flex items-center justify-between mb-3">
                 <h4 className="text-[13.5px] font-semibold text-text-strong">System variables</h4>
@@ -567,6 +585,7 @@ services:
                 </div>
               )}
             </div>
+            )}
 
             {/* Application-Specific Environment Variables */}
             <div>
@@ -1093,7 +1112,7 @@ services:
         <div>
           <div className="text-[21px] font-semibold tracking-[-0.02em]">Install {app.name}</div>
           <div className="text-[13px] text-text-muted mt-0.5">
-            Version <span className="font-mono">latest</span> · Step {currentStep + 1} — {steps[currentStep].name}
+            Version <span className="font-mono">{version}</span> · Step {currentStep + 1} — {steps[currentStep].name}
           </div>
         </div>
       </div>

@@ -348,10 +348,11 @@ export class RealDraftService implements DraftService {
           name: app.name,
           icon: app.icon,
         },
-        systemEnv: [
-          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-        ],
+        // Platform-wide system variables an operator may override per-install.
+        // None are defined by default (apps resolve install-specific values from
+        // their bundle compose + tokens), so this is empty rather than seeded with
+        // placeholder vars that don't affect the deploy.
+        systemEnv: [],
         appEnv: defaults.env,
         defaults: defaults.defaults,
       };
@@ -709,10 +710,7 @@ export class MockDraftService implements DraftService {
     return {
       draftId,
       app: { id: request.appId, name: 'Mock App', icon: '📦' },
-      systemEnv: [
-        { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-        { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-      ],
+      systemEnv: [],
       appEnv: draft.appEnv,
       defaults: { ports: draft.ports, volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }] },
     };

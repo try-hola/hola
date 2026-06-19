@@ -327,7 +327,10 @@ export class SdkAdapter {
       const path = `/api/drafts/${draftId}`;
       return this.enhancedRequest('PATCH', path, () => this.sdk.drafts.update(draftId, data), data, true);
     },
-    
+
+    remove: (draftId: string): Promise<void> =>
+      this.enhancedRequest('DELETE', `/api/drafts/${draftId}`, () => this.sdk.drafts.remove(draftId), undefined, false),
+
     uploadFile: (draftId: string, formData: FormData): Promise<UploadDraftFileResponse> => {
       const path = `/api/drafts/${draftId}/uploads`;
       // For web file uploads, we need to preserve FormData approach
