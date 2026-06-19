@@ -11,7 +11,7 @@
     },
     "packages/cli": {
       "name": "@hola/cli",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "bin": {
         "hola": "./bin/hola",
       },
@@ -40,11 +40,11 @@
     },
     "packages/compose": {
       "name": "@hola/compose",
-      "version": "0.4.0",
+      "version": "0.4.1",
     },
     "packages/sdk": {
       "name": "@hola/sdk",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "@hola/shared": "workspace:*",
       },
@@ -58,7 +58,7 @@
     },
     "packages/server": {
       "name": "@hola/server",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "@hola/shared": "workspace:*",
         "yaml": "^2.9.0",
@@ -73,7 +73,7 @@
     },
     "packages/shared": {
       "name": "@hola/shared",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "yaml": "^2.9.0",
       },
