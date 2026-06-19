@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
-import { 
-  User, 
-  Shield, 
-  Palette, 
-  Bell, 
-  Server, 
-  Activity,
-  Globe,
+import {
+  Shield,
   Info,
   Plus,
   X,
@@ -15,40 +9,45 @@ import {
   Save,
   Wifi,
   WifiOff,
-  AlertTriangle
+  AlertTriangle,
+  Activity
 } from 'lucide-react';
-import type { 
+import type {
   SystemEnvVar,
   GetBackupSettingsResponse
 } from '@hola/shared';
 import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
 import { useSystemStatusApi } from '../hooks/useSettingsApi';
+import { useTheme, type ThemePref } from '../hooks/useTheme';
 
 export const Settings: React.FC = () => {
   // API hooks for data management
-  const { 
-    data: settings, 
-    loading: settingsLoading, 
-    error: settingsError, 
-    updateSettings 
+  const {
+    data: settings,
+    loading: settingsLoading,
+    error: settingsError,
+    updateSettings
   } = useSettingsApi();
-  
-  const { 
-    data: backupSettings, 
-    loading: backupLoading, 
-    error: backupError, 
-    updateBackupSettings 
+
+  const {
+    data: backupSettings,
+    loading: backupLoading,
+    error: backupError,
+    updateBackupSettings
   } = useBackupSettingsApi();
-  
-  const { 
-    data: systemStatus, 
-    loading: statusLoading, 
-    error: statusError 
+
+  const {
+    data: systemStatus,
+    loading: statusLoading,
+    error: statusError
   } = useSystemStatusApi();
 
+  // Theme is owned by the shared ThemeProvider (single source of truth shared
+  // with the Topbar toggle), so the selector always reflects the applied theme.
+  const { theme, setTheme } = useTheme();
+
   // Local UI state
-  const [theme, setTheme] = useState('dark');
   const [notifications, setNotifications] = useState({
     email: true,
     push: true,
@@ -63,7 +62,7 @@ export const Settings: React.FC = () => {
 
   // Local state for system env vars editing
   const [localSystemEnvVars, setLocalSystemEnvVars] = useState<SystemEnvVar[]>([]);
-  
+
   // Local state for backup settings editing
   const [localBackupSettings, setLocalBackupSettings] = useState<GetBackupSettingsResponse | null>(null);
 
@@ -83,14 +82,14 @@ export const Settings: React.FC = () => {
 
   // Loading state - any API loading
   const loading = settingsLoading || backupLoading || statusLoading;
-  
+
   // Combined error state
   const error = settingsError || backupError || statusError;
 
   // Save settings handlers
   const handleSaveSettings = async () => {
     if (!settings || !updateSettings) return;
-    
+
     try {
       setSaving(true);
       await updateSettings({
@@ -107,7 +106,7 @@ export const Settings: React.FC = () => {
   // Save backup settings handler
   const handleSaveBackupSettings = async () => {
     if (!localBackupSettings || !updateBackupSettings) return;
-    
+
     try {
       setSavingBackup(true);
       await updateBackupSettings({
@@ -147,529 +146,411 @@ export const Settings: React.FC = () => {
     setLocalBackupSettings({ ...localBackupSettings, [field]: value });
   };
 
+  const themeOptions: { value: ThemePref; label: string }[] = [
+    { value: 'dark', label: 'Dark' },
+    { value: 'light', label: 'Light' },
+    { value: 'system', label: 'System' },
+  ];
+
+  const notificationToggles: { key: keyof typeof notifications; label: string; desc: string }[] = [
+    { key: 'email', label: 'Email notifications', desc: 'Deliver alerts to your inbox' },
+    { key: 'updates', label: 'Update notifications', desc: 'New catalog versions and platform updates' },
+    { key: 'backups', label: 'Backup notifications', desc: 'Scheduled backup results' },
+    { key: 'errors', label: 'Error notifications', desc: 'Deployment and runtime failures' },
+  ];
+
+  const inputClass =
+    'w-full h-10 bg-surface-2 border border-border rounded-[9px] text-text-strong px-[13px] text-[13.5px] outline-none focus:border-primary';
+  const labelClass = 'text-[12.5px] text-text-muted mb-1.5';
+
   return (
-    <div className="space-y-6">
+    <div className="animate-fadein max-w-[760px]">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-semibold">Settings</h1>
-        <p className="text-text-muted mt-1">Manage your ¡Hola! platform configuration</p>
+      <div className="mb-[22px]">
+        <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Settings</h1>
+        <p className="mt-1.5 text-text-muted text-sm">
+          Platform configuration for your ¡Hola! deployment.
+        </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Profile */}
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <User className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">Profile</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Username</label>
-              <div className="px-3 py-2 bg-surface-2 border border-border rounded-lg text-sm text-text-muted">
-                admin (managed by Authentik)
-              </div>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium mb-2">Email</label>
-              <div className="px-3 py-2 bg-surface-2 border border-border rounded-lg text-sm text-text-muted">
-                admin@localhost (managed by Authentik)
-              </div>
-            </div>
+      {error && (
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm mb-4 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 flex-none" />
+          <span>{error}</span>
+        </div>
+      )}
 
-            <div className="bg-info/10 border border-info/20 rounded-lg p-4">
-              <div className="flex items-start space-x-3">
-                <Info className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <div className="font-medium text-info">Identity Management</div>
-                  <div className="text-text-muted mt-1">
-                    Profile information is managed through Authentik. Use the Authentik dashboard to modify your account details.
-                  </div>
-                </div>
-              </div>
+      <div className="flex flex-col gap-4">
+        {/* Profile */}
+        <div className="bg-surface-1 border border-border rounded-card p-5">
+          <div className="font-semibold text-[15px] mb-1">Profile</div>
+          <p className="text-[13px] text-text-muted mb-3.5">Managed by Authentik. Edit details in the Authentik dashboard.</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className={labelClass}>Username</div>
+              <input value="admin" readOnly className={inputClass} />
+            </div>
+            <div>
+              <div className={labelClass}>Email</div>
+              <input value="admin@localhost" readOnly className={inputClass} />
             </div>
           </div>
         </div>
 
-        {/* Theme */}
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <Palette className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">Appearance</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-2">Theme</label>
-              <select
-                value={theme}
-                onChange={(e) => setTheme(e.target.value)}
-                className="w-full px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-                <option value="system">System</option>
-              </select>
-            </div>
+        {/* Appearance */}
+        <div className="bg-surface-1 border border-border rounded-card p-5">
+          <div className="font-semibold text-[15px] mb-1">Appearance</div>
+          <p className="text-[13px] text-text-muted mb-3.5">Choose how ¡Hola! looks. System follows your device.</p>
+          <div className="flex gap-2">
+            {themeOptions.map((o) => {
+              const selected = theme === o.value;
+              return (
+                <div
+                  key={o.value}
+                  onClick={() => setTheme(o.value)}
+                  className={`flex-1 h-[42px] flex items-center justify-center rounded-[10px] text-[13.5px] font-semibold cursor-pointer border ${
+                    selected
+                      ? 'bg-primary-weak text-primary border-primary'
+                      : 'bg-surface-2 text-text-muted border-border hover:text-text-strong'
+                  }`}
+                >
+                  {o.label}
+                </div>
+              );
+            })}
           </div>
         </div>
 
         {/* Notifications */}
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <Bell className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">Notifications</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <label className="flex items-center justify-between">
-              <span className="text-sm">Email notifications</span>
-              <input
-                type="checkbox"
-                checked={notifications.email}
-                onChange={(e) => setNotifications({...notifications, email: e.target.checked})}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </label>
-            
-            <label className="flex items-center justify-between">
-              <span className="text-sm">Update notifications</span>
-              <input
-                type="checkbox"
-                checked={notifications.updates}
-                onChange={(e) => setNotifications({...notifications, updates: e.target.checked})}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </label>
-            
-            <label className="flex items-center justify-between">
-              <span className="text-sm">Backup notifications</span>
-              <input
-                type="checkbox"
-                checked={notifications.backups}
-                onChange={(e) => setNotifications({...notifications, backups: e.target.checked})}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </label>
-            
-            <label className="flex items-center justify-between">
-              <span className="text-sm">Error notifications</span>
-              <input
-                type="checkbox"
-                checked={notifications.errors}
-                onChange={(e) => setNotifications({...notifications, errors: e.target.checked})}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </label>
-          </div>
-        </div>
-
-        {/* Privacy */}
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <Shield className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">Privacy</h2>
-          </div>
-          
-          <div className="space-y-4">
-            <label className="flex items-center justify-between">
-              <div>
-                <span className="text-sm font-medium">Analytics</span>
-                <p className="text-xs text-text-muted">Help improve ¡Hola! by sharing anonymous usage data</p>
-              </div>
-              <input
-                type="checkbox"
-                checked={analytics}
-                onChange={(e) => setAnalytics(e.target.checked)}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </label>
-          </div>
-        </div>
-      </div>
-
-      {/* Backup Settings */}
-      <div className="bg-surface-1 rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-3">
-            <Server className="w-5 h-5 text-primary" />
-            <div>
-              <h2 className="text-lg font-medium">Backup Settings</h2>
-              <p className="text-sm text-text-muted">Configure automated backup schedules and retention</p>
-            </div>
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="animate-pulse space-y-4">
-            <div className="h-4 bg-surface-2 rounded w-1/3"></div>
-            <div className="h-10 bg-surface-2 rounded w-full"></div>
-            <div className="h-4 bg-surface-2 rounded w-1/4"></div>
-            <div className="h-10 bg-surface-2 rounded w-1/2"></div>
-          </div>
-        ) : localBackupSettings ? (
-          <div className="space-y-6">
-            {/* Schedule Toggle */}
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm font-medium">Automated Backups</label>
-                <p className="text-xs text-text-muted mt-1">Enable scheduled automatic backups</p>
-              </div>
-              <input
-                type="checkbox"
-                checked={localBackupSettings.scheduleEnabled}
-                onChange={(e) => updateLocalBackupSettings('scheduleEnabled', e.target.checked)}
-                className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-              />
-            </div>
-
-            {/* Schedule Time */}
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Backup Time</label>
-              <div className="flex items-center space-x-3">
-                <input
-                  type="time"
-                  value={localBackupSettings.scheduleTime}
-                  onChange={(e) => updateLocalBackupSettings('scheduleTime', e.target.value)}
-                  disabled={!localBackupSettings.scheduleEnabled}
-                  className="px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed"
-                />
-                <span className="text-sm text-text-muted">Daily backup time (server timezone)</span>
-              </div>
-            </div>
-
-            {/* Retention Period */}
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">Retention Period</label>
-              <div className="flex items-center space-x-3">
-                <input
-                  type="number"
-                  min="1"
-                  max="365"
-                  value={localBackupSettings.retentionDays}
-                  onChange={(e) => updateLocalBackupSettings('retentionDays', parseInt(e.target.value))}
-                  className="w-24 px-3 py-2 bg-surface-0 border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-                <span className="text-sm text-text-muted">days (1-365)</span>
-              </div>
-              <p className="text-xs text-text-muted">
-                Backups older than this will be automatically deleted
-              </p>
-            </div>
-
-            {/* Save Button */}
-            <div className="flex justify-end space-x-3 pt-4 border-t border-border">
-              {error && (
-                <div className="flex items-center space-x-2 text-danger text-sm">
-                  <AlertTriangle className="w-4 h-4" />
-                  <span>{error}</span>
-                </div>
-              )}
-              <button 
-                onClick={handleSaveBackupSettings}
-                disabled={savingBackup}
-                className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+        <div className="bg-surface-1 border border-border rounded-card p-5">
+          <div className="font-semibold text-[15px] mb-4">Notifications</div>
+          {notificationToggles.map((t) => {
+            const on = notifications[t.key];
+            return (
+              <div
+                key={t.key}
+                className="flex items-center gap-[14px] py-[11px] border-b border-border-soft"
               >
-                {savingBackup ? (
-                  <Activity className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Save className="w-4 h-4" />
-                )}
-                <span>{savingBackup ? 'Saving...' : 'Save Backup Settings'}</span>
-              </button>
+                <div className="flex-1">
+                  <div className="text-[13.5px] font-medium">{t.label}</div>
+                  <div className="text-xs text-text-faint">{t.desc}</div>
+                </div>
+                <div
+                  onClick={() => setNotifications({ ...notifications, [t.key]: !on })}
+                  className={`w-[38px] h-[22px] rounded-full relative cursor-pointer transition-colors flex-none ${
+                    on ? 'bg-primary' : 'bg-surface-3'
+                  }`}
+                >
+                  <div
+                    className={`absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-[left] ${
+                      on ? 'left-[18px]' : 'left-[2px]'
+                    }`}
+                  />
+                </div>
+              </div>
+            );
+          })}
+          {/* Analytics (privacy) */}
+          <div className="flex items-center gap-[14px] py-[11px] border-b border-border-soft">
+            <div className="flex-1">
+              <div className="text-[13.5px] font-medium">Anonymous analytics</div>
+              <div className="text-xs text-text-faint">Help improve ¡Hola! by sharing anonymous usage data</div>
+            </div>
+            <div
+              onClick={() => setAnalytics(!analytics)}
+              className={`w-[38px] h-[22px] rounded-full relative cursor-pointer transition-colors flex-none ${
+                analytics ? 'bg-primary' : 'bg-surface-3'
+              }`}
+            >
+              <div
+                className={`absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-[left] ${
+                  analytics ? 'left-[18px]' : 'left-[2px]'
+                }`}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Backup */}
+        <div className="bg-surface-1 border border-border rounded-card p-5">
+          <div className="font-semibold text-[15px] mb-1">Backup</div>
+          <p className="text-[13px] text-text-muted mb-3.5">Configure automated backup schedules and retention.</p>
+
+          {loading ? (
+            <div className="animate-pulse space-y-4">
+              <div className="h-4 bg-surface-2 rounded w-1/3" />
+              <div className="h-10 bg-surface-2 rounded w-full" />
+              <div className="h-4 bg-surface-2 rounded w-1/4" />
+              <div className="h-10 bg-surface-2 rounded w-1/2" />
+            </div>
+          ) : localBackupSettings ? (
+            <>
+              {/* Schedule Toggle */}
+              <div className="flex items-center gap-[14px] py-[11px] border-b border-border-soft">
+                <div className="flex-1">
+                  <div className="text-[13.5px] font-medium">Automated backups</div>
+                  <div className="text-xs text-text-faint">Enable scheduled automatic backups</div>
+                </div>
+                <div
+                  onClick={() => updateLocalBackupSettings('scheduleEnabled', !localBackupSettings.scheduleEnabled)}
+                  className={`w-[38px] h-[22px] rounded-full relative cursor-pointer transition-colors flex-none ${
+                    localBackupSettings.scheduleEnabled ? 'bg-primary' : 'bg-surface-3'
+                  }`}
+                >
+                  <div
+                    className={`absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-[left] ${
+                      localBackupSettings.scheduleEnabled ? 'left-[18px]' : 'left-[2px]'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 pt-4">
+                <div>
+                  <div className={labelClass}>Backup time (server timezone)</div>
+                  <input
+                    type="time"
+                    value={localBackupSettings.scheduleTime}
+                    onChange={(e) => updateLocalBackupSettings('scheduleTime', e.target.value)}
+                    disabled={!localBackupSettings.scheduleEnabled}
+                    className={`${inputClass} font-mono disabled:opacity-50 disabled:cursor-not-allowed`}
+                  />
+                </div>
+                <div>
+                  <div className={labelClass}>Retention period (1–365 days)</div>
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    value={localBackupSettings.retentionDays}
+                    onChange={(e) => updateLocalBackupSettings('retentionDays', parseInt(e.target.value))}
+                    className={`${inputClass} font-mono`}
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-4 mt-4 border-t border-border-soft">
+                <button
+                  onClick={handleSaveBackupSettings}
+                  disabled={savingBackup}
+                  className="h-10 px-[14px] bg-primary-weak text-primary rounded-[9px] text-[13px] font-semibold hover:bg-primary hover:text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {savingBackup ? <Activity className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  <span>{savingBackup ? 'Saving…' : 'Save backup settings'}</span>
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        {/* System environment variables */}
+        <div className="bg-surface-1 border border-border rounded-card p-5">
+          <div className="flex items-start justify-between mb-1">
+            <div className="font-semibold text-[15px]">System environment variables</div>
+            <button
+              onClick={addSystemEnvVar}
+              className="h-9 px-[12px] bg-primary-weak text-primary rounded-[9px] text-[13px] font-semibold hover:bg-primary hover:text-white flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add variable</span>
+            </button>
+          </div>
+          <p className="text-[13px] text-text-muted mb-3.5">Global variables available to all deployments.</p>
+
+          <div className="flex flex-col gap-2">
+            {localSystemEnvVars.map((envVar: SystemEnvVar, index: number) => (
+              <div key={index} className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="VARIABLE_NAME"
+                  value={envVar.key}
+                  onChange={(e) => updateSystemEnvVar(index, 'key', e.target.value)}
+                  className={`${inputClass} font-mono w-[34%] flex-none`}
+                />
+                <div className="flex-1 relative">
+                  <input
+                    type={envVar.isSecret && !showSecrets[envVar.key] ? 'password' : 'text'}
+                    placeholder="Value"
+                    value={envVar.value}
+                    onChange={(e) => updateSystemEnvVar(index, 'value', e.target.value)}
+                    className={`${inputClass} font-mono pr-10`}
+                  />
+                  {envVar.isSecret && (
+                    <button
+                      type="button"
+                      onClick={() => toggleSecretVisibility(envVar.key)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-text-muted hover:text-text-strong"
+                    >
+                      {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  )}
+                </div>
+                <label className="flex items-center gap-1.5 text-[12.5px] text-text-muted flex-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={envVar.isSecret}
+                    onChange={(e) => updateSystemEnvVar(index, 'isSecret', e.target.checked)}
+                    className="w-4 h-4 accent-primary"
+                  />
+                  Secret
+                </label>
+                <button
+                  onClick={() => removeSystemEnvVar(index)}
+                  className="w-10 h-10 bg-surface-2 border border-border rounded-[9px] text-text-muted hover:text-danger flex items-center justify-center flex-none"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end pt-4 mt-4 border-t border-border-soft">
+            <button
+              onClick={handleSaveSettings}
+              disabled={saving}
+              className="h-10 px-[14px] bg-primary-weak text-primary rounded-[9px] text-[13px] font-semibold hover:bg-primary hover:text-white disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {saving ? <Activity className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              <span>{saving ? 'Saving…' : 'Save system variables'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* System status */}
+        {loading ? (
+          <div className="bg-surface-1 border border-border rounded-card p-5">
+            <div className="font-semibold text-[15px] mb-4">System status</div>
+            <div className="animate-pulse grid grid-cols-2 gap-4">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i}>
+                  <div className="h-4 bg-surface-2 rounded w-1/2 mb-2" />
+                  <div className="h-6 bg-surface-2 rounded w-3/4" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : systemStatus ? (
+          <div className="bg-surface-1 border border-border rounded-card p-5">
+            <div className="font-semibold text-[15px] mb-4">System status</div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className={labelClass}>¡Hola! platform</div>
+                <div className="font-mono text-[13px] text-text-strong">v{systemStatus.version.hola}</div>
+              </div>
+              <div>
+                <div className={labelClass}>Docker engine</div>
+                <div className="font-mono text-[13px] text-text-strong flex items-center gap-2">
+                  <span>v{systemStatus.docker.version || 'unknown'}</span>
+                  {systemStatus.docker.ok ? (
+                    <Wifi className="w-4 h-4 text-success" />
+                  ) : (
+                    <WifiOff className="w-4 h-4 text-danger" />
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className={labelClass}>Docker Compose</div>
+                <div className="font-mono text-[13px] text-text-strong">v{systemStatus.version.compose}</div>
+              </div>
+              <div>
+                <div className={labelClass}>Disk usage</div>
+                <div className="font-mono text-[13px] text-text-strong">
+                  {Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}% used
+                </div>
+              </div>
             </div>
 
-            {/* Info Notice */}
-            <div className="bg-info/10 border border-info/20 rounded-lg p-4">
-              <div className="flex items-start space-x-3">
-                <Info className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <div className="font-medium text-info">Backup Schedule</div>
-                  <div className="text-text-muted mt-1 space-y-1">
-                    <div>• Automated backups run daily at the specified time</div>
-                    <div>• Manual backups can be created anytime from the Backups page</div>
-                    <div>• Backups include all deployment data and configurations</div>
-                    <div>• Older backups are automatically cleaned up based on retention settings</div>
+            {/* Integrations */}
+            <div className="pt-4 mt-4 border-t border-border-soft">
+              <div className="text-[13.5px] font-medium mb-3">Integrations</div>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between px-[13px] h-11 bg-surface-2 border border-border rounded-[9px]">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${systemStatus.docker.ok ? 'bg-success' : 'bg-danger'}`} />
+                    <div className="text-[13.5px] font-medium">Docker engine</div>
+                  </div>
+                  <span className={`text-[13px] ${systemStatus.docker.ok ? 'text-success' : 'text-danger'}`}>
+                    {systemStatus.docker.ok ? 'Connected' : 'Disconnected'}
+                  </span>
+                </div>
+
+                {systemStatus.oras && (
+                  <div className="flex items-center justify-between px-[13px] h-11 bg-surface-2 border border-border rounded-[9px]">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${systemStatus.oras.ok ? 'bg-success' : 'bg-danger'}`} />
+                      <div className="text-[13.5px] font-medium">ORAS registry</div>
+                    </div>
+                    <span className={`text-[13px] ${systemStatus.oras.ok ? 'text-success' : 'text-danger'}`}>
+                      {systemStatus.oras.ok ? 'Connected' : 'Disconnected'}
+                    </span>
+                  </div>
+                )}
+
+                {systemStatus.authentik && (
+                  <div className="flex items-center justify-between px-[13px] h-11 bg-surface-2 border border-border rounded-[9px]">
+                    <div className="flex items-center gap-3">
+                      <Shield className="w-3.5 h-3.5 text-primary" />
+                      <div className="text-[13.5px] font-medium">Authentik SSO</div>
+                    </div>
+                    <span className={`text-[13px] ${systemStatus.authentik.ok ? 'text-success' : 'text-danger'}`}>
+                      {systemStatus.authentik.ok ? 'Connected' : 'Disconnected'}
+                    </span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between px-[13px] h-11 bg-surface-2 border border-border rounded-[9px]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2 h-2 rounded-full bg-success" />
+                    <div className="text-[13.5px] font-medium">Traefik proxy</div>
+                  </div>
+                  <span className="text-[13px] text-success">Connected</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Storage */}
+            <div className="pt-4 mt-4 border-t border-border-soft">
+              <div className="text-[13.5px] font-medium mb-3">Storage</div>
+              <div className="flex flex-col gap-2 text-[13px]">
+                <div className="flex items-center justify-between">
+                  <span className="text-text-muted">Total disk space</span>
+                  <span className="font-mono">{(systemStatus.disk.totalBytes / (1024 ** 3)).toFixed(1)} GB</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-muted">Free space</span>
+                  <span className="font-mono">{(systemStatus.disk.freeBytes / (1024 ** 3)).toFixed(1)} GB</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-text-muted">Used space</span>
+                  <span className="font-mono">{((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / (1024 ** 3)).toFixed(1)} GB</span>
+                </div>
+                <div className="mt-1">
+                  <div className="w-full bg-surface-2 rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-2 rounded-full transition-all duration-300 ${
+                        Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100) > 80
+                          ? 'bg-danger'
+                          : 'bg-success'
+                      }`}
+                      style={{ width: `${Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}%` }}
+                    />
                   </div>
                 </div>
               </div>
             </div>
           </div>
         ) : null}
-      </div>
 
-      {/* System Environment Variables */}
-      <div className="bg-surface-1 rounded-lg border border-border p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center space-x-3">
-            <Globe className="w-5 h-5 text-primary" />
-            <div>
-              <h2 className="text-lg font-medium">System Environment Variables</h2>
-              <p className="text-sm text-text-muted">Global variables available to all deployments</p>
-            </div>
-          </div>
-          <button
-            onClick={addSystemEnvVar}
-            className="bg-primary text-primary-contrast px-3 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex items-center space-x-2"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Variable</span>
-          </button>
-        </div>
-
-        <div className="space-y-3">
-          <div className="grid grid-cols-12 gap-3 text-sm font-medium text-text-muted border-b border-border pb-2">
-            <div className="col-span-3">Key</div>
-            <div className="col-span-4">Value</div>
-            <div className="col-span-1 text-center">Secret</div>
-            <div className="col-span-3">Description</div>
-            <div className="col-span-1"></div>
-          </div>
-
-          {localSystemEnvVars.map((envVar: SystemEnvVar, index: number) => (
-            <div key={index} className="grid grid-cols-12 gap-3 items-center p-3 bg-surface-2 rounded-lg">
-              <div className="col-span-3">
-                <input
-                  type="text"
-                  placeholder="VARIABLE_NAME"
-                  value={envVar.key}
-                  onChange={(e) => updateSystemEnvVar(index, 'key', e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-0 border border-border rounded text-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              <div className="col-span-4 relative">
-                <input
-                  type={envVar.isSecret && !showSecrets[envVar.key] ? 'password' : 'text'}
-                  placeholder="Value"
-                  value={envVar.value}
-                  onChange={(e) => updateSystemEnvVar(index, 'value', e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-0 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 pr-10"
-                />
-                {envVar.isSecret && (
-                  <button
-                    type="button"
-                    onClick={() => toggleSecretVisibility(envVar.key)}
-                    className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 text-text-muted hover:text-text-strong transition-colors"
-                  >
-                    {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                )}
-              </div>
-              <div className="col-span-1 flex justify-center">
-                <input
-                  type="checkbox"
-                  checked={envVar.isSecret}
-                  onChange={(e) => updateSystemEnvVar(index, 'isSecret', e.target.checked)}
-                  className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-                />
-              </div>
-              <div className="col-span-3">
-                <input
-                  type="text"
-                  placeholder="Description"
-                  value={envVar.description}
-                  onChange={(e) => updateSystemEnvVar(index, 'description', e.target.value)}
-                  className="w-full px-3 py-2 bg-surface-0 border border-border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-              <div className="col-span-1 flex justify-center">
-                <button
-                  onClick={() => removeSystemEnvVar(index)}
-                  className="p-1 text-text-muted hover:text-danger transition-colors"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 flex justify-end space-x-3">
-          {error && (
-            <div className="flex items-center space-x-2 text-danger text-sm">
-              <AlertTriangle className="w-4 h-4" />
-              <span>{error}</span>
-            </div>
-          )}
-          <button 
-            onClick={handleSaveSettings}
-            disabled={saving}
-            className="bg-success text-primary-contrast px-4 py-2 rounded-lg text-sm font-medium hover:bg-success/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-          >
-            {saving ? (
-              <Activity className="w-4 h-4 animate-spin" />
-            ) : (
-              <Save className="w-4 h-4" />
-            )}
-            <span>{saving ? 'Saving...' : 'Save System Variables'}</span>
-          </button>
-        </div>
-
-        <div className="mt-4 bg-info/10 border border-info/20 rounded-lg p-4">
-          <div className="flex items-start space-x-3">
-            <Info className="w-4 h-4 text-info flex-shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <div className="font-medium text-info">System Variables</div>
-              <div className="text-text-muted mt-1">
-                These variables are available to all deployments by default. Individual deployments can override these values when needed.
-              </div>
-            </div>
+        {/* Identity management notice */}
+        <div className="bg-surface-1 border border-border rounded-card p-5 flex items-start gap-3">
+          <Info className="w-4 h-4 text-info flex-none mt-0.5" />
+          <div className="text-[13px] text-text-muted">
+            <span className="font-medium text-text-strong">Identity management.</span>{' '}
+            Profile information is managed through Authentik. Use the Authentik dashboard to modify your account details.
           </div>
         </div>
       </div>
-
-      {/* System Status & Information */}
-      {loading ? (
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <Server className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">System Status</h2>
-          </div>
-          <div className="animate-pulse">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {[1, 2, 3, 4].map((i) => (
-                <div key={i}>
-                  <div className="h-4 bg-surface-2 rounded w-1/2 mb-2"></div>
-                  <div className="h-6 bg-surface-2 rounded w-3/4"></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : systemStatus ? (
-        <div className="bg-surface-1 rounded-lg border border-border p-6">
-          <div className="flex items-center space-x-3 mb-4">
-            <Server className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">System Status</h2>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-            <div>
-              <div className="text-sm text-text-muted mb-1">Hola Platform</div>
-              <div className="font-medium">v{systemStatus.version.hola}</div>
-            </div>
-            
-            <div>
-              <div className="text-sm text-text-muted mb-1">Docker Engine</div>
-              <div className="font-medium flex items-center space-x-2">
-                <span>v{systemStatus.docker.version || 'Unknown'}</span>
-                {systemStatus.docker.ok ? 
-                  <Wifi className="w-4 h-4 text-success" /> : 
-                  <WifiOff className="w-4 h-4 text-danger" />
-                }
-              </div>
-            </div>
-            
-            <div>
-              <div className="text-sm text-text-muted mb-1">Docker Compose</div>
-              <div className="font-medium">v{systemStatus.version.compose}</div>
-            </div>
-            
-            <div>
-              <div className="text-sm text-text-muted mb-1">Disk Usage</div>
-              <div className="font-medium">
-                {Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}% used
-              </div>
-            </div>
-          </div>
-
-          {/* Integration Status */}
-          <div className="border-t border-border pt-6">
-            <h3 className="text-lg font-medium mb-4">Integration Status</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-                <div className="flex items-center space-x-3">
-                  <div className={`w-2 h-2 rounded-full ${systemStatus.docker.ok ? 'bg-success' : 'bg-danger'}`}></div>
-                  <div>
-                    <div className="font-medium">Docker Engine</div>
-                    <div className="text-sm text-text-muted">Container runtime</div>
-                  </div>
-                </div>
-                <span className={`text-sm ${systemStatus.docker.ok ? 'text-success' : 'text-danger'}`}>
-                  {systemStatus.docker.ok ? 'Connected' : 'Disconnected'}
-                </span>
-              </div>
-
-              {systemStatus.oras && (
-                <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className={`w-2 h-2 rounded-full ${systemStatus.oras.ok ? 'bg-success' : 'bg-danger'}`}></div>
-                    <div>
-                      <div className="font-medium">ORAS Registry</div>
-                      <div className="text-sm text-text-muted">OCI artifact storage</div>
-                    </div>
-                  </div>
-                  <span className={`text-sm ${systemStatus.oras.ok ? 'text-success' : 'text-danger'}`}>
-                    {systemStatus.oras.ok ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
-              )}
-
-              {systemStatus.authentik && (
-                <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-                  <div className="flex items-center space-x-3">
-                    <div className={`w-2 h-2 rounded-full ${systemStatus.authentik.ok ? 'bg-success' : 'bg-danger'}`}></div>
-                    <div>
-                      <div className="font-medium">Authentik</div>
-                      <div className="text-sm text-text-muted">Identity and access management</div>
-                    </div>
-                  </div>
-                  <span className={`text-sm ${systemStatus.authentik.ok ? 'text-success' : 'text-danger'}`}>
-                    {systemStatus.authentik.ok ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-                <div className="flex items-center space-x-3">
-                  <div className="w-2 h-2 rounded-full bg-success"></div>
-                  <div>
-                    <div className="font-medium">Traefik Proxy</div>
-                    <div className="text-sm text-text-muted">Reverse proxy and SSL termination</div>
-                  </div>
-                </div>
-                <span className="text-sm text-success">Connected</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Disk Usage Details */}
-          <div className="border-t border-border pt-6 mt-6">
-            <h3 className="text-lg font-medium mb-4">Storage Information</h3>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-text-muted">Total Disk Space:</span>
-                <span className="font-medium">{(systemStatus.disk.totalBytes / (1024 ** 3)).toFixed(1)} GB</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-text-muted">Free Space:</span>
-                <span className="font-medium">{(systemStatus.disk.freeBytes / (1024 ** 3)).toFixed(1)} GB</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-text-muted">Used Space:</span>
-                <span className="font-medium">{((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / (1024 ** 3)).toFixed(1)} GB</span>
-              </div>
-              <div className="mt-2">
-                <div className="flex justify-between text-xs text-text-muted mb-1">
-                  <span>Disk Usage</span>
-                  <span>{Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}%</span>
-                </div>
-                <div className="w-full bg-surface-0 rounded-full h-2">
-                  <div 
-                    className={`h-2 rounded-full transition-all duration-300 ${
-                      Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100) > 80 
-                        ? 'bg-danger' 
-                        : 'bg-success'
-                    }`}
-                    style={{ width: `${Math.round(((systemStatus.disk.totalBytes - systemStatus.disk.freeBytes) / systemStatus.disk.totalBytes) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 };

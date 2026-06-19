@@ -1,37 +1,68 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
-import { Search, User } from 'lucide-react';
+import { useLocation } from 'react-router-dom';
+import { Search, Moon, Sun } from 'lucide-react';
+import { useTheme } from '../../hooks/useTheme';
+
+const TITLES: Record<string, { title: string; crumb: string }> = {
+  '/apps': { title: 'Your apps', crumb: 'Installed applications' },
+  '/dashboard': { title: 'Dashboard', crumb: 'Server overview' },
+  '/catalog': { title: 'Catalog', crumb: 'Browse & install apps' },
+  '/deployments': { title: 'Deployments', crumb: 'All deployments' },
+  '/backups': { title: 'Backups', crumb: 'Snapshots & restore' },
+  '/notifications': { title: 'Notifications', crumb: 'System events' },
+  '/settings': { title: 'Settings', crumb: 'Platform configuration' },
+};
+
+function pageInfo(pathname: string): { title: string; crumb: string } {
+  if (pathname === '/' ) return TITLES['/apps'];
+  if (pathname.startsWith('/catalog/')) return { title: 'Install app', crumb: 'Catalog → Install' };
+  if (pathname.startsWith('/deployments/')) return { title: 'Deployment', crumb: 'Deployments → Detail' };
+  const key = Object.keys(TITLES).find((k) => pathname.startsWith(k));
+  return key ? TITLES[key] : { title: 'Hola', crumb: '' };
+}
 
 export const Topbar: React.FC = () => {
+  const location = useLocation();
+  const { applied, toggle } = useTheme();
+  const { title, crumb } = pageInfo(location.pathname);
+
   return (
-    <header className="h-16 bg-surface-1 border-b border-border px-6 flex items-center justify-between">
-      {/* Logo */}
-      <Link to="/dashboard" className="flex items-center space-x-3 group">
-        <span className="text-2xl group-hover:scale-110 transition-transform">🌮</span>
-        <span className="text-xl font-semibold">¡Hola!</span>
-      </Link>
-      
-      {/* Search and User */}
-      <div className="flex items-center space-x-6">
-        <div className="relative flex-1 max-w-3xl min-w-96">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-text-muted" />
-          <input
-            type="text"
-            placeholder="Search apps, deployments..."
-            className="w-full pl-10 pr-4 py-2.5 bg-surface-2 border border-border rounded-lg text-sm placeholder-text-muted focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
-          />
-        </div>
-        
-        {/* User Profile */}
-        <div className="flex items-center space-x-3">
-          <div className="text-right text-sm">
-            <div className="text-text-strong font-medium">Admin User</div>
-            <div className="text-text-muted">admin@localhost</div>
-          </div>
-          <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
-            <User className="w-4 h-4 text-primary-contrast" />
-          </div>
-        </div>
+    <header className="h-[60px] flex-none flex items-center gap-4 px-[22px] border-b border-border bg-surface-0/80 backdrop-blur-md z-[5]">
+      <div className="min-w-0">
+        <div className="text-base font-semibold tracking-[-0.01em] leading-tight">{title}</div>
+        <div className="text-xs text-text-faint leading-snug">{crumb}</div>
+      </div>
+
+      <div className="flex-1" />
+
+      {/* Search trigger */}
+      <button className="hidden sm:flex items-center gap-[9px] h-9 px-3 bg-surface-1 border border-border rounded-[9px] text-text-faint cursor-pointer min-w-[210px] hover:border-primary transition-colors">
+        <Search className="w-4 h-4" />
+        <span className="text-[13px] flex-1 text-left">Search apps, deployments…</span>
+        <span className="font-mono text-[11px] px-[6px] py-px border border-border rounded-[5px]">⌘K</span>
+      </button>
+
+      {/* Health */}
+      <div className="hidden md:flex items-center gap-[9px] h-9 px-3 bg-surface-1 border border-border rounded-[9px]">
+        <span className="relative flex w-2 h-2">
+          <span className="absolute inset-0 rounded-full bg-success" />
+          <span className="absolute inset-0 rounded-full bg-success animate-ping-slow" />
+        </span>
+        <span className="text-[12.5px] text-text-muted">home.example.com</span>
+      </div>
+
+      {/* Theme toggle */}
+      <button
+        onClick={toggle}
+        title="Toggle theme"
+        className="w-9 h-9 flex-none flex items-center justify-center bg-surface-1 border border-border rounded-[9px] text-text-muted cursor-pointer hover:text-text-strong hover:border-primary transition-colors"
+      >
+        {applied === 'dark' ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
+      </button>
+
+      {/* Avatar */}
+      <div className="w-9 h-9 flex-none flex items-center justify-center bg-surface-2 border border-border rounded-[9px] text-text-strong font-semibold text-[13px] cursor-pointer">
+        av
       </div>
     </header>
   );

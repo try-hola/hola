@@ -3,12 +3,12 @@ import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
 import {
-  ArrowLeft,
   Play,
   Square,
   RotateCcw,
   Trash2,
   ExternalLink,
+  Globe,
   Settings,
   Activity,
   BarChart3,
@@ -22,44 +22,27 @@ import {
   RotateCw,
   AlertTriangle,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Copy
 } from 'lucide-react';
 import type {
   AppEnvVar,
-  SystemEnvVar,
-  JobStatus
+  SystemEnvVar
 } from '@hola/shared';
+import { AppIcon } from '../components/ui/AppIcon';
+import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { useDeploymentDetailApi, useDeploymentHistoryApi } from '../hooks/useDeploymentDetailApi';
 
-// Helper functions for history tab
-const getJobStatusColor = (status: JobStatus): string => {
-  switch (status) {
-    case 'completed':
-      return 'bg-success';
-    case 'running':
-      return 'bg-info animate-pulse';
-    case 'failed':
-      return 'bg-danger';
-    case 'queued':
-      return 'bg-warning';
-    default:
-      return 'bg-text-muted';
-  }
-};
+// Decorative sparkline bar heights — computed once at module load (the values
+// are illustrative, not real time-series data).
+const SPARK_BARS = Array.from({ length: 34 }, (_, i) => 30 + ((i * 37) % 70));
 
-const getJobStatusStyle = (status: JobStatus): string => {
-  switch (status) {
-    case 'completed':
-      return 'text-success bg-success/10 border-success/20';
-    case 'running':
-      return 'text-info bg-info/10 border-info/20';
-    case 'failed':
-      return 'text-danger bg-danger/10 border-danger/20';
-    case 'queued':
-      return 'text-warning bg-warning/10 border-warning/20';
-    default:
-      return 'text-text-muted bg-surface-2 border-border';
-  }
+// A resource value is only renderable as a progress bar when it's a percentage;
+// otherwise we show the raw value without a misleading fixed-width bar.
+const percentWidth = (val: string): string | null => {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*%\s*$/.exec(val);
+  if (!m) return null;
+  return `${Math.max(0, Math.min(100, parseFloat(m[1])))}%`;
 };
 
 const formatDateTime = (dateString: string): string => {
@@ -72,7 +55,7 @@ const getDuration = (startedAt: string, finishedAt: string): string => {
   const end = new Date(finishedAt);
   const diffMs = end.getTime() - start.getTime();
   const diffSecs = Math.round(diffMs / 1000);
-  
+
   if (diffSecs < 60) {
     return `${diffSecs}s`;
   } else if (diffSecs < 3600) {
@@ -100,23 +83,23 @@ export const DeploymentDetail: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
   const [historyPage, setHistoryPage] = useState(1);
-  
+
   // Use API hooks for data fetching
-  const { 
-    data: deployment, 
-    loading, 
-    error, 
+  const {
+    data: deployment,
+    loading,
+    error,
     refetch: refetchDeployment,
     updateConfiguration,
-    executeAction 
+    executeAction
   } = useDeploymentDetailApi(deploymentId);
-  
-  const { 
-    data: historyData, 
-    loading: historyLoading, 
-    refetch: refetchHistory 
+
+  const {
+    data: historyData,
+    loading: historyLoading,
+    refetch: refetchHistory
   } = useDeploymentHistoryApi(deploymentId, historyPage);
-  
+
   // Form state
   const [isEditing, setIsEditing] = useState(false);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
@@ -235,10 +218,10 @@ export const DeploymentDetail: React.FC = () => {
 
   const handleAction = async (action: 'start' | 'stop' | 'restart' | 'delete') => {
     if (!deployment) return;
-    
+
     const operationKey = `action-${action}`;
     setOperationLoading(prev => ({ ...prev, [operationKey]: true }));
-    
+
     try {
       await executeAction(action);
       // TODO: Show success message
@@ -252,9 +235,9 @@ export const DeploymentDetail: React.FC = () => {
 
   const saveConfiguration = async () => {
     if (!deployment) return;
-    
+
     setOperationLoading(prev => ({ ...prev, 'save-config': true }));
-    
+
     try {
       await updateConfiguration({
         env: deploymentEnvVars,
@@ -270,87 +253,87 @@ export const DeploymentDetail: React.FC = () => {
     }
   };
 
+  const isRunning = deployment.status === 'running';
+
+  // Real facts for the Overview "Details" card.
+  const facts: { label: string; value: string; mono?: boolean }[] = [
+    { label: 'App', value: deployment.app, mono: true },
+    { label: 'Deployment ID', value: deployment.id, mono: true },
+    { label: 'Status', value: deployment.status },
+    ...(deployment.version ? [{ label: 'Version', value: deployment.version, mono: true }] : []),
+    ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
+    { label: 'Last updated', value: deployment.lastUpdated },
+    ...(deployment.url ? [{ label: 'URL', value: deployment.url, mono: true }] : []),
+    ...(deployment.ports.length
+      ? [{ label: 'Ports', value: deployment.ports.join(', '), mono: true }]
+      : []),
+  ];
+
+  // Resource usage rows (real values from the deployment). Bars render only when
+  // the value is a percentage; `resources` may be absent on a malformed payload.
+  const res = deployment.resources;
+  const resourceBars: { label: string; val: string; color: string }[] = res
+    ? [
+        { label: 'CPU', val: res.cpu, color: 'var(--info)' },
+        { label: 'Memory', val: res.memory, color: 'var(--warning)' },
+        ...(res.disk ? [{ label: 'Disk', val: res.disk, color: 'var(--success)' }] : []),
+      ]
+    : [];
+
+  // Single source for the read-only compose preview that is both shown and copied.
+  const composePreview = `services:\n  ${deployment.app}:\n    image: ${deployment.app}:${deployment.version ?? 'latest'}\n    # ingress routed by Traefik (no host ports)`;
+
+  const openApp = () => {
+    if (deployment.url) window.open(deployment.url, '_blank', 'noopener,noreferrer');
+  };
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
         return (
-          <div className="space-y-6">
-            {/* Endpoints */}
-            <div className="bg-surface-1 rounded-lg border border-border p-6">
-              <h3 className="text-lg font-medium mb-4">Service Endpoints</h3>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between p-3 bg-surface-2 rounded-lg">
-                  <div>
-                    <div className="font-medium">Web Interface</div>
-                    <div className="text-sm text-text-muted">{deployment.url}</div>
-                  </div>
-                  {deployment.url && (
-                    <a
-                      href={deployment.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 bg-primary text-primary-contrast rounded-lg hover:bg-primary/90 transition-colors"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                    </a>
-                  )}
+          <div className="animate-fadein space-y-4">
+            <div className="grid grid-cols-[1.5fr_1fr] gap-4">
+              {/* Details */}
+              <div className="bg-surface-1 border border-border rounded-card p-5">
+                <div className="font-semibold text-[15px] mb-4">Details</div>
+                <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+                  {facts.map((f) => (
+                    <div key={f.label}>
+                      <div className="text-xs text-text-faint mb-1">{f.label}</div>
+                      <div
+                        className={`text-[13.5px] font-medium break-all ${f.mono ? 'font-mono' : ''}`}
+                      >
+                        {f.value}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
-            </div>
 
-            {/* Resource Usage */}
-            <div className="bg-surface-1 rounded-lg border border-border p-6">
-              <h3 className="text-lg font-medium mb-4">Resource Usage</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div>
-                  <div className="text-sm text-text-muted mb-2">CPU Usage</div>
-                  <div className="text-2xl font-semibold text-info">{deployment.resources.cpu}</div>
-                  <div className="w-full bg-surface-2 rounded-full h-2 mt-2">
-                    <div className="bg-info h-2 rounded-full" style={{width: '12%'}}></div>
+              {/* Resources */}
+              <div className="bg-surface-1 border border-border rounded-card p-5">
+                <div className="font-semibold text-[15px] mb-[18px]">Resources</div>
+                {resourceBars.map((m) => (
+                  <div key={m.label} className="mb-[15px]">
+                    <div className="flex justify-between text-[12.5px] mb-1.5">
+                      <span className="text-text-muted">{m.label}</span>
+                      <span className="font-mono font-medium">{m.val}</span>
+                    </div>
+                    {percentWidth(m.val) && (
+                      <div className="h-[7px] rounded bg-surface-3 overflow-hidden">
+                        <div
+                          className="h-full rounded"
+                          style={{ width: percentWidth(m.val)!, background: m.color }}
+                        />
+                      </div>
+                    )}
                   </div>
-                </div>
-                <div>
-                  <div className="text-sm text-text-muted mb-2">Memory Usage</div>
-                  <div className="text-2xl font-semibold text-warning">{deployment.resources.memory}</div>
-                  <div className="w-full bg-surface-2 rounded-full h-2 mt-2">
-                    <div className="bg-warning h-2 rounded-full" style={{width: '32%'}}></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm text-text-muted mb-2">Disk Usage</div>
-                  <div className="text-2xl font-semibold text-success">{deployment.resources.disk}</div>
-                  <div className="w-full bg-surface-2 rounded-full h-2 mt-2">
-                    <div className="bg-success h-2 rounded-full" style={{width: '24%'}}></div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Stats */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="bg-surface-1 rounded-lg border border-border p-4">
-                <div className="text-sm text-text-muted">Status</div>
-                <div className="flex items-center space-x-2 mt-1">
-                  <div className="w-2 h-2 bg-success rounded-full animate-pulse"></div>
-                  <span className="font-medium capitalize">{deployment.status}</span>
-                </div>
-              </div>
-              <div className="bg-surface-1 rounded-lg border border-border p-4">
-                <div className="text-sm text-text-muted">Uptime</div>
-                <div className="font-medium mt-1">{deployment.uptime}</div>
-              </div>
-              <div className="bg-surface-1 rounded-lg border border-border p-4">
-                <div className="text-sm text-text-muted">Version</div>
-                <div className="font-medium mt-1">{deployment.version}</div>
-              </div>
-              <div className="bg-surface-1 rounded-lg border border-border p-4">
-                <div className="text-sm text-text-muted">Last Updated</div>
-                <div className="font-medium mt-1">{deployment.lastUpdated}</div>
+                ))}
               </div>
             </div>
 
             {/* Recent Jobs */}
-            <JobTracker 
+            <JobTracker
               deploymentId={deployment.id}
               maxJobs={3}
               autoRefresh={true}
@@ -366,22 +349,90 @@ export const DeploymentDetail: React.FC = () => {
       case 'logs': {
         const jobId = searchParams.get('jobId');
         return (
-          <LogsViewer 
-            deploymentId={deployment.id}
-            jobId={jobId || undefined}
-            title={jobId ? `Job ${jobId} Logs` : "Application Logs"}
-            maxHeight="max-h-[600px]"
-            showJobStatus={!!jobId}
-          />
+          <div className="animate-fadein bg-surface-1 border border-border rounded-card overflow-hidden">
+            <div className="flex items-center gap-[10px] px-4 py-3 border-b border-border-soft">
+              <span className="relative flex w-2 h-2">
+                <span className="absolute inset-0 rounded-full bg-success" />
+                <span className="absolute inset-0 rounded-full bg-success animate-ping-fast" />
+              </span>
+              <span className="text-[13px] font-semibold">Live logs</span>
+              <div className="flex-1" />
+            </div>
+            <LogsViewer
+              deploymentId={deployment.id}
+              jobId={jobId || undefined}
+              title={jobId ? `Job ${jobId} Logs` : 'Application Logs'}
+              maxHeight="max-h-[600px]"
+              showJobStatus={!!jobId}
+            />
+          </div>
         );
       }
 
+      case 'metrics':
+        return (
+          <div className="animate-fadein grid grid-cols-2 gap-4">
+            {resourceBars.map((m) => (
+              <div
+                key={m.label}
+                className="bg-surface-1 border border-border rounded-card p-[18px]"
+              >
+                <div className="flex justify-between items-baseline mb-[14px]">
+                  <span className="text-[13.5px] text-text-muted font-medium">{m.label}</span>
+                  <span
+                    className="font-mono text-base font-semibold"
+                    style={{ color: m.color }}
+                  >
+                    {m.val}
+                  </span>
+                </div>
+                <div className="flex items-end gap-[3px] h-20">
+                  {SPARK_BARS.map((h, i) => (
+                    <div
+                      key={i}
+                      className="flex-1 rounded-[2px] opacity-55"
+                      style={{ height: `${h}%`, background: m.color }}
+                    />
+                  ))}
+                </div>
+                <div className="flex justify-between text-[11px] text-text-faint mt-2 font-mono">
+                  <span>-5m</span>
+                  <span>now</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        );
+
+      case 'backups':
+        return (
+          <div className="animate-fadein bg-surface-1 border border-border rounded-card overflow-hidden">
+            <div className="flex items-center justify-between px-[18px] py-4 border-b border-border-soft">
+              <div className="font-semibold text-[15px]">Backups for this app</div>
+              <button
+                onClick={() => setActiveTab('history')}
+                className="h-[34px] px-[13px] flex items-center gap-[7px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                Create backup
+              </button>
+            </div>
+            <div className="flex flex-col items-center justify-center text-center px-5 py-16">
+              <Shield className="w-10 h-10 text-text-faint mb-4" />
+              <h3 className="text-[15px] font-semibold mb-1">No backups yet</h3>
+              <p className="text-text-muted text-sm max-w-[360px]">
+                Backups for this app will appear here once they have been created.
+              </p>
+            </div>
+          </div>
+        );
+
       case 'configuration':
         return (
-          <div className="space-y-6">
+          <div className="animate-fadein flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">Current Configuration</h3>
-              <button 
+              <h3 className="font-semibold text-[15px]">Current Configuration</h3>
+              <button
                 onClick={() => {
                   if (isEditing) {
                     saveConfiguration();
@@ -391,8 +442,8 @@ export const DeploymentDetail: React.FC = () => {
                 }}
                 disabled={operationLoading['save-config']}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center space-x-2 disabled:opacity-50 ${
-                  isEditing 
-                    ? 'bg-success text-primary-contrast hover:bg-success/90' 
+                  isEditing
+                    ? 'bg-success text-primary-contrast hover:bg-success/90'
                     : 'bg-primary text-primary-contrast hover:bg-primary/90'
                 }`}
               >
@@ -403,212 +454,175 @@ export const DeploymentDetail: React.FC = () => {
               </button>
             </div>
 
-            {/* Deployment-Specific Environment Variables */}
-            <div className="bg-surface-1 rounded-lg border border-border p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-medium">Deployment-Specific Variables</h4>
+            {/* Environment variables */}
+            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+              <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
+                <div className="font-semibold text-[15px]">Environment variables</div>
                 {isEditing && (
                   <button
                     onClick={addDeploymentEnvVar}
-                    className="bg-surface-2 text-text-strong px-3 py-2 rounded-lg text-sm font-medium hover:bg-surface-0 transition-colors flex items-center space-x-2"
+                    className="h-[34px] px-[13px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Add Variable</span>
                   </button>
                 )}
               </div>
-              
-              <div className="space-y-3">
-                {deploymentEnvVars.map((envVar, index) => {
-                  const showValue = envVar.isSecret && !showSecrets[envVar.key];
-                  
-                  return (
-                    <div key={index} className="p-3 border border-border rounded-lg bg-surface-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3 flex-grow">
-                          <div className="min-w-0 flex-grow">
-                            {isEditing ? (
-                              <div className="space-y-2">
-                                <input
-                                  type="text"
-                                  placeholder="VARIABLE_NAME"
-                                  value={envVar.key}
-                                  onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value)}
-                                  className="w-full px-3 py-1 bg-surface-0 border border-border rounded text-sm font-mono"
-                                />
-                                <input
-                                  type="text"
-                                  placeholder="Description (optional)"
-                                  value={envVar.description}
-                                  onChange={(e) => updateDeploymentEnvVar(index, 'description', e.target.value)}
-                                  className="w-full px-3 py-1 bg-surface-0 border border-border rounded text-xs"
-                                />
-                              </div>
-                            ) : (
-                              <div>
-                                <div className="font-mono text-sm font-medium">{envVar.key}</div>
-                                {envVar.description && (
-                                  <div className="text-xs text-text-muted mt-1">{envVar.description}</div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                          
-                          <div className="flex items-center space-x-2">
-                            {isEditing ? (
-                              <div className="flex items-center space-x-2">
-                                <input
-                                  type={showValue ? 'password' : 'text'}
-                                  value={envVar.value}
-                                  onChange={(e) => updateDeploymentEnvVar(index, 'value', e.target.value)}
-                                  className="px-3 py-1 bg-surface-0 border border-border rounded text-sm font-mono w-48"
-                                />
-                                <label className="flex items-center space-x-1">
-                                  <input
-                                    type="checkbox"
-                                    checked={envVar.isSecret}
-                                    onChange={(e) => updateDeploymentEnvVar(index, 'isSecret', e.target.checked)}
-                                    className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-                                  />
-                                  <span className="text-xs text-text-muted">Secret</span>
-                                </label>
-                                {envVar.isSecret && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSecretVisibility(envVar.key)}
-                                    className="p-1 text-text-muted hover:text-text-strong transition-colors"
-                                  >
-                                    {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => removeDeploymentEnvVar(index)}
-                                  className="p-1 text-text-muted hover:text-danger transition-colors"
-                                >
-                                  <X className="w-4 h-4" />
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="flex items-center space-x-2">
-                                <span className="text-sm font-mono">
-                                  {showValue ? '••••••••' : envVar.value}
-                                </span>
-                                {envVar.isSecret && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSecretVisibility(envVar.key)}
-                                    className="p-1 text-text-muted hover:text-text-strong transition-colors"
-                                  >
-                                    {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+
+              {deploymentEnvVars.map((envVar, index) => {
+                const showValue = envVar.isSecret && !showSecrets[envVar.key];
+                return (
+                  <div
+                    key={index}
+                    className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft"
+                  >
+                    {isEditing ? (
+                      <>
+                        <input
+                          type="text"
+                          placeholder="VARIABLE_NAME"
+                          value={envVar.key}
+                          onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value)}
+                          className="w-[170px] flex-none px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
+                        />
+                        <input
+                          type={showValue ? 'password' : 'text'}
+                          value={envVar.value}
+                          onChange={(e) => updateDeploymentEnvVar(index, 'value', e.target.value)}
+                          className="flex-1 px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
+                        />
+                        <label className="flex items-center gap-1">
+                          <input
+                            type="checkbox"
+                            checked={envVar.isSecret}
+                            onChange={(e) => updateDeploymentEnvVar(index, 'isSecret', e.target.checked)}
+                            className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
+                          />
+                          <span className="text-xs text-text-muted">Secret</span>
+                        </label>
+                        {envVar.isSecret && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSecretVisibility(envVar.key)}
+                            className="flex text-text-faint hover:text-text-strong transition-colors"
+                          >
+                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        )}
+                        <button
+                          onClick={() => removeDeploymentEnvVar(index)}
+                          className="flex text-text-muted hover:text-danger transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-mono text-[12.5px] text-text-muted w-[170px] flex-none break-all">
+                          {envVar.key}
+                        </span>
+                        <span className="flex-1 font-mono text-[12.5px] break-all">
+                          {showValue ? '••••••••' : envVar.value}
+                        </span>
+                        {envVar.isSecret && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSecretVisibility(envVar.key)}
+                            className="flex text-text-faint hover:text-text-strong transition-colors"
+                          >
+                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* System Environment Variables */}
-            <div className="bg-surface-1 rounded-lg border border-border p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-medium">System Environment Variables</h4>
-                <div className="text-sm text-text-muted">
-                  Inherited from system settings • Override only when needed
+            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+              <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
+                <div className="font-semibold text-[15px]">System Environment Variables</div>
+                <div className="text-xs text-text-faint">
+                  Inherited from system settings · Override only when needed
                 </div>
               </div>
-              
-              <div className="space-y-3">
-                {systemEnvVars.map((envVar) => {
-                  const isOverridden = Object.prototype.hasOwnProperty.call(deploymentOverrides, envVar.key);
-                  const currentValue = isOverridden ? deploymentOverrides[envVar.key] : envVar.value;
-                  const showValue = envVar.isSecret && !showSecrets[envVar.key];
-                  
-                  return (
-                    <div key={envVar.key} className={`p-3 border rounded-lg ${
-                      isOverridden ? 'border-warning/50 bg-warning/5' : 'border-border bg-surface-2'
-                    }`}>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3 flex-grow">
-                          <div className="min-w-0 flex-grow">
-                            <div className="flex items-center space-x-2">
-                              <span className="font-mono text-sm font-medium">{envVar.key}</span>
-                              {isOverridden && (
-                                <span className="text-xs bg-warning text-primary-contrast px-2 py-0.5 rounded">
-                                  OVERRIDDEN
-                                </span>
-                              )}
-                            </div>
-                            {envVar.description && (
-                              <div className="text-xs text-text-muted mt-1">{envVar.description}</div>
-                            )}
-                          </div>
-                          
-                          <div className="flex items-center space-x-2">
-                            {isEditing ? (
-                              <div className="flex items-center space-x-2">
-                                <input
-                                  type={showValue ? 'password' : 'text'}
-                                  value={currentValue}
-                                  onChange={(e) => updateSystemOverride(envVar.key, e.target.value)}
-                                  className="px-3 py-1 bg-surface-0 border border-border rounded text-sm font-mono w-48"
-                                  placeholder={envVar.value || 'Enter value...'}
-                                />
-                                {envVar.isSecret && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSecretVisibility(envVar.key)}
-                                    className="p-1 text-text-muted hover:text-text-strong transition-colors"
-                                  >
-                                    {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                  </button>
-                                )}
-                                {isOverridden && (
-                                  <button
-                                    onClick={() => resetSystemOverride(envVar.key)}
-                                    className="p-1 text-text-muted hover:text-warning transition-colors"
-                                    title="Reset to system default"
-                                  >
-                                    <RotateCw className="w-4 h-4" />
-                                  </button>
-                                )}
-                              </div>
-                            ) : (
-                              <div className="flex items-center space-x-2">
-                                <span className="text-sm font-mono">
-                                  {showValue ? '••••••••' : (currentValue || '(empty)')}
-                                </span>
-                                {envVar.isSecret && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSecretVisibility(envVar.key)}
-                                    className="p-1 text-text-muted hover:text-text-strong transition-colors"
-                                  >
-                                    {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+
+              {systemEnvVars.map((envVar) => {
+                const isOverridden = Object.prototype.hasOwnProperty.call(deploymentOverrides, envVar.key);
+                const currentValue = isOverridden ? deploymentOverrides[envVar.key] : envVar.value;
+                const showValue = envVar.isSecret && !showSecrets[envVar.key];
+
+                return (
+                  <div
+                    key={envVar.key}
+                    className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft"
+                  >
+                    <span className="font-mono text-[12.5px] text-text-muted w-[170px] flex-none flex items-center gap-2 break-all">
+                      {envVar.key}
+                      {isOverridden && (
+                        <span className="text-[10px] bg-warning text-primary-contrast px-1.5 py-0.5 rounded font-semibold">
+                          OVERRIDDEN
+                        </span>
+                      )}
+                    </span>
+                    {isEditing ? (
+                      <>
+                        <input
+                          type={showValue ? 'password' : 'text'}
+                          value={currentValue}
+                          onChange={(e) => updateSystemOverride(envVar.key, e.target.value)}
+                          className="flex-1 px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
+                          placeholder={envVar.value || 'Enter value...'}
+                        />
+                        {envVar.isSecret && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSecretVisibility(envVar.key)}
+                            className="flex text-text-faint hover:text-text-strong transition-colors"
+                          >
+                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        )}
+                        {isOverridden && (
+                          <button
+                            onClick={() => resetSystemOverride(envVar.key)}
+                            className="flex text-text-muted hover:text-warning transition-colors"
+                            title="Reset to system default"
+                          >
+                            <RotateCw className="w-4 h-4" />
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex-1 font-mono text-[12.5px] break-all">
+                          {showValue ? '••••••••' : (currentValue || '(empty)')}
+                        </span>
+                        {envVar.isSecret && (
+                          <button
+                            type="button"
+                            onClick={() => toggleSecretVisibility(envVar.key)}
+                            className="flex text-text-faint hover:text-text-strong transition-colors"
+                          >
+                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
 
               {Object.keys(deploymentOverrides).length > 0 && (
-                <div className="mt-4 bg-warning/10 border border-warning/20 rounded-lg p-4">
+                <div className="m-[18px] bg-warning/10 border border-warning/20 rounded-lg p-4">
                   <div className="flex items-start space-x-3">
                     <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
                     <div className="text-sm">
                       <div className="font-medium text-warning">System Variable Overrides</div>
                       <div className="text-text-muted mt-1">
-                        This deployment overrides {Object.keys(deploymentOverrides).length} system variable(s). 
+                        This deployment overrides {Object.keys(deploymentOverrides).length} system variable(s).
                         Changes will only affect this deployment.
                       </div>
                     </div>
@@ -617,27 +631,51 @@ export const DeploymentDetail: React.FC = () => {
               )}
             </div>
 
-            {/* Port Mappings */}
-            <div className="bg-surface-1 rounded-lg border border-border p-6">
-              <h4 className="font-medium mb-4">Port Mappings</h4>
-              <div className="space-y-2">
-                {deployment.ports.map(port => (
-                  <div key={port} className="flex items-center justify-between p-3 border border-border rounded bg-surface-2">
-                    <span className="font-mono text-sm">{port}</span>
-                    <span className="text-xs text-success">Available</span>
-                  </div>
-                ))}
+            {/* Materialized Compose · read-only */}
+            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+              <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
+                <div className="font-semibold text-[15px]">
+                  Materialized Compose{' '}
+                  <span className="text-xs text-text-faint font-normal">· read-only</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(composePreview)}
+                  className="flex items-center gap-1.5 text-[12.5px] text-text-muted hover:text-text-strong transition-colors"
+                >
+                  <Copy className="w-4 h-4" />
+                  Copy
+                </button>
               </div>
+              <pre className="m-0 p-[16px_18px] font-mono text-[12.5px] leading-relaxed text-text-muted overflow-x-auto">
+                {composePreview}
+              </pre>
+            </div>
+
+            {/* Port Mappings */}
+            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+              <div className="px-[18px] py-[14px] border-b border-border-soft font-semibold text-[15px]">
+                Port Mappings
+              </div>
+              {deployment.ports.map((port) => (
+                <div
+                  key={port}
+                  className="flex items-center justify-between px-[18px] py-[11px] border-b border-border-soft"
+                >
+                  <span className="font-mono text-[12.5px]">{port}</span>
+                  <span className="text-xs text-success">Available</span>
+                </div>
+              ))}
             </div>
           </div>
         );
 
       case 'history':
         return (
-          <div className="space-y-6">
+          <div className="animate-fadein flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-lg font-medium">Deployment History</h3>
-              <button 
+              <h3 className="font-semibold text-[15px]">Release &amp; job history</h3>
+              <button
                 onClick={() => refetchHistory()}
                 className="px-4 py-2 bg-primary text-primary-contrast rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex items-center space-x-2"
               >
@@ -652,39 +690,36 @@ export const DeploymentDetail: React.FC = () => {
                 <p className="text-text-muted">Loading history...</p>
               </div>
             ) : (
-              <div className="bg-surface-1 rounded-lg border border-border overflow-hidden">
-                <div className="divide-y divide-border">
-                  {historyData?.items?.map((item) => (
-                    <div key={item.id} className="p-4 hover:bg-surface-2 transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
-                          <div className={`w-2 h-2 rounded-full ${getJobStatusColor(item.status)}`} />
-                          <div>
-                            <div className="font-medium capitalize">
-                              {item.type} {item.status === 'failed' ? 'failed' : 'completed'}
-                            </div>
-                            <div className="text-sm text-text-muted">
-                              Started: {formatDateTime(item.startedAt)}
-                              {item.finishedAt && (
-                                <span> • Finished: {formatDateTime(item.finishedAt)}</span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <span className={`px-2 py-1 text-xs rounded border capitalize ${getJobStatusStyle(item.status)}`}>
-                            {item.status}
-                          </span>
-                          {item.finishedAt && (
-                            <span className="text-xs text-text-muted">
-                              {getDuration(item.startedAt, item.finishedAt)}
-                            </span>
-                          )}
-                        </div>
+              <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+                {historyData?.items?.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-[14px] px-[18px] py-[14px] border-b border-border-soft"
+                  >
+                    <span className="w-[34px] h-[34px] flex-none rounded-[9px] bg-surface-2 flex items-center justify-center">
+                      <StatusDot status={item.status} />
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13.5px] font-medium capitalize">
+                        {item.type} {item.status === 'failed' ? 'failed' : 'completed'}
+                      </div>
+                      <div className="text-xs text-text-faint mt-0.5">
+                        Started {formatDateTime(item.startedAt)}
                       </div>
                     </div>
-                  ))}
-                </div>
+                    {item.finishedAt && (
+                      <span className="font-mono text-xs text-text-faint">
+                        {getDuration(item.startedAt, item.finishedAt)}
+                      </span>
+                    )}
+                    <StatusBadge status={item.status} dot={false} />
+                    {item.finishedAt && (
+                      <span className="text-[12.5px] text-text-faint w-24 text-right">
+                        {formatDateTime(item.finishedAt)}
+                      </span>
+                    )}
+                  </div>
+                ))}
 
                 {historyData?.items?.length === 0 && !historyLoading && (
                   <div className="text-center py-12">
@@ -700,7 +735,7 @@ export const DeploymentDetail: React.FC = () => {
                     <div className="text-sm text-text-muted">
                       Showing {((historyPage - 1) * 10) + 1} to {Math.min(historyPage * 10, historyData.total)} of {historyData.total} activities
                     </div>
-                    
+
                     <div className="flex items-center space-x-2">
                       <button
                         onClick={() => setHistoryPage(historyPage - 1)}
@@ -709,11 +744,11 @@ export const DeploymentDetail: React.FC = () => {
                       >
                         <ChevronLeft className="w-4 h-4" />
                       </button>
-                      
+
                       <span className="px-3 py-1 text-sm">
                         Page {historyPage} of {Math.ceil(historyData.total / 10)}
                       </span>
-                      
+
                       <button
                         onClick={() => setHistoryPage(historyPage + 1)}
                         disabled={historyPage >= Math.ceil(historyData.total / 10)}
@@ -739,84 +774,87 @@ export const DeploymentDetail: React.FC = () => {
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center space-x-4">
-        <Link to="/deployments" className="p-2 hover:bg-surface-1 rounded-lg transition-colors">
-          <ArrowLeft className="w-5 h-5" />
-        </Link>
-        
-        <div className="flex items-center space-x-3 flex-grow">
-          <div className="text-2xl">{deployment.icon}</div>
-          <div>
-            <h1 className="text-2xl font-semibold">{deployment.name}</h1>
-            <div className="flex items-center space-x-2 mt-1">
-              <div className="w-2 h-2 bg-success rounded-full animate-pulse"></div>
-              <span className="text-sm text-text-muted capitalize">{deployment.status}</span>
+    <div className="animate-fadein">
+      {/* Header card */}
+      <div className="bg-surface-1 border border-border rounded-[14px] p-[20px_22px] mb-4">
+        <div className="flex items-center gap-[15px] flex-wrap">
+          <AppIcon name={deployment.name} emoji={deployment.icon} size={52} />
+          <div className="min-w-0">
+            <div className="flex items-center gap-[10px]">
+              <span className="text-[21px] font-semibold tracking-[-0.02em]">{deployment.name}</span>
+              <StatusDot status={deployment.status} />
+              <StatusBadge status={deployment.status} dot={false} />
             </div>
+            {deployment.url && (
+              <div
+                onClick={openApp}
+                className="inline-flex items-center gap-1.5 mt-[5px] font-mono text-[12.5px] text-primary cursor-pointer"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                {deployment.url}
+                <ExternalLink className="w-3.5 h-3.5" />
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1" />
+
+          {/* Actions */}
+          <div className="flex gap-2 flex-wrap">
+            <button
+              onClick={() => handleAction('restart')}
+              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Restart
+            </button>
+            <button
+              onClick={() => handleAction(isRunning ? 'stop' : 'start')}
+              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors"
+            >
+              {isRunning ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+              {isRunning ? 'Stop' : 'Start'}
+            </button>
+            <button
+              onClick={() => setActiveTab('history')}
+              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors"
+            >
+              <RotateCw className="w-4 h-4" />
+              Rollback
+            </button>
+            <button
+              onClick={() => handleAction('delete')}
+              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger-weak text-danger border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:bg-danger hover:text-white transition-colors"
+            >
+              <Trash2 className="w-4 h-4" />
+              Remove
+            </button>
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex space-x-2">
-          <button 
-            onClick={() => handleAction('start')}
-            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
-            title="Start"
-          >
-            <Play className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => handleAction('stop')}
-            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
-            title="Stop"
-          >
-            <Square className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => handleAction('restart')}
-            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors" 
-            title="Restart"
-          >
-            <RotateCcw className="w-4 h-4" />
-          </button>
-          <button 
-            onClick={() => handleAction('delete')}
-            className="p-2 bg-surface-1 border border-border rounded-lg hover:bg-surface-2 transition-colors text-danger" 
-            title="Delete"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+        {/* Tab bar seated on the card's bottom border */}
+        <div className="flex gap-1 border-b border-border-soft -mb-5 -mx-[22px] px-[22px] mt-[18px]">
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <div
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`px-[14px] py-[11px] text-[13.5px] font-semibold cursor-pointer border-b-2 -mb-px ${
+                  isActive
+                    ? 'text-text-strong border-primary'
+                    : 'text-text-muted border-transparent hover:text-text-strong'
+                }`}
+              >
+                {tab.name}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-border">
-        <nav className="flex space-x-8">
-          {tabs.map(tab => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === tab.id
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-text-muted hover:text-text-strong hover:border-border'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{tab.name}</span>
-              </button>
-            );
-          })}
-        </nav>
-      </div>
-
       {/* Tab Content */}
-      <div>
-        {renderTabContent()}
-      </div>
+      <div>{renderTabContent()}</div>
     </div>
   );
 };
