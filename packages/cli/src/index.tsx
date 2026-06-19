@@ -2,6 +2,7 @@
 import sade from 'sade';
 
 import { CLI_VERSION } from './version';
+import { camelKeys } from './lib/opts';
 
 // Lazy command loaders to avoid unnecessary dependencies until invoked
 const load = async <T,>(p: Promise<T>): Promise<T> => p;
@@ -23,7 +24,7 @@ prog
   .option('--json', 'Print the resolved config as JSON (secrets redacted)', false)
   .action(async (opts) => {
     const { runInit } = await load(import('./commands/init/init'));
-    await runInit(opts);
+    await runInit(camelKeys(opts));
   });
 
 // bootstrap — wizard + SSH into the host and run the full install
@@ -41,7 +42,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (opts) => {
     const { runBootstrap } = await load(import('./commands/bootstrap/bootstrap'));
-    await runBootstrap(opts);
+    await runBootstrap(camelKeys(opts));
   });
 
 // catalog — browse the app catalog
@@ -53,7 +54,7 @@ prog
   .option('--json', 'Print raw JSON output', false)
   .action(async (query, opts) => {
     const { runCatalog } = await load(import('./commands/catalog/catalog'));
-    await runCatalog(query, opts);
+    await runCatalog(query, camelKeys(opts));
   });
 
 // install — install a catalog app by id (draft from catalog → finalize → deploy)
@@ -68,7 +69,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (appId, opts) => {
     const { runInstall } = await load(import('./commands/install/install'));
-    await runInstall(appId, opts);
+    await runInstall(appId, camelKeys(opts));
   });
 
 // deployments — list installed deployments
@@ -79,7 +80,7 @@ prog
   .option('--json', 'Print raw JSON output', false)
   .action(async (opts) => {
     const { runDeploymentsList } = await load(import('./commands/deployments/deployments'));
-    await runDeploymentsList(opts);
+    await runDeploymentsList(camelKeys(opts));
   });
 
 // logs — print recent logs for a deployment (or live-tail with --follow)
@@ -90,7 +91,7 @@ prog
   .option('--json', 'Print raw JSON output', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentLogs } = await load(import('./commands/deployments/deployments'));
-    await runDeploymentLogs(deploymentId, opts);
+    await runDeploymentLogs(deploymentId, camelKeys(opts));
   });
 
 // stop / restart — lifecycle actions on a deployment
@@ -101,7 +102,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
-    await runDeploymentAction('stop', deploymentId, opts);
+    await runDeploymentAction('stop', deploymentId, camelKeys(opts));
   });
 
 prog
@@ -111,7 +112,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
-    await runDeploymentAction('restart', deploymentId, opts);
+    await runDeploymentAction('restart', deploymentId, camelKeys(opts));
   });
 
 // uninstall — remove a deployment (containers, data, auth) — destructive
@@ -122,7 +123,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runUninstall } = await load(import('./commands/deployments/actions'));
-    await runUninstall(deploymentId, opts);
+    await runUninstall(deploymentId, camelKeys(opts));
   });
 
 // rollback — roll a deployment back to a previous release
@@ -135,7 +136,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runRollback } = await load(import('./commands/deployments/actions'));
-    await runRollback(deploymentId, opts);
+    await runRollback(deploymentId, camelKeys(opts));
   });
 
 // bundle validate
@@ -147,7 +148,7 @@ prog
   .option('--json', 'Print raw JSON output', false)
   .action(async (opts) => {
     const { runBundleValidate } = await load(import('./commands/bundle/validate'));
-    await runBundleValidate(opts);
+    await runBundleValidate(camelKeys(opts));
   });
 
 // bundle deploy (one-shot)
@@ -164,7 +165,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (opts) => {
     const { runBundleDeploy } = await load(import('./commands/bundle/deploy'));
-    await runBundleDeploy(opts);
+    await runBundleDeploy(camelKeys(opts));
   });
 
 // Fallback banner when no args
