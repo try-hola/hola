@@ -19,7 +19,7 @@ const answers: Record<string, string> = {
   HOLA_API_KEY: '',
 };
 
-const OK_PREFLIGHT = 'docker=ok\ngit=ok\ncompose=ok\ndockerperm=ok\n';
+const OK_PREFLIGHT = 'docker=ok\ncurl=ok\ntar=ok\ncompose=ok\ndockerperm=ok\n';
 
 function makeRunner(preflight = OK_PREFLIGHT): Runner & { calls: { cmd: string; input?: string }[] } {
   const calls: { cmd: string; input?: string }[] = [];
@@ -48,7 +48,7 @@ describe('hola bootstrap', () => {
 
     expect(res?.steps).toEqual([
       'Preflight host',
-      'Fetch Hola cli-v0.2.0 into ~/hola',
+      'Download Hola 0.2.0 stack into ~/hola',
       'Write .env (over stdin)',
       'Run install.sh',
       'Verify https://app.hola.example.com',
@@ -62,15 +62,28 @@ describe('hola bootstrap', () => {
     expect(process.exitCode).toBe(0);
   });
 
-  it('clones the repo at the requested ref and writes .env to packages/compose', async () => {
+  it('downloads the version-pinned bundle and writes .env to the install dir', async () => {
     const runner = makeRunner();
     await runBootstrap(
-      { host: 'me@vm', ref: 'main', dir: '/opt/hola', skipChecks: true, json: true },
+      { host: 'me@vm', ref: 'cli-v0.2.0', dir: '/opt/hola', skipChecks: true, json: true },
       { prompter: scriptedPrompter(answers), runner }
     );
-    expect(runner.calls.some((c) => /git clone .*--branch main .*\/opt\/hola/.test(c.cmd))).toBe(true);
-    expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/packages/compose/.env'))).toBe(true);
-    expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola/packages/compose && ./scripts/install.sh'))).toBe(true);
+    expect(
+      runner.calls.some((c) =>
+        /curl -fsSL \S*releases\/download\/cli-v0\.2\.0\/hola-compose-0\.2\.0\.tar\.gz.*tar xz -C \/opt\/hola/.test(c.cmd),
+      ),
+    ).toBe(true);
+    expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/.env'))).toBe(true);
+    expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola && ./scripts/install.sh'))).toBe(true);
+  });
+
+  it('honors --tarball-url for the bundle download', async () => {
+    const runner = makeRunner();
+    await runBootstrap(
+      { host: 'me@vm', tarballUrl: 'https://example.com/custom.tar.gz', skipChecks: true, json: true },
+      { prompter: scriptedPrompter(answers), runner }
+    );
+    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL https://example.com/custom.tar.gz'))).toBe(true);
   });
 
   it('--dry-run connects to nothing and exits 0', async () => {
@@ -85,7 +98,7 @@ describe('hola bootstrap', () => {
   });
 
   it('aborts before install when preflight finds Docker missing', async () => {
-    const runner = makeRunner('docker=missing\ngit=ok\ncompose=missing\ndockerperm=fail\n');
+    const runner = makeRunner('docker=missing\ncurl=ok\ntar=ok\ncompose=missing\ndockerperm=fail\n');
     const res = await runBootstrap(
       { host: 'me@vm', skipChecks: true, json: true },
       { prompter: scriptedPrompter(answers), runner }

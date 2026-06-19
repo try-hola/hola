@@ -162,10 +162,13 @@ docker run --rm -v hola-data:/data -v "$PWD":/backup alpine \
 
 ## Upgrade
 
+Re-run `hola bootstrap` with a newer CLI: it downloads the new compose bundle
+(which pins the new `ghcr.io/try-hola` image tags) and re-runs the idempotent
+installer. On the host directly:
+
 ```bash
-git pull
 cd packages/compose
-docker compose -f docker-compose.yml up -d --build
+./scripts/up.sh --pull always   # pull the version-pinned images, recreate changed services
 ```
 
 State in the `hola-data` volume is preserved across upgrades.

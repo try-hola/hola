@@ -13,6 +13,8 @@ export interface BootstrapOptions {
   host?: string;
   repo?: string;
   ref?: string;
+  /** Override the compose-bundle download URL (defaults to the release asset for this CLI version). */
+  tarballUrl?: string;
   dir?: string;
   envFile?: string;
   skipChecks?: boolean;
@@ -31,11 +33,22 @@ class BootstrapAbort extends Error {}
 
 const DEFAULT_REPO = 'https://github.com/try-hola/hola.git';
 
+/** Strip a leading `cli-v` from a release tag to get the bare version (cli-v0.3.0 → 0.3.0). */
+function versionFromRef(ref: string): string {
+  return ref.startsWith('cli-v') ? ref.slice('cli-v'.length) : ref;
+}
+
+/** Derive the GitHub release-download base from a clone URL (…/hola.git → …/hola). */
+function releaseBase(repo: string): string {
+  return repo.replace(/\.git$/, '');
+}
+
 /**
  * End-to-end remote install: collect config (wizard or --env-file), then over SSH
- * preflight the host, clone/update the Hola repo, write the .env (streamed via
- * stdin so secrets never hit argv), run scripts/install.sh, and verify. Returns
- * the result, or undefined on failure (after setting a non-zero exit code).
+ * preflight the host, download the version-pinned compose bundle, write the .env
+ * (streamed via stdin so secrets never hit argv), run scripts/install.sh (which
+ * pulls the published images), and verify. Returns the result, or undefined on
+ * failure (after setting a non-zero exit code).
  */
 export async function runBootstrap(
   opts: BootstrapOptions,
@@ -48,9 +61,13 @@ export async function runBootstrap(
   const host = opts.host;
   const repo = opts.repo ?? DEFAULT_REPO;
   const ref = opts.ref ?? `cli-v${CLI_VERSION}`;
+  const version = versionFromRef(ref);
+  // The bundle extracts compose's contents directly into `dir` — no git checkout,
+  // so there's no packages/compose nesting on the host.
   const dir = opts.dir ?? '~/hola';
-  const composeDir = `${dir}/packages/compose`;
+  const composeDir = dir;
   const envPath = `${composeDir}/.env`;
+  const tarballUrl = opts.tarballUrl ?? `${releaseBase(repo)}/releases/download/${ref}/hola-compose-${version}.tar.gz`;
   const steps: string[] = [];
 
   try {
@@ -88,9 +105,10 @@ export async function runBootstrap(
       return r;
     };
 
-    // 2) Preflight (single remote probe → key=value lines).
+    // 2) Preflight (single remote probe → key=value lines). The host pulls
+    //    prebuilt images, so it needs docker + compose + curl/tar — but not git.
     const probe =
-      'for c in docker git; do command -v "$c" >/dev/null 2>&1 && echo "$c=ok" || echo "$c=missing"; done; ' +
+      'for c in docker curl tar; do command -v "$c" >/dev/null 2>&1 && echo "$c=ok" || echo "$c=missing"; done; ' +
       'docker compose version >/dev/null 2>&1 && echo compose=ok || echo compose=missing; ' +
       'docker ps >/dev/null 2>&1 && echo dockerperm=ok || echo dockerperm=fail';
     if (opts.dryRun) {
@@ -100,16 +118,20 @@ export async function runBootstrap(
       if (r.code !== 0) throw new BootstrapAbort(`Could not connect to ${host} (ssh exit ${r.code}).`);
       const p = parsePreflight(r.stdout);
       assertPreflight(p);
-      out('  host OK (docker, compose, git, permissions)');
+      out('  host OK (docker, compose, curl/tar, permissions)');
     }
 
-    // 3) Clone or update the repo at the target ref (full repo: compose builds from ../..).
-    const clone =
-      `if [ -d ${dir}/.git ]; then git -C ${dir} fetch --depth 1 origin ${ref} && git -C ${dir} checkout --force FETCH_HEAD; ` +
-      `else git clone --depth 1 --branch ${ref} ${repo} ${dir}; fi`;
-    const cloneRes = await ssh(`Fetch Hola ${ref} into ${dir}`, clone, { stream: true });
-    if (!opts.dryRun && cloneRes.code !== 0) {
-      throw new BootstrapAbort(`git clone/update failed (exit ${cloneRes.code}). Check --repo/--ref and host network.`);
+    // 3) Download + extract the version-pinned compose bundle (no git, no source
+    //    build on the host — the images are prebuilt and pulled at `up` time).
+    const fetchStack =
+      `set -e; mkdir -p ${composeDir}; ` +
+      `curl -fsSL ${tarballUrl} | tar xz -C ${composeDir}`;
+    const fetchRes = await ssh(`Download Hola ${version} stack into ${composeDir}`, fetchStack, { stream: true });
+    if (!opts.dryRun && fetchRes.code !== 0) {
+      throw new BootstrapAbort(
+        `Downloading the compose bundle failed (exit ${fetchRes.code}). ` +
+          `Check that release ${ref} exists and the host can reach ${tarballUrl}.`,
+      );
     }
 
     // 4) Write .env — streamed over stdin so values never appear in argv/ps/history.
@@ -179,8 +201,11 @@ function assertPreflight(p: Record<string, string>): void {
         'then re-run bootstrap.',
     );
   }
-  if (p.git !== 'ok') {
-    throw new BootstrapAbort('git is required on the host (e.g. `sudo apt-get install -y git`), then re-run bootstrap.');
+  if (p.curl !== 'ok' || p.tar !== 'ok') {
+    throw new BootstrapAbort(
+      'curl and tar are required on the host to download the compose bundle ' +
+        '(e.g. `sudo apt-get install -y curl tar`), then re-run bootstrap.',
+    );
   }
 }
 

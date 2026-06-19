@@ -116,9 +116,15 @@ HOSTS_HINT
   fi
 fi
 
-# Build images and bring up the stack. Defaults to the PRODUCTION stack; set
-# HOLA_DEV=1 to run the local dev override (Bun dev servers, HTTP only) instead.
-"$SCRIPT_DIR/up.sh" --build
+# Bring up the PRODUCTION stack. By default compose pulls the version-pinned
+# images (ghcr.io/try-hola/{server,web}). HOLA_BUILD=1 builds them from source
+# instead (the from-source installer sets this) — _common.sh adds the build
+# overlay and we pass --build here. HOLA_DEV=1 runs the dev override instead.
+if [[ "${HOLA_BUILD:-}" == "1" || "${HOLA_BUILD:-}" == "true" ]]; then
+  "$SCRIPT_DIR/up.sh" --build
+else
+  "$SCRIPT_DIR/up.sh"
+fi
 
 cat <<'NEXT'
 [install] Done. If auth is enabled and you did not set HOLA_API_KEY, retrieve the

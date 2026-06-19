@@ -1,8 +1,18 @@
 name: CLI Release
 
-# Build standalone `hola` binaries and attach them to a GitHub Release.
+# On a `cli-v*` tag, build the release artifacts that all track the same version:
+#   1. multi-arch server + web images, pushed to GHCR (ghcr.io/try-hola/{server,web})
+#   2. the compose bundle tarball (hola-compose-<version>.tar.gz)
+#   3. standalone `hola` CLI binaries
+# (2) and (3) are attached to the GitHub Release; the host downloads (2) and
+# `docker compose up` pulls the pinned images from (1) — no build on the host.
+#
 # Trigger by pushing a tag like `cli-v0.1.0`:
 #   git tag cli-v0.1.0 && git push origin cli-v0.1.0
+#
+# ONE-TIME SETUP: GHCR packages are created private. After the first run, set
+# `ghcr.io/try-hola/server` and `ghcr.io/try-hola/web` to Public in the org's
+# package settings so hosts pull them without authentication.
 on:
   push:
     tags:
@@ -10,9 +20,63 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
+  # 1) Build + push the version-pinned platform images to GHCR.
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#cli-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push server image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/try-hola/server:${{ steps.ver.outputs.version }}
+            ghcr.io/try-hola/server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build & push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/try-hola/web:${{ steps.ver.outputs.version }}
+            ghcr.io/try-hola/web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 2) Compose bundle + CLI binaries, attached to the Release. Runs after the
+  #    images so the published Release only ever points at images that exist.
   release:
+    needs: images
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,6 +90,10 @@ jobs:
       - name: Install
         run: bun install --frozen-lockfile
 
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#cli-v}" >> "$GITHUB_OUTPUT"
+
       - name: Compile binaries (cross-target)
         run: |
           mkdir -p dist-bin
@@ -37,11 +105,22 @@ jobs:
           done
           ls -lh dist-bin
 
+      - name: Package compose bundle
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Stamp the version so scripts/_common.sh pins the image tags on the host.
+          printf '%s\n' "$VERSION" > packages/compose/VERSION
+          mkdir -p dist-bin
+          tar czf "dist-bin/hola-compose-$VERSION.tar.gz" -C packages/compose \
+            --exclude=./node_modules --exclude=./data --exclude=./logs \
+            --exclude=./traefik --exclude=./.env .
+          ls -lh dist-bin
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Create the release if it does not exist, then upload (clobbering) the binaries.
+          # Create the release if it does not exist, then upload (clobbering) the assets.
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release create "$GITHUB_REF_NAME" \
               --title "Hola CLI $GITHUB_REF_NAME" \
