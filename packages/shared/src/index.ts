@@ -157,13 +157,41 @@ export const CAPABILITIES = {
 export type Capability = typeof CAPABILITIES[keyof typeof CAPABILITIES];
 
 // Auth API endpoints.
-// pt.1 (control-plane API keys) implements `me`. Session/SSO endpoints
-// (login/logout/refresh) arrive with application SSO in MVP pt.2 (ADR 0001).
+// `me` returns the current principal. `config` is an UNAUTHENTICATED endpoint the
+// web dashboard reads at boot to learn how to log in (OIDC vs admin-key). `login`/
+// `logout` back the admin-key session fallback (sets/clears an HttpOnly cookie);
+// the OIDC path exchanges codes in the browser and sends a Bearer JWT instead.
 export const AUTH_API = {
   me: '/api/auth/me',
+  config: '/api/auth/config',
+  login: '/api/auth/login',
+  logout: '/api/auth/logout',
 } as const;
 
 export type GetAuthMeResponse = Principal;
+
+/**
+ * GET /api/auth/config — tells the dashboard how to authenticate. Served without
+ * auth so the SPA can fetch it before it has a credential.
+ *  - `mode: 'none'`   — auth disabled (HOLA_USE_AUTH=false); the SPA loads directly.
+ *  - `mode: 'oidc'`   — run the Authorization Code + PKCE flow against `oidc`.
+ *  - `mode: 'apikey'` — auth on but no OIDC; the SPA shows an admin-key login.
+ */
+export type AuthConfigResponse = {
+  authRequired: boolean;
+  mode: 'none' | 'oidc' | 'apikey';
+  oidc?: {
+    issuer: string;
+    clientId: string;
+    redirectUri: string;
+    audience: string;
+    scopes: string[];
+  };
+};
+
+// POST /api/auth/login — admin-key session fallback.
+export type AuthLoginRequest = { key: string };
+export type AuthLoginResponse = { ok: true; principal: Principal };
 
 // GET /api/me
 export type GetMeResponse = Principal;

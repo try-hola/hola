@@ -63,11 +63,40 @@ export interface DeprovisionInput {
   ref?: ProvisionedAuthRef;
 }
 
+/** Input for provisioning the Hola dashboard's OWN OIDC client (not a deployed app). */
+export interface PlatformOidcInput {
+  /** The dashboard's external host (HOLA_DOMAIN), e.g. `app.example.com`. */
+  host: string;
+  /** Browser callback path the SPA handles, e.g. `/auth/callback`. */
+  redirectPath: string;
+  /** OIDC scopes to grant, e.g. ['openid','profile','email']. */
+  scopes: string[];
+}
+
+/** The dashboard OIDC client details, read back for the server + SPA to use. */
+export interface PlatformOidcResult {
+  issuer: string;
+  clientId: string;
+  redirectUri: string;
+  audience: string;
+}
+
 export interface ProvisionerService extends HealthCheckable {
   provision(input: ProvisionInput): Promise<ProvisionResult>;
   deprovision(input: DeprovisionInput): Promise<void>;
+  /**
+   * Idempotently ensure a PUBLIC (PKCE) OIDC client for the dashboard itself and
+   * return its issuer/clientId. Stable across restarts (keyed on a fixed slug), so
+   * re-running reuses the same client. The dashboard is a public SPA client, so no
+   * client secret is issued.
+   */
+  provisionPlatformOidc(input: PlatformOidcInput): Promise<PlatformOidcResult>;
   healthCheck(): Promise<ServiceHealth>;
 }
+
+// Fixed identifiers for the dashboard's own OIDC client (stable → idempotent).
+const DASHBOARD_SLUG = 'hola-dashboard';
+const DASHBOARD_NAME = 'Hola Dashboard';
 
 // ---------------------------------------------------------------------------
 // Authentik REST backend
@@ -110,6 +139,8 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_outposts.view_outpost',
   'authentik_outposts.change_outpost',
   'authentik_flows.view_flow',
+  // Read certificate-keypairs to pick a signing key for the dashboard OIDC client.
+  'authentik_crypto.view_certificatekeypair',
 ];
 
 /** Sanitize a string into an Authentik slug (lowercase, alnum + hyphen). */
@@ -259,6 +290,92 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   private issuerUrl(slug: string): string {
     const base = this.config.authentikPublicUrl || this.config.authentikUrl || '';
     return `${base}/application/o/${slug}/`;
+  }
+
+  // ---- platform (dashboard) OIDC ----------------------------------------
+
+  async provisionPlatformOidc(input: PlatformOidcInput): Promise<PlatformOidcResult> {
+    const redirectUri = `https://${input.host}${input.redirectPath}`;
+    const issuer = this.issuerUrl(DASHBOARD_SLUG);
+
+    // Idempotent: if the dashboard application already exists, reuse its provider
+    // (keeping a stable client_id across restarts) and just refresh the redirect URI.
+    const existing = await this.findApplication(DASHBOARD_SLUG);
+    if (existing?.provider != null) {
+      const provider = await this.api<AuthentikOAuth2Provider>('GET', `/api/v3/providers/oauth2/${existing.provider}/`);
+      await this.api('PATCH', `/api/v3/providers/oauth2/${existing.provider}/`, {
+        redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
+      });
+      this.logger.info('Reused dashboard OIDC client', { clientId: provider.client_id });
+      return { issuer, clientId: provider.client_id, redirectUri, audience: provider.client_id };
+    }
+
+    // Fresh provision: a PUBLIC client (PKCE, no usable secret) with an asymmetric
+    // signing key so access tokens are verifiable JWTs (RS256) via JWKS.
+    const clientId = randomUUID();
+    const [authFlow, invalidationFlow, propertyMappings, signingKey] = await Promise.all([
+      this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
+      this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
+      this.resolveScopeMappingPks(input.scopes),
+      this.resolveSigningKeyPk(),
+    ]);
+
+    const provider = await this.api<AuthentikOAuth2Provider>('POST', '/api/v3/providers/oauth2/', {
+      name: DASHBOARD_NAME,
+      authorization_flow: authFlow,
+      invalidation_flow: invalidationFlow,
+      client_type: 'public',
+      client_id: clientId,
+      redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
+      property_mappings: propertyMappings,
+      sub_mode: 'hashed_user_id',
+      ...(signingKey ? { signing_key: signingKey } : {}),
+    });
+
+    try {
+      await this.api('POST', '/api/v3/core/applications/', {
+        name: DASHBOARD_NAME,
+        slug: DASHBOARD_SLUG,
+        provider: provider.pk,
+        meta_launch_url: `https://${input.host}/`,
+      });
+    } catch (error) {
+      await this.apiDeleteIgnoreMissing(`/api/v3/providers/oauth2/${provider.pk}/`);
+      throw new ProvisioningError('failed to create dashboard Authentik application', error);
+    }
+
+    this.logger.info('Provisioned dashboard OIDC client', { clientId, providerPk: provider.pk });
+    return { issuer, clientId, redirectUri, audience: clientId };
+  }
+
+  /** Look up an application by slug, returning null when absent (404). */
+  private async findApplication(slug: string): Promise<{ provider: number | null } | null> {
+    try {
+      return await this.api<{ provider: number | null }>(
+        'GET',
+        `/api/v3/core/applications/${encodeURIComponent(slug)}/`,
+      );
+    } catch (error) {
+      const status = error instanceof ProvisioningError ? (error.details as { status?: number })?.status : undefined;
+      if (status === 404) return null;
+      throw error;
+    }
+  }
+
+  /** Pick a certificate-keypair to sign tokens with (Authentik ships a default). */
+  private async resolveSigningKeyPk(): Promise<string | undefined> {
+    try {
+      const res = await this.api<{ results: Array<{ pk: string }> }>(
+        'GET',
+        '/api/v3/crypto/certificatekeypairs/?has_key=true&ordering=name',
+      );
+      return res.results?.[0]?.pk;
+    } catch (error) {
+      this.logger.warn('Could not resolve a signing key for the dashboard client; tokens may be opaque', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   // ---- forward-auth ------------------------------------------------------
@@ -646,5 +763,15 @@ export class MockProvisionerService implements ProvisionerService {
 
   async deprovision(input: DeprovisionInput): Promise<void> {
     this.logger.debug('Mock deprovision', { deploymentId: input.deploymentId, mode: input.ref?.mode });
+  }
+
+  async provisionPlatformOidc(input: PlatformOidcInput): Promise<PlatformOidcResult> {
+    const clientId = 'mock-dashboard-client';
+    return {
+      issuer: `https://auth.mock/application/o/${DASHBOARD_SLUG}/`,
+      clientId,
+      redirectUri: `https://${input.host}${input.redirectPath}`,
+      audience: clientId,
+    };
   }
 }

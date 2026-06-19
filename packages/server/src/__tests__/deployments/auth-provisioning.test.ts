@@ -28,6 +28,8 @@ import type {
   ProvisionInput,
   ProvisionResult,
   DeprovisionInput,
+  PlatformOidcInput,
+  PlatformOidcResult,
 } from '../../services/core/provisioner';
 import type { AppAuthConfig } from '@hola/shared';
 
@@ -125,6 +127,16 @@ class SpyProvisioner implements ProvisionerService {
 
   async deprovision(input: DeprovisionInput): Promise<void> {
     this.deprovisions.push(input);
+  }
+
+  async provisionPlatformOidc(input: PlatformOidcInput): Promise<PlatformOidcResult> {
+    const clientId = 'dashboard-cid';
+    return {
+      issuer: 'https://auth.example.com/application/o/hola-dashboard/',
+      clientId,
+      redirectUri: `https://${input.host}${input.redirectPath}`,
+      audience: clientId,
+    };
   }
 }
 

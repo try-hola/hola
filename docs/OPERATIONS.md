@@ -52,6 +52,25 @@ docker compose exec server cat /data/config/admin-api-key
 Send it as `Authorization: Bearer <key>` (or `X-API-Key: <key>`); for the CLI/SDK
 set `HOLA_TOKEN`. Development and test run with auth disabled. See ADR 0001.
 
+#### Dashboard sign-in
+
+The web dashboard reads `GET /api/auth/config` (unauthenticated) at load to pick a
+login flow:
+
+- **SSO (recommended).** With `HOLA_AUTH_MODE=authentik`, the server self-provisions
+  a public OIDC client for the dashboard at startup (registered at
+  `https://<HOLA_DOMAIN>/auth/callback`) and the login screen shows **Sign in with
+  SSO** — an Authorization Code + PKCE flow against Authentik. The browser sends the
+  resulting access-token JWT as a Bearer header; the server validates it against
+  Authentik's JWKS. Set `HOLA_OIDC_ISSUER` + `HOLA_OIDC_CLIENT_ID` to point at an
+  external IdP instead, and `HOLA_OIDC_ADMIN_GROUP` to restrict write access to a
+  group.
+- **Admin-key fallback.** Without OIDC, the login screen accepts the admin API key;
+  the server validates it and sets an `HttpOnly` session cookie, so the key is never
+  stored in the browser.
+
+When `HOLA_USE_AUTH=false` (dev/test) the dashboard loads with no login.
+
 ## Deploy an app
 
 The web dashboard browses a remote **catalog** of installable apps, set via

@@ -13,6 +13,7 @@ import { RealDatabaseService, MockDatabaseService, type DatabaseService } from '
 import { RealDatabaseConfigService, type DatabaseConfigService } from './core/database-config';
 import { RealAuthService, MockAuthService, type AuthService } from './auth/auth-service';
 import { resolveAdminApiKey, createAdminApiKeyProvider } from './auth/api-key-config';
+import { createOidcAuthProvider } from './auth/oidc-provider';
 import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
 import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
 import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
@@ -151,9 +152,13 @@ export function createServices(env: ServiceEnvironment): Services {
   
   const catalog = new RealCatalogService();
   
-  // Set up auth provider for real auth service
-  // Register the admin API-key provider with a usable credential (env or generated+persisted).
+  // Set up auth providers for real auth service. Order matters: the api-key
+  // provider runs first (cheap map lookup for the admin key / CLI tokens); the
+  // OIDC provider runs second and validates dashboard Bearer JWTs. The OIDC
+  // provider self-disables until an issuer/clientId is configured (e.g. after
+  // startup self-provisioning), so registering it unconditionally is safe.
   authService.registerProvider(createAdminApiKeyProvider(resolveAdminApiKey()));
+  authService.registerProvider(createOidcAuthProvider());
   
   // Shared routing service owns Traefik rule generation/validation/emission.
   const routing = new RealRoutingService(storage);

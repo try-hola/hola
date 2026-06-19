@@ -99,6 +99,14 @@ services:
       # service account. Set HOLA_AUTHENTIK_API_TOKEN to pin a pre-made scoped token instead.
       - HOLA_AUTHENTIK_BOOTSTRAP_TOKEN=${AUTHENTIK_BOOTSTRAP_TOKEN:-}
       - HOLA_AUTHENTIK_API_TOKEN=${HOLA_AUTHENTIK_API_TOKEN:-}
+      # Dashboard SSO: with HOLA_AUTH_MODE=authentik the server self-provisions a
+      # public OIDC client for the dashboard and validates its access tokens. To
+      # use an external IdP instead, set HOLA_OIDC_ISSUER + HOLA_OIDC_CLIENT_ID
+      # (and the client's redirect URI must be https://${HOLA_DOMAIN}/auth/callback).
+      - HOLA_OIDC_ISSUER=${HOLA_OIDC_ISSUER:-}
+      - HOLA_OIDC_CLIENT_ID=${HOLA_OIDC_CLIENT_ID:-}
+      - HOLA_OIDC_AUDIENCE=${HOLA_OIDC_AUDIENCE:-}
+      - HOLA_OIDC_ADMIN_GROUP=${HOLA_OIDC_ADMIN_GROUP:-}
       # Base DN of the shared LDAP directory (for native-ldap apps); host/port
       # default to the authentik-ldap outpost service.
       - HOLA_AUTHENTIK_LDAP_BASE_DN=${HOLA_AUTHENTIK_LDAP_BASE_DN:-dc=hola,dc=internal}
