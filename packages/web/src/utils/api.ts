@@ -351,9 +351,15 @@ export const api = {
       return apiClient.get(`${API.deployments.history(deploymentId)}${query}`);
     },
     
-    action: (deploymentId: string, action: { action: 'start' | 'stop' | 'restart' | 'delete' }) => 
+    action: (deploymentId: string, action: { action: 'start' | 'stop' | 'restart' | 'delete' }) =>
       apiClient.post(API.deployments.actions(deploymentId), action),
-    
+
+    // Full teardown: stop + deprovision + release the Traefik route + remove the
+    // record (DELETE /api/deployments/:id). The `delete` action only stops compose
+    // and leaves the route held, which blocks reinstalling the same app.
+    remove: (deploymentId: string) =>
+      apiClient.delete(API.deployments.byId(deploymentId)),
+
     logs: (deploymentId: string, params?: { since?: string; lines?: number }) => {
       const query = apiClient.buildQuery(params || {});
       return apiClient.get(`${API.deployments.logs(deploymentId)}${query}`, false); // Don't cache logs

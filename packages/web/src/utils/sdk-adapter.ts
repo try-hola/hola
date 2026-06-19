@@ -376,6 +376,12 @@ export class SdkAdapter {
     create: (data: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> =>
       this.enhancedRequest('POST', '/api/deployments', () => this.sdk.deployments.create(data), data, true),
 
+    // Full teardown: stops containers, deprovisions auth, releases the Traefik
+    // route, and removes the record (DELETE /api/deployments/:id). The `delete`
+    // *action* only stops compose, leaving the route held — use this to remove.
+    remove: (deploymentId: string): Promise<void> =>
+      this.enhancedRequest('DELETE', `/api/deployments/${deploymentId}`, () => this.sdk.deployments.delete(deploymentId), undefined, true),
+
     list: (params?: GetDeploymentsRequest): Promise<GetDeploymentsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments${query}`;

@@ -61,7 +61,7 @@ export const Deployments: React.FC = () => {
   const deployments = deploymentsResponse?.items || [];
   const totalDeployments = deploymentsResponse?.total || 0;
 
-  const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart' | 'delete') => {
+  const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart') => {
     try {
       const request: PostDeploymentActionRequest = { action };
       const result = await api.deployments.action(deploymentId, request) as PostDeploymentActionResponse;
@@ -76,6 +76,18 @@ export const Deployments: React.FC = () => {
     } catch (error) {
       console.error(`Error performing ${action}:`, error);
       // In a real app, you'd show a toast notification here
+    }
+  }, [refetch]);
+
+  // Removal is a full teardown (stop + deprovision + release route + remove
+  // record), distinct from the `stop` action — so it uses the DELETE endpoint,
+  // not a lifecycle action, otherwise the route stays held and blocks reinstall.
+  const handleDelete = useCallback(async (deploymentId: string) => {
+    try {
+      await api.deployments.remove(deploymentId);
+      await refetch();
+    } catch (error) {
+      console.error('Error deleting deployment:', error);
     }
   }, [refetch]);
 
@@ -242,7 +254,7 @@ export const Deployments: React.FC = () => {
                   title="Remove"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleAction(deployment.id, 'delete');
+                    handleDelete(deployment.id);
                   }}
                   className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-danger hover:bg-danger-weak transition-colors"
                 >
