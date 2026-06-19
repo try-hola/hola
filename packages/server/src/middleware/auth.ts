@@ -40,14 +40,38 @@ function extractToken(req: Request): string | null {
   if (apiKeyHeader) {
     return apiKeyHeader;
   }
-  
+
+  // Try the dashboard session cookie (admin-key fallback login sets this HttpOnly
+  // cookie so the SPA never holds the raw key in JS-readable storage).
+  const sessionCookie = readCookie(req, SESSION_COOKIE);
+  if (sessionCookie) {
+    return sessionCookie;
+  }
+
   // Try query parameter (less secure, for development)
   const url = new URL(req.url);
   const queryToken = url.searchParams.get('token') || url.searchParams.get('api_key');
   if (queryToken) {
     return queryToken;
   }
-  
+
+  return null;
+}
+
+/** Name of the HttpOnly session cookie used by the admin-key login fallback. */
+export const SESSION_COOKIE = 'hola_session';
+
+/** Read a single cookie value from the request's Cookie header. */
+export function readCookie(req: Request, name: string): string | null {
+  const header = req.headers.get('cookie');
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === name) {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    }
+  }
   return null;
 }
 
@@ -62,6 +86,11 @@ function isPublicEndpoint(path: string, method: string): boolean {
     { path: '/api/system/health', method: 'GET' },
     { path: '/api/system/status', method: 'GET' },
     { path: '/api/echo', method: 'POST' }, // For testing
+    // Auth bootstrap: the SPA reads its login config and logs in before it has a
+    // credential, so these must be reachable without one.
+    { path: '/api/auth/config', method: 'GET' },
+    { path: '/api/auth/login', method: 'POST' },
+    { path: '/api/auth/logout', method: 'POST' },
   ];
   
   return publicEndpoints.some(endpoint => 

@@ -32,7 +32,7 @@ import { globalCache, CacheTTL } from './cache';
 import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
 
 // Environment-based configuration for SDK
-function getWebBaseUrl(): string {
+export function getWebBaseUrl(): string {
   // Check for explicit Vite environment variable first
   if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;

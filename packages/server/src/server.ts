@@ -2,6 +2,8 @@ import {
   API,
   AUTH_API,
   type GetAuthMeResponse,
+  type AuthConfigResponse,
+  type AuthLoginResponse,
   type HealthResponse,
   type HelloResponse,
   type GetMeResponse,
@@ -61,7 +63,9 @@ import { createSSEStream, createSSEHeaders } from './utils/sse';
 import { mapErrorToResponse } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
-import { createAuthMiddleware, getPrincipal } from './middleware/auth';
+import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
+import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
+import { authConfig } from './config/auth';
 
 // Import enhanced mock data
 import {
@@ -182,6 +186,13 @@ function withCors(res: Response) {
   headers.set('access-control-allow-origin', '*');
   headers.set('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
   headers.set('access-control-allow-headers', 'content-type,authorization,x-request-id');
+  // Re-copying headers via the Headers constructor can drop Set-Cookie on some
+  // runtimes; restore it explicitly so the login/logout cookie survives.
+  const setCookies = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [];
+  if (setCookies.length > 0) {
+    headers.delete('set-cookie');
+    for (const c of setCookies) headers.append('set-cookie', c);
+  }
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
@@ -317,6 +328,65 @@ async function route(url: URL, req: Request): Promise<Response> {
     const me = getIdentity(req);
     if (!me) return json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, { status: 401 });
     return json(me);
+  }
+
+  // Public: tell the dashboard how to authenticate (OIDC vs admin-key vs none).
+  if (pathname === AUTH_API.config && req.method === 'GET') {
+    const authRequired = featureFlags.useAuth;
+    if (!authRequired) {
+      return json({ authRequired: false, mode: 'none' } satisfies AuthConfigResponse);
+    }
+    const oidc = resolveOidcConfig();
+    if (oidc.enabled && oidc.issuer && oidc.clientId && oidc.redirectUri) {
+      return json({
+        authRequired: true,
+        mode: 'oidc',
+        oidc: {
+          issuer: oidc.issuer,
+          clientId: oidc.clientId,
+          redirectUri: oidc.redirectUri,
+          audience: oidc.audience ?? oidc.clientId,
+          scopes: oidc.scopes,
+        },
+      } satisfies AuthConfigResponse);
+    }
+    return json({ authRequired: true, mode: 'apikey' } satisfies AuthConfigResponse);
+  }
+
+  // Public: admin-key login fallback. Validates the key via the auth service and,
+  // on success, sets an HttpOnly session cookie so the SPA never stores the raw key.
+  if (pathname === AUTH_API.login && req.method === 'POST') {
+    if (!featureFlags.useAuth) {
+      // Nothing to log into; report success so the SPA proceeds.
+      return json({ ok: true, principal: getPrincipal(req) } as AuthLoginResponse);
+    }
+    let body: { key?: string };
+    try {
+      body = (await req.json()) as { key?: string };
+    } catch {
+      return json({ error: { code: 'BAD_JSON', message: 'Invalid JSON' } }, { status: 400 });
+    }
+    const key = body.key?.trim();
+    if (!key) {
+      return json({ error: { code: 'BAD_REQUEST', message: 'key is required' } }, { status: 400 });
+    }
+    const { auth } = getServices();
+    const result = await auth.authenticate(key, { path: pathname, method: req.method });
+    if (!result.success || !result.principal) {
+      return json({ error: { code: 'UNAUTHORIZED', message: 'Invalid key' } }, { status: 401 });
+    }
+    // Session cookie carries the key itself; it's HttpOnly+Secure+SameSite=Strict
+    // and same-origin with /api, so it can't be read by JS or sent cross-site.
+    const cookie = `${SESSION_COOKIE}=${encodeURIComponent(key)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`;
+    return json({ ok: true, principal: result.principal } satisfies AuthLoginResponse, {
+      headers: { 'set-cookie': cookie },
+    });
+  }
+
+  // Public: clear the admin-key session cookie.
+  if (pathname === AUTH_API.logout && req.method === 'POST') {
+    const cookie = `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
+    return json({ ok: true }, { headers: { 'set-cookie': cookie } });
   }
 
   // Summary
@@ -1610,6 +1680,49 @@ export async function createInProcessApp(options: InProcessAppOptions = {}): Pro
   };
 }
 
+/**
+ * Self-provision the dashboard's own OIDC client (best-effort, background).
+ *
+ * Only runs in production with auth on and HOLA_AUTH_MODE=authentik. Skips when
+ * the operator supplied explicit HOLA_OIDC_* env (external IdP). Authentik may
+ * still be migrating at first boot, so this retries with backoff and never blocks
+ * serving — until it succeeds, /api/auth/config reports the admin-key fallback.
+ */
+async function initializePlatformAuth(): Promise<void> {
+  if (!featureFlags.useAuth || authConfig.mode !== 'authentik') return;
+  if (process.env.HOLA_OIDC_ISSUER && process.env.HOLA_OIDC_CLIENT_ID) {
+    logger.info('Dashboard OIDC configured via env; skipping self-provision');
+    return;
+  }
+  const host = process.env.HOLA_DOMAIN?.trim();
+  if (!host) {
+    logger.warn('HOLA_DOMAIN unset; cannot self-provision the dashboard OIDC client');
+    return;
+  }
+
+  const { provisioner } = getServices();
+  const delaysMs = [0, 5_000, 15_000, 30_000, 60_000];
+  for (let i = 0; i < delaysMs.length; i++) {
+    if (delaysMs[i]) await new Promise((r) => setTimeout(r, delaysMs[i]));
+    try {
+      const result = await provisioner.provisionPlatformOidc({
+        host,
+        redirectPath: '/auth/callback',
+        scopes: resolveOidcConfig().scopes,
+      });
+      setProvisionedOidc(result);
+      logger.info('Dashboard OIDC client ready', { issuer: result.issuer, clientId: result.clientId });
+      return;
+    } catch (error) {
+      logger.warn('Dashboard OIDC provisioning attempt failed; will retry', {
+        attempt: i + 1,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  logger.error('Gave up self-provisioning the dashboard OIDC client; using admin-key login until configured');
+}
+
 // Phase 0: Start background tasks
 async function startBackgroundTasks() {
   logger.info('Starting background tasks');
@@ -1652,7 +1765,10 @@ process.on('SIGTERM', () => {
 if (shouldAutoStart) {
   await initializeDevelopmentEnvironment();
   await startBackgroundTasks();
-  
+
+  // Self-provision the dashboard OIDC client in the background (best-effort).
+  void initializePlatformAuth();
+
   const server = Bun.serve({
     port: PORT,
     fetch: handleRequest,

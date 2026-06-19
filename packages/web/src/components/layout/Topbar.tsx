@@ -1,7 +1,16 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { Search, Moon, Sun } from 'lucide-react';
+import { Search, Moon, Sun, LogOut } from 'lucide-react';
 import { useTheme } from '../../hooks/useTheme';
+import { useAuth } from '../../hooks/useAuth';
+
+/** Two-letter initials from a name/email for the avatar. */
+function initials(label: string | undefined): string {
+  if (!label) return 'av';
+  const parts = label.split(/[\s@.]+/).filter(Boolean);
+  const chars = (parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '');
+  return (chars || label.slice(0, 2)).toLowerCase();
+}
 
 const TITLES: Record<string, { title: string; crumb: string }> = {
   '/apps': { title: 'Your apps', crumb: 'Installed applications' },
@@ -24,7 +33,10 @@ function pageInfo(pathname: string): { title: string; crumb: string } {
 export const Topbar: React.FC = () => {
   const location = useLocation();
   const { applied, toggle } = useTheme();
+  const { user, mode, logout } = useAuth();
   const { title, crumb } = pageInfo(location.pathname);
+  const showAccount = mode !== null && mode !== 'none';
+  const label = user?.name || user?.email;
 
   return (
     <header className="h-[60px] flex-none flex items-center gap-4 px-[22px] border-b border-border bg-surface-0/80 backdrop-blur-md z-[5]">
@@ -60,10 +72,22 @@ export const Topbar: React.FC = () => {
         {applied === 'dark' ? <Sun className="w-[18px] h-[18px]" /> : <Moon className="w-[18px] h-[18px]" />}
       </button>
 
-      {/* Avatar */}
-      <div className="w-9 h-9 flex-none flex items-center justify-center bg-surface-2 border border-border rounded-[9px] text-text-strong font-semibold text-[13px] cursor-pointer">
-        av
+      {/* Avatar + sign out (only when auth is enabled) */}
+      <div
+        className="w-9 h-9 flex-none flex items-center justify-center bg-surface-2 border border-border rounded-[9px] text-text-strong font-semibold text-[13px]"
+        title={label ?? 'Account'}
+      >
+        {initials(label)}
       </div>
+      {showAccount && (
+        <button
+          onClick={() => { void logout(); }}
+          title="Sign out"
+          className="w-9 h-9 flex-none flex items-center justify-center bg-surface-1 border border-border rounded-[9px] text-text-muted cursor-pointer hover:text-danger hover:border-danger transition-colors"
+        >
+          <LogOut className="w-[18px] h-[18px]" />
+        </button>
+      )}
     </header>
   );
 };

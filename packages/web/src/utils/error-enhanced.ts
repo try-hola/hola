@@ -3,6 +3,8 @@
 
 import type { ErrorResponse as SharedErrorResponse } from '@hola/shared';
 
+import { getAuthToken, notifyUnauthorized } from './auth-token';
+
 export type ErrorResponse = SharedErrorResponse;
 
 // Error classification for different handling strategies
@@ -326,14 +328,38 @@ export async function enhancedFetch(
   throw lastError;
 }
 
+/** True for our own auth bootstrap endpoints, which must not trigger re-auth loops. */
+function isAuthEndpoint(input: RequestInfo | URL): boolean {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  return url.includes('/api/auth/');
+}
+
 // Enhanced safeFetch replacement with retry support
 export async function safeFetchEnhanced(
   input: RequestInfo | URL,
   init?: RequestInit,
   retryConfig?: Partial<RetryConfig>
 ): Promise<Response> {
+  // Attach auth: a Bearer access token for the OIDC flow (cookie auth needs none),
+  // and always send same-origin credentials so the admin-key session cookie rides
+  // along. The token getter is registered by the React AuthProvider.
+  const token = getAuthToken();
+  const withAuth: RequestInit = { credentials: 'include', ...init };
+  if (token) {
+    const headers = new Headers(withAuth.headers);
+    if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+    withAuth.headers = headers;
+  }
+
   try {
-    return await enhancedFetch(input, init, retryConfig);
+    const res = await enhancedFetch(input, withAuth, retryConfig);
+    // A 401 on a real API call means our credential is gone/expired — let the app
+    // drop to login. Ignore the auth endpoints themselves (login returning 401 is
+    // a normal "wrong key", not a session expiry).
+    if (res.status === 401 && !isAuthEndpoint(input)) {
+      notifyUnauthorized();
+    }
+    return res;
   } catch (err) {
     // Ensure we always throw an EnhancedError
     if (err instanceof Error && !(err as EnhancedError).type) {
