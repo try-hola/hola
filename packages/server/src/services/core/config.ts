@@ -52,10 +52,8 @@ export class RealConfigService implements ConfigService {
 
   // Default settings
   private defaultSystemSettings: SystemSettings = {
-    systemEnv: [
-      { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-      { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-    ],
+    // No placeholder system variables: an operator adds their own in Settings.
+    systemEnv: [],
     docker: { host: '/var/run/docker.sock' },
     tls: { email: '' },
     notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },

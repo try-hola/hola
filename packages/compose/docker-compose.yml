@@ -72,6 +72,9 @@ services:
       # `docker compose`. Force it off for the production stack.
       - USE_MOCK_DATA=false
       - HOLA_DATA_DIR=/data
+      # The running version, surfaced in the dashboard / system status. Exported by
+      # scripts/_common.sh from the bundle's VERSION file (same value as the image tag).
+      - HOLA_VERSION=${HOLA_VERSION:-}
       # Platform hosts the server emits Traefik file-provider routes for (core.yml):
       # the UI itself, the Traefik dashboard, and (when SSO is on) the Authentik UI.
       # These replace the Docker-label routers Traefik used to discover.

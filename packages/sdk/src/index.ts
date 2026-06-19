@@ -94,7 +94,8 @@ export class HolaSdk {
     create: (data: CreateDraftRequest) => this.post<CreateDraftResponse>(API.drafts.create, data),
     byId: (draftId: string) => this.get<GetDraftResponse>(API.drafts.byId(draftId)),
     update: (draftId: string, data: PatchDraftRequest) => this.patch<PatchDraftResponse>(API.drafts.byId(draftId), data),
-    uploadFile: (draftId: string, filePath: string, content: string) => 
+    remove: (draftId: string) => this.delete<void>(API.drafts.byId(draftId)),
+    uploadFile: (draftId: string, filePath: string, content: string) =>
       this.post<UploadDraftFileResponse>(API.drafts.uploads(draftId), { filePath, content }),
     removeFile: (draftId: string, uploadId: string) => 
       this.delete<DeleteDraftFileResponse>(API.drafts.uploadById(draftId, uploadId)),

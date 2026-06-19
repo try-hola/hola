@@ -18,7 +18,7 @@ const navigationItems = [
   { name: 'Catalog', path: '/catalog', icon: Package },
   { name: 'Deployments', path: '/deployments', icon: Server },
   { name: 'Backups', path: '/backups', icon: Shield },
-  { name: 'Notifications', path: '/notifications', icon: Bell, badge: 3 },
+  { name: 'Notifications', path: '/notifications', icon: Bell },
   { name: 'Settings', path: '/settings', icon: Settings },
 ];
 

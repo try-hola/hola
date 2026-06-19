@@ -1,4 +1,5 @@
 import React from 'react';
+import { safeFetchEnhanced } from '../utils/error-enhanced';
 import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
 import type { 
@@ -51,7 +52,7 @@ export function useNotificationsApi(
         params.append('filter', filter);
       }
 
-      const response = await fetch(`${API.notifications.base}?${params.toString()}`);
+      const response = await safeFetchEnhanced(`${API.notifications.base}?${params.toString()}`);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch notifications: ${response.status} ${response.statusText}`);
@@ -76,7 +77,7 @@ export function useNotificationsApi(
   // Mark notification as read
   const markAsRead = React.useCallback(async (id: string) => {
     const request: PatchNotificationRequest = { read: true };
-    const response = await fetch(API.notifications.byId(id), {
+    const response = await safeFetchEnhanced(API.notifications.byId(id), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -96,7 +97,7 @@ export function useNotificationsApi(
   // Dismiss notification
   const dismissNotification = React.useCallback(async (id: string) => {
     const request: PatchNotificationRequest = { dismiss: true };
-    const response = await fetch(API.notifications.byId(id), {
+    const response = await safeFetchEnhanced(API.notifications.byId(id), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -116,7 +117,7 @@ export function useNotificationsApi(
   // Mark all as read
   const markAllAsRead = React.useCallback(async () => {
     const request: PostNotificationsActionRequest = { action: 'markAllRead' };
-    const response = await fetch(API.notifications.actions, {
+    const response = await safeFetchEnhanced(API.notifications.actions, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -136,7 +137,7 @@ export function useNotificationsApi(
   // Dismiss all notifications
   const dismissAll = React.useCallback(async () => {
     const request: PostNotificationsActionRequest = { action: 'dismissAll' };
-    const response = await fetch(API.notifications.actions, {
+    const response = await safeFetchEnhanced(API.notifications.actions, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)

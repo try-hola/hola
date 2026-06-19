@@ -8,6 +8,7 @@ import {
   type HelloResponse,
   type GetMeResponse,
   type GetSummaryResponse,
+  type SummaryJob,
   type GetCatalogAppsResponse,
   type CreateDraftRequest,
   type PatchDraftRequest,
@@ -22,7 +23,6 @@ import {
   type GetBackupsResponse,
   type CreateBackupRequest,
   type CreateBackupResponse,
-  type GetBackupResponse,
   type RestoreBackupRequest,
   type RestoreBackupResponse,
   type DeleteBackupResponse,
@@ -67,34 +67,6 @@ import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware
 import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
 import { authConfig } from './config/auth';
 
-// Import enhanced mock data
-import {
-  // Jobs
-  getJobById,
-  getAllJobs,
-  getJobsByDeployment,
-  // System
-  getSummary,
-  getSystemStatus,
-  updateSystemHealth,
-  // Notifications
-  // getNotifications,
-  // updateNotification,
-  // executeNotificationAction,
-  generateJobNotifications,
-  // Backups
-  // getBackups,
-  // getBackupById,
-  // createBackup,
-  // restoreBackup,
-  // deleteBackup,
-  scheduleAutomaticBackups,
-  // Settings
-  // getSettings,
-  // updateSettings,
-  // getBackupSettings,
-  // updateBackupSettings,
-} from './mock-data';
 
 // Import development tools
 import { initializeDevelopmentEnvironment } from './config/development';
@@ -389,25 +361,46 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json({ ok: true }, { headers: { 'set-cookie': cookie } });
   }
 
-  // Summary
+  // Summary — computed from real deployments, jobs, and system status.
   if (pathname === API.summary && req.method === 'GET') {
     try {
-      // Phase 4: Use real system monitoring service for system status in summary
       const services = getServices();
-      const systemStatus = await services.systemMonitoring.getSystemStatus();
-      
-      // Get summary data with real system status
-      const summary = getSummary();
+      const [systemStatus, deploymentsResp, jobs] = await Promise.all([
+        services.systemMonitoring.getSystemStatus(),
+        services.deployments.listDeployments({ page: 1, limit: 1000 }),
+        services.jobs.listJobs(),
+      ]);
+
+      const deployments = deploymentsResp.items;
+      const appByDeployment = new Map(deployments.map(d => [d.id, d.app]));
+
+      const activeJobsCount = jobs.filter(j => j.status === 'running' || j.status === 'queued').length;
+      const recentJobs: SummaryJob[] = [...jobs]
+        .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
+        .slice(0, 5)
+        .map(j => ({
+          id: j.id,
+          deploymentId: j.deploymentId ?? '',
+          type: j.type,
+          app: (j.deploymentId && appByDeployment.get(j.deploymentId)) || j.deploymentId || 'system',
+          status: j.status,
+          ...(j.progress !== undefined ? { progress: j.progress } : {}),
+          timestamp: j.finishedAt ?? j.startedAt,
+        }));
+
+      const erroredDeployments = deployments.filter(d => d.status === 'error').length;
+      const failedRecentJobs = recentJobs.filter(j => j.status === 'failed').length;
+
       const payload: GetSummaryResponse = {
-        ...summary,
+        deploymentsCount: deployments.length,
+        activeJobsCount,
+        alertsCount: erroredDeployments + failedRecentJobs,
+        recentJobs,
         system: systemStatus,
       };
       return json(payload);
     } catch (error) {
-      logger.error('Failed to get system status for summary, using mock', error as Error);
-      // Fallback to full mock implementation
-      const payload: GetSummaryResponse = getSummary();
-      return json(payload);
+      return errorResponse(req, error);
     }
   }
 
@@ -1021,21 +1014,12 @@ async function route(url: URL, req: Request): Promise<Response> {
     
     let jobs: Job[];
     try {
-      // Phase 5: Use JobService if available
       const services = getServices();
       const status = statusParam && statusParam !== 'all' ? statusParam as JobStatus : undefined;
       jobs = await services.jobs.listJobs({ deploymentId: deploymentId ?? undefined, status });
-    } catch {
-      // Fallback to mock data
-      if (deploymentId) {
-        jobs = getJobsByDeployment(deploymentId);
-      } else {
-        jobs = getAllJobs();
-      }
-      if (statusParam && statusParam !== 'all') {
-        const status = statusParam as JobStatus;
-        jobs = jobs.filter(job => job.status === status);
-      }
+    } catch (error) {
+      logger.error('Failed to list jobs', error as Error);
+      jobs = [];
     }
 
     // Apply pagination
@@ -1056,11 +1040,15 @@ async function route(url: URL, req: Request): Promise<Response> {
   const jobMatch = pathname.match(/^\/api\/jobs\/([^/]+)$/);
   if (jobMatch && req.method === 'GET') {
     const jobId = jobMatch[1];
-    const payload = getJobById(jobId);
-    if (!payload) {
-      return notFound();
+    try {
+      const payload = await getServices().jobs.getJob(jobId);
+      if (!payload) {
+        return notFound();
+      }
+      return json(payload);
+    } catch (error) {
+      return errorResponse(req, error);
     }
-    return json(payload);
   }
 
   const jobLogsMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs$/);
@@ -1221,15 +1209,11 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Backups
+  // Backups. There is no platform backup engine yet (per-app backup is provided
+  // by the `backrest` catalog app), so the list is genuinely empty rather than
+  // seeded with sample backups. The mutation routes remain as no-op stubs.
   if (pathname === API.backups.base && req.method === 'GET') {
-    const payload: GetBackupsResponse = {
-      items: [
-        { id: '1', app: 'Nextcloud', icon: '☁️', timestamp: new Date().toISOString(), sizeBytes: 2_400_000_000, status: 'completed', type: 'automatic' },
-        { id: '2', app: 'Home Assistant', icon: '🏠', timestamp: new Date(Date.now()-12*3600e3).toISOString(), sizeBytes: 145_000_000, status: 'completed', type: 'automatic' },
-      ],
-      page: 1, limit: 2, total: 2,
-    };
+    const payload: GetBackupsResponse = { items: [], page: 1, limit: 10, total: 0 };
     return json(payload);
   }
 
@@ -1241,18 +1225,8 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   const backupByIdMatch = pathname.match(/^\/api\/backups\/([^/]+)$/);
   if (backupByIdMatch && req.method === 'GET') {
-    const payload: GetBackupResponse = {
-      id: backupByIdMatch[1],
-      app: 'Nextcloud',
-      appId: 'nextcloud',
-      icon: '☁️',
-      timestamp: new Date().toISOString(),
-      sizeBytes: 2_400_000_000,
-      status: 'completed',
-      type: 'automatic',
-      files: [{ path: 'backup.tar.gz', sizeBytes: 2_400_000_000 }],
-    };
-    return json(payload);
+    // No backup store: an id can never resolve to a real backup.
+    return notFound();
   }
 
   const backupRestoreMatch = pathname.match(/^\/api\/backups\/([^/]+)\/restore$/);
@@ -1267,14 +1241,11 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json(payload);
   }
 
-  // Notifications
+  // Notifications. No notification store exists yet, so the feed is empty rather
+  // than seeded with sample alerts.
   if (pathname === API.notifications.base && req.method === 'GET') {
     const payload: GetNotificationsResponse = {
-      items: [
-        { id: '1', type: 'update', title: 'Update Available: Nextcloud 28.0.3', message: 'Security improvements.', timestamp: '2 hours ago', read: false, priority: 'medium' },
-        { id: '2', type: 'error', title: 'Backup Failed: Plex', message: 'Insufficient disk space.', timestamp: '4 hours ago', read: false, priority: 'high' },
-      ],
-      page: 1, limit: 2, total: 2, unreadCount: 2,
+      items: [], page: 1, limit: 10, total: 0, unreadCount: 0,
     };
     return json(payload);
   }
@@ -1307,12 +1278,9 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json(payload);
     } catch (error) {
       logger.error('Failed to get system settings', error as Error);
-      // Fallback to default settings
+      // Fallback to empty settings (no placeholder system variables).
       const payload: GetSettingsResponse = {
-        systemEnv: [
-          { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain' },
-          { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-        ],
+        systemEnv: [],
         docker: { host: '/var/run/docker.sock' },
         tls: { email: '' },
         notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
@@ -1396,15 +1364,11 @@ async function route(url: URL, req: Request): Promise<Response> {
   // System status
   if (pathname === API.system.status && req.method === 'GET') {
     try {
-      // Phase 4: Use real system monitoring service when available
       const services = getServices();
       const payload: GetSystemStatusResponse = await services.systemMonitoring.getSystemStatus();
       return json(payload);
     } catch (error) {
-      logger.error('Failed to get system status from monitoring service, falling back to mock', error as Error);
-      // Fallback to mock implementation
-      const payload: GetSystemStatusResponse = getSystemStatus();
-      return json(payload);
+      return errorResponse(req, error);
     }
   }
 
@@ -1726,18 +1690,8 @@ async function initializePlatformAuth(): Promise<void> {
 // Phase 0: Start background tasks
 async function startBackgroundTasks() {
   logger.info('Starting background tasks');
-  
-  // Generate job notifications for demo
-  generateJobNotifications();
-  
-  // Schedule automatic backups
-  scheduleAutomaticBackups();
-  
-  // System health updates
-  const updateSystemHealthTimer = setInterval(() => {
-    updateSystemHealth();
-  }, 10_000);
-  backgroundTimers.push(() => clearInterval(updateSystemHealthTimer));
+  // No demo data generators: jobs, notifications, and system status are all
+  // served from real services on demand.
 }
 
 function stopBackgroundTasks() {

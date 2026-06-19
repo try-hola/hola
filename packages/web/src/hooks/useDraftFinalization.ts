@@ -1,11 +1,11 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import type { FinalizeDraftResponse } from '@hola/shared';
+import type { CreateDeploymentFromDraftResponse } from '@hola/shared';
 
 // StrictMode-compatible hook for draft finalization
 export function useDraftFinalization() {
   const [state, setState] = React.useState<{
-    data: FinalizeDraftResponse | null;
+    data: CreateDeploymentFromDraftResponse | null;
     loading: boolean;
     error: string | null;
   }>({
@@ -14,25 +14,28 @@ export function useDraftFinalization() {
     error: null,
   });
 
-  // Finalize draft and create deployment
+  // Finalize the draft (stage immutable artifacts) and then create + start a
+  // deployment from it. Finalize alone produces no running app — creating the
+  // deployment is what enqueues the install job that runs `docker compose up`.
   const finalizeDraft = React.useCallback(async (draftId: string) => {
     setState(prev => ({ ...prev, loading: true, error: null }));
-    
+
     try {
-      const result = await api.drafts.finalize(draftId) as FinalizeDraftResponse;
-      
+      await api.drafts.finalize(draftId);
+      const deployment = await api.deployments.create({ draftId });
+
       setState({
-        data: result,
+        data: deployment,
         loading: false,
         error: null,
       });
-      
-      return result;
+
+      return deployment;
     } catch (error) {
       setState({
         data: null,
         loading: false,
-        error: error instanceof Error ? error.message : 'Failed to finalize draft',
+        error: error instanceof Error ? error.message : 'Failed to install app',
       });
       throw error;
     }

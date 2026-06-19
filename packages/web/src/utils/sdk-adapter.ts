@@ -12,8 +12,9 @@ import type {
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   // Deployment types
+  CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
-  PatchDeploymentRequest, PatchDeploymentResponse, 
+  PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   GetDeploymentHistoryResponse,
   // Job types
@@ -327,7 +328,10 @@ export class SdkAdapter {
       const path = `/api/drafts/${draftId}`;
       return this.enhancedRequest('PATCH', path, () => this.sdk.drafts.update(draftId, data), data, true);
     },
-    
+
+    remove: (draftId: string): Promise<void> =>
+      this.enhancedRequest('DELETE', `/api/drafts/${draftId}`, () => this.sdk.drafts.remove(draftId), undefined, false),
+
     uploadFile: (draftId: string, formData: FormData): Promise<UploadDraftFileResponse> => {
       const path = `/api/drafts/${draftId}/uploads`;
       // For web file uploads, we need to preserve FormData approach
@@ -369,12 +373,21 @@ export class SdkAdapter {
 
   // Deployments with optimistic cache management
   deployments = {
+    create: (data: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> =>
+      this.enhancedRequest('POST', '/api/deployments', () => this.sdk.deployments.create(data), data, true),
+
+    // Full teardown: stops containers, deprovisions auth, releases the Traefik
+    // route, and removes the record (DELETE /api/deployments/:id). The `delete`
+    // *action* only stops compose, leaving the route held — use this to remove.
+    remove: (deploymentId: string): Promise<void> =>
+      this.enhancedRequest('DELETE', `/api/deployments/${deploymentId}`, () => this.sdk.deployments.delete(deploymentId), undefined, true),
+
     list: (params?: GetDeploymentsRequest): Promise<GetDeploymentsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments${query}`;
       return this.getWithCache(path, () => this.sdk.deployments.list(params));
     },
-    
+
     byId: (deploymentId: string): Promise<GetDeploymentResponse> => {
       const path = `/api/deployments/${deploymentId}`;
       return this.getWithCache(path, () => this.sdk.deployments.byId(deploymentId));

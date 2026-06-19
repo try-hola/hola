@@ -7,14 +7,33 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { statSync } from 'fs';
+import { statSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
+import { authConfig } from '../../config/auth';
 import type { ServiceHealth, HealthCheckable } from './types';
 // Note: avoid static import of getDockerService to prevent circular deps; use dynamic import where needed
 import type { SystemStatus } from '@hola/shared';
 
 const execAsync = promisify(exec);
+
+/**
+ * The running Hola version. Prefer HOLA_VERSION (the image tag the deploy
+ * scripts export from the bundle's VERSION file), falling back to the server
+ * package.json version for source checkouts. Never a hardcoded placeholder.
+ */
+const HOLA_VERSION: string = (() => {
+  const env = process.env.HOLA_VERSION?.trim();
+  if (env) return env;
+  try {
+    const pkgPath = join(import.meta.dir, '../../../package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: string };
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 export interface DiskUsage {
   freeBytes: number;
@@ -265,33 +284,26 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
   }
 
   async checkAuthentik(): Promise<ExternalTool> {
+    // Only meaningful when SSO is enabled; probe the real Authentik URL the
+    // server itself uses (the same one the provisioner reaches), rather than a
+    // hardcoded localhost placeholder that can never resolve from this container.
+    const base = authConfig.authentikPublicUrl || authConfig.authentikUrl;
+    if (authConfig.mode !== 'authentik' || !base) {
+      return { name: 'authentik', available: false, error: 'not configured' };
+    }
     try {
-      this.logger.debug('Checking Authentik availability');
-      
-      // For now, we'll just check if Authentik is accessible via HTTP
-      // This is a placeholder implementation
-      const { stdout } = await execAsync('curl -s -o /dev/null -w "%{http_code}" http://localhost:9000 || echo "000"');
-      const httpCode = stdout.trim();
-      
-      if (httpCode === '200' || httpCode === '302' || httpCode === '401') {
-        this.logger.debug('Authentik is available', { httpCode });
-        return {
-          name: 'authentik',
-          available: true,
-        };
-      } else {
-        this.logger.debug('Authentik not available', { httpCode });
-        return {
-          name: 'authentik',
-          available: false,
-          error: `HTTP ${httpCode}`,
-        };
+      this.logger.debug('Checking Authentik availability', { base });
+      // Any HTTP response (login page, redirect, auth challenge) proves Authentik
+      // is serving; only a network error or 5xx counts as down.
+      const res = await fetch(base, { redirect: 'manual', signal: AbortSignal.timeout(5000) });
+      if (res.status > 0 && res.status < 500) {
+        return { name: 'authentik', available: true };
       }
+      return { name: 'authentik', available: false, error: `HTTP ${res.status}` };
     } catch (error) {
       this.logger.debug('Authentik check failed', {
         error: error instanceof Error ? error.message : String(error),
       });
-      
       return {
         name: 'authentik',
         available: false,
@@ -336,8 +348,8 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
         totalBytes: resources.disk.totalBytes,
       },
       version: {
-    hola: '1.0.0', // TODO: Read from package.json
-    compose: composeVersion || 'unknown',
+        hola: HOLA_VERSION,
+        compose: composeVersion || 'unknown',
       },
     };
     

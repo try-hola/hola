@@ -36,6 +36,37 @@ type RemoteCatalog = {
   }>;
 };
 
+type CatalogVersionEntry = {
+  version: string;
+  createdAt?: string;
+  digest?: string;
+  sizeBytes?: number;
+  refs?: { oci?: string };
+};
+
+/**
+ * Resolve "latest" to the newest concrete version. Sorts by semver descending
+ * (numeric dot-segments); if any version doesn't parse as semver, falls back to
+ * the catalog's listed order (last entry). Returns undefined for an empty list.
+ */
+function pickLatestVersion(versions: CatalogVersionEntry[]): CatalogVersionEntry | undefined {
+  if (!versions.length) return undefined;
+  const isSemver = (s: string) => /^\d+(\.\d+)*$/.test(s);
+  if (!versions.every(v => isSemver(v.version))) {
+    return versions[versions.length - 1];
+  }
+  const parse = (s: string) => s.split('.').map(p => parseInt(p, 10));
+  return [...versions].sort((a, b) => {
+    const pa = parse(a.version);
+    const pb = parse(b.version);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      const diff = (pb[i] || 0) - (pa[i] || 0);
+      if (diff) return diff;
+    }
+    return 0;
+  })[0];
+}
+
 export interface CatalogService {
   listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse>;
   getApp(appId: string): Promise<GetCatalogAppResponse>;
@@ -110,7 +141,15 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const data = await this.ensureLoaded();
     const app = data.apps.find(a => a.id === appId);
     if (!app) throw new Error('APP_NOT_FOUND');
-    const v = (app.versions || []).find(x => x.version === version);
+    const versions = app.versions || [];
+    // Resolve the meta-version "latest" (and an unspecified version) to the
+    // newest concrete release. Catalog entries pin real versions (e.g. 1.2.1),
+    // so a literal "latest" never matches an entry — both the CLI and the web
+    // wizard pass "latest" by default, so this resolution is what makes the
+    // common "install the newest" path work at all.
+    const v = (!version || version === 'latest')
+      ? pickLatestVersion(versions)
+      : versions.find(x => x.version === version);
     if (!v) throw new Error('VERSION_NOT_FOUND');
     const ref = v.refs?.oci;
     if (!ref) throw new Error('NO_OCI_REF');

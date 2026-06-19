@@ -1,6 +1,7 @@
 import React from 'react';
 import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
+import { safeFetchEnhanced } from '../utils/error-enhanced';
 import type { 
   GetBackupsResponse,
   BackupStatus,
@@ -60,7 +61,7 @@ export function useBackupsApi(
         params.append('appId', appFilter);
       }
 
-      const response = await fetch(`${API.backups.base}?${params.toString()}`);
+      const response = await safeFetchEnhanced(`${API.backups.base}?${params.toString()}`);
       
       if (!response.ok) {
         throw new Error(`Failed to fetch backups: ${response.status} ${response.statusText}`);
@@ -85,7 +86,7 @@ export function useBackupsApi(
   // Create backup
   const createBackup = React.useCallback(async (appId?: string) => {
     const request: CreateBackupRequest = { appId };
-    const response = await fetch(API.backups.base, {
+    const response = await safeFetchEnhanced(API.backups.base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -105,7 +106,7 @@ export function useBackupsApi(
   // Restore backup
   const restoreBackup = React.useCallback(async (backupId: string, targetDeploymentId?: string) => {
     const request: RestoreBackupRequest = { targetDeploymentId };
-    const response = await fetch(API.backups.restore(backupId), {
+    const response = await safeFetchEnhanced(API.backups.restore(backupId), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request)
@@ -120,7 +121,7 @@ export function useBackupsApi(
 
   // Delete backup
   const deleteBackup = React.useCallback(async (backupId: string) => {
-    const response = await fetch(API.backups.byId(backupId), {
+    const response = await safeFetchEnhanced(API.backups.byId(backupId), {
       method: 'DELETE'
     });
     
@@ -137,7 +138,7 @@ export function useBackupsApi(
 
   // Download backup
   const downloadBackup = React.useCallback(async (backupId: string) => {
-    const response = await fetch(API.backups.byId(backupId));
+    const response = await safeFetchEnhanced(API.backups.byId(backupId));
     
     if (!response.ok) {
       throw new Error(`Failed to download backup: ${response.status} ${response.statusText}`);
