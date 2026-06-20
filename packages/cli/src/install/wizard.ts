@@ -15,6 +15,8 @@ export interface WizardOptions {
   skipChecks?: boolean;
   /** Injectable for tests; defaults to the real network/host checks. */
   checks?: (config: ConfigMap) => Promise<CheckResult[]>;
+  /** Process environment, for fields that offer to reuse a value already set (AWS_*). Injectable for tests. */
+  env?: Record<string, string | undefined>;
 }
 
 export interface WizardResult {
@@ -26,22 +28,35 @@ export interface WizardResult {
 export class WizardError extends Error {}
 
 export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
-  const { prompter, initial = {} } = opts;
+  const { prompter, initial = {}, env = process.env } = opts;
   const config: ConfigMap = {};
 
   for (const field of INSTALL_SCHEMA) {
     if (field.requiredWhen && !field.requiredWhen(config)) continue;
 
-    const fallback = initial[field.key] ?? defaultFor(field, config);
-    const message = field.help ? `${field.prompt}\n  ${field.help}` : field.prompt;
-    const value = await prompter.prompt({
+    // A `fromEnv` field offers a value already set in the environment (AWS_*),
+    // so the user accepts it instead of pasting. For a masked secret we can't
+    // prefill the prompt, so a blank answer means "use the detected value" and
+    // is not rejected by the field's validator.
+    const envVal = field.fromEnv ? env[field.key]?.trim() || undefined : undefined;
+    const fallback = initial[field.key] ?? envVal ?? defaultFor(field, config);
+
+    let message = field.help ? `${field.prompt}\n  ${field.help}` : field.prompt;
+    if (envVal && field.secret) message = `${field.prompt} (found in your environment — press Enter to use it)`;
+
+    const validate = field.validate
+      ? (v: string) => (!v && envVal ? undefined : field.validate!(v, config))
+      : undefined;
+
+    let value = await prompter.prompt({
       key: field.key,
       type: field.type,
       message,
       default: fallback,
       options: field.options,
-      validate: field.validate ? (v: string) => field.validate!(v, config) : undefined,
+      validate,
     });
+    if (!value && envVal) value = envVal; // accept the detected environment value
     config[field.key] = value;
   }
 
