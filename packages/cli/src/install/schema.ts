@@ -7,7 +7,7 @@
 //
 // Keep this in sync with packages/compose/.env.example (the documented template).
 
-import { combine, isDomain, isEmail, isUrlOrEmpty, optionalSecret, required } from './validate';
+import { combine, isDomain, isEmail, isEmailOrEmpty, isUrlOrEmpty, optionalSecret, required } from './validate';
 
 export type FieldType = 'text' | 'select' | 'secret' | 'confirm';
 
@@ -155,6 +155,28 @@ export const INSTALL_SCHEMA: InstallField[] = [
     default: 'admin@example.com',
     requiredWhen: isAuthentik,
     validate: isEmail,
+  },
+  {
+    key: 'HOLA_ADMIN_EMAIL',
+    type: 'text',
+    prompt: 'Your admin email (sign in as yourself)',
+    help: 'Blank to just use the built-in akadmin account',
+    requiredWhen: isAuthentik,
+    validate: isEmailOrEmpty,
+  },
+  {
+    key: 'HOLA_ADMIN_USERNAME',
+    type: 'text',
+    prompt: 'Your username',
+    default: (c) => (c.HOLA_ADMIN_EMAIL ? c.HOLA_ADMIN_EMAIL.split('@')[0] : ''),
+    // Only asked once a named admin email is given.
+    requiredWhen: (c) => isAuthentik(c) && !!c.HOLA_ADMIN_EMAIL?.trim(),
+  },
+  {
+    key: 'HOLA_ADMIN_NAME',
+    type: 'text',
+    prompt: 'Your display name (optional)',
+    requiredWhen: (c) => isAuthentik(c) && !!c.HOLA_ADMIN_EMAIL?.trim(),
   },
   {
     key: 'HOLA_USE_AUTH',

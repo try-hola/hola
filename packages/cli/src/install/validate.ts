@@ -26,6 +26,13 @@ export const isEmail: Validator = (v) => {
   return undefined;
 };
 
+/** An email is fine, and so is empty (blank = no named admin, use akadmin). */
+export const isEmailOrEmpty: Validator = (v) => {
+  const t = v.trim();
+  if (!t) return undefined;
+  return EMAIL_RE.test(t) ? undefined : 'Not a valid email address';
+};
+
 /** A URL is fine, and so is empty (blank disables the catalog). */
 export const isUrlOrEmpty: Validator = (v) => {
   const t = v.trim();
