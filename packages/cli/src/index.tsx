@@ -48,6 +48,22 @@ prog
     await runBootstrap(camelKeys(opts));
   });
 
+// teardown — remove a Hola deployment from a host over SSH (inverse of bootstrap)
+prog
+  .command('teardown')
+  .describe('Tear down Hola on a host over SSH — destructive (removes containers, volumes, data)')
+  .option('--host', 'Target host, e.g. user@vm (required)')
+  .option('--dir', 'Install directory on the host', '/opt/hola')
+  .option('--keep-data', 'Only stop/remove containers; keep volumes and the data/install dirs', false)
+  .option('--images', 'Also remove the ghcr.io/try-hola/* images', false)
+  .option('--yes, -y', 'Skip the confirmation prompt', false)
+  .option('--dry-run', 'Print the plan without connecting', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (opts) => {
+    const { runTeardown } = await load(import('./commands/teardown/teardown'));
+    await runTeardown(camelKeys(opts));
+  });
+
 // catalog — browse the app catalog
 prog
   .command('catalog [query]')
