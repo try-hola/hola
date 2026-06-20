@@ -44,6 +44,15 @@ const isRoute53 = (c: ConfigMap) => c.ACME_DNS_PROVIDER === 'route53';
 const isCloudflare = (c: ConfigMap) => c.ACME_DNS_PROVIDER === 'cloudflare';
 const isAuthentik = (c: ConfigMap) => c.HOLA_AUTH_MODE === 'authentik';
 
+/** IANA timezone of the machine running the wizard (e.g. America/New_York), or '' if undetectable. Honors $TZ. */
+export function systemTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
 export const INSTALL_SCHEMA: InstallField[] = [
   {
     key: 'HOLA_BASE_DOMAIN',
@@ -139,14 +148,15 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'HOLA_DEFAULT_TZ',
     type: 'text',
     prompt: 'Default timezone for deployed apps (TZ, blank to leave unset)',
-    help: 'e.g. UTC or America/New_York; applied to apps that do not set TZ',
-    default: '',
+    help: 'Applied to apps that do not set TZ; defaults to this machine\'s timezone',
+    // Prefill the timezone of the machine running `hola init`.
+    default: () => systemTimeZone(),
   },
   {
     key: 'HOLA_AUTH_MODE',
     type: 'select',
     prompt: 'SSO platform for catalog apps',
-    help: 'authentik brings up the bundled Authentik stack (~2 GB RAM)',
+    help: 'Note: authentik brings up the bundled Authentik stack (~2 GB RAM)',
     // Secure by default: provision per-app SSO unless the operator opts out.
     default: 'authentik',
     options: [
