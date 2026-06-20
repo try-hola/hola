@@ -448,7 +448,9 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
   private async addProviderToEmbeddedOutpost(providerPk: number): Promise<number | undefined> {
-    const list = await this.api<{ results: Array<{ pk: number; providers: number[] }> }>(
+    const list = await this.api<{
+      results: Array<{ pk: number; providers: number[]; config?: Record<string, unknown> }>;
+    }>(
       'GET',
       `/api/v3/outposts/instances/?name__iexact=${encodeURIComponent('authentik Embedded Outpost')}`
     );
@@ -458,7 +460,26 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       return undefined;
     }
     const providers = Array.from(new Set([...(outpost.providers ?? []), providerPk]));
-    await this.api('PATCH', `/api/v3/outposts/instances/${outpost.pk}/`, { providers });
+    const patch: Record<string, unknown> = { providers };
+
+    // The embedded outpost defaults its browser-facing host to `http://0.0.0.0:9000`
+    // (Authentik's internal bind address). That value is unroutable from a user's
+    // browser, so every forward-auth app would 302 the OAuth `authorize` redirect to
+    // a dead address. Pin the outpost's host to the public Authentik URL so the login
+    // redirect resolves. Merge into the existing config (PATCH replaces it wholesale).
+    const publicUrl = this.config.authentikPublicUrl;
+    if (publicUrl) {
+      patch.config = {
+        ...(outpost.config ?? {}),
+        authentik_host: publicUrl,
+        authentik_host_browser: publicUrl,
+      };
+    } else {
+      this.logger.warn(
+        'authentikPublicUrl is not set; embedded outpost browser redirects may point at an unroutable host. Set HOLA_AUTHENTIK_PUBLIC_URL.',
+      );
+    }
+    await this.api('PATCH', `/api/v3/outposts/instances/${outpost.pk}/`, patch);
     return outpost.pk;
   }
 
