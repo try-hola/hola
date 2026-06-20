@@ -12,5 +12,9 @@ else
   docker compose "${COMPOSE_FILES[@]}" up -d "$@"
 fi
 
-echo "[compose] Stack is up. Services:"
-docker compose "${COMPOSE_FILES[@]}" ps
+# When driven by `hola bootstrap` (HOLA_BOOTSTRAP=1) the CLI renders its own
+# container table client-side, so skip the raw `ps` dump to avoid double output.
+if [[ "${HOLA_BOOTSTRAP:-}" != "1" ]]; then
+  echo "[compose] Stack is up. Services:"
+  docker compose "${COMPOSE_FILES[@]}" ps
+fi
