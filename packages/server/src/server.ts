@@ -935,14 +935,22 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Logs SSE (deployment)
-  // Snapshot of prior logs. Live logs are served by the dedicated SSE endpoint
-  // `/logs/stream` below; historical container-log retrieval is not implemented
-  // yet (tracked separately), so this returns an empty snapshot rather than the
-  // fabricated sample data it used to emit.
+  // Logs snapshot (deployment): the app's real recent container output across
+  // every compose service. Live logs stream from `/logs/stream` below. On any
+  // docker error the service returns an empty snapshot — never fabricated data.
   const deploymentLogsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs$/);
   if (deploymentLogsMatch && req.method === 'GET') {
-    return json({ items: [] });
+    const deploymentId = deploymentLogsMatch[1];
+    const url = new URL(req.url);
+    const tailParam = parseInt(url.searchParams.get('tail') ?? '', 10);
+    const tail = Number.isFinite(tailParam) && tailParam > 0 ? tailParam : undefined;
+    try {
+      const services = getServices();
+      const payload = await services.deployments.getDeploymentLogs(deploymentId, { tail });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   // Logs SSE Stream (deployment) - new endpoint for real-time logs
@@ -954,7 +962,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       logger,
       onSubscribe(controller) {
         controller.heartbeat();
-        // Stream real deployment lifecycle/Compose logs emitted by the deployment service.
+        // Two sources, merged: (1) Hola lifecycle/Compose events (deploy,
+        // provision) from the logging bus, and (2) the app's real container
+        // stdout via `docker compose logs -f`, so the tab shows what the app
+        // is actually doing.
         const sub = services.logging.onLog({ kind: 'deployment', id: deploymentId }, entry => {
           controller.send({
             type: 'log',
@@ -967,8 +978,36 @@ async function route(url: URL, req: Request): Promise<Response> {
           });
         });
 
+        // The container stream starts async; guard against the client
+        // disconnecting before the stop handle resolves (else it would leak the
+        // `docker compose logs -f` child).
+        let closed = false;
+        let containerStop = () => {};
+        services.deployments
+          .streamDeploymentLogs(deploymentId, entry => {
+            if (closed) return;
+            controller.send({
+              type: 'log',
+              data: {
+                timestamp: entry.timestamp,
+                service: entry.service,
+                level: entry.level,
+                message: entry.message,
+              },
+            });
+          })
+          .then(handle => {
+            if (closed) handle.stop();
+            else containerStop = handle.stop;
+          })
+          .catch(error => {
+            logger.warn('Failed to start container log stream', { deploymentId, error: String(error) });
+          });
+
         return () => {
+          closed = true;
           sub.unsubscribe();
+          containerStop();
         };
       },
     });
