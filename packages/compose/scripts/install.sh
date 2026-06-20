@@ -126,18 +126,22 @@ else
   "$SCRIPT_DIR/up.sh"
 fi
 
-cat <<'NEXT'
+# Credential hints. Skipped when invoked by `hola bootstrap` (HOLA_BOOTSTRAP=1):
+# the CLI retrieves the API key and reveals the SSO password itself, client-side.
+if [[ "${HOLA_BOOTSTRAP:-}" != "1" ]]; then
+  cat <<'NEXT'
 [install] Done. If auth is enabled and you did not set HOLA_API_KEY, retrieve the
 generated admin API key with:
   docker compose exec server cat /data/config/admin-api-key
 NEXT
 
-if [[ "$AUTH_MODE" == "authentik" ]]; then
-  cat <<NEXT
+  if [[ "$AUTH_MODE" == "authentik" ]]; then
+    cat <<NEXT
 [install] Authentik SSO is enabled. The login UI is at https://${authentik_domain:-auth.local.hola}
   Admin user: akadmin
   Admin password: AUTHENTIK_BOOTSTRAP_PASSWORD in .env
 First boot takes a minute while Authentik runs migrations. Catalog apps that
 support SSO will have their auth provisioned automatically on install.
 NEXT
+  fi
 fi

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -31,6 +31,9 @@ function makeRunner(preflight = OK_PREFLIGHT): Runner & { calls: { cmd: string; 
     ssh: vi.fn(async (_host: string, cmd: string, opts?: { input?: string }) => {
       calls.push({ cmd, input: opts?.input });
       if (cmd.includes('command -v')) return { code: 0, stdout: preflight, stderr: '' };
+      if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'generated-key-123', stderr: '' };
+      if (cmd.includes('Hola admin setup')) return { code: 0, stdout: 'https://auth.example.com/if/flow/recovery/abc', stderr: '' };
+      if (cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD')) return { code: 0, stdout: 'akadmin-pw-xyz', stderr: '' };
       if (cmd.includes('curl')) return { code: 0, stdout: '200', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     }),
@@ -77,7 +80,7 @@ describe('hola bootstrap', () => {
       ),
     ).toBe(true);
     expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/.env'))).toBe(true);
-    expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola && ./scripts/install.sh'))).toBe(true);
+    expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola && HOLA_BOOTSTRAP=1 ./scripts/install.sh'))).toBe(true);
     // /opt is root-owned: the fetch step creates the dir with sudo + chown when
     // the parent isn't writable (and plain mkdir when it is).
     const fetch = runner.calls.find((c) => c.cmd.includes('tar xz -C /opt/hola'))!;
@@ -120,6 +123,93 @@ describe('hola bootstrap', () => {
     const res = await runBootstrap({ skipChecks: true, json: true }, { prompter: scriptedPrompter(answers), runner: makeRunner() });
     expect(res).toBeUndefined();
     expect(process.exitCode).toBe(1);
+  });
+
+  // --- Credential handoff (interactive runs) ---------------------------------
+
+  async function withEnv(content: string, run: (tmp: string, envPath: string) => Promise<void>) {
+    const tmp = await mkdtemp(join(tmpdir(), 'hola-creds-'));
+    const envPath = join(tmp, '.env');
+    await writeFile(envPath, content);
+    try { await run(tmp, envPath); } finally { await rm(tmp, { recursive: true, force: true }); }
+  }
+
+  it('saves the fetched admin API key to a local creds file', async () => {
+    await withEnv(
+      'HOLA_DOMAIN=apps.example.com\nHOLA_USE_AUTH=true\nHOLA_API_KEY=\nHOLA_AUTH_MODE=none\n',
+      async (tmp, envPath) => {
+        const runner = makeRunner();
+        await runBootstrap(
+          { host: 'paul@vm', envFile: envPath, skipChecks: true },
+          { prompter: scriptedPrompter({}), runner, credsDir: tmp }
+        );
+        const creds = await readFile(join(tmp, 'hola-paul-vm.env'), 'utf8');
+        expect(creds).toContain('export HOLA_API_URL=https://apps.example.com');
+        expect(creds).toContain('export HOLA_TOKEN=generated-key-123');
+        expect(runner.calls.some((c) => c.cmd.includes('admin-api-key'))).toBe(true);
+      }
+    );
+  });
+
+  it('uses a pinned HOLA_API_KEY without fetching it from the host', async () => {
+    await withEnv(
+      'HOLA_DOMAIN=apps.example.com\nHOLA_USE_AUTH=true\nHOLA_API_KEY=pinned-key\nHOLA_AUTH_MODE=none\n',
+      async (tmp) => {
+        const runner = makeRunner();
+        await runBootstrap(
+          { host: 'paul@vm', envFile: join(tmp, '.env'), skipChecks: true },
+          { prompter: scriptedPrompter({}), runner, credsDir: tmp }
+        );
+        const creds = await readFile(join(tmp, 'hola-paul-vm.env'), 'utf8');
+        expect(creds).toContain('export HOLA_TOKEN=pinned-key');
+        expect(runner.calls.some((c) => c.cmd.includes('admin-api-key'))).toBe(false);
+      }
+    );
+  });
+
+  it('auto-surfaces the named-admin recovery link (no password prompt)', async () => {
+    await withEnv(
+      'HOLA_DOMAIN=apps.example.com\nHOLA_USE_AUTH=true\nHOLA_API_KEY=k\nHOLA_AUTH_MODE=authentik\nHOLA_ADMIN_EMAIL=me@example.com\nHOLA_AUTHENTIK_DOMAIN=auth.example.com\n',
+      async (tmp) => {
+        const runner = makeRunner();
+        await runBootstrap(
+          { host: 'paul@vm', envFile: join(tmp, '.env'), skipChecks: true },
+          { prompter: scriptedPrompter({}), runner, credsDir: tmp }
+        );
+        // Recovery link is fetched; the akadmin password is never read.
+        expect(runner.calls.some((c) => c.cmd.includes('Hola admin setup'))).toBe(true);
+        expect(runner.calls.some((c) => c.cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD'))).toBe(false);
+      }
+    );
+  });
+
+  it('reveals the akadmin password only when there is no named admin and the user opts in', async () => {
+    await withEnv(
+      'HOLA_DOMAIN=apps.example.com\nHOLA_USE_AUTH=true\nHOLA_API_KEY=k\nHOLA_AUTH_MODE=authentik\nHOLA_ADMIN_EMAIL=\nHOLA_AUTHENTIK_DOMAIN=auth.example.com\n',
+      async (tmp) => {
+        const runner = makeRunner();
+        await runBootstrap(
+          { host: 'paul@vm', envFile: join(tmp, '.env'), skipChecks: true },
+          { prompter: scriptedPrompter({ _show_akadmin_pw: 'true' }), runner, credsDir: tmp }
+        );
+        expect(runner.calls.some((c) => c.cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD'))).toBe(true);
+        expect(runner.calls.some((c) => c.cmd.includes('Hola admin setup'))).toBe(false);
+      }
+    );
+  });
+
+  it('does not read the akadmin password when the reveal is declined', async () => {
+    await withEnv(
+      'HOLA_DOMAIN=apps.example.com\nHOLA_USE_AUTH=true\nHOLA_API_KEY=k\nHOLA_AUTH_MODE=authentik\nHOLA_ADMIN_EMAIL=\nHOLA_AUTHENTIK_DOMAIN=auth.example.com\n',
+      async (tmp) => {
+        const runner = makeRunner();
+        await runBootstrap(
+          { host: 'paul@vm', envFile: join(tmp, '.env'), skipChecks: true },
+          { prompter: scriptedPrompter({ _show_akadmin_pw: 'false' }), runner, credsDir: tmp }
+        );
+        expect(runner.calls.some((c) => c.cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD'))).toBe(false);
+      }
+    );
   });
 
   it('detects an init-produced .env and reuses it instead of re-asking the wizard', async () => {
