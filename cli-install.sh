@@ -99,7 +99,10 @@ case ":$PATH:" in
      warn "  export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
 esac
 
-info "Point the CLI at your server:"
-info "  export HOLA_API_URL=https://<your-hola-domain>"
-info "  export HOLA_TOKEN=<admin-api-key>"
-info "Then: $BIN_NAME --help"
+info "Next steps:"
+info "  • No server yet?  Set one up on a host:   $BIN_NAME bootstrap --host user@your-vm"
+info "    (or generate a .env locally first with:  $BIN_NAME init)"
+info "  • Already have a server?  Point the CLI at it:"
+info "      export HOLA_API_URL=https://<your-hola-domain>"
+info "      export HOLA_TOKEN=<admin-api-key>"
+info "Run '$BIN_NAME --help' to see all commands."
