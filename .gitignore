@@ -33,6 +33,9 @@ logs/
 .env.*
 !.env.example
 
+# Per-host CLI credentials written by `hola bootstrap` / `hola credentials`
+hola-*.env
+
 # Monorepo packages
 packages/*/dist
 packages/*/.vite

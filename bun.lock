@@ -11,7 +11,7 @@
     },
     "packages/cli": {
       "name": "@hola/cli",
-      "version": "0.4.1",
+      "version": "0.6.3",
       "bin": {
         "hola": "./bin/hola",
       },
@@ -21,6 +21,7 @@
         "@hola/shared": "workspace:*",
         "eventsource-parser": "^3.1.0",
         "ink": "^7.0.6",
+        "picocolors": "^1.1.1",
         "react": "^19.2.7",
         "react-devtools-core": "^7.0.1",
         "sade": "^1.8.1",
@@ -40,11 +41,11 @@
     },
     "packages/compose": {
       "name": "@hola/compose",
-      "version": "0.4.1",
+      "version": "0.6.3",
     },
     "packages/sdk": {
       "name": "@hola/sdk",
-      "version": "0.4.1",
+      "version": "0.6.3",
       "dependencies": {
         "@hola/shared": "workspace:*",
       },
@@ -58,7 +59,7 @@
     },
     "packages/server": {
       "name": "@hola/server",
-      "version": "0.4.1",
+      "version": "0.6.3",
       "dependencies": {
         "@hola/shared": "workspace:*",
         "jose": "^5.9.6",
@@ -74,7 +75,7 @@
     },
     "packages/shared": {
       "name": "@hola/shared",
-      "version": "0.4.1",
+      "version": "0.6.3",
       "dependencies": {
         "yaml": "^2.9.0",
       },

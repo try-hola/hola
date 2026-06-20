@@ -20,6 +20,7 @@
     "@hola/shared": "workspace:*",
     "eventsource-parser": "^3.1.0",
     "ink": "^7.0.6",
+    "picocolors": "^1.1.1",
     "react": "^19.2.7",
     "react-devtools-core": "^7.0.1",
     "sade": "^1.8.1",

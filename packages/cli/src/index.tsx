@@ -64,6 +64,19 @@ prog
     await runTeardown(camelKeys(opts));
   });
 
+// credentials — retrieve post-install credentials for a host (re-run anytime)
+prog
+  .command('credentials')
+  .describe('Fetch a host’s credentials: save the CLI API key locally and surface the SSO admin link')
+  .option('--host', 'Target host, e.g. user@vm (required)')
+  .option('--dir', 'Install directory on the host', '/opt/hola')
+  .option('--show-password', 'Reveal the akadmin fallback password (only when there is no named admin)', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (opts) => {
+    const { runCredentials } = await load(import('./commands/credentials/credentials'));
+    await runCredentials(camelKeys(opts));
+  });
+
 // catalog — browse the app catalog
 prog
   .command('catalog [query]')
