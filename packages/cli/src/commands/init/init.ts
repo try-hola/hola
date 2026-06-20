@@ -6,6 +6,7 @@ import { parseEnv, renderEnv, schemaTemplate } from '../../install/render-env';
 import { secretKeys, type ConfigMap } from '../../install/schema';
 import { runWizard, WizardError } from '../../install/wizard';
 import type { CheckResult } from '../../install/checks';
+import type { BootstrapOptions, BootstrapResult } from '../bootstrap/bootstrap';
 
 export interface InitOptions {
   out?: string;
@@ -13,7 +14,15 @@ export interface InitOptions {
   force?: boolean;
   skipChecks?: boolean;
   json?: boolean;
+  /** Keep the local .env after a successful remote install (default: delete it). */
+  keepEnv?: boolean;
 }
+
+/** The bootstrap entrypoint, narrowed to what the init handoff needs; injectable for tests. */
+type BootstrapFn = (
+  opts: BootstrapOptions,
+  injected?: { prompter?: Prompter }
+) => Promise<BootstrapResult | undefined>;
 
 export interface InitResult {
   target: string;
@@ -47,7 +56,7 @@ async function resolveComposeDir(opts: InitOptions): Promise<string> {
  */
 export async function runInit(
   opts: InitOptions,
-  injected?: { prompter?: Prompter; checks?: (c: ConfigMap) => Promise<CheckResult[]> }
+  injected?: { prompter?: Prompter; checks?: (c: ConfigMap) => Promise<CheckResult[]>; bootstrap?: BootstrapFn }
 ): Promise<InitResult | undefined> {
   const prompter = injected?.prompter ?? clackPrompter();
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
@@ -86,13 +95,54 @@ export async function runInit(
     await fs.chmod(target, 0o600); // ensure 0600 even if the file pre-existed
 
     const result: InitResult = { target, config };
+
+    // JSON / non-interactive mode: emit the result and stop (no prompts).
     if (opts.json) {
       console.log(JSON.stringify({ target, config: redact(config) }, null, 2));
+      return result;
+    }
+
+    out(`\nWrote ${target}`);
+    out('  Note: this file holds the values you entered, including any secrets (it is chmod 600).');
+
+    // Offer the one-step remote install so the freshly written .env is reused
+    // (no re-answering the wizard), then prompt for the target host.
+    const wantsInstall = await prompter.prompt({
+      key: '_bootstrap',
+      type: 'confirm',
+      message: 'Install Hola on a host now over SSH?',
+      default: 'true',
+    });
+    if (wantsInstall !== 'true') {
+      out('\nWhen you are ready, install on a host with:');
+      out(`  hola bootstrap --host user@your-vm --env-file ${target}`);
+      return result;
+    }
+
+    const host = (await prompter.prompt({
+      key: '_host',
+      type: 'text',
+      message: 'Target host to install on (user@host)',
+      validate: (v: string) => (v.trim() ? undefined : 'A host is required'),
+    })).trim();
+
+    // Lazily load bootstrap so `hola init` stays light when not installing.
+    const bootstrap = injected?.bootstrap ?? (await import('../bootstrap/bootstrap')).runBootstrap;
+    const bootRes = await bootstrap({ host, envFile: target, skipChecks: opts.skipChecks }, { prompter });
+    if (!bootRes) {
+      // bootstrap already reported the error + set the exit code; keep the .env
+      // so the user can retry without re-entering everything.
+      out(`\nKept ${target} so you can retry:  hola bootstrap --host ${host} --env-file ${target}`);
+      return result;
+    }
+
+    // Installed — the secrets now live on the host, so remove the local copy by
+    // default (it's a sensitive artifact). `--keep-env` opts out.
+    if (opts.keepEnv) {
+      out(`\nKept ${target} (--keep-env).`);
     } else {
-      out(`\nWrote ${target}`);
-      out('Next steps:');
-      out('  • On the host (in your Hola checkout): cd packages/compose && ./scripts/install.sh');
-      out('  • Or from here, all at once:           hola bootstrap --host user@your-vm');
+      await fs.rm(target, { force: true });
+      out(`\nRemoved ${target} — its secrets now live only on ${host}.`);
     }
     return result;
   } catch (err) {

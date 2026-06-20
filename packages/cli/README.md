@@ -31,8 +31,8 @@ Commands are registered in `src/index.tsx` with lazy loaders and implemented und
 ## Commands
 
 ### Setup
-- `hola init` — interactively generate a validated Hola `.env` (runs locally; no server needed).
-- `hola bootstrap --host user@vm` — set up Hola on a remote host over SSH (wizard + install).
+- `hola bootstrap --host user@vm` — **the one-step install.** Walks the setup wizard and installs Hola on the host over SSH. This is all most people need.
+- `hola init` — *optional.* Just generate a validated `.env` locally (no server/SSH) — for reviewing/editing config before install, keeping it in a secrets manager, reusing it across hosts, or CI. It then offers to hand off to `bootstrap`, and `bootstrap` reuses an init-produced `.env` rather than re-asking. Options: `--out`, `--compose-dir`, `--force`, `--keep-env`, `--skip-checks`, `--json`.
 
 ### Catalog & install
 - `hola catalog [query]` — browse/search the app catalog. Options: `--category`, `--limit`, `--json`.

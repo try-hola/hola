@@ -14,13 +14,16 @@ prog
   .describe('Hola CLI — set up a server, browse the catalog, install apps, and manage deployments');
 
 // init — guided first-time setup (writes .env on this machine; no server needed)
+// Optional: `hola bootstrap` does the wizard + install in one step. init is for
+// when you want the validated .env on its own (review/edit, secrets manager, CI).
 prog
   .command('init')
-  .describe('Interactively generate a Hola .env (validated, runs locally)')
+  .describe('Optional: generate a validated .env locally (bootstrap does this + installs)')
   .option('--out', 'Path to write the .env (default <compose-dir>/.env)')
   .option('--compose-dir', 'Path to the packages/compose directory')
   .option('--force', 'Update an existing .env in place', false)
   .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
+  .option('--keep-env', 'Keep the local .env after a successful remote install', false)
   .option('--json', 'Print the resolved config as JSON (secrets redacted)', false)
   .action(async (opts) => {
     const { runInit } = await load(import('./commands/init/init'));
@@ -30,7 +33,7 @@ prog
 // bootstrap — wizard + SSH into the host and run the full install
 prog
   .command('bootstrap')
-  .describe('Set up Hola on a remote host over SSH (wizard + install)')
+  .describe('Install Hola on a host over SSH — the one-step setup (wizard + install)')
   .option('--host', 'Target host, e.g. user@vm (required)')
   .option('--repo', 'Hola repo to download release assets from', 'https://github.com/try-hola/hola.git')
   .option('--ref', `Release tag to install (default cli-v${CLI_VERSION})`)
@@ -141,8 +144,10 @@ prog
 
 // Fallback banner when no args
 if (process.argv.length <= 2) {
-  // Minimal banner when no args
-  console.log('Hola CLI ready. Try: hola catalog · hola install <app> · hola deployments');
+  // Minimal banner when no args. Lead with setup for first-time users, then the
+  // day-to-day commands for an installed server.
+  console.log('Hola CLI. New here? Set up a server: hola bootstrap --host user@vm');
+  console.log('Installed? Try: hola catalog · hola install <app> · hola deployments');
 } else {
   prog.parse(process.argv);
 }
