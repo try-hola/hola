@@ -97,6 +97,29 @@ describe('hola credentials', () => {
     });
   });
 
+  it('stops waiting (no hang) when the server reports it gave up provisioning the link', async () => {
+    await withTmp(async (tmp) => {
+      const runner: Runner & { calls: string[] } = {
+        calls: [],
+        ssh: vi.fn(async (_h: string, cmd: string) => {
+          if (cmd.startsWith('cat ')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
+          if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'key-abc', stderr: '' };
+          // The poll's log grab finds the server's "gave up" sentinel, no link.
+          if (cmd.includes('Hola admin setup')) return { code: 0, stdout: '__HOLA_PROVISION_FAILED__\n', stderr: '' };
+          return { code: 0, stdout: '', stderr: '' };
+        }),
+        local: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      } as Runner & { calls: string[] };
+      const res = await runCredentials(
+        { host: 'paul@vm' },
+        { prompter: scriptedPrompter({}), runner, credsDir: tmp, sleep: async () => {} },
+      );
+      // Returned (did not hang on the unbounded poll) and surfaced no link.
+      expect(res?.recoveryLink).toBeUndefined();
+      expect(res?.adminEmail).toBe('me@example.com');
+    });
+  });
+
   it('reveals the akadmin password with --show-password (no prompt)', async () => {
     await withTmp(async (tmp) => {
       const runner = makeRunner(AKADMIN_ENV);
