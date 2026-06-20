@@ -84,6 +84,24 @@ describe('OidcAuthProvider', () => {
     expect(cfg.audience).toBe(CLIENT_ID); // defaults to clientId
   });
 
+  it('defaults adminGroup to hola-admins when self-provisioned (no HOLA_OIDC_ISSUER)', () => {
+    delete process.env.HOLA_OIDC_ISSUER;
+    delete process.env.HOLA_OIDC_ADMIN_GROUP;
+    expect(resolveOidcConfig().adminGroup).toBe('hola-admins');
+  });
+
+  it('leaves adminGroup unset for an external IdP (HOLA_OIDC_ISSUER set)', () => {
+    process.env.HOLA_OIDC_ISSUER = ISSUER;
+    delete process.env.HOLA_OIDC_ADMIN_GROUP;
+    expect(resolveOidcConfig().adminGroup).toBeUndefined();
+  });
+
+  it('HOLA_OIDC_ADMIN_GROUP env always wins over the default', () => {
+    delete process.env.HOLA_OIDC_ISSUER;
+    process.env.HOLA_OIDC_ADMIN_GROUP = 'custom-admins';
+    expect(resolveOidcConfig().adminGroup).toBe('custom-admins');
+  });
+
   it('accepts a valid token (aud = clientId) and maps an admin principal', async () => {
     const provider = new OidcAuthProvider();
     const token = await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc', extra: { email: 'a@b.c', name: 'Ada' } });
