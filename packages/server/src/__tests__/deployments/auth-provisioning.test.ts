@@ -138,6 +138,8 @@ class SpyProvisioner implements ProvisionerService {
       audience: clientId,
     };
   }
+
+  async ensureAdminGroup(): Promise<void> {}
 }
 
 async function waitForJob(jobs: RealJobService, id: string, timeoutMs = 5000) {

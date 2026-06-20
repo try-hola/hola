@@ -353,4 +353,42 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     expect(bootCalls.some(c => c.path === '/api/v3/core/users/service_account/')).toBe(false);
     expect(bootCalls.find(c => c.path === '/api/v3/providers/oauth2/')!.auth).toBe('Bearer scoped-key-xyz');
   });
+
+  test('ensureAdminGroup creates the group and seeds all superusers', async () => {
+    let created = false;
+    let patchedUsers: number[] | undefined;
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) {
+        return created ? json({ results: [{ pk: 'g1', users: [] }] }) : json({ results: [] });
+      }
+      if (call.method === 'POST' && call.path === '/api/v3/core/groups/') {
+        created = true;
+        return json({ pk: 'g1', users: [] }, 201);
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?is_superuser=true')) {
+        return json({ results: [{ pk: 7 }, { pk: 9 }] });
+      }
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') {
+        patchedUsers = (call.body as { users: number[] }).users;
+        return json({ pk: 'g1' });
+      }
+      return undefined;
+    });
+
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+    await svc.ensureAdminGroup('hola-admins');
+
+    // Group was created, then PATCHed to contain both superusers.
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/core/groups/')).toBe(true);
+    expect(patchedUsers).toEqual([7, 9]);
+  });
+
+  test('ensureAdminGroup is best-effort: a backend error does not throw', async () => {
+    installFetch((call) => {
+      if (call.path.startsWith('/api/v3/core/groups/')) return new Response('boom', { status: 500 });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+    await expect(svc.ensureAdminGroup('hola-admins')).resolves.toBeUndefined();
+  });
 });

@@ -91,6 +91,13 @@ export interface ProvisionerService extends HealthCheckable {
    * client secret is issued.
    */
   provisionPlatformOidc(input: PlatformOidcInput): Promise<PlatformOidcResult>;
+  /**
+   * Idempotently ensure a platform-owned admin group exists and seed all current
+   * superusers into it. Both the dashboard (HOLA_OIDC_ADMIN_GROUP) and catalog
+   * apps (e.g. Gitea's `--admin-group`) can then map admin to one stable group
+   * instead of a backend-specific one like Authentik's built-in "authentik Admins".
+   */
+  ensureAdminGroup(name: string): Promise<void>;
   healthCheck(): Promise<ServiceHealth>;
 }
 
@@ -139,6 +146,10 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_core.delete_user',
   'authentik_core.reset_user_password',
   'authentik_core.assign_user_permissions',
+  // Manage the platform admin group (create + seed superusers into it).
+  'authentik_core.add_group',
+  'authentik_core.view_group',
+  'authentik_core.change_group',
   'authentik_core.view_propertymapping',
   'authentik_outposts.view_outpost',
   'authentik_outposts.change_outpost',
@@ -444,6 +455,39 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       ref: { mode: 'forward-auth', providerPk: provider.pk, applicationSlug: slug, outpostPk },
       middleware: this.forwardAuthMiddleware(slug),
     };
+  }
+
+  /** Ensure the admin group exists and contains every current superuser. */
+  async ensureAdminGroup(name: string): Promise<void> {
+    try {
+      // Find or create the group.
+      const found = await this.api<{ results: Array<{ pk: string; users: number[] }> }>(
+        'GET', `/api/v3/core/groups/?name=${encodeURIComponent(name)}`
+      );
+      let group = found.results?.[0];
+      if (!group) {
+        group = await this.api<{ pk: string; users: number[] }>('POST', '/api/v3/core/groups/', { name });
+        this.logger.info('Created platform admin group', { name, pk: group.pk });
+      }
+
+      // Seed all current superusers so platform admins are members (and thus
+      // satisfy any app/dashboard admin-group mapping that points here).
+      const supers = await this.api<{ results: Array<{ pk: number }> }>(
+        'GET', '/api/v3/core/users/?is_superuser=true'
+      );
+      const superPks = (supers.results ?? []).map(u => u.pk);
+      const current = group.users ?? [];
+      const merged = Array.from(new Set([...current, ...superPks]));
+      if (merged.length !== current.length) {
+        await this.api('PATCH', `/api/v3/core/groups/${group.pk}/`, { users: merged });
+        this.logger.info('Seeded superusers into platform admin group', { name, added: merged.length - current.length });
+      }
+    } catch (error) {
+      this.logger.warn('Could not ensure platform admin group; admin mapping may have no members yet', {
+        name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
@@ -807,5 +851,9 @@ export class MockProvisionerService implements ProvisionerService {
       redirectUri: `https://${input.host}${input.redirectPath}`,
       audience: clientId,
     };
+  }
+
+  async ensureAdminGroup(name: string): Promise<void> {
+    this.logger.debug('Mock ensureAdminGroup', { name });
   }
 }

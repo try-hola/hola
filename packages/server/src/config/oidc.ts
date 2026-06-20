@@ -14,6 +14,13 @@
 // When neither yields an issuer+clientId, OIDC is disabled and the dashboard falls
 // back to the admin-key login.
 
+/**
+ * The platform-owned admin group. The server provisions this group in the auth
+ * backend and seeds superusers into it (see ProvisionerService.ensureAdminGroup),
+ * so both the dashboard and catalog apps can map admin to one stable group.
+ */
+export const DEFAULT_ADMIN_GROUP = 'hola-admins';
+
 function stripTrailingSlash(url: string | undefined): string | undefined {
   if (!url) return undefined;
   return url.replace(/\/+$/, '');
@@ -85,7 +92,14 @@ export function resolveOidcConfig(): OidcConfig {
     stripTrailingSlash(process.env.HOLA_OIDC_REDIRECT_URI) || provisioned?.redirectUri;
   const audience =
     process.env.HOLA_OIDC_AUDIENCE?.trim() || provisioned?.audience || clientId;
-  const adminGroup = process.env.HOLA_OIDC_ADMIN_GROUP?.trim() || undefined;
+  // Default the dashboard's admin group to the Hola-owned group when the dashboard
+  // client is self-provisioned (Authentik): the server provisions that group and
+  // seeds superusers into it, so the operator stays admin. For an external IdP
+  // (explicit HOLA_OIDC_ISSUER) we can't assume the group exists, so leave it unset
+  // unless the operator opts in. Explicit env always wins.
+  const selfProvisioned = !process.env.HOLA_OIDC_ISSUER;
+  const adminGroup =
+    process.env.HOLA_OIDC_ADMIN_GROUP?.trim() || (selfProvisioned ? DEFAULT_ADMIN_GROUP : undefined);
 
   return {
     enabled: Boolean(issuer && clientId),

@@ -1545,6 +1545,13 @@ async function initializePlatformAuth(): Promise<void> {
       });
       setProvisionedOidc(result);
       logger.info('Dashboard OIDC client ready', { issuer: result.issuer, clientId: result.clientId });
+      // Ensure the admin group exists + contains the superusers, so the dashboard
+      // admin gate (HOLA_OIDC_ADMIN_GROUP, default hola-admins) and catalog apps
+      // that map to it have members. Best-effort; never blocks readiness.
+      const adminGroup = resolveOidcConfig().adminGroup;
+      if (adminGroup) {
+        await provisioner.ensureAdminGroup(adminGroup);
+      }
       return;
     } catch (error) {
       logger.warn('Dashboard OIDC provisioning attempt failed; will retry', {
