@@ -18,6 +18,7 @@ import type {
 } from '@hola/shared';
 import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
+import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 
@@ -60,6 +61,15 @@ export const Deployments: React.FC = () => {
 
   const deployments = deploymentsResponse?.items || [];
   const totalDeployments = deploymentsResponse?.total || 0;
+
+  // Join app id -> catalog product name + glyph so the "App" column shows the
+  // real app (e.g. "Uptime Kuma" 📈), not a "deployment-<id>" placeholder.
+  const { data: catalogData } = useCatalogAppsApi({ page: 1, limit: 100 });
+  const appMeta = React.useMemo(() => {
+    const map = new Map<string, { name: string; icon: string }>();
+    for (const app of catalogData?.items ?? []) map.set(app.id, { name: app.name, icon: app.icon });
+    return map;
+  }, [catalogData]);
 
   const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart') => {
     try {
@@ -205,15 +215,19 @@ export const Deployments: React.FC = () => {
           </div>
 
           {/* Body rows */}
-          {deployments.map((deployment) => (
+          {deployments.map((deployment) => {
+            const meta = appMeta.get(deployment.app);
+            const displayName = meta?.name || deployment.app || deployment.name;
+            const displayIcon = meta?.icon || deployment.icon;
+            return (
             <div
               key={deployment.id}
               onClick={() => navigate(`/deployments/${deployment.id}`)}
               className={`${GRID_COLS} py-[13px] border-b border-border-soft items-center cursor-pointer hover:bg-surface-2`}
             >
               <div className="flex items-center gap-[11px] min-w-0">
-                <AppIcon name={deployment.name} emoji={deployment.icon} size={34} />
-                <span className="font-semibold text-sm truncate">{deployment.name}</span>
+                <AppIcon name={displayName} emoji={displayIcon} size={34} />
+                <span className="font-semibold text-sm truncate">{displayName}</span>
               </div>
               <div>
                 <StatusBadge status={deployment.status} />
@@ -262,7 +276,8 @@ export const Deployments: React.FC = () => {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {/* Empty state */}
           {deployments.length === 0 && (

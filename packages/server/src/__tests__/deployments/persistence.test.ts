@@ -187,6 +187,14 @@ describe('Deployment persistence (real service)', () => {
     expect(rollback.previousReleaseId).toBe(promoted.releaseId);
   });
 
+  test('a deployment created without a name defaults to the app slug', async () => {
+    const { drafts, deployments } = makeSystem();
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });
+    const detail = await deployments.getDeployment(created.deploymentId);
+    // Not an opaque "deployment-<id>" placeholder — the UI shows the app.
+    expect(detail.name).toBe('gitea');
+  });
+
   test('a failed promotion leaves the previous release active', async () => {
     const { storage, drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });

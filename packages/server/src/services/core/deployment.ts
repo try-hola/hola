@@ -447,7 +447,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
-        name: request.name || `deployment-${deploymentId.slice(0, 8)}`,
+        // Default to the app slug (e.g. "uptime-kuma") so the UI shows the app,
+        // not an opaque "deployment-<id>" placeholder. A caller-supplied name wins.
+        name: request.name || app,
         app,
         icon: '📦',
         status: 'installing',
