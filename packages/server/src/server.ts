@@ -52,7 +52,6 @@ interface ServiceError extends Error {
 // Phase 0: Infrastructure imports
 import { appConfig, featureFlags } from './config/features';
 import { initializeLogger, getLogger } from './lib/logger';
-import type { LogLevel } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext, type RequestContext } from './middleware/request';
 import { getServices, resetServices } from './services/simple-factory';
@@ -937,40 +936,13 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   // Logs SSE (deployment)
+  // Snapshot of prior logs. Live logs are served by the dedicated SSE endpoint
+  // `/logs/stream` below; historical container-log retrieval is not implemented
+  // yet (tracked separately), so this returns an empty snapshot rather than the
+  // fabricated sample data it used to emit.
   const deploymentLogsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/logs$/);
   if (deploymentLogsMatch && req.method === 'GET') {
-    const stream = createSSEStream({
-      logger,
-      onSubscribe(controller) {
-        let i = 0;
-        const services = ['nextcloud', 'postgres', 'redis'];
-  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
-        controller.heartbeat();
-        const interval = setInterval(() => {
-          i += 1;
-          controller.send({
-            type: 'log',
-            data: {
-              timestamp: new Date().toISOString(),
-              service: services[i % services.length],
-              level: levels[i % levels.length],
-              message: `Log line ${i}`,
-            },
-          });
-          if (i % 8 === 0) {
-            controller.heartbeat();
-          }
-        }, 1000);
-        const closer = setTimeout(() => {
-          controller.close();
-        }, 60000);
-        return () => {
-          clearInterval(interval);
-          clearTimeout(closer);
-        };
-      },
-    });
-    return new Response(stream, { headers: createSSEHeaders() });
+    return json({ items: [] });
   }
 
   // Logs SSE Stream (deployment) - new endpoint for real-time logs
@@ -1051,68 +1023,12 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Snapshot of prior job logs. Live job logs stream from `/logs/stream` below;
+  // there is no historical log buffer yet, so this returns an empty snapshot
+  // rather than fabricated sample lines.
   const jobLogsMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs$/);
   if (jobLogsMatch && req.method === 'GET') {
-    const jobId = jobLogsMatch[1];
-    try {
-      const services = getServices();
-      const stream = createSSEStream({
-        logger,
-        onSubscribe(controller) {
-          controller.heartbeat();
-          const sub = services.logging.onLog({ kind: 'job', id: jobId }, entry => {
-            controller.send({
-              type: 'log',
-              data: {
-                timestamp: entry.timestamp,
-                service: entry.service,
-                level: entry.level,
-                message: entry.message,
-              },
-            });
-          });
-
-          return () => {
-            sub.unsubscribe();
-          };
-        },
-      });
-      return new Response(stream, { headers: createSSEHeaders() });
-    } catch {
-  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
-      const stream = createSSEStream({
-        logger,
-        onSubscribe(controller) {
-          let i = 0;
-          controller.heartbeat();
-          const interval = setInterval(() => {
-            i += 1;
-            controller.send({
-              type: 'log',
-              data: {
-                timestamp: new Date().toISOString(),
-                service: 'job',
-                level: levels[i % levels.length],
-                message: `Job log ${i}`,
-              },
-            });
-            if (i % 8 === 0) {
-              controller.heartbeat();
-            }
-          }, 1000);
-
-          const closer = setTimeout(() => {
-            controller.close();
-          }, 60000);
-
-          return () => {
-            clearInterval(interval);
-            clearTimeout(closer);
-          };
-        },
-      });
-      return new Response(stream, { headers: createSSEHeaders() });
-    }
+    return json({ items: [] });
   }
 
   // Job Logs SSE Stream - new endpoint for real-time job logs and updates
@@ -1156,56 +1072,9 @@ async function route(url: URL, req: Request): Promise<Response> {
         },
       });
       return new Response(stream, { headers: createSSEHeaders() });
-    } catch {
-  const levels: LogLevel[] = ['info', 'warn', 'debug'];
-      const stream = createSSEStream({
-        logger,
-        onSubscribe(controller) {
-          let i = 0;
-          let progress = 0;
-          controller.heartbeat();
-          const interval = setInterval(() => {
-            i += 1;
-            progress = Math.min(progress + 5, 100);
-            controller.send({
-              type: 'log',
-              data: {
-                timestamp: new Date().toISOString(),
-                service: 'job-runner',
-                level: levels[i % levels.length],
-                message: `Job ${jobId} step ${i}`,
-              },
-            });
-            if (i % 5 === 0) {
-              controller.send({
-                type: 'job_update',
-                data: {
-                  jobId,
-                  status: progress >= 100 ? 'completed' : 'running',
-                  progress,
-                  ...(progress >= 100 ? { finishedAt: new Date().toISOString() } : {}),
-                },
-              });
-              if (progress >= 100) {
-                controller.close();
-              }
-            }
-            if (i % 20 === 0) {
-              controller.heartbeat();
-            }
-          }, 1500);
-
-          const closer = setTimeout(() => {
-            controller.close();
-          }, 200000);
-
-          return () => {
-            clearInterval(interval);
-            clearTimeout(closer);
-          };
-        },
-      });
-      return new Response(stream, { headers: createSSEHeaders() });
+    } catch (error) {
+      // Surface the real failure rather than fabricating a fake job log stream.
+      return errorResponse(req, error);
     }
   }
 

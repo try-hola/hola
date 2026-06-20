@@ -34,57 +34,6 @@ interface LogsViewerProps {
   showJobStatus?: boolean;
 }
 
-const mockLogs: LogEntry[] = [
-  {
-    timestamp: '2024-01-15T14:30:15.123Z',
-    service: 'nextcloud',
-    level: 'info',
-    message: 'Starting Nextcloud instance'
-  },
-  {
-    timestamp: '2024-01-15T14:30:16.456Z',
-    service: 'postgres',
-    level: 'info',
-    message: 'Database connection established'
-  },
-  {
-    timestamp: '2024-01-15T14:30:17.789Z',
-    service: 'nextcloud',
-    level: 'info',
-    message: 'Application ready on port 80'
-  },
-  {
-    timestamp: '2024-01-15T14:32:45.012Z',
-    service: 'nextcloud',
-    level: 'info',
-    message: 'User login: admin'
-  },
-  {
-    timestamp: '2024-01-15T14:35:12.345Z',
-    service: 'nextcloud',
-    level: 'warn',
-    message: 'High memory usage detected: 85% of allocated memory in use'
-  },
-  {
-    timestamp: '2024-01-15T14:40:01.678Z',
-    service: 'nextcloud',
-    level: 'info',
-    message: 'Cron job executed successfully'
-  },
-  {
-    timestamp: '2024-01-15T14:42:33.901Z',
-    service: 'postgres',
-    level: 'error',
-    message: 'Connection timeout from nextcloud service'
-  },
-  {
-    timestamp: '2024-01-15T14:42:34.234Z',
-    service: 'postgres',
-    level: 'info',
-    message: 'Connection restored'
-  },
-];
-
 const getLevelColor = (level: LogLevel) => {
   switch (level) {
     case 'error':
@@ -219,8 +168,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
     } catch (err) {
       console.error('Failed to load initial data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load data');
-      // Fallback to mock data for development
-      setAllLogs(mockLogs);
+      setAllLogs([]);
     } finally {
       setLoading(false);
     }
