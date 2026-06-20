@@ -21,6 +21,7 @@ prog
   .option('--compose-dir', 'Path to the packages/compose directory')
   .option('--force', 'Update an existing .env in place', false)
   .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
+  .option('--keep-env', 'Keep the local .env after a successful remote install', false)
   .option('--json', 'Print the resolved config as JSON (secrets redacted)', false)
   .action(async (opts) => {
     const { runInit } = await load(import('./commands/init/init'));

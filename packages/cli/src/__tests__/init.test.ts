@@ -92,6 +92,66 @@ describe('hola init', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('offers to install, hands the .env to bootstrap, and deletes it on success', async () => {
+    const out = join(dir, '.env');
+    const calls: Array<{ host?: string; envFile?: string }> = [];
+    const res = await runInit(
+      { out, skipChecks: true }, // interactive (no json) → the install offer runs
+      {
+        prompter: scriptedPrompter({ ...baseAnswers, _bootstrap: 'true', _host: 'paul@vm' }),
+        checks: noChecks,
+        bootstrap: async (o) => { calls.push(o); return { host: o.host!, dir: '/opt/hola', ref: 'cli-v9', steps: [] }; },
+      }
+    );
+
+    expect(res?.target).toBe(out);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ host: 'paul@vm', envFile: out });
+    // .env removed once its secrets are on the host.
+    await expect(readFile(out, 'utf8')).rejects.toThrow();
+  });
+
+  it('keeps the .env with --keep-env after a successful install', async () => {
+    const out = join(dir, '.env');
+    await runInit(
+      { out, skipChecks: true, keepEnv: true },
+      {
+        prompter: scriptedPrompter({ ...baseAnswers, _bootstrap: 'true', _host: 'paul@vm' }),
+        checks: noChecks,
+        bootstrap: async (o) => ({ host: o.host!, dir: '/opt/hola', ref: 'cli-v9', steps: [] }),
+      }
+    );
+    expect(await readFile(out, 'utf8')).toContain('HOLA_BASE_DOMAIN=hola.example.com'); // still there
+  });
+
+  it('keeps the .env when bootstrap fails so the user can retry', async () => {
+    const out = join(dir, '.env');
+    await runInit(
+      { out, skipChecks: true },
+      {
+        prompter: scriptedPrompter({ ...baseAnswers, _bootstrap: 'true', _host: 'paul@vm' }),
+        checks: noChecks,
+        bootstrap: async () => undefined, // bootstrap reported an error
+      }
+    );
+    expect(await readFile(out, 'utf8')).toContain('HOLA_BASE_DOMAIN='); // preserved
+  });
+
+  it('does not call bootstrap when the install offer is declined', async () => {
+    const out = join(dir, '.env');
+    let called = false;
+    await runInit(
+      { out, skipChecks: true },
+      {
+        prompter: scriptedPrompter({ ...baseAnswers, _bootstrap: 'false', _host: 'paul@vm' }),
+        checks: noChecks,
+        bootstrap: async () => { called = true; return undefined; },
+      }
+    );
+    expect(called).toBe(false);
+    expect(await readFile(out, 'utf8')).toContain('HOLA_BASE_DOMAIN='); // kept for later
+  });
+
   it('skips conditional fields when not applicable (none/http-01)', async () => {
     const out = join(dir, '.env');
     await runInit(

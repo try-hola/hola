@@ -51,9 +51,32 @@ function releaseBase(repo: string): string {
  * pulls the published images), and verify. Returns the result, or undefined on
  * failure (after setting a non-zero exit code).
  */
+/** First existing `.env` a freshly-run `hola init` would have written, or null. */
+async function defaultFindEnvFile(): Promise<string | null> {
+  const candidates = [
+    path.resolve(process.cwd(), 'packages/compose/.env'),
+    path.resolve(process.cwd(), '.env'),
+  ];
+  for (const c of candidates) {
+    try {
+      await fs.access(c);
+      return c;
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 export async function runBootstrap(
   opts: BootstrapOptions,
-  injected?: { prompter?: Prompter; runner?: Runner; checks?: (c: ConfigMap) => Promise<CheckResult[]> }
+  injected?: {
+    prompter?: Prompter;
+    runner?: Runner;
+    checks?: (c: ConfigMap) => Promise<CheckResult[]>;
+    /** Locate a reusable .env (defaults to the init-produced compose/.env); injectable for tests. */
+    findEnvFile?: () => Promise<string | null>;
+  }
 ): Promise<BootstrapResult | undefined> {
   const prompter = injected?.prompter ?? clackPrompter();
   const runner = injected?.runner ?? systemRunner();
@@ -74,14 +97,28 @@ export async function runBootstrap(
   try {
     if (!host) throw new BootstrapAbort('--host user@vm is required.');
 
-    // 1) Config → rendered .env (reuse an init-produced file, or run the wizard).
+    // 1) Config → rendered .env: an explicit --env-file, else a detected
+    //    init-produced .env we offer to reuse, else the wizard. Detection only
+    //    runs interactively (skipped under --json, which is for scripted use).
     let rendered: string;
     let config: ConfigMap;
-    if (opts.envFile) {
-      const p = path.resolve(process.cwd(), opts.envFile);
-      rendered = await fs.readFile(p, 'utf8');
+    let reuse: string | null = opts.envFile ? path.resolve(process.cwd(), opts.envFile) : null;
+    if (!reuse && !opts.json) {
+      const found = await (injected?.findEnvFile ?? defaultFindEnvFile)();
+      if (found) {
+        const ans = await prompter.prompt({
+          key: '_use_env',
+          type: 'confirm',
+          message: `Found ${found} — use it (skip the questions)?`,
+          default: 'true',
+        });
+        if (ans === 'true') reuse = found;
+      }
+    }
+    if (reuse) {
+      rendered = await fs.readFile(reuse, 'utf8');
       config = parseEnv(rendered);
-      out(`Using ${p}`);
+      out(`Using ${reuse}`);
     } else {
       out('Hola setup — answer a few questions, then I will install on the host.\n');
       const wiz = await runWizard({ prompter, skipChecks: opts.skipChecks, checks: injected?.checks });

@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 import { runBootstrap } from '../commands/bootstrap/bootstrap';
 import { scriptedPrompter } from '../install/prompter';
@@ -117,5 +120,30 @@ describe('hola bootstrap', () => {
     const res = await runBootstrap({ skipChecks: true, json: true }, { prompter: scriptedPrompter(answers), runner: makeRunner() });
     expect(res).toBeUndefined();
     expect(process.exitCode).toBe(1);
+  });
+
+  it('detects an init-produced .env and reuses it instead of re-asking the wizard', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'hola-boot-'));
+    const envPath = join(tmp, '.env');
+    // A marker value the wizard would never produce, proving the file was reused.
+    await writeFile(envPath, 'HOLA_DOMAIN=reused.example.com\nHOLA_API_KEY=from-the-file\n');
+    const runner = makeRunner();
+    try {
+      const res = await runBootstrap(
+        { host: 'me@vm', skipChecks: true }, // interactive: detection runs
+        {
+          // Empty answers: if the wizard ran, its required fields would throw.
+          prompter: scriptedPrompter({}),
+          runner,
+          findEnvFile: async () => envPath,
+        }
+      );
+      expect(res?.host).toBe('me@vm');
+      const writeCall = runner.calls.find((c) => c.cmd.includes('cat >'))!;
+      expect(writeCall.input).toContain('HOLA_DOMAIN=reused.example.com');
+      expect(writeCall.input).toContain('HOLA_API_KEY=from-the-file');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
   });
 });
