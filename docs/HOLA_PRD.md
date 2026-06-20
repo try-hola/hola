@@ -147,12 +147,13 @@ while retaining full control of their infrastructure.
 ### CLI Experience
 - React + Ink CLI (`@hola/cli`) mirrors web workflows for automation via the standard Draft /
   Deployment APIs.
-- **Status:** `hola bundle validate` works end-to-end; `hola bundle deploy` currently stops at draft
-  finalization (completing it is issue #54); `bundle dev` is an intentional stub.
+- **Status:** `hola init`/`bootstrap` stand up a server; `hola catalog` browses the catalog and
+  `hola install <appId>` runs draft → validate → finalize → deploy with SSE job-watch; `hola
+  deployments`/`logs`/`stop`/`restart`/`rollback`/`uninstall` manage the lifecycle.
 - Commands emphasize scriptability, colored output, optional JSON, and non-zero exit codes on
-  failure. SSE job-watch streaming is planned (#54).
-- **Note:** legacy development-session commands were removed in favor of standard Draft/Deployment
-  workflows.
+  failure.
+- **Note:** the legacy hand-authoring commands (`bundle validate`/`deploy`) were removed — apps are
+  authored in the [`try-hola/apps`](https://github.com/try-hola/apps) catalog repo and installed by id.
 
 ## 5. System Architecture Overview
 
@@ -240,7 +241,7 @@ Dependency-ordered recovery (`→` denotes "unblocks"):
    lifecycle with durable jobs and real log/SSE streaming, no host ports (#15).
 6. **Decide auth and ship the stack** — auth architecture ADR + implementation (#53); a runnable
    single-host production Compose stack with images, persistence, Docker access, and routing (#55).
-7. **Complete the CLI** — finish `bundle deploy` through deployment + job watch (#54).
+7. **Complete the CLI** — catalog browse + `install <appId>` through deployment + job watch.
 8. **Verify** — API contract/routing tests (#17), end-to-end recovery smoke tests (#18), and a
    conditional Docker/Compose integration test (#19).
 9. **Align documentation** with the recovered system (#20).
@@ -256,10 +257,10 @@ implemented behavior while clearly marking future work.
 - **Package:** `packages/cli` (TypeScript + React + Ink), distributed via a `hola` bin wrapper.
   Depends on `@hola/sdk` and `@hola/shared` for shared contracts.
 - **Tooling:** Bun-driven dev, `bun build` to Node-target ESM, strict TypeScript, linting, and tests.
-- **Current surface:** `bundle validate` (working), `bundle deploy` (finalizes a draft; full
-  deployment + SSE job-watch is #54), `bundle dev` (intentional stub).
-- **Planned:** complete deploy/job-watch, then `bundle init/pack/push/logs/clean` with file watching,
-  Traefik-aware validation, and stable JSON output.
+- **Current surface:** `init`/`bootstrap` (server setup), `catalog` (browse), `install <appId>`
+  (draft → validate → finalize → deploy → SSE job-watch), and `deployments`/`logs`/`stop`/`restart`/
+  `rollback`/`uninstall` (lifecycle).
+- **Planned:** richer catalog filtering and stable JSON output across all commands.
 - **Runtime expectations:** clear status-line UI, `<Static>` log rendering, environment variables
   (`HOLA_API_URL`, `HOLA_TOKEN`), and robust network/auth error handling.
 

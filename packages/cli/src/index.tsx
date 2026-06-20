@@ -11,7 +11,7 @@ const prog = sade('hola');
 
 prog
   .version(CLI_VERSION)
-  .describe('Hola CLI — install, deployments, and the bundle developer workflow');
+  .describe('Hola CLI — set up a server, browse the catalog, install apps, and manage deployments');
 
 // init — guided first-time setup (writes .env on this machine; no server needed)
 prog
@@ -137,35 +137,6 @@ prog
   .action(async (deploymentId, opts) => {
     const { runRollback } = await load(import('./commands/deployments/actions'));
     await runRollback(deploymentId, camelKeys(opts));
-  });
-
-// bundle validate
-prog
-  .command('bundle validate')
-  .describe('Validate compose/env with server ValidationService')
-  .option('--path, -p', 'Bundle directory', '.')
-  .option('--strict', 'Upgrade warnings to failures', false)
-  .option('--json', 'Print raw JSON output', false)
-  .action(async (opts) => {
-    const { runBundleValidate } = await load(import('./commands/bundle/validate'));
-    await runBundleValidate(camelKeys(opts));
-  });
-
-// bundle deploy (one-shot)
-prog
-  .command('bundle deploy')
-  .describe('One-shot import → draft → validate → preflight → finalize → deploy → watch')
-  .option('--path, -p', 'Bundle directory', '.')
-  .option('--app-id', 'App ID (defaults to the bundle directory name)')
-  .option('--version', 'Version', 'latest')
-  .option('--port', 'Ingress container port Traefik routes to (e.g. 3000 for Gitea)')
-  .option('--traefik', 'Require Traefik mode', false)
-  .option('--strict', 'Fail on validation warnings', false)
-  .option('--no-stream', 'Do not watch the deployment job', false)
-  .option('--json', 'Print the result as JSON', false)
-  .action(async (opts) => {
-    const { runBundleDeploy } = await load(import('./commands/bundle/deploy'));
-    await runBundleDeploy(camelKeys(opts));
   });
 
 // Fallback banner when no args

@@ -16,9 +16,9 @@ export interface DeployResult {
 
 /**
  * The shared tail of every deploy: validate → preflight → finalize → create
- * deployment → watch the job. Used by both `bundle deploy` (draft from a local
- * compose) and `install` (draft seeded from the catalog). Throws `DeployAbort`
- * on validation/preflight failure (after reporting it).
+ * deployment → watch the job. Used by `install` (draft seeded from the
+ * catalog). Throws `DeployAbort` on validation/preflight failure (after
+ * reporting it).
  */
 export async function finalizeAndDeploy(
   sdk: HolaSdk,
