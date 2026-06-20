@@ -440,7 +440,7 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
 
     // Subclass to skip the real backoff delays.
     class FastProvisioner extends RealAuthentikProvisionerService {
-      protected sleep(_ms: number): Promise<void> { return Promise.resolve(); }
+      protected sleep(): Promise<void> { return Promise.resolve(); }
     }
     const svc = new FastProvisioner({ ...CONFIG, adminEmail: 'me@example.com' });
     const result = await svc.ensureBootstrapAdmin('hola-admins');
