@@ -265,4 +265,41 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     await svc.deprovision({ deploymentId: 'dep-ldap-0003abcd', ref: result.ref });
     expect((await akGet(`/api/v3/core/users/${result.ref.bindAccountPk}/`)).status).toBe(404);
   }, 120_000);
+
+  test('scoped-token bootstrap admin: creates the missing recovery flow and mints a link', async () => {
+    // Authentik 2025.x ships NO recovery flow, so the provisioner must create one.
+    // Use the self-bootstrapped scoped token (not the superuser admin token) so this
+    // also verifies the scoped permission set can add the flow + stage bindings.
+    const svc = new RealAuthentikProvisionerService({
+      ...config, authentikApiToken: undefined, authentikBootstrapToken: BOOTSTRAP_TOKEN, adminEmail: 'recovery-it@example.com',
+    });
+
+    // Precondition: confirm Authentik really ships no recovery flow out of the box.
+    const before = (await akGet('/api/v3/flows/instances/?designation=recovery')) as {
+      status: number; body: { results: unknown[] };
+    };
+    expect(before.body.results.length).toBe(0);
+
+    await svc.ensureAdminGroup('hola-admins');
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+
+    expect(result.recoveryLink).toBeTruthy();
+    expect(result.recoveryLink).toContain('/if/flow/');
+
+    // The recovery flow now exists, is bound to the default brand, and has the two
+    // reused stages (prompt + user-write) so the link can actually set a password.
+    const after = (await akGet('/api/v3/flows/instances/?designation=recovery')) as {
+      status: number; body: { results: Array<{ pk: string; slug: string }> };
+    };
+    const flow = after.body.results.find(f => f.slug === 'hola-recovery');
+    expect(flow).toBeDefined();
+    const brand = (await akGet('/api/v3/core/brands/?default=true')) as {
+      status: number; body: { results: Array<{ flow_recovery: string | null }> };
+    };
+    expect(brand.body.results[0].flow_recovery).toBe(flow!.pk);
+    const bindings = (await akGet(`/api/v3/flows/bindings/?target=${flow!.pk}`)) as {
+      status: number; body: { results: unknown[] };
+    };
+    expect(bindings.body.results.length).toBe(2);
+  }, 180_000);
 });

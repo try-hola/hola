@@ -165,6 +165,11 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_outposts.view_outpost',
   'authentik_outposts.change_outpost',
   'authentik_flows.view_flow',
+  // Create a recovery flow (Authentik ships none) reusing the password-change
+  // stages, so a named admin can be sent a one-time password-setup link.
+  'authentik_flows.add_flow',
+  'authentik_flows.view_flowstagebinding',
+  'authentik_flows.add_flowstagebinding',
   // Read certificate-keypairs to pick a signing key for the dashboard OIDC client.
   'authentik_crypto.view_certificatekeypair',
 ];
@@ -556,41 +561,104 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
   }
 
-  /** Mint a one-time recovery link, ensuring a recovery flow is bound first. */
-  private async mintRecoveryLink(userPk: number): Promise<string | undefined> {
-    await this.ensureBrandRecoveryFlow();
-    try {
-      const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
-      return res.link;
-    } catch (error) {
-      this.logger.warn('Recovery link generation failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
+  /** Overridable indirection so tests can exercise the retry loop without waiting. */
+  protected sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /** Best-effort: bind a recovery flow to the default brand (so /recovery/ works). */
-  private async ensureBrandRecoveryFlow(): Promise<void> {
+  /**
+   * Mint a one-time recovery link, ensuring a recovery flow is bound first.
+   *
+   * Authentik 2025.x ships NO recovery flow by default, so a fresh install has
+   * nothing to bind and `/recovery/` returns 400 forever. `ensureBrandRecoveryFlow`
+   * now creates one when missing. The default blueprints it depends on (the
+   * password-change stages) are also applied a little after the API starts
+   * answering, so retry the ensure + mint over a short window.
+   */
+  private async mintRecoveryLink(userPk: number): Promise<string | undefined> {
+    const delaysMs = [0, 3_000, 6_000, 10_000, 15_000, 20_000]; // ~54s total
+    for (let i = 0; i < delaysMs.length; i++) {
+      if (delaysMs[i]) await this.sleep(delaysMs[i]);
+      // Ensure a recovery flow exists + is bound to the brand before the mint.
+      if (!(await this.ensureBrandRecoveryFlow())) continue;
+      try {
+        const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
+        return res.link;
+      } catch (error) {
+        this.logger.warn('Recovery link generation attempt failed; will retry', {
+          attempt: i + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Ensure a recovery flow exists and is bound to the default brand (so
+   * `/recovery/` works). Authentik ships none, so create one when absent.
+   * Returns true once a flow exists and is bound, false while the prerequisite
+   * default blueprints have not been applied yet (so the caller can retry).
+   */
+  private async ensureBrandRecoveryFlow(): Promise<boolean> {
     try {
-      const flows = await this.api<{ results: Array<{ pk: string }> }>(
+      let flowPk: string | undefined = (await this.api<{ results: Array<{ pk: string }> }>(
         'GET', '/api/v3/flows/instances/?designation=recovery'
-      );
-      const flowPk = flows.results?.[0]?.pk;
-      if (!flowPk) return; // no recovery flow exists; /recovery/ will 404 and we degrade
+      )).results?.[0]?.pk;
+      if (!flowPk) flowPk = await this.createRecoveryFlow();
+      if (!flowPk) return false; // couldn't find or create one yet — retry later
       const brands = await this.api<{ results: Array<{ brand_uuid: string; flow_recovery: string | null }> }>(
         'GET', '/api/v3/core/brands/?default=true'
       );
       const brand = brands.results?.[0];
-      if (brand && !brand.flow_recovery) {
+      if (!brand) return false;
+      if (brand.flow_recovery !== flowPk) {
         await this.api('PATCH', `/api/v3/core/brands/${brand.brand_uuid}/`, { flow_recovery: flowPk });
-        this.logger.info('Bound a recovery flow to the default brand', { flowPk });
+        this.logger.info('Bound recovery flow to the default brand', { flowPk });
       }
+      return true;
     } catch (error) {
       this.logger.warn('Could not ensure a brand recovery flow', {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
+  }
+
+  /**
+   * Create a `recovery`-designation flow, reusing the stages of the shipped
+   * `default-password-change` flow (a Prompt + User Write stage) so the recovery
+   * link lets the operator set their own password. Idempotent by slug. Returns the
+   * flow pk, or undefined if the prerequisite `default-password-change` blueprint
+   * has not been applied yet (so the caller retries).
+   */
+  private async createRecoveryFlow(): Promise<string | undefined> {
+    const slug = 'hola-recovery';
+    const existing = (await this.api<{ results: Array<{ pk: string }> }>(
+      'GET', `/api/v3/flows/instances/?slug=${slug}`
+    )).results?.[0]?.pk;
+    if (existing) return existing;
+    // Reuse the password-change flow's stages (prompt for a new password + write it).
+    const pwFlowPk = (await this.api<{ results: Array<{ pk: string }> }>(
+      'GET', '/api/v3/flows/instances/?slug=default-password-change'
+    )).results?.[0]?.pk;
+    if (!pwFlowPk) return undefined; // default blueprints not applied yet
+    const bindings = (await this.api<{ results: Array<{ stage: string; order: number }> }>(
+      'GET', `/api/v3/flows/bindings/?target=${pwFlowPk}`
+    )).results ?? [];
+    if (!bindings.length) return undefined;
+    const flow = await this.api<{ pk: string }>('POST', '/api/v3/flows/instances/', {
+      name: 'Hola Recovery',
+      slug,
+      title: 'Set your password',
+      designation: 'recovery',
+      authentication: 'require_unauthenticated',
+    });
+    for (const b of bindings) {
+      await this.api('POST', '/api/v3/flows/bindings/', { target: flow.pk, stage: b.stage, order: b.order });
+    }
+    this.logger.info('Created a recovery flow (Authentik ships none)', { flowPk: flow.pk, slug });
+    return flow.pk;
   }
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
