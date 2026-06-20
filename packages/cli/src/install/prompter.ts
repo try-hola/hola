@@ -28,6 +28,17 @@ export class PromptCancelled extends Error {
   }
 }
 
+/**
+ * Adapt a string validator to clack, which passes `undefined` (not `''`) when an
+ * optional field is submitted blank. Our validators all call `v.trim()`, so coerce
+ * the value to a string at this one boundary. Exported for testing.
+ */
+export function toClackValidate(
+  validate?: (v: string) => string | undefined
+): ((v: string | undefined) => string | undefined) | undefined {
+  return validate ? (v) => validate(v ?? '') : undefined;
+}
+
 /** Production prompter backed by @clack/prompts. Lazily imported so tests never load it. */
 export function clackPrompter(): Prompter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -39,7 +50,7 @@ export function clackPrompter(): Prompter {
   return {
     async prompt(spec) {
       const clack = await load();
-      const validate = spec.validate ? (v: string) => spec.validate!(v) : undefined;
+      const validate = toClackValidate(spec.validate);
       let result: unknown;
       switch (spec.type) {
         case 'secret':
