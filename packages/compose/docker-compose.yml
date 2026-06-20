@@ -110,6 +110,11 @@ services:
       - HOLA_OIDC_CLIENT_ID=${HOLA_OIDC_CLIENT_ID:-}
       - HOLA_OIDC_AUDIENCE=${HOLA_OIDC_AUDIENCE:-}
       - HOLA_OIDC_ADMIN_GROUP=${HOLA_OIDC_ADMIN_GROUP:-}
+      # Optional named admin: provisioned into hola-admins with a one-time
+      # password-setup recovery link logged at startup (see .env.example).
+      - HOLA_ADMIN_EMAIL=${HOLA_ADMIN_EMAIL:-}
+      - HOLA_ADMIN_USERNAME=${HOLA_ADMIN_USERNAME:-}
+      - HOLA_ADMIN_NAME=${HOLA_ADMIN_NAME:-}
       # Base DN of the shared LDAP directory (for native-ldap apps); host/port
       # default to the authentik-ldap outpost service.
       - HOLA_AUTHENTIK_LDAP_BASE_DN=${HOLA_AUTHENTIK_LDAP_BASE_DN:-dc=hola,dc=internal}

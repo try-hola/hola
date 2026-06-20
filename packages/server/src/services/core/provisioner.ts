@@ -98,6 +98,13 @@ export interface ProvisionerService extends HealthCheckable {
    * instead of a backend-specific one like Authentik's built-in "authentik Admins".
    */
   ensureAdminGroup(name: string): Promise<void>;
+  /**
+   * Provision a named admin user (from HOLA_ADMIN_EMAIL) into `adminGroup` and,
+   * if they've never logged in, return a one-time recovery link to set their own
+   * password — so the operator signs in as themselves, not the generic akadmin.
+   * No-op when no admin email is configured.
+   */
+  ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }>;
   healthCheck(): Promise<ServiceHealth>;
 }
 
@@ -150,6 +157,10 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_core.add_group',
   'authentik_core.view_group',
   'authentik_core.change_group',
+  // Bind a recovery flow to the default brand so a named admin can be sent a
+  // one-time password-setup link at bootstrap.
+  'authentik_brands.view_brand',
+  'authentik_brands.change_brand',
   'authentik_core.view_propertymapping',
   'authentik_outposts.view_outpost',
   'authentik_outposts.change_outpost',
@@ -485,6 +496,98 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     } catch (error) {
       this.logger.warn('Could not ensure platform admin group; admin mapping may have no members yet', {
         name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Provision the named admin user + a one-time password-setup recovery link. */
+  async ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }> {
+    const email = this.config.adminEmail;
+    if (!email) return { created: false };
+    const username = this.config.adminUsername || email.split('@')[0];
+    const name = this.config.adminName || username;
+    try {
+      // Find (by email) or create the internal user.
+      const found = await this.api<{ results: Array<{ pk: number; last_login: string | null }> }>(
+        'GET', `/api/v3/core/users/?email=${encodeURIComponent(email)}`
+      );
+      let user = found.results?.[0];
+      let created = false;
+      if (!user) {
+        user = await this.api<{ pk: number; last_login: string | null }>('POST', '/api/v3/core/users/', {
+          username, email, name, type: 'internal', is_active: true, path: 'users',
+        });
+        created = true;
+        this.logger.info('Provisioned named admin user', { email, username, pk: user.pk });
+      }
+
+      await this.addUserToGroup(adminGroup, user.pk);
+
+      // Only mint a recovery link until they've logged in once, so we don't emit a
+      // fresh one on every restart after they're set up.
+      if (user.last_login) return { created };
+
+      const recoveryLink = await this.mintRecoveryLink(user.pk);
+      if (!recoveryLink) {
+        this.logger.warn('Could not mint admin recovery link; set the password via akadmin or configure a recovery flow', { email });
+      }
+      return { created, recoveryLink };
+    } catch (error) {
+      this.logger.warn('Could not ensure bootstrap admin user', {
+        email, error: error instanceof Error ? error.message : String(error),
+      });
+      return { created: false };
+    }
+  }
+
+  /** Add a single user to a group by name (creating the group if needed). */
+  private async addUserToGroup(groupName: string, userPk: number): Promise<void> {
+    const found = await this.api<{ results: Array<{ pk: string; users: number[] }> }>(
+      'GET', `/api/v3/core/groups/?name=${encodeURIComponent(groupName)}`
+    );
+    let group = found.results?.[0];
+    if (!group) {
+      group = await this.api<{ pk: string; users: number[] }>('POST', '/api/v3/core/groups/', { name: groupName });
+    }
+    const users = group.users ?? [];
+    if (!users.includes(userPk)) {
+      await this.api('PATCH', `/api/v3/core/groups/${group.pk}/`, { users: [...users, userPk] });
+    }
+  }
+
+  /** Mint a one-time recovery link, ensuring a recovery flow is bound first. */
+  private async mintRecoveryLink(userPk: number): Promise<string | undefined> {
+    await this.ensureBrandRecoveryFlow();
+    try {
+      const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
+      return res.link;
+    } catch (error) {
+      this.logger.warn('Recovery link generation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Best-effort: bind a recovery flow to the default brand (so /recovery/ works). */
+  private async ensureBrandRecoveryFlow(): Promise<void> {
+    try {
+      const flows = await this.api<{ results: Array<{ pk: string }> }>(
+        'GET', '/api/v3/flows/instances/?designation=recovery'
+      );
+      const flowPk = flows.results?.[0]?.pk;
+      if (!flowPk) return; // no recovery flow exists; /recovery/ will 404 and we degrade
+      const brands = await this.api<{ results: Array<{ brand_uuid: string; flow_recovery: string | null }> }>(
+        'GET', '/api/v3/core/brands/?default=true'
+      );
+      const brand = brands.results?.[0];
+      if (brand && !brand.flow_recovery) {
+        await this.api('PATCH', `/api/v3/core/brands/${brand.brand_uuid}/`, { flow_recovery: flowPk });
+        this.logger.info('Bound a recovery flow to the default brand', { flowPk });
+      }
+    } catch (error) {
+      this.logger.warn('Could not ensure a brand recovery flow', {
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -855,5 +958,10 @@ export class MockProvisionerService implements ProvisionerService {
 
   async ensureAdminGroup(name: string): Promise<void> {
     this.logger.debug('Mock ensureAdminGroup', { name });
+  }
+
+  async ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }> {
+    this.logger.debug('Mock ensureBootstrapAdmin', { adminGroup });
+    return { created: false };
   }
 }
