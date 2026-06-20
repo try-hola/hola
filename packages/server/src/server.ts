@@ -1551,6 +1551,14 @@ async function initializePlatformAuth(): Promise<void> {
       const adminGroup = resolveOidcConfig().adminGroup;
       if (adminGroup) {
         await provisioner.ensureAdminGroup(adminGroup);
+        // Optionally provision a named admin (HOLA_ADMIN_EMAIL) and surface its
+        // one-time password-setup link so the operator signs in as themselves.
+        const admin = await provisioner.ensureBootstrapAdmin(adminGroup);
+        if (admin.recoveryLink) {
+          logger.info(
+            `=== Hola admin setup: open this one-time link to set your password ===\n${admin.recoveryLink}`,
+          );
+        }
       }
       return;
     } catch (error) {

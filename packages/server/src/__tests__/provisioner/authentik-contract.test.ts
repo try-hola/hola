@@ -391,4 +391,55 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     const svc = new RealAuthentikProvisionerService(CONFIG);
     await expect(svc.ensureAdminGroup('hola-admins')).resolves.toBeUndefined();
   });
+
+  test('ensureBootstrapAdmin creates the user, adds it to the group, returns a recovery link', async () => {
+    let patchedGroupUsers: number[] | undefined;
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') {
+        patchedGroupUsers = (call.body as { users: number[] }).users;
+        return json({ pk: 'g1' });
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'recovery-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/recovery/abc' });
+      return undefined;
+    });
+    calls.length = 0;
+
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+
+    expect(result.created).toBe(true);
+    expect(result.recoveryLink).toBe('https://auth.example.com/recovery/abc');
+    expect(patchedGroupUsers).toEqual([101]);
+    // Bound a recovery flow to the default brand so /recovery/ works.
+    expect(calls.some(c => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
+  });
+
+  test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {
+    installFetch();
+    calls.length = 0;
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    expect(result).toEqual({ created: false });
+    expect(calls.some(c => c.path.startsWith('/api/v3/core/users/?email='))).toBe(false);
+  });
+
+  test('ensureBootstrapAdmin skips the recovery link once the admin has logged in', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) {
+        return json({ results: [{ pk: 101, last_login: '2026-01-01T00:00:00Z' }] });
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [101] }] });
+      return undefined;
+    });
+    calls.length = 0;
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    expect(result).toEqual({ created: false });
+    expect(calls.some(c => c.path.endsWith('/recovery/'))).toBe(false);
+  });
 });

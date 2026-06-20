@@ -140,6 +140,10 @@ class SpyProvisioner implements ProvisionerService {
   }
 
   async ensureAdminGroup(): Promise<void> {}
+
+  async ensureBootstrapAdmin(): Promise<{ created: boolean; recoveryLink?: string }> {
+    return { created: false };
+  }
 }
 
 async function waitForJob(jobs: RealJobService, id: string, timeoutMs = 5000) {

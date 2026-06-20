@@ -45,6 +45,18 @@ export interface AuthConfig {
   ldapPort: string;
   /** Base DN of the shared LDAP directory served by the outpost. */
   ldapBaseDn: string;
+  /**
+   * Optional: email of a named admin to provision at startup. When set, the
+   * server ensures an Authentik user with this email exists, adds it to the
+   * platform admin group, and (if they've never logged in) mints a one-time
+   * recovery link they use to set their own password — so the operator signs in
+   * as themselves instead of the generic `akadmin`.
+   */
+  adminEmail?: string;
+  /** Optional username for the provisioned admin (defaults to the email local part). */
+  adminUsername?: string;
+  /** Optional display name for the provisioned admin. */
+  adminName?: string;
 }
 
 function stripTrailingSlash(url: string | undefined): string | undefined {
@@ -64,6 +76,9 @@ export const defaultAuthConfig: AuthConfig = {
   ldapHost: process.env.HOLA_AUTHENTIK_LDAP_HOST || 'authentik-ldap',
   ldapPort: process.env.HOLA_AUTHENTIK_LDAP_PORT || '3389',
   ldapBaseDn: process.env.HOLA_AUTHENTIK_LDAP_BASE_DN || 'dc=hola,dc=internal',
+  adminEmail: process.env.HOLA_ADMIN_EMAIL?.trim() || undefined,
+  adminUsername: process.env.HOLA_ADMIN_USERNAME?.trim() || undefined,
+  adminName: process.env.HOLA_ADMIN_NAME?.trim() || undefined,
 };
 
 export function loadAuthConfig(): AuthConfig {

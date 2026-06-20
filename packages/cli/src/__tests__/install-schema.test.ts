@@ -4,7 +4,7 @@ import { join } from 'path';
 
 import { INSTALL_SCHEMA, defaultFor, secretKeys } from '../install/schema';
 import { parseEnv, renderEnv, schemaTemplate } from '../install/render-env';
-import { interdependencyErrors, isDomain, isEmail } from '../install/validate';
+import { interdependencyErrors, isDomain, isEmail, isEmailOrEmpty } from '../install/validate';
 
 describe('install schema', () => {
   it('derives HOLA_DOMAIN/AUTHENTIK domains from the base domain', () => {
@@ -23,6 +23,29 @@ describe('install schema', () => {
     expect(aws.requiredWhen!({ ACME_DNS_PROVIDER: 'route53' })).toBe(true);
     expect(authDomain.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(true);
     expect(authDomain.requiredWhen!({ HOLA_AUTH_MODE: 'none' })).toBe(false);
+  });
+
+  it('prompts the named admin only under authentik; username/name only once an email is given', () => {
+    const email = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_EMAIL')!;
+    const username = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_USERNAME')!;
+    const name = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_NAME')!;
+
+    expect(email.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(true);
+    expect(email.requiredWhen!({ HOLA_AUTH_MODE: 'none' })).toBe(false);
+
+    // Username/name are skipped when no admin email was supplied.
+    expect(username.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(false);
+    expect(username.requiredWhen!({ HOLA_AUTH_MODE: 'authentik', HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
+    expect(name.requiredWhen!({ HOLA_AUTH_MODE: 'authentik', HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
+
+    // Username defaults to the email local part.
+    expect(defaultFor(username, { HOLA_ADMIN_EMAIL: 'paul@x.io' })).toBe('paul');
+  });
+
+  it('allows a blank named-admin email (use akadmin) but rejects malformed', () => {
+    expect(isEmailOrEmpty('', {})).toBeUndefined();
+    expect(isEmailOrEmpty('me@x.io', {})).toBeUndefined();
+    expect(isEmailOrEmpty('nope', {})).toBeDefined();
   });
 
   it('marks secret fields for redaction', () => {
