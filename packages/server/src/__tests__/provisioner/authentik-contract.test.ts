@@ -263,6 +263,13 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(patch).toBeDefined();
     expect((patch.body as { providers: number[] }).providers).toContain(55);
 
+    // Outpost's browser host is pinned to the public Authentik URL, otherwise it
+    // defaults to http://0.0.0.0:9000 and forward-auth login redirects 302 to a
+    // host the user's browser can't reach.
+    const cfg = (patch.body as { config?: Record<string, unknown> }).config;
+    expect(cfg?.authentik_host).toBe('https://auth.example.com');
+    expect(cfg?.authentik_host_browser).toBe('https://auth.example.com');
+
     // Returns a middleware descriptor pointing at the internal outpost URL.
     expect(result.middleware?.outpostUrl).toBe('http://authentik-server:9000');
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });

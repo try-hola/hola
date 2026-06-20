@@ -24,10 +24,16 @@ export const Apps: React.FC = () => {
   const { data: deploymentsData, loading, error } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
   const { data: catalogData } = useCatalogAppsApi(CATALOG_PARAMS);
 
-  // Join app id -> catalog icon so tiles show the real app glyph, not a fallback.
+  // Join app id -> catalog icon + display name so tiles show the real app glyph
+  // and product name (e.g. "Uptime Kuma"), not the deployment's internal name.
   const iconByApp = React.useMemo(() => {
     const map = new Map<string, string>();
     for (const app of catalogData?.items ?? []) map.set(app.id, app.icon);
+    return map;
+  }, [catalogData]);
+  const nameByApp = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const app of catalogData?.items ?? []) map.set(app.id, app.name);
     return map;
   }, [catalogData]);
 
@@ -70,17 +76,20 @@ export const Apps: React.FC = () => {
         <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(212px,1fr))]">
           {apps.map((app) => {
             const icon = iconByApp.get(app.app) || app.icon || '';
+            // Prefer the catalog product name; fall back to the app id (always
+            // readable) before the deployment's internal name.
+            const displayName = nameByApp.get(app.app) || app.app || app.name;
             const openable = app.status === 'running' && !!app.url;
 
             const tile = (
               <div className="group relative h-full bg-surface-1 border border-border rounded-[14px] p-[22px] transition hover:-translate-y-[3px] hover:border-primary hover:shadow-elevation-4">
                 <div className="flex items-start justify-between">
-                  <AppIcon name={app.name} emoji={icon} size={54} />
+                  <AppIcon name={displayName} emoji={icon} size={54} />
                   {openable && (
                     <ExternalLink className="w-4 h-4 text-text-faint group-hover:text-primary transition-colors" />
                   )}
                 </div>
-                <div className="mt-4 font-semibold text-base truncate">{app.name}</div>
+                <div className="mt-4 font-semibold text-base truncate">{displayName}</div>
                 <div className="mt-2">
                   <StatusBadge status={app.status} />
                 </div>
@@ -96,13 +105,13 @@ export const Apps: React.FC = () => {
                 href={app.url!}
                 target="_blank"
                 rel="noopener noreferrer"
-                title={`Open ${app.name}`}
+                title={`Open ${displayName}`}
                 className="block"
               >
                 {tile}
               </a>
             ) : (
-              <Link key={app.id} to={`/deployments/${app.id}`} title={app.name} className="block">
+              <Link key={app.id} to={`/deployments/${app.id}`} title={displayName} className="block">
                 {tile}
               </Link>
             );
