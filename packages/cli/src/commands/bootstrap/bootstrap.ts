@@ -51,6 +51,11 @@ function releaseBase(repo: string): string {
  * pulls the published images), and verify. Returns the result, or undefined on
  * failure (after setting a non-zero exit code).
  */
+/** Filesystem-safe slug for a host (paul@vm → paul-vm), for the local creds filename. */
+function hostSlug(host: string): string {
+  return host.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'host';
+}
+
 /** First existing `.env` a freshly-run `hola init` would have written, or null. */
 async function defaultFindEnvFile(): Promise<string | null> {
   const candidates = [
@@ -76,6 +81,8 @@ export async function runBootstrap(
     checks?: (c: ConfigMap) => Promise<CheckResult[]>;
     /** Locate a reusable .env (defaults to the init-produced compose/.env); injectable for tests. */
     findEnvFile?: () => Promise<string | null>;
+    /** Directory the local CLI-credentials file is written to (defaults to cwd); injectable for tests. */
+    credsDir?: string;
   }
 ): Promise<BootstrapResult | undefined> {
   const prompter = injected?.prompter ?? clackPrompter();
@@ -193,8 +200,9 @@ export async function runBootstrap(
     const writeRes = await ssh('Write .env (over stdin)', `cat > ${envPath} && chmod 600 ${envPath}`, { input: rendered });
     if (!opts.dryRun && writeRes.code !== 0) throw new BootstrapAbort(`Writing ${envPath} failed (exit ${writeRes.code}).`);
 
-    // 5) Run the installer, streaming its output.
-    const installRes = await ssh('Run install.sh', `cd ${composeDir} && ./scripts/install.sh`, { stream: true });
+    // 5) Run the installer, streaming its output. HOLA_BOOTSTRAP=1 silences its
+    //    credential hints — the CLI retrieves and presents those itself (step 7).
+    const installRes = await ssh('Run install.sh', `cd ${composeDir} && HOLA_BOOTSTRAP=1 ./scripts/install.sh`, { stream: true });
     if (!opts.dryRun && installRes.code !== 0) throw new BootstrapAbort(`install.sh failed (exit ${installRes.code}).`);
 
     // 6) Best-effort verify (warn-only: DNS/cert may still be settling).
@@ -205,6 +213,75 @@ export async function runBootstrap(
       );
       const codeStr = verify.stdout.trim();
       out(codeStr === '200' ? '  UI is responding (200).' : `  UI not ready yet (got "${codeStr || 'no response'}") — may take a minute for TLS/DNS.`);
+    }
+
+    // 7) Credential handoff (interactive runs only — needs a TTY to prompt and to
+    //    print secrets the operator reads once). install.sh stayed quiet (step 5).
+    if (!opts.dryRun && !opts.json) {
+      // 7a) CLI credential: fetch the generated admin API key and save it locally
+      //     so the CLI is ready to point at this server.
+      if (config.HOLA_USE_AUTH === 'true') {
+        let apiKey = config.HOLA_API_KEY?.trim() || undefined; // a pinned key needs no fetch
+        if (!apiKey) {
+          const fetchKey =
+            `cd ${composeDir} && for i in $(seq 1 10); do ` +
+            `k=$(docker compose exec -T server cat /data/config/admin-api-key 2>/dev/null | tr -d '\\r\\n'); ` +
+            `[ -n "$k" ] && { printf %s "$k"; break; }; sleep 2; done`;
+          apiKey = (await ssh('Retrieve admin API key', fetchKey)).stdout.trim() || undefined;
+        }
+        if (apiKey && config.HOLA_DOMAIN) {
+          const credsPath = path.join(injected?.credsDir ?? process.cwd(), `hola-${hostSlug(host)}.env`);
+          await fs.writeFile(
+            credsPath,
+            `# Hola CLI credentials for ${host}. Source this file (or export the vars) to use the CLI.\n` +
+              `export HOLA_API_URL=https://${config.HOLA_DOMAIN}\n` +
+              `export HOLA_TOKEN=${apiKey}\n`,
+            { mode: 0o600 },
+          );
+          out(`\nSaved CLI credentials to ${credsPath} (chmod 600).`);
+          out(`  Use them:  source ${credsPath}   # then e.g. hola catalog`);
+        } else {
+          out('\nThe admin API key was not ready yet (the server may still be starting). Retrieve it with:');
+          out(`  ssh ${host} "cd ${composeDir} && docker compose exec -T server cat /data/config/admin-api-key"`);
+        }
+      }
+
+      // 7b) Web dashboard admin sign-in.
+      if (config.HOLA_AUTH_MODE === 'authentik') {
+        if (config.HOLA_ADMIN_EMAIL?.trim()) {
+          // Named admin → password-less: surface the one-time recovery link the
+          // server logs on first boot (it sets your own password).
+          out(`\nWeb dashboard admin: sign in as ${config.HOLA_ADMIN_EMAIL} via SSO.`);
+          out('  Fetching your one-time password-setup link (logged on first boot; can take a minute)…');
+          const grabLink =
+            `cd ${composeDir} && for i in $(seq 1 30); do ` +
+            `l=$(docker compose logs --no-color --no-log-prefix server 2>&1 | grep -A1 'Hola admin setup' | tail -1 | tr -d '\\r'); ` +
+            `[ -n "$l" ] && { printf %s "$l"; break; }; sleep 3; done`;
+          const link = (await ssh('Fetch admin recovery link', grabLink)).stdout.trim();
+          if (link) {
+            out(`  Open this one-time link to set your password:\n    ${link}`);
+          } else {
+            out('  Not logged yet. Once SSO provisioning finishes, retrieve it with:');
+            out(`    ssh ${host} 'docker logs hola-server | grep -A1 "Hola admin setup"'`);
+          }
+        } else {
+          // akadmin fallback → offer a one-time password reveal (off by default).
+          const authUrl = config.HOLA_AUTHENTIK_DOMAIN ? `https://${config.HOLA_AUTHENTIK_DOMAIN}` : 'your Authentik domain';
+          out(`\nWeb dashboard admin: akadmin at ${authUrl}.`);
+          const reveal = await prompter.prompt({
+            key: '_show_akadmin_pw',
+            type: 'confirm',
+            message: 'Show the akadmin password once now?',
+            default: 'false',
+          });
+          if (reveal === 'true') {
+            const pw = (await ssh('Read akadmin password', `grep '^AUTHENTIK_BOOTSTRAP_PASSWORD=' ${envPath} | cut -d= -f2-`)).stdout.trim();
+            out(pw ? `  akadmin password: ${pw}` : `  Could not read it; see AUTHENTIK_BOOTSTRAP_PASSWORD in ${envPath} on the host.`);
+          } else {
+            out(`  Retrieve it later:  ssh ${host} 'grep AUTHENTIK_BOOTSTRAP_PASSWORD ${envPath}'`);
+          }
+        }
+      }
     }
 
     const result: BootstrapResult = { host, dir, ref, steps };

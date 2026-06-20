@@ -31,7 +31,7 @@ Commands are registered in `src/index.tsx` with lazy loaders and implemented und
 ## Commands
 
 ### Setup
-- `hola bootstrap --host user@vm` — **the one-step install.** Walks the setup wizard and installs Hola on the host over SSH. This is all most people need.
+- `hola bootstrap --host user@vm` — **the one-step install.** Walks the setup wizard and installs Hola on the host over SSH. This is all most people need. After install it hands you your credentials: it saves the generated admin API key to a local `hola-<host>.env` (`source` it to use the CLI), and for the dashboard it surfaces your one-time SSO password-setup link (when you configured a named admin) or offers to reveal the `akadmin` password once (fallback).
 - `hola init` — *optional.* Just generate a validated `.env` locally (no server/SSH) — for reviewing/editing config before install, keeping it in a secrets manager, reusing it across hosts, or CI. It then offers to hand off to `bootstrap`, and `bootstrap` reuses an init-produced `.env` rather than re-asking. Options: `--out`, `--compose-dir`, `--force`, `--keep-env`, `--skip-checks`, `--json`.
 
 ### Catalog & install
