@@ -60,6 +60,22 @@ describe('Jobs and Structured Logs', () => {
       expect(body).toEqual({ items: [] });
     }, TEST_TIMEOUT);
 
+    it('GET /api/deployments/:id/logs returns a real container-log snapshot as JSON', async () => {
+      // Mock mode has no Docker engine, so the snapshot is honestly empty —
+      // never the fabricated sample data the endpoint used to emit (#166/#167).
+      const services = getServices();
+      const list = await services.deployments.listDeployments({ page: 1, limit: 1 });
+      const deploymentId = list.items[0]?.id ?? 'seed-nextcloud';
+
+      const res = await fetch(`${BASE_URL}${API.deployments.logs(deploymentId)}`);
+      expect(res.ok).toBe(true);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('application/json');
+      const body = await res.json() as { items: unknown[] };
+      expect(Array.isArray(body.items)).toBe(true);
+      expect(body.items).toEqual([]);
+    }, TEST_TIMEOUT);
+
     it('GET /api/jobs/:id/logs/stream has SSE headers and supports job_update events', async () => {
       const services = getServices();
   const job = await services.jobs.createJob({ type: 'install', deploymentId: 'grafana-monitoring' });

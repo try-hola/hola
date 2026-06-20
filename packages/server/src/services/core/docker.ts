@@ -71,7 +71,15 @@ export interface DockerService {
   // Log operations
   getContainerLogs(containerName: string, since?: string, tail?: number): Promise<DockerLogs>;
   streamContainerLogs(containerName: string, callback: (log: DockerLogs['entries'][0]) => void): Promise<{ stop: () => void }>;
-  
+  /** Recent logs across every service in a compose project, merged + timestamp-sorted. */
+  composeLogs(projectPath: string, projectName: string, options?: { tail?: number }): Promise<DockerLogs>;
+  /** Live stream of every service's stdout in a compose project (`docker compose logs -f`). */
+  streamComposeLogs(
+    projectPath: string,
+    projectName: string,
+    callback: (log: DockerLogs['entries'][0]) => void
+  ): Promise<{ stop: () => void }>;
+
   // Health checking
   healthCheck(): Promise<ServiceHealth>;
 }
@@ -394,6 +402,70 @@ export class RealDockerService implements DockerService, HealthCheckable {
     };
   }
 
+  async composeLogs(
+    projectPath: string,
+    projectName: string,
+    options?: { tail?: number }
+  ): Promise<DockerLogs> {
+    const tail = options?.tail ?? 200;
+    try {
+      this.logger.debug('Getting compose project logs', { projectPath, projectName, tail });
+      const composeFile = join(projectPath, 'docker-compose.yml');
+      const { stdout } = await execFileAsync(
+        'docker',
+        ['compose', '-f', composeFile, '-p', projectName, 'logs', '--no-color', '--timestamps', '--tail', String(tail)],
+        { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 }
+      );
+      return { entries: parseComposeLogs(stdout), hasMore: false };
+    } catch (error) {
+      // Honest empty snapshot on any failure (project down, no daemon, etc.) —
+      // never fabricate log data.
+      this.logger.error('Failed to get compose project logs', error instanceof Error ? error : undefined, {
+        projectPath,
+        projectName,
+      });
+      return { entries: [], hasMore: false };
+    }
+  }
+
+  async streamComposeLogs(
+    projectPath: string,
+    projectName: string,
+    callback: (log: DockerLogs['entries'][0]) => void
+  ): Promise<{ stop: () => void }> {
+    this.logger.info('Starting compose log stream', { projectPath, projectName });
+    const composeFile = join(projectPath, 'docker-compose.yml');
+    const { spawn } = await import('child_process');
+    // `--tail 0`: the snapshot endpoint already serves history, so the live
+    // stream only carries new lines (no duplicate flood on connect).
+    const proc = spawn('docker', [
+      'compose', '-f', composeFile, '-p', projectName,
+      'logs', '-f', '--no-color', '--timestamps', '--tail', '0',
+    ], { cwd: projectPath });
+
+    let stopped = false;
+    const onData = (data: Buffer) => {
+      if (stopped) return;
+      parseComposeLogs(data.toString()).forEach(callback);
+    };
+    proc.stdout?.on('data', onData);
+    proc.stderr?.on('data', onData);
+    proc.on('error', (error) => {
+      this.logger.error('Compose log stream error', error, { projectName });
+    });
+    proc.on('exit', (code) => {
+      this.logger.info('Compose log stream ended', { projectName, code });
+    });
+
+    return {
+      stop: () => {
+        stopped = true;
+        proc.kill();
+        this.logger.info('Compose log stream stopped', { projectName });
+      },
+    };
+  }
+
   async healthCheck(): Promise<ServiceHealth> {
     try {
       const info = await this.getDockerInfo();
@@ -472,20 +544,66 @@ export class RealDockerService implements DockerService, HealthCheckable {
   }
 
   private detectLogLevel(message: string): 'info' | 'warn' | 'error' | 'debug' {
-    const lowerMessage = message.toLowerCase();
-    
-    if (lowerMessage.includes('error') || lowerMessage.includes('fatal') || lowerMessage.includes('critical')) {
-      return 'error';
-    }
-    if (lowerMessage.includes('warn') || lowerMessage.includes('warning')) {
-      return 'warn';
-    }
-    if (lowerMessage.includes('debug') || lowerMessage.includes('trace')) {
-      return 'debug';
-    }
-    
-    return 'info';
+    return detectLogLevel(message);
   }
+}
+
+/** Heuristic log-level classification from a message body (shared by both parsers). */
+function detectLogLevel(message: string): DockerLogs['entries'][0]['level'] {
+  const lowerMessage = message.toLowerCase();
+
+  if (lowerMessage.includes('error') || lowerMessage.includes('fatal') || lowerMessage.includes('critical')) {
+    return 'error';
+  }
+  if (lowerMessage.includes('warn') || lowerMessage.includes('warning')) {
+    return 'warn';
+  }
+  if (lowerMessage.includes('debug') || lowerMessage.includes('trace')) {
+    return 'debug';
+  }
+
+  return 'info';
+}
+
+// A `docker logs --timestamps` line: RFC3339Nano timestamp then the message.
+const LOG_TIMESTAMP_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+(.*)$/;
+// A `docker compose logs` line prefixes each line with `<service>-<replica>  | `.
+const COMPOSE_PREFIX_RE = /^([^|]+?)\s*\|\s?(.*)$/;
+
+/**
+ * Parse `docker compose logs --timestamps` output into structured entries.
+ *
+ * Each line looks like `gitea-1  | 2024-01-01T00:00:00.000000000Z message`: a
+ * service prefix (service name + replica index), then a docker-logs line. The
+ * service label drops the `-<n>` replica suffix so multi-service apps (e.g.
+ * Postiz) are grouped by compose service. Entries are timestamp-sorted so the
+ * merged multi-service view reads chronologically. Exported for unit testing.
+ */
+export function parseComposeLogs(output: string): DockerLogs['entries'] {
+  const entries: DockerLogs['entries'] = [];
+
+  for (const raw of output.split('\n')) {
+    const line = raw.replace(/\r$/, '');
+    if (!line.trim()) continue;
+
+    const prefixed = line.match(COMPOSE_PREFIX_RE);
+    // Lines without a `service |` prefix (e.g. compose's own "Attaching to …"
+    // notices) are labelled `system` rather than dropped or misattributed.
+    const service = prefixed ? prefixed[1].trim().replace(/-\d+$/, '') : 'system';
+    const rest = prefixed ? prefixed[2] : line;
+
+    const tsMatch = rest.match(LOG_TIMESTAMP_RE);
+    if (tsMatch) {
+      const [, timestamp, message] = tsMatch;
+      entries.push({ timestamp, service, level: detectLogLevel(message), message: message.trim() });
+    } else {
+      // No docker timestamp (rare: a notice line) — keep the text, stamp now.
+      entries.push({ timestamp: new Date().toISOString(), service, level: detectLogLevel(rest), message: rest.trim() });
+    }
+  }
+
+  entries.sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  return entries;
 }
 
 /**
@@ -557,6 +675,16 @@ export class MockDockerService implements DockerService {
     callback: (log: DockerLogs['entries'][0]) => void
   ): Promise<{ stop: () => void }> {
     callback({ timestamp: new Date().toISOString(), service: containerName, level: 'info', message: '[mock] streaming log line' });
+    return { stop: () => {} };
+  }
+
+  // No real containers in mock mode: return an honest empty snapshot / no-op
+  // stream rather than fabricating app output (see #166/#167).
+  async composeLogs(): Promise<DockerLogs> {
+    return { entries: [], hasMore: false };
+  }
+
+  async streamComposeLogs(): Promise<{ stop: () => void }> {
     return { stop: () => {} };
   }
 

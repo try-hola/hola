@@ -32,7 +32,9 @@ import type {
   DeploymentDirectoryLayout,
   Job,
   DeploymentListItem,
-  ProvisionedAuthRef
+  ProvisionedAuthRef,
+  GetLogsResponse,
+  LogEntry
 } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
@@ -97,6 +99,12 @@ export interface DeploymentService extends HealthCheckable {
   getDeploymentHistory(deploymentId: string, options?: { page?: number; limit?: number }): Promise<GetDeploymentHistoryResponse>;
   getReleases(deploymentId: string): Promise<Release[]>;
   getRelease(deploymentId: string, releaseId: string): Promise<Release>;
+
+  // Container logs (the app's real stdout, distinct from lifecycle/job logs)
+  /** Recent container logs for the deployment's compose project (snapshot). */
+  getDeploymentLogs(deploymentId: string, options?: { tail?: number }): Promise<GetLogsResponse>;
+  /** Live container log stream; returns a stop handle. No-op when unsupported. */
+  streamDeploymentLogs(deploymentId: string, callback: (entry: LogEntry) => void): Promise<{ stop: () => void }>;
 
   // Internal management
   getDirectoryLayout(deploymentId: string): Promise<DeploymentDirectoryLayout>;
@@ -713,6 +721,27 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return release;
   }
 
+  /**
+   * Container-log snapshot. The base store has no Docker engine, so it returns
+   * an honest empty snapshot; RealDeploymentService overrides this to read the
+   * app's actual compose-project logs.
+   */
+  async getDeploymentLogs(deploymentId: string, options?: { tail?: number }): Promise<GetLogsResponse> {
+    void deploymentId;
+    void options;
+    return { items: [] };
+  }
+
+  /** No-op container stream for the base store; RealDeploymentService overrides. */
+  async streamDeploymentLogs(
+    deploymentId: string,
+    callback: (entry: LogEntry) => void
+  ): Promise<{ stop: () => void }> {
+    void deploymentId;
+    void callback;
+    return { stop: () => {} };
+  }
+
   async getDirectoryLayout(deploymentId: string): Promise<DeploymentDirectoryLayout> {
     const deploymentPath = `deployments/${deploymentId}`;
     return {
@@ -770,6 +799,40 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** Absolute working directory that holds the materialized docker-compose.yml. */
   private runtimeDir(deploymentId: string): string {
     return this.storageService.resolveHolaPath('deployments', deploymentId, 'runtime');
+  }
+
+  /**
+   * Real container logs for a deployment: read the compose project's recent
+   * stdout across every service. Returns an empty snapshot for an unknown
+   * deployment (never throws/fabricates); docker errors are absorbed by the
+   * docker service.
+   */
+  override async getDeploymentLogs(
+    deploymentId: string,
+    options?: { tail?: number }
+  ): Promise<GetLogsResponse> {
+    await this.ensureLoaded();
+    if (!this.deployments.has(deploymentId)) return { items: [] };
+    const { entries } = await this.dockerService.composeLogs(
+      this.runtimeDir(deploymentId),
+      this.projectName(deploymentId),
+      options
+    );
+    return { items: entries };
+  }
+
+  /** Live stream of the deployment's compose-project container stdout. */
+  override async streamDeploymentLogs(
+    deploymentId: string,
+    callback: (entry: LogEntry) => void
+  ): Promise<{ stop: () => void }> {
+    await this.ensureLoaded();
+    if (!this.deployments.has(deploymentId)) return { stop: () => {} };
+    return this.dockerService.streamComposeLogs(
+      this.runtimeDir(deploymentId),
+      this.projectName(deploymentId),
+      callback
+    );
   }
 
   /** Write the active release's compose file into the deployment runtime dir. */
