@@ -10,8 +10,30 @@ describe('install schema', () => {
   it('derives HOLA_DOMAIN/AUTHENTIK domains from the base domain', () => {
     const holaDomain = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_DOMAIN')!;
     const authDomain = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_AUTHENTIK_DOMAIN')!;
-    expect(defaultFor(holaDomain, { HOLA_BASE_DOMAIN: 'hola.example.com' })).toBe('app.hola.example.com');
+    // The dashboard lists the collection of apps → plural `apps.<base>`.
+    expect(defaultFor(holaDomain, { HOLA_BASE_DOMAIN: 'hola.example.com' })).toBe('apps.hola.example.com');
     expect(defaultFor(authDomain, { HOLA_BASE_DOMAIN: 'hola.example.com' })).toBe('auth.hola.example.com');
+  });
+
+  it('defaults SSO to authentik (secure by default) with it listed first', () => {
+    const authMode = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_AUTH_MODE')!;
+    expect(defaultFor(authMode, {})).toBe('authentik');
+    expect(authMode.options?.[0]?.value).toBe('authentik');
+  });
+
+  it('reuses the first email (Let\'s Encrypt) as the default for later email questions', () => {
+    const bootstrap = INSTALL_SCHEMA.find((f) => f.key === 'AUTHENTIK_BOOTSTRAP_EMAIL')!;
+    const adminEmail = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_EMAIL')!;
+    expect(defaultFor(bootstrap, { LETSENCRYPT_EMAIL: 'me@x.io' })).toBe('me@x.io');
+    expect(defaultFor(adminEmail, { LETSENCRYPT_EMAIL: 'me@x.io' })).toBe('me@x.io');
+    // Falls back to the static placeholder / blank when no email was given yet.
+    expect(defaultFor(bootstrap, {})).toBe('admin@example.com');
+    expect(defaultFor(adminEmail, {})).toBe('');
+  });
+
+  it('marks the AWS credential fields as reusable from the environment', () => {
+    const fromEnv = INSTALL_SCHEMA.filter((f) => f.fromEnv).map((f) => f.key);
+    expect(fromEnv).toEqual(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'AWS_HOSTED_ZONE_ID']);
   });
 
   it('gates conditional fields with requiredWhen', () => {

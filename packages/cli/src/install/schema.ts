@@ -21,12 +21,19 @@ export interface InstallField {
   prompt: string;
   /** Extra one-line guidance. */
   help?: string;
-  /** Static default, or one derived from answers so far (e.g. `app.<base>`). */
+  /** Static default, or one derived from answers so far (e.g. `apps.<base>`). */
   default?: string | ((c: ConfigMap) => string);
   /** Choices for `select`. */
   options?: { value: string; label: string }[];
   /** Mask input and redact in JSON/dry-run output. */
   secret?: boolean;
+  /**
+   * Offer a value already present in the process environment (read from the env
+   * var named by this field's `key`) so the user can accept it instead of
+   * pasting it in. For a `secret` field a blank answer means "use the detected
+   * value". Used for the AWS_* credentials.
+   */
+  fromEnv?: boolean;
   /** Returns an error message, or undefined when valid. */
   validate?: (v: string, c: ConfigMap) => string | undefined;
   /** When present and false for the current answers, the field is skipped. */
@@ -48,8 +55,10 @@ export const INSTALL_SCHEMA: InstallField[] = [
   {
     key: 'HOLA_DOMAIN',
     type: 'text',
-    prompt: 'Domain for the Hola UI/API',
-    default: (c) => (c.HOLA_BASE_DOMAIN ? `app.${c.HOLA_BASE_DOMAIN}` : ''),
+    prompt: 'Domain for the Hola dashboard/API',
+    // The dashboard lists the collection of installed apps, so default to the
+    // plural `apps.<base>` rather than the singular `app.<base>`.
+    default: (c) => (c.HOLA_BASE_DOMAIN ? `apps.${c.HOLA_BASE_DOMAIN}` : ''),
     validate: isDomain,
   },
   {
@@ -81,6 +90,7 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'AWS_ACCESS_KEY_ID',
     type: 'text',
     prompt: 'AWS access key ID',
+    fromEnv: true,
     requiredWhen: isRoute53,
     validate: required('AWS access key ID'),
   },
@@ -89,6 +99,7 @@ export const INSTALL_SCHEMA: InstallField[] = [
     type: 'secret',
     prompt: 'AWS secret access key',
     secret: true,
+    fromEnv: true,
     requiredWhen: isRoute53,
     validate: required('AWS secret access key'),
   },
@@ -97,6 +108,7 @@ export const INSTALL_SCHEMA: InstallField[] = [
     type: 'text',
     prompt: 'AWS region',
     default: 'us-east-1',
+    fromEnv: true,
     requiredWhen: isRoute53,
     validate: required('AWS region'),
   },
@@ -104,6 +116,7 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'AWS_HOSTED_ZONE_ID',
     type: 'text',
     prompt: 'AWS hosted zone ID (optional — blank to auto-detect)',
+    fromEnv: true,
     requiredWhen: isRoute53,
     // optional: empty is allowed.
   },
@@ -134,10 +147,11 @@ export const INSTALL_SCHEMA: InstallField[] = [
     type: 'select',
     prompt: 'SSO platform for catalog apps',
     help: 'authentik brings up the bundled Authentik stack (~2 GB RAM)',
-    default: 'none',
+    // Secure by default: provision per-app SSO unless the operator opts out.
+    default: 'authentik',
     options: [
-      { value: 'none', label: 'none — apps use their own auth' },
       { value: 'authentik', label: 'authentik — auto-provision per-app SSO' },
+      { value: 'none', label: 'none — apps use their own auth' },
     ],
   },
   {
@@ -152,7 +166,8 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'AUTHENTIK_BOOTSTRAP_EMAIL',
     type: 'text',
     prompt: 'Authentik admin email',
-    default: 'admin@example.com',
+    // Reuse the first email the operator gave (Let's Encrypt contact) as the default.
+    default: (c) => c.LETSENCRYPT_EMAIL || 'admin@example.com',
     requiredWhen: isAuthentik,
     validate: isEmail,
   },
@@ -161,6 +176,8 @@ export const INSTALL_SCHEMA: InstallField[] = [
     type: 'text',
     prompt: 'Your admin email (sign in as yourself)',
     help: 'Blank to just use the built-in akadmin account',
+    // Default to the first email given, so you sign in as yourself out of the box.
+    default: (c) => c.LETSENCRYPT_EMAIL || '',
     requiredWhen: isAuthentik,
     validate: isEmailOrEmpty,
   },
