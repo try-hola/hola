@@ -48,10 +48,6 @@ Commands are registered in `src/index.tsx` with lazy loaders and implemented und
 
 Lifecycle commands (`install`/`stop`/`restart`/`rollback`) watch the resulting job and stream its progress unless `--no-stream` is passed, and exit non-zero if the job fails.
 
-### Bundle authoring (catalog app developers)
-- `hola bundle validate` — validate a local `compose`/`env` bundle against the server's ValidationService. Options: `--path`/`-p`, `--strict`, `--json`.
-- `hola bundle deploy` — one-shot import → draft → validate → preflight → finalize → deploy → watch. Options: `--path`/`-p`, `--app-id`, `--version`, `--port`, `--traefik`, `--strict`, `--no-stream`, `--json`.
-
 ## Environment
 - `HOLA_API_URL`: API base (default `http://localhost:3001`)
 - `HOLA_TOKEN`: Bearer token (optional; adds `Authorization: Bearer <token>`) 
