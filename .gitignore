@@ -48,3 +48,6 @@ packages/*/coverage
 # TypeScript build info
 **/tsconfig.tsbuildinfo
 .tsbuildinfo
+
+# Bun compile scratch artifacts
+*.bun-build

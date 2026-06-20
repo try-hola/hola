@@ -110,8 +110,8 @@ jobs:
           mkdir -p dist-bin
           for t in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             echo "Building hola-$t"
-            bun build packages/cli/src/index.tsx --compile \
-              --target="bun-$t" --external react-devtools-core \
+            bun build packages/cli/src/index.ts --compile \
+              --target="bun-$t" \
               --outfile "dist-bin/hola-$t"
           done
           ls -lh dist-bin

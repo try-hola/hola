@@ -24,9 +24,9 @@ hola --help
 ## Usage
 - From repo root: `bun --filter @hola/cli dev` (interactive dev)
 - Directly in package: `bun --cwd packages/cli dev`
-- Built standalone binary: `bun build packages/cli/src/index.tsx --compile --external react-devtools-core --outfile hola`
+- Built standalone binary: `bun build packages/cli/src/index.ts --compile --outfile hola`
 
-Commands are registered in `src/index.tsx` with lazy loaders and implemented under `src/commands/`. Run `hola --help` (or `hola <command> --help`) for the authoritative, always-current list.
+Commands are registered in `src/index.ts` with lazy loaders and implemented under `src/commands/`. Run `hola --help` (or `hola <command> --help`) for the authoritative, always-current list.
 
 ## Commands
 

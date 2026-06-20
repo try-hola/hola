@@ -19,7 +19,7 @@ Node/TS CLI orchestrating server APIs and streaming real-time feedback.
 
 ## Core Rules
 - Build requests with `@hola/shared` constants/types.
-- Commands under `src/commands/*`; top-level `src/index.tsx` dispatches.
+- Commands under `src/commands/*`; top-level `src/index.ts` dispatches.
 - SSE: reuse `src/lib/sse.ts`; handle reconnects, SIGINT cleanup, and graceful termination messages.
 - Output: human-friendly by default; `--json` for machine output.
 - **Use Draft workflow for validation**: Validate compose files by creating drafts, uploading files, and using SDK validation methods.
