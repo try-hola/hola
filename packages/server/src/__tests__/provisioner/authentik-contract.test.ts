@@ -450,6 +450,40 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
   });
 
+  test('ensureBootstrapAdmin creates a recovery flow when Authentik ships none', async () => {
+    // Authentik 2025.x has no recovery flow, but does ship default-password-change
+    // (a Prompt + User Write stage) we can reuse.
+    const created: string[] = [];
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
+      // No recovery flow, and our hola-recovery flow doesn't exist yet.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?slug=hola-recovery')) return json({ results: [] });
+      // default-password-change exists with two stages to reuse.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?slug=default-password-change')) return json({ results: [{ pk: 'pw-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=pw-flow')) return json({ results: [{ stage: 'prompt-stage', order: 0 }, { stage: 'write-stage', order: 1 }] });
+      if (call.method === 'POST' && call.path === '/api/v3/flows/instances/') { created.push('flow'); return json({ pk: 'hola-recovery-pk' }, 201); }
+      if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { created.push(`bind:${(call.body as { stage: string }).stage}`); return json({ pk: 'b' }, 201); }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/if/flow/hola-recovery/?flow_token=abc' });
+      return undefined;
+    });
+    calls.length = 0;
+
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+
+    expect(result.recoveryLink).toContain('hola-recovery');
+    // It created the flow and rebound the two reused stages.
+    expect(created).toEqual(['flow', 'bind:prompt-stage', 'bind:write-stage']);
+    // And bound the new flow to the default brand.
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/'
+      && (c.body as { flow_recovery: string }).flow_recovery === 'hola-recovery-pk')).toBe(true);
+  });
+
   test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {
     installFetch();
     calls.length = 0;
