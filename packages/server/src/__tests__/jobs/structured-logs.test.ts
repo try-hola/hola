@@ -46,7 +46,7 @@ describe('Jobs and Structured Logs', () => {
   });
 
   describe('Job logs SSE', () => {
-    it('GET /api/jobs/:id/logs has SSE headers', async () => {
+    it('GET /api/jobs/:id/logs returns a JSON snapshot (live logs are on /logs/stream)', async () => {
       const services = getServices();
   // Use a valid JobType ('install' used for generic log stream testing)
   const job = await services.jobs.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
@@ -55,10 +55,9 @@ describe('Jobs and Structured Logs', () => {
       const res = await fetch(`${BASE_URL}${API.jobs.logs(jobId)}`);
       expect(res.ok).toBe(true);
       expect(res.status).toBe(200);
-      expect(res.headers.get('content-type')).toContain('text/event-stream');
-      expect(res.headers.get('cache-control')).toBe('no-cache');
-      expect(res.headers.get('connection')).toBe('keep-alive');
-      // We do not consume the stream to avoid hanging the test
+      expect(res.headers.get('content-type')).toContain('application/json');
+      const body = await res.json();
+      expect(body).toEqual({ items: [] });
     }, TEST_TIMEOUT);
 
     it('GET /api/jobs/:id/logs/stream has SSE headers and supports job_update events', async () => {
