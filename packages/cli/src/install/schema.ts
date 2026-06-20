@@ -78,7 +78,7 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'ACME_DNS_PROVIDER',
     type: 'select',
     prompt: 'TLS certificate challenge',
-    help: 'DNS-01 is required for private/homelab hosts not reachable on :80',
+    help: 'Note: DNS-01 is required for private/homelab hosts not reachable on :80',
     default: '',
     options: [
       { value: '', label: 'HTTP-01 (host is internet-reachable on port 80)' },
