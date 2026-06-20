@@ -1573,7 +1573,10 @@ async function initializePlatformAuth(): Promise<void> {
   }
 
   const { provisioner } = getServices();
-  const delaysMs = [0, 5_000, 15_000, 30_000, 60_000];
+  // Authentik's first boot (image pull + DB migrations + worker bootstrap) can take
+  // several minutes, so keep retrying with capped backoff rather than giving up
+  // after ~2 minutes. Never blocks serving — runs as a background task.
+  const delaysMs = [0, 5_000, 15_000, 30_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000];
   for (let i = 0; i < delaysMs.length; i++) {
     if (delaysMs[i]) await new Promise((r) => setTimeout(r, delaysMs[i]));
     try {

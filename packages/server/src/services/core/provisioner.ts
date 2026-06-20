@@ -556,40 +556,66 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
   }
 
-  /** Mint a one-time recovery link, ensuring a recovery flow is bound first. */
-  private async mintRecoveryLink(userPk: number): Promise<string | undefined> {
-    await this.ensureBrandRecoveryFlow();
-    try {
-      const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
-      return res.link;
-    } catch (error) {
-      this.logger.warn('Recovery link generation failed', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return undefined;
-    }
+  /** Overridable indirection so tests can exercise the retry loop without waiting. */
+  protected sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  /** Best-effort: bind a recovery flow to the default brand (so /recovery/ works). */
-  private async ensureBrandRecoveryFlow(): Promise<void> {
+  /**
+   * Mint a one-time recovery link, ensuring a recovery flow is bound first.
+   *
+   * Authentik applies its default blueprints (including the recovery flow) a short
+   * while AFTER its API starts answering, so on a fresh first boot the flow may not
+   * exist the instant we provision — `ensureBrandRecoveryFlow` then finds nothing to
+   * bind and `/recovery/` returns 400. Rather than give up one-shot, retry the
+   * bind + mint over a short window so the link is minted as soon as the flow lands.
+   */
+  private async mintRecoveryLink(userPk: number): Promise<string | undefined> {
+    const delaysMs = [0, 3_000, 6_000, 10_000, 15_000, 20_000]; // ~54s total
+    for (let i = 0; i < delaysMs.length; i++) {
+      if (delaysMs[i]) await this.sleep(delaysMs[i]);
+      // Wait for the recovery flow to exist + be bound before attempting the mint.
+      if (!(await this.ensureBrandRecoveryFlow())) continue;
+      try {
+        const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
+        return res.link;
+      } catch (error) {
+        this.logger.warn('Recovery link generation attempt failed; will retry', {
+          attempt: i + 1,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Best-effort: ensure a recovery flow is bound to the default brand (so
+   * `/recovery/` works). Returns true once a flow exists and is bound, false while
+   * the flow has not been provisioned yet (so the caller can retry).
+   */
+  private async ensureBrandRecoveryFlow(): Promise<boolean> {
     try {
       const flows = await this.api<{ results: Array<{ pk: string }> }>(
         'GET', '/api/v3/flows/instances/?designation=recovery'
       );
       const flowPk = flows.results?.[0]?.pk;
-      if (!flowPk) return; // no recovery flow exists; /recovery/ will 404 and we degrade
+      if (!flowPk) return false; // recovery-flow blueprint not applied yet
       const brands = await this.api<{ results: Array<{ brand_uuid: string; flow_recovery: string | null }> }>(
         'GET', '/api/v3/core/brands/?default=true'
       );
       const brand = brands.results?.[0];
-      if (brand && !brand.flow_recovery) {
+      if (!brand) return false;
+      if (!brand.flow_recovery) {
         await this.api('PATCH', `/api/v3/core/brands/${brand.brand_uuid}/`, { flow_recovery: flowPk });
         this.logger.info('Bound a recovery flow to the default brand', { flowPk });
       }
+      return true;
     } catch (error) {
       this.logger.warn('Could not ensure a brand recovery flow', {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
   }
 

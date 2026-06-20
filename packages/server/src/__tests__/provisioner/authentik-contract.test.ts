@@ -419,6 +419,37 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     expect(calls.some(c => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
   });
 
+  test('ensureBootstrapAdmin retries the recovery mint until the flow blueprint lands', async () => {
+    // On a fresh Authentik boot the recovery-flow blueprint is applied a little
+    // after the API starts answering, so the flow query is empty at first.
+    let flowQueries = 0;
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) {
+        flowQueries += 1;
+        return json({ results: flowQueries >= 3 ? [{ pk: 'recovery-flow' }] : [] }); // empty until the 3rd poll
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/recovery/late' });
+      return undefined;
+    });
+    calls.length = 0;
+
+    // Subclass to skip the real backoff delays.
+    class FastProvisioner extends RealAuthentikProvisionerService {
+      protected sleep(_ms: number): Promise<void> { return Promise.resolve(); }
+    }
+    const svc = new FastProvisioner({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+
+    expect(flowQueries).toBeGreaterThanOrEqual(3); // kept polling until the flow appeared
+    expect(result.recoveryLink).toBe('https://auth.example.com/recovery/late');
+    expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
+  });
+
   test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {
     installFetch();
     calls.length = 0;
