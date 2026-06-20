@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-import { INSTALL_SCHEMA, defaultFor, secretKeys } from '../install/schema';
+import { INSTALL_SCHEMA, defaultFor, secretKeys, systemTimeZone } from '../install/schema';
 import { parseEnv, renderEnv, schemaTemplate } from '../install/render-env';
 import { interdependencyErrors, isDomain, isEmail, isEmailOrEmpty, optionalSecret } from '../install/validate';
 import { toClackValidate } from '../install/prompter';
@@ -35,6 +35,13 @@ describe('install schema', () => {
   it('marks the AWS credential fields as reusable from the environment', () => {
     const fromEnv = INSTALL_SCHEMA.filter((f) => f.fromEnv).map((f) => f.key);
     expect(fromEnv).toEqual(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION', 'AWS_HOSTED_ZONE_ID']);
+  });
+
+  it("defaults the timezone to this machine's timezone", () => {
+    const tz = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_DEFAULT_TZ')!;
+    expect(defaultFor(tz, {})).toBe(systemTimeZone());
+    // Intl resolves a real IANA zone on any CI host, so the default is non-empty there.
+    expect(defaultFor(tz, {})).toMatch(/^[A-Za-z]+\/[A-Za-z]/);
   });
 
   it('gates conditional fields with requiredWhen', () => {
