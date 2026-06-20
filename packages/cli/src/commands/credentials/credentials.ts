@@ -45,7 +45,7 @@ export interface HandoffContext {
   credsDir: string;
   /** Pre-answer the akadmin reveal (the standalone command's --show-password). */
   showPassword?: boolean;
-  /** Poll budget for the recovery link (defaults tuned for a fresh boot). */
+  /** Poll budget for the recovery link. Default is unbounded (wait until ready). */
   linkAttempts?: number;
   linkIntervalMs?: number;
   /** Injectable delay so tests don't actually wait. */
@@ -107,14 +107,20 @@ export async function handoffCredentials(config: ConfigMap, ctx: HandoffContext)
     if (config.HOLA_ADMIN_EMAIL?.trim()) {
       result.adminEmail = config.HOLA_ADMIN_EMAIL.trim();
       out(`\nWeb dashboard admin: sign in as ${colors.bold(result.adminEmail)} via SSO.`);
+      // Surface the escape hatch BEFORE waiting: SSO provisioning (Authentik
+      // migrations + provider setup) can take minutes, so tell the user how to
+      // bail and resume later — then wait indefinitely until the link is logged.
+      out(`  ${colors.dim('SSO provisioning can take several minutes — this will keep waiting.')}`);
+      out(`  ${colors.dim('Press Ctrl-C to stop; resume anytime with')} ${colors.cyan(`hola credentials --host ${host}`)}`);
       const link = await pollRecoveryLink(ctx, wait);
       if (link) {
         result.recoveryLink = link;
         out(`  ${colors.green('Open this one-time link to set your password:')}`);
         out(`    ${colors.cyan(link)}`);
       } else {
-        out(`  ${colors.yellow('!')} Still provisioning — the link was not logged yet.`);
-        out(`  Re-run ${colors.cyan(`hola credentials --host ${host}`)} shortly to fetch it.`);
+        // Only reachable when a finite poll budget is injected (tests). In normal
+        // use the poll never gives up, so there is no "not ready" dead end.
+        out(`  ${colors.yellow('!')} Not ready yet — resume with ${colors.cyan(`hola credentials --host ${host}`)}.`);
       }
     } else {
       // akadmin fallback → reveal the password only on explicit opt-in.
@@ -143,24 +149,29 @@ export async function handoffCredentials(config: ConfigMap, ctx: HandoffContext)
 
 /**
  * Poll the server log for the one-time recovery link, waiting through first-boot
- * provisioning with a spinner. Returns the link, or '' if the budget is exhausted.
+ * provisioning with a spinner. By default it waits **indefinitely** (the user can
+ * Ctrl-C and resume via `hola credentials`) — provisioning is the slow part and
+ * there's no useful timeout. A finite `linkAttempts` can be injected (tests),
+ * in which case it returns '' once the budget is exhausted.
  */
 async function pollRecoveryLink(ctx: HandoffContext, wait: (ms: number) => Promise<void>): Promise<string> {
   const { host, composeDir, runner } = ctx;
-  const attempts = ctx.linkAttempts ?? 60; // ~3 min at 3s
+  const maxAttempts = ctx.linkAttempts ?? Infinity; // default: never give up
   const intervalMs = ctx.linkIntervalMs ?? 3000;
   const grab =
     `cd ${composeDir} && docker compose logs --no-color --no-log-prefix server 2>&1 ` +
     `| grep -A1 'Hola admin setup' | tail -1 | tr -d '\\r'`;
-  const spin = createSpinner('Waiting for your one-time password-setup link (logged a moment after first boot)…');
-  for (let i = 0; i < attempts; i++) {
+  const spin = createSpinner('Waiting for SSO provisioning to finish…');
+  let elapsedMs = 0;
+  for (let i = 0; i < maxAttempts; i++) {
     const link = (await runner.ssh(host, grab)).stdout.trim();
     if (link && /^https?:\/\//.test(link)) {
       spin.succeed('Password-setup link is ready.');
       return link;
     }
-    spin.update(`Waiting for provisioning… (${Math.round(((i + 1) * intervalMs) / 1000)}s)`);
-    if (i < attempts - 1) await wait(intervalMs);
+    elapsedMs += intervalMs;
+    spin.update(`Waiting for SSO provisioning… (${Math.round(elapsedMs / 1000)}s elapsed)`);
+    if (i < maxAttempts - 1) await wait(intervalMs);
   }
   spin.fail('Password-setup link not available yet.');
   return '';

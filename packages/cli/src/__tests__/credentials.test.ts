@@ -68,6 +68,35 @@ describe('hola credentials', () => {
     });
   });
 
+  it('keeps polling (no timeout) until the recovery link is provisioned', async () => {
+    await withTmp(async (tmp) => {
+      let attempts = 0;
+      const runner: Runner & { calls: string[] } = {
+        calls: [],
+        ssh: vi.fn(async (_h: string, cmd: string) => {
+          if (cmd.startsWith('cat ')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
+          if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'key-abc', stderr: '' };
+          if (cmd.includes('Hola admin setup')) {
+            attempts += 1;
+            // Not provisioned for the first few polls, then the link appears.
+            return attempts < 4
+              ? { code: 0, stdout: '', stderr: '' }
+              : { code: 0, stdout: 'https://auth.example.com/if/flow/recovery/late', stderr: '' };
+          }
+          return { code: 0, stdout: '', stderr: '' };
+        }),
+        local: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+      } as Runner & { calls: string[] };
+      const res = await runCredentials(
+        { host: 'paul@vm' },
+        { prompter: scriptedPrompter({}), runner, credsDir: tmp, sleep: async () => {} },
+      );
+      // It kept polling past the early empty results — no fixed attempt budget.
+      expect(attempts).toBe(4);
+      expect(res?.recoveryLink).toBe('https://auth.example.com/if/flow/recovery/late');
+    });
+  });
+
   it('reveals the akadmin password with --show-password (no prompt)', async () => {
     await withTmp(async (tmp) => {
       const runner = makeRunner(AKADMIN_ENV);
