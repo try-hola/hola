@@ -4,7 +4,8 @@ import { join } from 'path';
 
 import { INSTALL_SCHEMA, defaultFor, secretKeys } from '../install/schema';
 import { parseEnv, renderEnv, schemaTemplate } from '../install/render-env';
-import { interdependencyErrors, isDomain, isEmail, isEmailOrEmpty } from '../install/validate';
+import { interdependencyErrors, isDomain, isEmail, isEmailOrEmpty, optionalSecret } from '../install/validate';
+import { toClackValidate } from '../install/prompter';
 
 describe('install schema', () => {
   it('derives HOLA_DOMAIN/AUTHENTIK domains from the base domain', () => {
@@ -79,6 +80,19 @@ describe('validators', () => {
     expect(interdependencyErrors({ ACME_DNS_PROVIDER: 'cloudflare' })).toHaveLength(1);
     expect(interdependencyErrors({ HOLA_AUTH_MODE: 'authentik' })).toHaveLength(1);
     expect(interdependencyErrors({ HOLA_AUTH_MODE: 'none' })).toHaveLength(0);
+  });
+
+  // Regression: clack passes `undefined` (not '') when an optional field is
+  // submitted blank. The prompter's coercion boundary must hand validators a
+  // string so they don't crash on `v.trim()` of undefined.
+  it('coerces a blank (undefined) optional submission before validating', () => {
+    const validator = optionalSecret();
+    const adapted = toClackValidate((v) => validator(v, {}));
+    expect(adapted).toBeDefined();
+    expect(adapted!(undefined)).toBeUndefined();
+    expect(adapted!('')).toBeUndefined();
+    expect(adapted!('secret')).toBeUndefined();
+    expect(adapted!(' padded ')).toBeDefined();
   });
 });
 
