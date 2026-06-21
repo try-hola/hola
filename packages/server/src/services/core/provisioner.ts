@@ -588,10 +588,8 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
         // Authentik builds the link from the host the API was called on — which is
         // the internal `authentik-server:9000` for us, unreachable from a browser.
-        // Rewrite the origin to the public Authentik URL so the operator can open it,
-        // then attach the dashboard as the post-flow redirect so a successful set +
-        // auto-login lands them on Hola, not Authentik's app launcher.
-        return this.withDashboardRedirect(this.toPublicUrl(res.link));
+        // Rewrite the origin to the public Authentik URL so the operator can open it.
+        return this.toPublicUrl(res.link);
       } catch (error) {
         this.logger.warn('Recovery link generation attempt failed; will retry', {
           attempt: i + 1,
@@ -617,24 +615,6 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       u.protocol = p.protocol;
       u.hostname = p.hostname;
       u.port = p.port; // clears the internal :9000 when the public URL has no port
-      return u.toString();
-    } catch {
-      return link;
-    }
-  }
-
-  /**
-   * Attach the Hola dashboard as the recovery flow's post-success redirect via the
-   * `next` query param, so once the operator sets a password (and the appended
-   * Login stage signs them in) they land on the dashboard instead of Authentik's
-   * single-tile app launcher. No-op when no dashboard URL is configured.
-   */
-  private withDashboardRedirect(link: string): string {
-    const dash = this.config.dashboardUrl;
-    if (!dash) return link;
-    try {
-      const u = new URL(link);
-      u.searchParams.set('next', dash);
       return u.toString();
     } catch {
       return link;

@@ -272,7 +272,6 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     // also verifies the scoped permission set can add the flow + stage bindings.
     const svc = new RealAuthentikProvisionerService({
       ...config, authentikApiToken: undefined, authentikBootstrapToken: BOOTSTRAP_TOKEN, adminEmail: 'recovery-it@example.com',
-      dashboardUrl: 'https://hola.example.com',
     });
 
     // Precondition: confirm Authentik really ships no recovery flow out of the box.
@@ -286,8 +285,6 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
 
     expect(result.recoveryLink).toBeTruthy();
     expect(result.recoveryLink).toContain('/if/flow/');
-    // The link carries the dashboard as its post-success redirect.
-    expect(new URL(result.recoveryLink!).searchParams.get('next')).toBe('https://hola.example.com');
 
     // The recovery flow now exists, is bound to the default brand, and has the two
     // reused stages (prompt + user-write) PLUS the appended Login stage so setting
