@@ -25,9 +25,14 @@ services:
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.websecure.http.tls.certresolver=le
-      # One wildcard cert for the whole base domain. Routers (UI, dashboard, auth,
-      # and the server-emitted app routes) inherit this entrypoint default, so they
-      # are all served from the single *.${HOLA_BASE_DOMAIN} cert — no per-host certs.
+      # One wildcard cert for the whole base domain (UI, dashboard, auth, and every
+      # app route — all served from the single *.${HOLA_BASE_DOMAIN} cert).
+      # NOTE: Traefik v3 does NOT proactively request an entrypoint-level
+      # `tls.domains` when routers emit an empty `tls: {}` — it only obtains the
+      # wildcard when a ROUTER carries `tls.domains`. So the actual proactive
+      # request is driven by the server stamping the wildcard on its emitted
+      # routers (HOLA_TLS_CERT_RESOLVER on the server service, below). This
+      # entrypoint default stays as the resolver fallback for any router.
       - --entrypoints.websecure.http.tls.domains[0].main=${HOLA_BASE_DOMAIN}
       - --entrypoints.websecure.http.tls.domains[0].sans=*.${HOLA_BASE_DOMAIN}
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -56,3 +61,12 @@ services:
       AWS_HOSTED_ZONE_ID: ${AWS_HOSTED_ZONE_ID:-}
       # Cloudflare (ACME_DNS_PROVIDER=cloudflare):
       CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:-}
+
+  # In wildcard/DNS-01 mode the server must stamp the wildcard `tls.domains` on
+  # every router it emits — an entrypoint-level `tls.domains` is not proactively
+  # resolved when routers carry `tls: {}` (see the entrypoint note above and
+  # routing.ts `routerTlsBlock`). The value is the ACME resolver name from the
+  # traefik command (`le`). Absent (HTTP-01 path) → routers stay `tls: {}`.
+  server:
+    environment:
+      HOLA_TLS_CERT_RESOLVER: le

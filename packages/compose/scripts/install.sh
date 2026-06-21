@@ -96,6 +96,20 @@ if [[ -n "$ACME_DNS_PROVIDER" ]]; then
   esac
 fi
 
+# Persist the production compose-file set into .env as COMPOSE_FILE so a bare
+# `docker compose <cmd>` in this directory (an operator restart, the orchestrator,
+# or a `docker compose restart traefik`) applies the SAME overlays as scripts/up.sh.
+# Without this, a plain `docker compose up`/`restart` loads only docker-compose.yml
+# and silently drops the DNS-01 overlay — reverting Traefik to HTTP-01 and losing
+# the wildcard cert. Mirrors how COMPOSE_PROFILES is persisted above; the wrapper
+# scripts still pass explicit `-f` flags, which override COMPOSE_FILE. Only the
+# persistent runtime overlays belong here (not the dev/build install-time ones).
+compose_files="docker-compose.yml"
+if [[ -n "$ACME_DNS_PROVIDER" ]]; then
+  compose_files="${compose_files}:docker-compose.dns01.yml"
+fi
+env_set COMPOSE_FILE "$compose_files"
+
 # Create basic data/logs dirs
 mkdir -p "$ROOT_DIR/logs" "$ROOT_DIR/data"
 mkdir -p "$ROOT_DIR/traefik/acme"
