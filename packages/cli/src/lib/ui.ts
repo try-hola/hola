@@ -166,3 +166,38 @@ export function renderContainerTable(rows: PsRow[]): string {
   );
   return [headerLine, ...body].join('\n');
 }
+
+export interface CheckLine {
+  name: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail?: string;
+}
+
+const CHECK_GLYPH: Record<CheckLine['status'], string> = {
+  pass: colors.green('✓'),
+  warn: colors.yellow('!'),
+  fail: colors.red('✗'),
+};
+
+/**
+ * Render install validation checks as ONE compact block (a single note), instead
+ * of one framed line per check. Each row is `<glyph> <name> — <detail>` with the
+ * glyph colorized by status, followed by a one-line summary. Returns '' for no
+ * checks. picocolors drops the ANSI off-TTY, so tests see plain text.
+ */
+export function renderChecks(checks: CheckLine[]): string {
+  if (!checks.length) return '';
+  const rows = checks.map((c) => {
+    const name = c.status === 'fail' ? colors.red(c.name) : c.name;
+    const detail = c.detail ? ` ${colors.dim(`— ${c.detail}`)}` : '';
+    return `  ${CHECK_GLYPH[c.status]}  ${name}${detail}`;
+  });
+  const count = (s: CheckLine['status']) => checks.filter((c) => c.status === s).length;
+  const pass = count('pass');
+  const warn = count('warn');
+  const fail = count('fail');
+  const parts = [`${pass} passed`];
+  if (warn) parts.push(colors.yellow(`${warn} warning${warn === 1 ? '' : 's'}`));
+  if (fail) parts.push(colors.red(`${fail} failed`));
+  return [colors.bold('Validation'), ...rows, colors.dim(parts.join('  ·  '))].join('\n');
+}

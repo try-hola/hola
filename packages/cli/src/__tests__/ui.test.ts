@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { formatComposeLine, parseComposePs, renderContainerTable } from '../lib/ui';
+import { formatComposeLine, parseComposePs, renderContainerTable, renderChecks } from '../lib/ui';
 
 // picocolors auto-disables ANSI off a TTY (as under vitest), so the rendered
 // strings here are plain text and assert cleanly.
@@ -68,5 +68,40 @@ describe('renderContainerTable', () => {
 
   it('returns an empty string when there are no rows', () => {
     expect(renderContainerTable([])).toBe('');
+  });
+});
+
+describe('renderChecks', () => {
+  it('renders one compact block: a heading, a line per check, and a summary', () => {
+    const out = renderChecks([
+      { name: 'DNS: apps.example.com', status: 'pass' },
+      { name: 'AWS credentials', status: 'pass' },
+      { name: 'Catalog URL', status: 'warn', detail: 'HTTP 503' },
+    ]);
+    const lines = out.split('\n');
+    // One heading + 3 check rows + 1 summary, with NO blank lines between rows.
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toContain('Validation');
+    expect(lines[1]).toContain('DNS: apps.example.com');
+    expect(lines[3]).toContain('Catalog URL');
+    expect(lines[3]).toContain('— HTTP 503'); // detail rendered inline
+    expect(lines[4]).toContain('2 passed');
+    expect(lines[4]).toContain('1 warning');
+  });
+
+  it('pluralizes and surfaces failures in the summary', () => {
+    const summary = renderChecks([
+      { name: 'a', status: 'pass' },
+      { name: 'b', status: 'warn' },
+      { name: 'c', status: 'warn' },
+      { name: 'd', status: 'fail' },
+    ]).split('\n').at(-1)!;
+    expect(summary).toContain('1 passed');
+    expect(summary).toContain('2 warnings');
+    expect(summary).toContain('1 failed');
+  });
+
+  it('returns an empty string when there are no checks', () => {
+    expect(renderChecks([])).toBe('');
   });
 });
