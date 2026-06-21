@@ -144,8 +144,25 @@ const AUTHENTIK_AUTH_RESPONSE_HEADERS = [
   'X-authentik-jwt',
 ];
 
+/**
+ * The TLS block stamped on every emitted router.
+ *
+ * Empty `tls: {}` keeps the entrypoint's default cert resolver with on-demand,
+ * per-host issuance (the HTTP-01 default). In **wildcard mode** — DNS-01, where
+ * the compose `dns01` overlay sets `HOLA_TLS_CERT_RESOLVER` on the server — every
+ * router must carry the wildcard `tls.domains` itself: Traefik v3 does **not**
+ * proactively resolve an entrypoint-level `tls.domains` when routers emit an
+ * empty `tls: {}`, so without this the `*.<base>` cert is never requested and
+ * Traefik serves its self-signed default. A fresh object per call avoids the
+ * YAML serializer emitting anchor/alias references for the repeated block.
+ */
+function routerTlsBlock(baseDomain: string, certResolver?: string): Record<string, unknown> {
+  if (!certResolver) return {};
+  return { certResolver, domains: [{ main: baseDomain, sans: [`*.${baseDomain}`] }] };
+}
+
 /** Render the Traefik file-provider dynamic config for a routing map (deterministic). */
-function renderDynamicConfig(map: TraefikRoutingMap): string {
+function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certResolver?: string): string {
   const routers: Record<string, unknown> = {};
   const services: Record<string, unknown> = {};
   const middlewares: Record<string, unknown> = {};
@@ -156,7 +173,7 @@ function renderDynamicConfig(map: TraefikRoutingMap): string {
       rule: `Host(\`${host}\`)`,
       service: rule.serviceName,
       entryPoints: ['websecure'],
-      tls: {},
+      tls: routerTlsBlock(baseDomain, certResolver),
     };
 
     if (rule.forwardAuth) {
@@ -180,7 +197,7 @@ function renderDynamicConfig(map: TraefikRoutingMap): string {
         service: outpostService,
         priority: 100,
         entryPoints: ['websecure'],
-        tls: {},
+        tls: routerTlsBlock(baseDomain, certResolver),
       };
       services[outpostService] = {
         loadBalancer: { servers: [{ url: outpost }] },
@@ -201,7 +218,7 @@ function renderDynamicConfig(map: TraefikRoutingMap): string {
 }
 
 /** Render the file-provider config for the platform's core routes (deterministic). */
-function renderCoreConfig(routes: CoreRoute[]): string {
+function renderCoreConfig(routes: CoreRoute[], baseDomain: string, certResolver?: string): string {
   const routers: Record<string, unknown> = {};
   const services: Record<string, unknown> = {};
   for (const route of [...routes].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -211,9 +228,9 @@ function renderCoreConfig(routes: CoreRoute[]): string {
       // gets a load balancer pointing at the upstream URL below.
       service: route.service ?? route.name,
       entryPoints: ['websecure'],
-      // Empty TLS block inherits the entrypoint's default cert resolver (and the
-      // DNS-01 wildcard domains), exactly like the server-emitted app routes.
-      tls: {},
+      // `tls: {}` inherits the entrypoint default resolver (on-demand per-host);
+      // in wildcard mode each router carries the wildcard domains. See routerTlsBlock.
+      tls: routerTlsBlock(baseDomain, certResolver),
     };
     if (!route.service) {
       services[route.name] = { loadBalancer: { servers: [{ url: route.url }] } };
@@ -227,11 +244,16 @@ function renderCoreConfig(routes: CoreRoute[]): string {
 export class RealRoutingService implements RoutingService {
   private logger = getLogger().child({ service: 'RoutingService' });
   private domain: string;
+  private certResolver?: string;
   private map: TraefikRoutingMap = {};
   private loadPromise: Promise<void> | null = null;
 
-  constructor(private storageService: StorageService, options?: { baseDomain?: string }) {
+  constructor(private storageService: StorageService, options?: { baseDomain?: string; certResolver?: string }) {
     this.domain = options?.baseDomain || process.env.HOLA_BASE_DOMAIN?.trim() || DEFAULT_BASE_DOMAIN;
+    // Set (to the resolver name, e.g. `le`) only in wildcard/DNS-01 mode — the
+    // compose dns01 overlay injects HOLA_TLS_CERT_RESOLVER on the server. When
+    // set, emitted routers carry the wildcard `tls.domains` (see routerTlsBlock).
+    this.certResolver = options?.certResolver ?? (process.env.HOLA_TLS_CERT_RESOLVER?.trim() || undefined);
   }
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -317,7 +339,7 @@ export class RealRoutingService implements RoutingService {
 
   async emitCoreRoutes(routes: CoreRoute[]): Promise<void> {
     await this.storageService.ensureDir('runtime/traefik');
-    await this.storageService.writeFile(CORE_CONFIG_PATH, renderCoreConfig(routes));
+    await this.storageService.writeFile(CORE_CONFIG_PATH, renderCoreConfig(routes, this.domain, this.certResolver));
     this.logger.info('Emitted core Traefik routes', {
       count: routes.length,
       hosts: routes.map(r => r.host),
@@ -329,7 +351,7 @@ export class RealRoutingService implements RoutingService {
     await this.storageService.ensureDir('runtime/traefik');
     const ordered = sortedMap(Object.values(this.map));
     await this.storageService.writeFile(ROUTING_MAP_PATH, JSON.stringify(ordered, null, 2));
-    await this.storageService.writeFile(DYNAMIC_CONFIG_PATH, renderDynamicConfig(ordered));
+    await this.storageService.writeFile(DYNAMIC_CONFIG_PATH, renderDynamicConfig(ordered, this.domain, this.certResolver));
   }
 }
 

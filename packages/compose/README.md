@@ -153,6 +153,17 @@ principal needs `route53:ChangeResourceRecordSets`, `GetChange`, `ListHostedZone
 `ListResourceRecordSets` on the zone. Note the wildcard is single-level, so deployed apps must
 be one label under the base (they are: `<app>.<HOLA_BASE_DOMAIN>`).
 
+`install.sh` records the active overlay set in `.env` as `COMPOSE_FILE`, so a bare
+`docker compose <cmd>` in this directory (e.g. `docker compose restart traefik`) keeps the
+DNS-01 overlay instead of silently reverting to the base HTTP-01 stack. The wrapper scripts
+still pass explicit `-f` flags either way.
+
+> **Wildcard issuance detail.** Traefik v3 does not proactively request an entrypoint-level
+> `tls.domains`; it only obtains the wildcard when a *router* carries `tls.domains`. So in
+> DNS-01 mode the server stamps the wildcard onto every router it emits, driven by
+> `HOLA_TLS_CERT_RESOLVER` (set on the server by the overlay). If you run a custom stack
+> without that env, routers fall back to `tls: {}` (on-demand per-host issuance).
+
 ## Upgrade
 
 The supported upgrade path is `hola bootstrap` with a newer CLI — it downloads the new bundle

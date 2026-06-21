@@ -74,6 +74,25 @@ describe('RoutingService', () => {
     expect(await storage.readFileAsString('runtime/traefik/dynamic.yml')).toBe(first);
   });
 
+  test('app routers emit empty tls by default (entrypoint-default resolver)', async () => {
+    await routing.activateRoute(routing.generateRule({ deploymentId: 'gitea-dep-a', appName: 'gitea', port: 3000 }));
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(dynamic.http.routers['gitea-dep-a'].tls).toEqual({});
+  });
+
+  test('wildcard mode stamps the wildcard tls.domains on app routers', async () => {
+    // DNS-01 wildcard mode: the server must carry the wildcard on the router
+    // itself — Traefik v3 won't proactively resolve an entrypoint-level
+    // tls.domains when the router emits tls:{}.
+    const wild = new RealRoutingService(storage, { baseDomain: 'example.com', certResolver: 'le' });
+    await wild.activateRoute(wild.generateRule({ deploymentId: 'gitea-dep-a', appName: 'gitea', port: 3000 }));
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(dynamic.http.routers['gitea-dep-a'].tls).toEqual({
+      certResolver: 'le',
+      domains: [{ main: 'example.com', sans: ['*.example.com'] }],
+    });
+  });
+
   test('forward-auth rule emits the outpost middleware + path-prefix router', async () => {
     const base = routing.generateRule({ deploymentId: 'grafana-dep-a', appName: 'grafana', port: 3000 });
     const rule = { ...base, forwardAuth: { name: 'ak-grafana-dep-a', outpostUrl: 'http://authentik-server:9000' } };
@@ -176,6 +195,18 @@ describe('RoutingService', () => {
         { name: 'traefik-dashboard', host: 'traefik.example.com', service: 'api@internal' },
       ]);
       expect(await storage.readFileAsString('runtime/traefik/core.yml')).toBe(first);
+    });
+
+    test('wildcard mode stamps the wildcard tls.domains on core routers', async () => {
+      const wild = new RealRoutingService(storage, { baseDomain: 'example.com', certResolver: 'le' });
+      await wild.emitCoreRoutes([
+        { name: 'hola-web', host: 'app.example.com', url: 'http://hola-web:80' },
+        { name: 'traefik-dashboard', host: 'traefik.example.com', service: 'api@internal' },
+      ]);
+      const core = parseYAML(await storage.readFileAsString('runtime/traefik/core.yml'));
+      const wildcardTls = { certResolver: 'le', domains: [{ main: 'example.com', sans: ['*.example.com'] }] };
+      expect(core.http.routers['hola-web'].tls).toEqual(wildcardTls);
+      expect(core.http.routers['traefik-dashboard'].tls).toEqual(wildcardTls);
     });
   });
 });
