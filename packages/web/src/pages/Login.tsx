@@ -1,12 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { KeyRound, ShieldCheck, LogIn } from 'lucide-react';
+import { KeyRound, ShieldCheck, LogIn, Loader2 } from 'lucide-react';
 
-import { useAuth } from '../hooks/useAuth';
+import { useAuth, SSO_ATTEMPTED_KEY, SSO_SIGNED_OUT_KEY } from '../hooks/useAuth';
+
+/** Read and clear a sessionStorage marker; false if absent or storage is blocked. */
+function takeFlag(key: string): boolean {
+  try {
+    const had = window.sessionStorage.getItem(key) === '1';
+    if (had) window.sessionStorage.removeItem(key);
+    return had;
+  } catch { return false; }
+}
 
 /**
  * Login screen. Adapts to the server's auth mode:
- *  - oidc   → a single "Sign in with SSO" button (redirects to Authentik).
+ *  - oidc   → auto-starts the SSO redirect so a user who already has an IdP
+ *             session lands in the app with no click; falls back to a manual
+ *             "Sign in with SSO" button after a logout or a failed round-trip.
  *  - apikey → an admin-key field that posts to the session-login endpoint.
  * Already-authenticated users (or auth-disabled servers) are bounced to the app.
  */
@@ -15,10 +26,43 @@ export const Login: React.FC = () => {
   const location = useLocation();
   const [key, setKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Assume OIDC will auto-redirect so the spinner shows immediately (no button
+  // flash); the effect flips this off if we fall back to the manual button.
+  const [autoRedirecting, setAutoRedirecting] = useState(mode === 'oidc');
+  const decided = useRef(false);
+
+  // OIDC: auto-start the redirect once. We skip (showing the manual button) when
+  // the user just logged out, or when a prior attempt bounced us back here still
+  // unauthenticated — either case would otherwise loop straight back to the IdP.
+  useEffect(() => {
+    if (mode !== 'oidc' || status !== 'unauthenticated' || decided.current) return;
+    decided.current = true;
+    const justSignedOut = takeFlag(SSO_SIGNED_OUT_KEY);
+    const priorAttemptFailed = takeFlag(SSO_ATTEMPTED_KEY);
+    if (justSignedOut || priorAttemptFailed) {
+      setAutoRedirecting(false); // fall through to the manual button
+      return;
+    }
+    setAutoRedirecting(true);
+    void login();
+  }, [mode, status, login]);
 
   if (status === 'authenticated') {
     const from = (location.state as { from?: string } | null)?.from ?? '/';
     return <Navigate to={from} replace />;
+  }
+
+  // While the auto-redirect (or the post-config 'loading' window for OIDC) is in
+  // flight, show a quiet "signing you in" state rather than flashing the button.
+  if (status === 'loading' || autoRedirecting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-0 text-text-strong px-4">
+        <div className="flex flex-col items-center gap-3 animate-fadein">
+          <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          <p className="text-text-muted text-sm">Signing you in…</p>
+        </div>
+      </div>
+    );
   }
 
   const onSubmit = async (e: React.FormEvent) => {

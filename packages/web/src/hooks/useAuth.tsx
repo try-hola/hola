@@ -38,6 +38,29 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * sessionStorage markers that let the login screen auto-start SSO without
+ * looping (see Login.tsx):
+ *  - SSO_ATTEMPTED is set just before a signin redirect and cleared once we're
+ *    authenticated. If we land back on /login with it still set, the silent
+ *    sign-in failed — show the manual button instead of bouncing again.
+ *  - SSO_SIGNED_OUT is set on an explicit logout so we don't immediately shove
+ *    the user back into the IdP after they asked to leave.
+ */
+export const SSO_ATTEMPTED_KEY = 'hola.sso.attempted';
+export const SSO_SIGNED_OUT_KEY = 'hola.sso.signedout';
+
+function setSessionFlag(key: string): void {
+  try { window.sessionStorage.setItem(key, '1'); } catch { /* private mode / disabled storage */ }
+}
+function takeSessionFlag(key: string): boolean {
+  try {
+    const had = window.sessionStorage.getItem(key) === '1';
+    if (had) window.sessionStorage.removeItem(key);
+    return had;
+  } catch { return false; }
+}
+
 /** Same-origin in prod (nginx) / via the Vite proxy in dev; absolute only in tests. */
 function apiUrl(path: string): string {
   return `${getWebBaseUrl()}${path}`;
@@ -78,6 +101,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       accessTokenRef.current = u.access_token;
       setUser({ name: u.profile?.name, email: u.profile?.email });
       setStatus('authenticated');
+      // Sign-in succeeded — drop the auto-redirect guard so a future visit can
+      // silently bounce again.
+      takeSessionFlag(SSO_ATTEMPTED_KEY);
     } else {
       accessTokenRef.current = undefined;
       setStatus('unauthenticated');
@@ -151,6 +177,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = useCallback(async (key?: string) => {
     setLoginError(null);
     if (mode === 'oidc') {
+      // Mark the attempt so the login screen falls back to a manual button if the
+      // redirect round-trip returns us here still unauthenticated (a broken callback).
+      setSessionFlag(SSO_ATTEMPTED_KEY);
       await managerRef.current?.signinRedirect();
       return;
     }
@@ -177,6 +206,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (mode === 'oidc') {
       const m = managerRef.current;
       accessTokenRef.current = undefined;
+      // Suppress the login screen's auto-redirect once, so logging out doesn't
+      // immediately bounce the user back into the IdP.
+      setSessionFlag(SSO_SIGNED_OUT_KEY);
       try { await m?.signoutRedirect(); }
       catch { await m?.removeUser(); setStatus('unauthenticated'); }
       return;
