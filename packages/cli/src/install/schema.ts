@@ -172,20 +172,17 @@ export const INSTALL_SCHEMA: InstallField[] = [
     requiredWhen: isAuthentik,
     validate: isDomain,
   },
-  {
-    key: 'AUTHENTIK_BOOTSTRAP_EMAIL',
-    type: 'text',
-    prompt: 'Authentik admin email',
-    // Reuse the first email the operator gave (Let's Encrypt contact) as the default.
-    default: (c) => c.LETSENCRYPT_EMAIL || 'admin@example.com',
-    requiredWhen: isAuthentik,
-    validate: isEmail,
-  },
+  // Note: we deliberately do NOT prompt for the built-in `akadmin` superuser's
+  // email — it stays an internal break-glass account (AUTHENTIK_BOOTSTRAP_EMAIL
+  // defaults to akadmin@example.com in compose). Asking for it caused operators to
+  // reuse their personal email for BOTH akadmin and their named admin; the server
+  // then found akadmin by that email and never created a distinct named admin, so
+  // "you" silently became akadmin. One email — yours — is all the wizard needs.
   {
     key: 'HOLA_ADMIN_EMAIL',
     type: 'text',
-    prompt: 'Your admin email (sign in as yourself)',
-    help: 'Blank to just use the built-in akadmin account',
+    prompt: 'Your admin email (you sign in as yourself)',
+    help: 'akadmin stays as a separate internal break-glass account; blank to use only that.',
     // Default to the first email given, so you sign in as yourself out of the box.
     default: (c) => c.LETSENCRYPT_EMAIL || '',
     requiredWhen: isAuthentik,

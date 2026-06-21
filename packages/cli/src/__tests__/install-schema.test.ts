@@ -22,14 +22,17 @@ describe('install schema', () => {
     expect(authMode.options?.[0]?.value).toBe('authentik');
   });
 
-  it('reuses the first email (Let\'s Encrypt) as the default for later email questions', () => {
-    const bootstrap = INSTALL_SCHEMA.find((f) => f.key === 'AUTHENTIK_BOOTSTRAP_EMAIL')!;
+  it('reuses the first email (Let\'s Encrypt) as the default for the admin email', () => {
     const adminEmail = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_EMAIL')!;
-    expect(defaultFor(bootstrap, { LETSENCRYPT_EMAIL: 'me@x.io' })).toBe('me@x.io');
     expect(defaultFor(adminEmail, { LETSENCRYPT_EMAIL: 'me@x.io' })).toBe('me@x.io');
-    // Falls back to the static placeholder / blank when no email was given yet.
-    expect(defaultFor(bootstrap, {})).toBe('admin@example.com');
+    // Blank when no email was given yet.
     expect(defaultFor(adminEmail, {})).toBe('');
+  });
+
+  it('does NOT prompt for the akadmin (break-glass) email — it stays internal', () => {
+    // Asking for it led operators to reuse one email for akadmin AND their named
+    // admin, which collapsed "you" into akadmin. akadmin's address is a compose default.
+    expect(INSTALL_SCHEMA.find((f) => f.key === 'AUTHENTIK_BOOTSTRAP_EMAIL')).toBeUndefined();
   });
 
   it('marks the AWS credential fields as reusable from the environment', () => {
