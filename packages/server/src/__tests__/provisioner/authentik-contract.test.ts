@@ -413,7 +413,11 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     const result = await svc.ensureBootstrapAdmin('hola-admins');
 
     expect(result.created).toBe(true);
-    expect(result.recoveryLink).toBe('https://auth.example.com/recovery/abc');
+    // The link points at the recovery flow, with a `next` that lands the operator
+    // on the dashboard (not Authentik's "My applications") once they're signed in.
+    const link = new URL(result.recoveryLink!);
+    expect(link.origin + link.pathname).toBe('https://auth.example.com/recovery/abc');
+    expect(link.searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
     expect(patchedGroupUsers).toEqual([101]);
     // Bound a recovery flow to the default brand so /recovery/ works.
     expect(calls.some(c => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
@@ -446,7 +450,9 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     const result = await svc.ensureBootstrapAdmin('hola-admins');
 
     expect(flowQueries).toBeGreaterThanOrEqual(3); // kept polling until the flow appeared
-    expect(result.recoveryLink).toBe('https://auth.example.com/recovery/late');
+    const lateLink = new URL(result.recoveryLink!);
+    expect(lateLink.origin + lateLink.pathname).toBe('https://auth.example.com/recovery/late');
+    expect(lateLink.searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
     expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/')).toBe(true);
   });
 
@@ -479,6 +485,7 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     const result = await svc.ensureBootstrapAdmin('hola-admins');
 
     expect(result.recoveryLink).toContain('hola-recovery');
+    expect(new URL(result.recoveryLink!).searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
     // It created the flow, rebound the two reused stages, then appended the Login
     // stage as the final binding (order after the reused stages) for auto-login.
     expect(created).toEqual(['flow', 'bind:prompt-stage@0', 'bind:write-stage@1', 'bind:login-stage@2']);
@@ -503,7 +510,12 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     // CONFIG.authentikPublicUrl is https://auth.example.com.
     const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
     const result = await svc.ensureBootstrapAdmin('hola-admins');
-    expect(result.recoveryLink).toBe('https://auth.example.com/if/flow/hola-recovery/?flow_token=tok');
+    // Origin rewritten to the public host; the existing flow_token query is preserved
+    // and the dashboard-landing `next` is appended alongside it.
+    const publicLink = new URL(result.recoveryLink!);
+    expect(publicLink.origin + publicLink.pathname).toBe('https://auth.example.com/if/flow/hola-recovery/');
+    expect(publicLink.searchParams.get('flow_token')).toBe('tok');
+    expect(publicLink.searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
   });
 
   test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {

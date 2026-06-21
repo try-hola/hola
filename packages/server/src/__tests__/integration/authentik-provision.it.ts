@@ -285,6 +285,8 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
 
     expect(result.recoveryLink).toBeTruthy();
     expect(result.recoveryLink).toContain('/if/flow/');
+    // Lands on the dashboard after set-password+login, not Authentik's app library.
+    expect(new URL(result.recoveryLink!).searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
 
     // The recovery flow now exists, is bound to the default brand, and has the two
     // reused stages (prompt + user-write) PLUS the appended Login stage so setting
