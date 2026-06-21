@@ -13,6 +13,8 @@ export interface TeardownOptions {
   includeCerts?: boolean;
   /** Skip the confirmation prompt. */
   yes?: boolean;
+  /** Skip the confirmation prompt (alias for `yes`). */
+  force?: boolean;
   /** Print the plan without connecting. */
   dryRun?: boolean;
   json?: boolean;
@@ -119,8 +121,8 @@ export async function runTeardown(
     }
 
     // Confirmation. Full teardown requires typing the host (guards against data
-    // loss); --keep-data is a simpler yes/no. `--yes` skips either.
-    if (!opts.yes) {
+    // loss); --keep-data is a simpler yes/no. `--yes`/`--force` skips either.
+    if (!opts.yes && !opts.force) {
       if (opts.keepData) {
         const ok = await prompter.prompt({
           key: '_confirm',

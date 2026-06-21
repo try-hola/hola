@@ -58,6 +58,7 @@ prog
   .option('--images', 'Also remove the ghcr.io/try-hola/* images', false)
   .option('--include-certs', 'Also wipe the Let’s Encrypt cert store (kept by default to avoid re-issuance)', false)
   .option('--yes, -y', 'Skip the confirmation prompt', false)
+  .option('--force, -f', 'Skip the confirmation prompt (alias for --yes)', false)
   .option('--dry-run', 'Print the plan without connecting', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (opts) => {

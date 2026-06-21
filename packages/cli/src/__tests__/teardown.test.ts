@@ -106,6 +106,18 @@ describe('hola teardown', () => {
     expect(has(runner.calls, /docker compose down -v/)).toBe(true);
   });
 
+  it('--force skips the confirmation prompt (alias for --yes)', async () => {
+    const runner = makeRunner();
+    // Empty scriptedPrompter would throw on the host-typing prompt's validator;
+    // proceeding without that proves --force bypassed the prompt entirely.
+    const res = await runTeardown(
+      { host: 'me@vm', force: true },
+      { prompter: scriptedPrompter({}), runner }
+    );
+    expect(res?.host).toBe('me@vm');
+    expect(has(runner.calls, /docker compose down -v/)).toBe(true);
+  });
+
   it('aborts when --keep-data confirmation is declined', async () => {
     const runner = makeRunner();
     const res = await runTeardown(
