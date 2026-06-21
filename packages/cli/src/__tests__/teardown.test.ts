@@ -59,6 +59,23 @@ describe('hola teardown', () => {
     expect(has(runner.calls, /ghcr\.io\/try-hola\/.*docker rmi -f/)).toBe(true);
   });
 
+  it('preserves the Let’s Encrypt cert store by default', async () => {
+    const runner = makeRunner();
+    await runTeardown({ host: 'me@vm', yes: true }, { prompter: scriptedPrompter({}), runner });
+    const rmStep = runner.calls.find((c) => c.includes('rm -rf /opt/hola'))!;
+    // The dir is still wiped, but acme.json is copied aside and restored.
+    expect(rmStep).toMatch(/traefik\/acme\/acme\.json/);
+    expect(rmStep).toMatch(/cp "\$acme" "\$tmp"/);
+    expect(rmStep).toMatch(/mv "\$tmp" "\$acme"/);
+  });
+
+  it('--include-certs wipes the cert store too (no preserve dance)', async () => {
+    const runner = makeRunner();
+    await runTeardown({ host: 'me@vm', includeCerts: true, yes: true }, { prompter: scriptedPrompter({}), runner });
+    const rmStep = runner.calls.find((c) => c.includes('rm -rf /opt/hola'))!;
+    expect(rmStep).not.toMatch(/traefik\/acme/);
+  });
+
   it('--dry-run prints the plan and connects to nothing', async () => {
     const runner = makeRunner();
     const res = await runTeardown({ host: 'me@vm', dryRun: true }, { prompter: scriptedPrompter({}), runner });
