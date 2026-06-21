@@ -39,6 +39,22 @@ export function toClackValidate(
   return validate ? (v) => validate(v ?? '') : undefined;
 }
 
+/**
+ * Coerce a clack prompt result to the string the wizard expects. Exported for testing.
+ *
+ * `clack.password()` resolves to `undefined` on an empty submit — unlike `text()`,
+ * the PasswordPrompt has no finalize/default handler, so an untouched field never
+ * sets `value`. A naive `String(result)` would turn that into the literal string
+ * `"undefined"`, which is truthy and so poisons the wizard's `!value` env-reuse
+ * fallback (the masked `fromEnv` secret silently becomes `"undefined"`, and AWS
+ * later rejects it as `SignatureDoesNotMatch`). Mapping nullish → '' lets the
+ * fallback fire.
+ */
+export function resultToAnswer(type: FieldType, result: unknown): string {
+  if (type === 'confirm') return result ? 'true' : 'false';
+  return result == null ? '' : String(result);
+}
+
 /** Production prompter backed by @clack/prompts. Lazily imported so tests never load it. */
 export function clackPrompter(): Prompter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,8 +86,7 @@ export function clackPrompter(): Prompter {
           result = await clack.text({ message: spec.message, initialValue: spec.default, validate });
       }
       if (clack.isCancel(result)) throw new PromptCancelled();
-      if (spec.type === 'confirm') return result ? 'true' : 'false';
-      return String(result);
+      return resultToAnswer(spec.type, result);
     },
     note(message) {
       // clack.log.message keeps the framed output consistent.
