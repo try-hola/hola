@@ -141,6 +141,9 @@ async function runWithEnv(
   }
 }
 
+// First NON-EMPTY line. The aws CLI prefixes its error with blank lines
+// (`\n\naws: [ERROR]: An error occurred (SignatureDoesNotMatch) ...`), so taking
+// line[0] would drop the actual reason and leave only "aws exited <code>".
 function firstLine(s: string): string {
-  return s.split('\n')[0]?.trim() ?? '';
+  return s.split('\n').map((l) => l.trim()).find(Boolean) ?? '';
 }
