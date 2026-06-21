@@ -3,9 +3,21 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { runCredentials } from '../commands/credentials/credentials';
+import { runCredentials, formatElapsed } from '../commands/credentials/credentials';
 import { scriptedPrompter } from '../install/prompter';
 import type { Runner } from '../lib/runner';
+
+describe('formatElapsed', () => {
+  it('shows seconds under a minute', () => {
+    expect(formatElapsed(0)).toBe('0s');
+    expect(formatElapsed(59_000)).toBe('59s');
+  });
+  it('shows minutes and seconds at or above 60s', () => {
+    expect(formatElapsed(60_000)).toBe('1m 0s');
+    expect(formatElapsed(125_000)).toBe('2m 5s');
+    expect(formatElapsed(318_000)).toBe('5m 18s');
+  });
+});
 
 // A fake runner that serves the host's .env on `cat`, then canned values for the
 // credential-retrieval commands. Records every command so we can assert behavior.

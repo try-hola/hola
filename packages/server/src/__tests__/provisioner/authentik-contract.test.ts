@@ -484,6 +484,25 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
       && (c.body as { flow_recovery: string }).flow_recovery === 'hola-recovery-pk')).toBe(true);
   });
 
+  test('ensureBootstrapAdmin rewrites the recovery link to the public Authentik URL', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'recovery-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
+      // Authentik returns the link on the INTERNAL host the API was called on.
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'http://authentik-server:9000/if/flow/hola-recovery/?flow_token=tok' });
+      return undefined;
+    });
+    calls.length = 0;
+    // CONFIG.authentikPublicUrl is https://auth.example.com.
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    expect(result.recoveryLink).toBe('https://auth.example.com/if/flow/hola-recovery/?flow_token=tok');
+  });
+
   test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {
     installFetch();
     calls.length = 0;
