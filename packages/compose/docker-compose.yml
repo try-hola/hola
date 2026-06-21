@@ -15,10 +15,28 @@
 #   # or: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 
 services:
+  # Ensure the Traefik file-provider directory exists in the shared data volume
+  # BEFORE Traefik starts. Traefik mounts hola-data READ-ONLY and its file provider
+  # fails permanently if the watched directory is missing at boot — it cannot watch
+  # a nonexistent path and never retries. On a cold start where Traefik wins the race
+  # against the server (which creates the dir), Traefik would load ZERO routers and
+  # 404 every host until manually restarted. This oneshot creates the dir read-write
+  # and exits; it reuses the traefik image so it adds no extra pull.
+  traefik-init:
+    image: traefik:v3.5
+    container_name: traefik-init
+    entrypoint: ["/bin/sh", "-c", "mkdir -p /data/runtime/traefik"]
+    restart: "no"
+    volumes:
+      - hola-data:/data
+
   traefik:
     image: traefik:v3.5
     container_name: traefik
     restart: unless-stopped
+    depends_on:
+      traefik-init:
+        condition: service_completed_successfully
     command:
       # --api enables the built-in api@internal service; the Hola server emits a
       # file-provider router for it (core.yml) at TRAEFIK_DASHBOARD_DOMAIN.
