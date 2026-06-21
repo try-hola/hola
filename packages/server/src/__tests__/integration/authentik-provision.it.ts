@@ -272,6 +272,7 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     // also verifies the scoped permission set can add the flow + stage bindings.
     const svc = new RealAuthentikProvisionerService({
       ...config, authentikApiToken: undefined, authentikBootstrapToken: BOOTSTRAP_TOKEN, adminEmail: 'recovery-it@example.com',
+      dashboardUrl: 'https://hola.example.com',
     });
 
     // Precondition: confirm Authentik really ships no recovery flow out of the box.
@@ -285,9 +286,12 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
 
     expect(result.recoveryLink).toBeTruthy();
     expect(result.recoveryLink).toContain('/if/flow/');
+    // The link carries the dashboard as its post-success redirect.
+    expect(new URL(result.recoveryLink!).searchParams.get('next')).toBe('https://hola.example.com');
 
     // The recovery flow now exists, is bound to the default brand, and has the two
-    // reused stages (prompt + user-write) so the link can actually set a password.
+    // reused stages (prompt + user-write) PLUS the appended Login stage so setting
+    // the password also signs the operator in.
     const after = (await akGet('/api/v3/flows/instances/?designation=recovery')) as {
       status: number; body: { results: Array<{ pk: string; slug: string }> };
     };
@@ -298,8 +302,14 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     };
     expect(brand.body.results[0].flow_recovery).toBe(flow!.pk);
     const bindings = (await akGet(`/api/v3/flows/bindings/?target=${flow!.pk}`)) as {
-      status: number; body: { results: unknown[] };
+      status: number; body: { results: Array<{ stage: string; order: number }> };
     };
-    expect(bindings.body.results.length).toBe(2);
+    expect(bindings.body.results.length).toBe(3);
+    // The final (highest-order) binding is Authentik's Login stage.
+    const lastStage = [...bindings.body.results].sort((a, b) => b.order - a.order)[0].stage;
+    const loginStages = (await akGet('/api/v3/stages/all/?name__iexact=default-authentication-login')) as {
+      status: number; body: { results: Array<{ pk: string }> };
+    };
+    expect(lastStage).toBe(loginStages.body.results[0].pk);
   }, 180_000);
 });

@@ -57,11 +57,24 @@ export interface AuthConfig {
   adminUsername?: string;
   /** Optional display name for the provisioned admin. */
   adminName?: string;
+  /**
+   * Browser-facing URL of the Hola dashboard (derived from HOLA_DOMAIN). Used as
+   * the recovery flow's post-success redirect (`?next=`) so setting a password +
+   * auto-login lands the operator on the dashboard, not Authentik's app launcher.
+   */
+  dashboardUrl?: string;
 }
 
 function stripTrailingSlash(url: string | undefined): string | undefined {
   if (!url) return undefined;
   return url.replace(/\/+$/, '');
+}
+
+/** Normalize a host or URL into a browser URL (https:// unless a scheme is given). */
+function toBrowserUrl(value: string | undefined): string | undefined {
+  const v = value?.trim();
+  if (!v) return undefined;
+  return stripTrailingSlash(/^https?:\/\//.test(v) ? v : `https://${v}`);
 }
 
 export const defaultAuthConfig: AuthConfig = {
@@ -79,6 +92,7 @@ export const defaultAuthConfig: AuthConfig = {
   adminEmail: process.env.HOLA_ADMIN_EMAIL?.trim() || undefined,
   adminUsername: process.env.HOLA_ADMIN_USERNAME?.trim() || undefined,
   adminName: process.env.HOLA_ADMIN_NAME?.trim() || undefined,
+  dashboardUrl: toBrowserUrl(process.env.HOLA_DOMAIN),
 };
 
 export function loadAuthConfig(): AuthConfig {

@@ -465,8 +465,10 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
       // default-password-change exists with two stages to reuse.
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?slug=default-password-change')) return json({ results: [{ pk: 'pw-flow' }] });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=pw-flow')) return json({ results: [{ stage: 'prompt-stage', order: 0 }, { stage: 'write-stage', order: 1 }] });
+      // The built-in Login stage we append so the operator is signed in on success.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/all/?name__iexact=default-authentication-login')) return json({ results: [{ pk: 'login-stage' }] });
       if (call.method === 'POST' && call.path === '/api/v3/flows/instances/') { created.push('flow'); return json({ pk: 'hola-recovery-pk' }, 201); }
-      if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { created.push(`bind:${(call.body as { stage: string }).stage}`); return json({ pk: 'b' }, 201); }
+      if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { const b = call.body as { stage: string; order: number }; created.push(`bind:${b.stage}@${b.order}`); return json({ pk: 'b' }, 201); }
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
       if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/if/flow/hola-recovery/?flow_token=abc' });
       return undefined;
@@ -477,11 +479,33 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     const result = await svc.ensureBootstrapAdmin('hola-admins');
 
     expect(result.recoveryLink).toContain('hola-recovery');
-    // It created the flow and rebound the two reused stages.
-    expect(created).toEqual(['flow', 'bind:prompt-stage', 'bind:write-stage']);
+    // It created the flow, rebound the two reused stages, then appended the Login
+    // stage as the final binding (order after the reused stages) for auto-login.
+    expect(created).toEqual(['flow', 'bind:prompt-stage@0', 'bind:write-stage@1', 'bind:login-stage@2']);
     // And bound the new flow to the default brand.
     expect(calls.some((c) => c.method === 'PATCH' && c.path === '/api/v3/core/brands/b1/'
       && (c.body as { flow_recovery: string }).flow_recovery === 'hola-recovery-pk')).toBe(true);
+  });
+
+  test('ensureBootstrapAdmin appends the dashboard redirect (next=) to the recovery link', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'recovery-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: 'recovery-flow' }] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'http://authentik-server:9000/if/flow/hola-recovery/?flow_token=tok' });
+      return undefined;
+    });
+    calls.length = 0;
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com', dashboardUrl: 'https://app.example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    // Origin rewritten to the public Authentik URL AND ?next= points at the dashboard.
+    const url = new URL(result.recoveryLink!);
+    expect(url.origin).toBe('https://auth.example.com');
+    expect(url.searchParams.get('next')).toBe('https://app.example.com');
+    expect(url.searchParams.get('flow_token')).toBe('tok');
   });
 
   test('ensureBootstrapAdmin rewrites the recovery link to the public Authentik URL', async () => {

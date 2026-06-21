@@ -170,6 +170,9 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_flows.add_flow',
   'authentik_flows.view_flowstagebinding',
   'authentik_flows.add_flowstagebinding',
+  // Read stages (stages/all) so the recovery flow can append the built-in Login
+  // stage — setting a password then signs the operator in automatically.
+  'authentik_flows.view_stage',
   // Read certificate-keypairs to pick a signing key for the dashboard OIDC client.
   'authentik_crypto.view_certificatekeypair',
 ];
@@ -585,8 +588,10 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
         // Authentik builds the link from the host the API was called on — which is
         // the internal `authentik-server:9000` for us, unreachable from a browser.
-        // Rewrite the origin to the public Authentik URL so the operator can open it.
-        return this.toPublicUrl(res.link);
+        // Rewrite the origin to the public Authentik URL so the operator can open it,
+        // then attach the dashboard as the post-flow redirect so a successful set +
+        // auto-login lands them on Hola, not Authentik's app launcher.
+        return this.withDashboardRedirect(this.toPublicUrl(res.link));
       } catch (error) {
         this.logger.warn('Recovery link generation attempt failed; will retry', {
           attempt: i + 1,
@@ -612,6 +617,24 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       u.protocol = p.protocol;
       u.hostname = p.hostname;
       u.port = p.port; // clears the internal :9000 when the public URL has no port
+      return u.toString();
+    } catch {
+      return link;
+    }
+  }
+
+  /**
+   * Attach the Hola dashboard as the recovery flow's post-success redirect via the
+   * `next` query param, so once the operator sets a password (and the appended
+   * Login stage signs them in) they land on the dashboard instead of Authentik's
+   * single-tile app launcher. No-op when no dashboard URL is configured.
+   */
+  private withDashboardRedirect(link: string): string {
+    const dash = this.config.dashboardUrl;
+    if (!dash) return link;
+    try {
+      const u = new URL(link);
+      u.searchParams.set('next', dash);
       return u.toString();
     } catch {
       return link;
@@ -652,9 +675,12 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   /**
    * Create a `recovery`-designation flow, reusing the stages of the shipped
    * `default-password-change` flow (a Prompt + User Write stage) so the recovery
-   * link lets the operator set their own password. Idempotent by slug. Returns the
-   * flow pk, or undefined if the prerequisite `default-password-change` blueprint
-   * has not been applied yet (so the caller retries).
+   * link lets the operator set their own password, then appending the built-in
+   * Login stage so setting the password ALSO signs them in — otherwise the flow
+   * ends unauthenticated and they're bounced to a login screen to re-enter the
+   * password they just set. Idempotent by slug. Returns the flow pk, or undefined
+   * if the prerequisite `default-password-change` blueprint has not been applied
+   * yet (so the caller retries).
    */
   private async createRecoveryFlow(): Promise<string | undefined> {
     const slug = 'hola-recovery';
@@ -681,8 +707,34 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     for (const b of bindings) {
       await this.api('POST', '/api/v3/flows/bindings/', { target: flow.pk, stage: b.stage, order: b.order });
     }
-    this.logger.info('Created a recovery flow (Authentik ships none)', { flowPk: flow.pk, slug });
+    // Append the Login stage as the final binding so the operator is signed in on
+    // success. Degrade gracefully (warn, no auto-login) if none is found — the
+    // password-set part still works.
+    const loginStagePk = await this.resolveLoginStagePk();
+    if (loginStagePk) {
+      const lastOrder = bindings.reduce((max, b) => Math.max(max, b.order), -1);
+      await this.api('POST', '/api/v3/flows/bindings/', { target: flow.pk, stage: loginStagePk, order: lastOrder + 1 });
+    } else {
+      this.logger.warn('No Login stage found; recovery flow will set the password but not auto-sign-in', { slug });
+    }
+    this.logger.info('Created a recovery flow (Authentik ships none)', { flowPk: flow.pk, slug, autoLogin: !!loginStagePk });
     return flow.pk;
+  }
+
+  /**
+   * Resolve the pk of Authentik's built-in Login stage (the one the default
+   * authentication flow ends with). The `stages/all` endpoint lists every stage
+   * type; match the default name and fall back to the first Login-component stage.
+   */
+  private async resolveLoginStagePk(): Promise<string | undefined> {
+    const byName = (await this.api<{ results: Array<{ pk: string }> }>(
+      'GET', '/api/v3/stages/all/?name__iexact=default-authentication-login'
+    )).results?.[0]?.pk;
+    if (byName) return byName;
+    const all = (await this.api<{ results: Array<{ pk: string; component?: string }> }>(
+      'GET', '/api/v3/stages/all/'
+    )).results ?? [];
+    return all.find((s) => s.component === 'ak-stage-user-login')?.pk;
   }
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
