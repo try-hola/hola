@@ -82,7 +82,7 @@ describe('runWizard — AWS credentials from the environment', () => {
 });
 
 describe('runWizard — new defaults flow through', () => {
-  it('defaults the Authentik + admin emails to the first email and signs you in as yourself', async () => {
+  it('defaults your admin email to the first email and signs you in as yourself', async () => {
     // Provide only the base domain + first email; accept every other default.
     const { config } = await runWizard({
       prompter: scriptedPrompter({
@@ -95,8 +95,10 @@ describe('runWizard — new defaults flow through', () => {
     });
     expect(config.HOLA_AUTH_MODE).toBe('authentik'); // secure by default
     expect(config.HOLA_DOMAIN).toBe('apps.hola.example.com'); // plural dashboard host
-    expect(config.AUTHENTIK_BOOTSTRAP_EMAIL).toBe('paul@example.com');
     expect(config.HOLA_ADMIN_EMAIL).toBe('paul@example.com');
     expect(config.HOLA_ADMIN_USERNAME).toBe('paul'); // local part of the admin email
+    // The wizard does NOT set akadmin's email — it stays a separate internal account,
+    // so your personal email never collides with the break-glass superuser.
+    expect(config.AUTHENTIK_BOOTSTRAP_EMAIL).toBeUndefined();
   });
 });
