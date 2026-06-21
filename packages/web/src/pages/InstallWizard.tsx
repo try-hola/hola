@@ -168,8 +168,14 @@ export const InstallWizard: React.FC = () => {
 
   const canProceed = () => {
     switch (currentStep) {
-      case 0: // Environment Variables
-        return !isLoading && envVars.every(env => env.key && (env.value || !env.isSecret));
+      case 0: {
+        // Environment Variables. A completely empty row is an unused placeholder
+        // (e.g. a default trailing row or one added via "Add variable") — it must
+        // not block Next. Only rows the user actually started filling in are
+        // validated: a populated row needs a key, and a secret also needs a value.
+        const meaningful = envVars.filter(env => env.key || env.value);
+        return !isLoading && meaningful.every(env => env.key && (env.value || !env.isSecret));
+      }
       case 4: // Validate & Preflight
         // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
         return !isLoading && (!validationResult || (validationResult?.ok && preflightResult?.ok));
