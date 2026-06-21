@@ -7,6 +7,7 @@ import { runChecks, type CheckResult } from './checks';
 import type { Prompter } from './prompter';
 import { INSTALL_SCHEMA, defaultFor, type ConfigMap } from './schema';
 import { interdependencyErrors } from './validate';
+import { renderChecks } from '../lib/ui';
 
 export interface WizardOptions {
   prompter: Prompter;
@@ -68,8 +69,8 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     const run = opts.checks ?? runChecks;
     checks = await run(config);
     if (checks.length) {
-      prompter.note('Validation:');
-      for (const c of checks) prompter.note(`  ${c.status.toUpperCase()}  ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
+      // One compact, colorized block — not a framed line per check.
+      prompter.note(renderChecks(checks));
     }
   }
 
