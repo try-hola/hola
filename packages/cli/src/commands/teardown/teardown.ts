@@ -9,6 +9,8 @@ export interface TeardownOptions {
   keepData?: boolean;
   /** Also remove the ghcr.io/try-hola/* images. */
   images?: boolean;
+  /** Also wipe the Let's Encrypt cert store (by default it's preserved across re-installs). */
+  includeCerts?: boolean;
   /** Skip the confirmation prompt. */
   yes?: boolean;
   /** Print the plan without connecting. */
@@ -67,14 +69,24 @@ export async function runTeardown(
       title: 'Remove Hola volumes',
       cmd: `docker volume ls -q | grep -E '^hola(_|-)' | xargs -r docker volume rm -f 2>/dev/null || true`,
     });
+    // Preserve the Let's Encrypt cert store across re-installs by default, so a
+    // teardown→bootstrap cycle reuses the existing wildcard cert instead of
+    // re-requesting it (which quickly hits LE's hourly rate limits). The bundle
+    // doesn't ship acme.json and install.sh keeps an existing one, so a preserved
+    // store survives the next install untouched. `--include-certs` wipes it too.
+    const wipeDir = opts.includeCerts
+      ? `rm -rf ${dir} 2>/dev/null; `
+      : `acme=${dir}/traefik/acme/acme.json; ` +
+        `if [ -f "$acme" ]; then tmp=$(mktemp); cp "$acme" "$tmp" 2>/dev/null; rm -rf ${dir} 2>/dev/null; ` +
+        `mkdir -p ${dir}/traefik/acme && mv "$tmp" "$acme" 2>/dev/null && chmod 600 "$acme"; else rm -rf ${dir} 2>/dev/null; fi; `;
     steps.push({
-      title: 'Remove data and install directories',
+      title: `Remove data and install directories${opts.includeCerts ? '' : ' (keeping TLS certs)'}`,
       // Derive the app data root from the host .env (falls back to the default),
       // and also remove the default /srv/hola parent. App data is written by
       // containers as root, so try sudo -n first.
       cmd:
         `apps=$(grep -E '^HOLA_APPS_BIND_ROOT=' ${dir}/.env 2>/dev/null | cut -d= -f2- | xargs); apps="\${apps:-/srv/hola/apps}"; ` +
-        `rm -rf ${dir} 2>/dev/null; ` +
+        wipeDir +
         `sudo -n rm -rf "$apps" /srv/hola 2>/dev/null || rm -rf "$apps" /srv/hola 2>/dev/null || true`,
     });
   }
@@ -93,7 +105,10 @@ export async function runTeardown(
     for (const s of steps) out(`  • ${s.title}`);
     if (!opts.keepData) {
       out('\nThis PERMANENTLY DELETES all Hola data on the host: named volumes');
-      out(`(incl. the Authentik database), the app data root, and ${dir} (compose, .env, TLS certs).`);
+      out(`(incl. the Authentik database), the app data root, and ${dir} (compose, .env).`);
+      out(opts.includeCerts
+        ? '  The Let\'s Encrypt cert store is ALSO wiped (--include-certs).'
+        : '  The Let\'s Encrypt cert store is kept so the next install reuses the cert (use --include-certs to wipe it too).');
     }
 
     if (opts.dryRun) {
