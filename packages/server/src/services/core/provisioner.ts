@@ -588,10 +588,8 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
         // Authentik builds the link from the host the API was called on — which is
         // the internal `authentik-server:9000` for us, unreachable from a browser.
-        // Rewrite the origin to the public Authentik URL so the operator can open it,
-        // then point the post-recovery redirect at the dashboard instead of Authentik's
-        // default "My applications" page.
-        return this.withDashboardLanding(this.toPublicUrl(res.link));
+        // Rewrite the origin to the public Authentik URL so the operator can open it.
+        return this.toPublicUrl(res.link);
       } catch (error) {
         this.logger.warn('Recovery link generation attempt failed; will retry', {
           attempt: i + 1,
@@ -600,29 +598,6 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       }
     }
     return undefined;
-  }
-
-  /**
-   * Append a `next` that sends the user to the Hola dashboard after the recovery
-   * flow (set-password + auto-login) completes, instead of Authentik's default
-   * "My applications" library page.
-   *
-   * It MUST be a relative path: Authentik's flow executor rejects any absolute
-   * `next` (different host than Authentik) as "Invalid next URL" — `is_url_absolute`
-   * returns true for anything with a netloc, so the cross-origin dashboard URL is
-   * refused. The core `application/launch/<slug>/` view is same-origin and, for an
-   * already-authenticated user (the recovery flow's Login stage signs them in),
-   * 302s straight to the application's launch URL — i.e. the dashboard. No-op if
-   * the link can't be parsed.
-   */
-  private withDashboardLanding(link: string): string {
-    try {
-      const u = new URL(link);
-      u.searchParams.set('next', `/application/launch/${DASHBOARD_SLUG}/`);
-      return u.toString();
-    } catch {
-      return link;
-    }
   }
 
   /**
