@@ -60,7 +60,7 @@ export const Topbar: React.FC = () => {
           <span className="absolute inset-0 rounded-full bg-success" />
           <span className="absolute inset-0 rounded-full bg-success animate-ping-slow" />
         </span>
-        <span className="text-[12.5px] text-text-muted">home.example.com</span>
+        <span className="text-[12.5px] text-text-muted">{window.location.hostname}</span>
       </div>
 
       {/* Theme toggle */}

@@ -55,7 +55,13 @@ export function useCatalogAppsApi(params: GetCatalogAppsRequest) {
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
-  }, [cacheKey, params]); // Include params in dependency to refetch when they change
+    // Only depend on cacheKey, not the `params` object: callers often pass an inline
+    // object literal (e.g. `useCatalogAppsApi({ page: 1, limit: 100 })`), whose identity
+    // changes every render. Including `params` here would recreate fetchData each render,
+    // re-fire the effect, setState, and loop forever — freezing the tab. cacheKey is a
+    // stable string derived from the param values, and `params` is read via closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   React.useEffect(() => {
     fetchData();

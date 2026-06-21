@@ -34,6 +34,10 @@ const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
 const GRID_COLS =
   'grid grid-cols-[2.4fr_1.1fr_0.9fr_1.9fr_0.9fr_130px] gap-[14px] px-[18px]';
 
+// Module-level constant so its identity is stable across renders (matches Apps.tsx).
+// A fresh object literal here would change every render and re-fetch the catalog.
+const CATALOG_PARAMS = { page: 1, limit: 100 };
+
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
@@ -64,7 +68,7 @@ export const Deployments: React.FC = () => {
 
   // Join app id -> catalog product name + glyph so the "App" column shows the
   // real app (e.g. "Uptime Kuma" 📈), not a "deployment-<id>" placeholder.
-  const { data: catalogData } = useCatalogAppsApi({ page: 1, limit: 100 });
+  const { data: catalogData } = useCatalogAppsApi(CATALOG_PARAMS);
   const appMeta = React.useMemo(() => {
     const map = new Map<string, { name: string; icon: string }>();
     for (const app of catalogData?.items ?? []) map.set(app.id, { name: app.name, icon: app.icon });
