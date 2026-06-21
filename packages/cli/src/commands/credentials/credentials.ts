@@ -154,6 +154,13 @@ export async function handoffCredentials(config: ConfigMap, ctx: HandoffContext)
 
 const PROVISION_FAILED = '__HOLA_PROVISION_FAILED__';
 
+/** Human elapsed time: seconds under a minute, "Xm Ys" at or above 60s. */
+export function formatElapsed(ms: number): string {
+  const total = Math.round(ms / 1000);
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m ${total % 60}s`;
+}
+
 /**
  * Poll the server log for the one-time recovery link, waiting through first-boot
  * provisioning with a spinner. By default it waits **indefinitely** (the user can
@@ -172,11 +179,14 @@ async function pollRecoveryLink(
   const { host, composeDir, runner } = ctx;
   const maxAttempts = ctx.linkAttempts ?? Infinity; // default: never give up
   const intervalMs = ctx.linkIntervalMs ?? 3000;
-  // One read of the server log per poll: emit the line after the setup marker (the
-  // link), plus a sentinel if the server has logged that provisioning gave up.
+  // One read of the server log per poll. The server logs structured JSON, so the
+  // marker and the link sit on the SAME physical line ("…setup ===\\n<url>"); a
+  // naive "line after the marker" grep misses it. Match the marker line + the one
+  // after, then extract the recovery URL itself (it carries a `flow_token`). Also
+  // emit a sentinel if the server logged that it gave up.
   const grab =
     `cd ${composeDir} && logs=$(docker compose logs --no-color --no-log-prefix server 2>&1); ` +
-    `printf '%s\\n' "$logs" | grep -A1 'Hola admin setup' | tail -1 | tr -d '\\r'; ` +
+    `printf '%s\\n' "$logs" | grep -A1 'Hola admin setup' | grep -oE 'https?://[^" ]*flow_token=[^" ]+' | tail -1; ` +
     `printf '%s' "$logs" | grep -qE 'Could not mint admin recovery link|Gave up self-provisioning' && echo ${PROVISION_FAILED}`;
   const spin = createSpinner('Waiting for SSO provisioning to finish…');
   let elapsedMs = 0;
@@ -192,7 +202,7 @@ async function pollRecoveryLink(
       return { failed: true };
     }
     elapsedMs += intervalMs;
-    spin.update(`Waiting for SSO provisioning… (${Math.round(elapsedMs / 1000)}s elapsed)`);
+    spin.update(`Waiting for SSO provisioning… (${formatElapsed(elapsedMs)} elapsed)`);
     if (i < maxAttempts - 1) await wait(intervalMs);
   }
   spin.fail('Password-setup link not available yet.');

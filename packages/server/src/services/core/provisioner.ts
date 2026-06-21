@@ -583,7 +583,10 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       if (!(await this.ensureBrandRecoveryFlow())) continue;
       try {
         const res = await this.api<{ link: string }>('POST', `/api/v3/core/users/${userPk}/recovery/`);
-        return res.link;
+        // Authentik builds the link from the host the API was called on — which is
+        // the internal `authentik-server:9000` for us, unreachable from a browser.
+        // Rewrite the origin to the public Authentik URL so the operator can open it.
+        return this.toPublicUrl(res.link);
       } catch (error) {
         this.logger.warn('Recovery link generation attempt failed; will retry', {
           attempt: i + 1,
@@ -592,6 +595,27 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Rewrite a link's origin to the public Authentik URL. Authentik builds links
+   * (e.g. recovery) from the host the request arrived on, which for us is the
+   * internal `authentik-server:9000` — not browser-reachable. Swap in the
+   * configured public origin (HOLA_AUTHENTIK_PUBLIC_URL). No-op if unset/unparseable.
+   */
+  private toPublicUrl(link: string): string {
+    const pub = this.config.authentikPublicUrl;
+    if (!pub) return link;
+    try {
+      const u = new URL(link);
+      const p = new URL(pub);
+      u.protocol = p.protocol;
+      u.hostname = p.hostname;
+      u.port = p.port; // clears the internal :9000 when the public URL has no port
+      return u.toString();
+    } catch {
+      return link;
+    }
   }
 
   /**
