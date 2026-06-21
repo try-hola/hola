@@ -110,13 +110,23 @@ export async function runBootstrap(
     if (!reuse && !opts.json) {
       const found = await (injected?.findEnvFile ?? defaultFindEnvFile)();
       if (found) {
+        // Show WHAT the file would deploy (a stale leftover is easy to ship blind),
+        // and default to NO so reuse is a deliberate choice, not an Enter-through.
+        const existing = parseEnv(await fs.readFile(found, 'utf8').catch(() => ''));
+        const summary = [
+          existing.HOLA_BASE_DOMAIN ? `domain ${existing.HOLA_BASE_DOMAIN}` : existing.HOLA_DOMAIN ? `dashboard ${existing.HOLA_DOMAIN}` : null,
+          existing.HOLA_ADMIN_EMAIL ? `admin ${existing.HOLA_ADMIN_EMAIL}` : null,
+        ].filter(Boolean).join(' · ');
+        out(`Found an existing config: ${found}`);
+        if (summary) out(`  it would deploy: ${colors.bold(summary)}`);
         const ans = await prompter.prompt({
           key: '_use_env',
           type: 'confirm',
-          message: `Found ${found} — use it (skip the questions)?`,
-          default: 'true',
+          message: 'Reuse it and skip the setup questions?',
+          default: 'false',
         });
         if (ans === 'true') reuse = found;
+        else out('  Starting fresh — answering the questions below.');
       }
     }
     if (reuse) {

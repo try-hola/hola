@@ -212,7 +212,7 @@ describe('hola bootstrap', () => {
     );
   });
 
-  it('detects an init-produced .env and reuses it instead of re-asking the wizard', async () => {
+  it('detects an init-produced .env and reuses it when the user opts in', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'hola-boot-'));
     const envPath = join(tmp, '.env');
     // A marker value the wizard would never produce, proving the file was reused.
@@ -222,8 +222,8 @@ describe('hola bootstrap', () => {
       const res = await runBootstrap(
         { host: 'me@vm', skipChecks: true }, // interactive: detection runs
         {
-          // Empty answers: if the wizard ran, its required fields would throw.
-          prompter: scriptedPrompter({}),
+          // Reuse now defaults to NO, so opt in explicitly to skip the wizard.
+          prompter: scriptedPrompter({ _use_env: 'true' }),
           runner,
           findEnvFile: async () => envPath,
         }
@@ -232,6 +232,27 @@ describe('hola bootstrap', () => {
       const writeCall = runner.calls.find((c) => c.cmd.includes('cat >'))!;
       expect(writeCall.input).toContain('HOLA_DOMAIN=reused.example.com');
       expect(writeCall.input).toContain('HOLA_API_KEY=from-the-file');
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does NOT reuse a detected .env by default — it runs the wizard instead', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'hola-boot-'));
+    const envPath = join(tmp, '.env');
+    await writeFile(envPath, 'HOLA_BASE_DOMAIN=stale.example.com\nHOLA_ADMIN_EMAIL=stale@example.com\n');
+    const runner = makeRunner();
+    try {
+      // Default-no on reuse → the wizard runs; with empty answers a required field
+      // throws (WizardError), so bootstrap aborts rather than shipping the stale file.
+      const res = await runBootstrap(
+        { host: 'me@vm', skipChecks: true },
+        { prompter: scriptedPrompter({}), runner, findEnvFile: async () => envPath }
+      );
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      // The stale file was never sent to the host.
+      expect(runner.calls.some((c) => c.input?.includes('stale.example.com'))).toBe(false);
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
