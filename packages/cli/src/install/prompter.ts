@@ -2,6 +2,8 @@
 // keeping @clack/prompts out of the test path. clackPrompter() is the production
 // implementation; scriptedPrompter() is the test double.
 
+import pc from 'picocolors';
+
 import type { FieldType } from './schema';
 
 export interface PromptSpec {
@@ -55,13 +57,75 @@ export function resultToAnswer(type: FieldType, result: unknown): string {
   return result == null ? '' : String(result);
 }
 
+/**
+ * A masked secret prompt prefilled with `def`, rendered as dots and fully editable.
+ * Pressing Enter submits the real (unmodified) value — so a secret already present
+ * in the environment is reused without retyping or pasting it (which also sidesteps
+ * terminal paste-mangling of `/ + =` in AWS-style secrets).
+ *
+ * clack's high-level `password()` ignores `initialValue`, so we drive @clack/core's
+ * `PasswordPrompt` directly with `initialUserInput` and re-render in clack's house
+ * style (its inline renderer isn't exported). Kept faithful to clack@1's render so
+ * this one field looks identical to every other prompt.
+ */
+export async function passwordWithDefault(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  clack: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  PasswordPrompt: any,
+  spec: PromptSpec,
+  validate: unknown,
+  // Tests inject fake TTY streams; production omits this so the prompt uses process stdio.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  io?: { input?: any; output?: any }
+): Promise<unknown> {
+  const { S_BAR, S_BAR_END, S_STEP_ACTIVE, S_STEP_ERROR, S_STEP_SUBMIT, S_STEP_CANCEL, S_PASSWORD_MASK } = clack;
+  const symbol = (state: string) =>
+    state === 'error'
+      ? pc.yellow(S_STEP_ERROR)
+      : state === 'submit'
+        ? pc.green(S_STEP_SUBMIT)
+        : state === 'cancel'
+          ? pc.red(S_STEP_CANCEL)
+          : pc.cyan(S_STEP_ACTIVE);
+  const prompt = new PasswordPrompt({
+    mask: S_PASSWORD_MASK,
+    initialUserInput: spec.default,
+    validate,
+    input: io?.input,
+    output: io?.output,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    render(this: any) {
+      const head = `${pc.gray(S_BAR)}\n${symbol(this.state)}  ${spec.message}\n`;
+      const masked = this.masked as string;
+      switch (this.state) {
+        case 'error':
+          return `${head.trim()}\n${pc.yellow(S_BAR)}  ${masked ?? ''}\n${pc.yellow(S_BAR_END)}  ${pc.yellow(this.error)}\n`;
+        case 'submit':
+          return `${head}${pc.gray(S_BAR)}  ${masked ? pc.dim(masked) : ''}`;
+        case 'cancel':
+          return `${head}${pc.gray(S_BAR)}  ${masked ? pc.strikethrough(pc.dim(masked)) : ''}`;
+        default:
+          return `${head}${pc.cyan(S_BAR)}  ${this.userInputWithCursor}\n${pc.cyan(S_BAR_END)}\n`;
+      }
+    },
+  });
+  return prompt.prompt();
+}
+
 /** Production prompter backed by @clack/prompts. Lazily imported so tests never load it. */
 export function clackPrompter(): Prompter {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let p: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let core: any;
   const load = async () => {
     if (!p) p = await import('@clack/prompts');
     return p;
+  };
+  const loadCore = async () => {
+    if (!core) core = await import('@clack/core');
+    return core;
   };
   return {
     async prompt(spec) {
@@ -70,7 +134,11 @@ export function clackPrompter(): Prompter {
       let result: unknown;
       switch (spec.type) {
         case 'secret':
-          result = await clack.password({ message: spec.message, validate });
+          // Prefill with the detected value (e.g. a fromEnv secret) so Enter submits
+          // it as dots; fall back to an empty masked prompt when there's nothing to reuse.
+          result = spec.default
+            ? await passwordWithDefault(clack, (await loadCore()).PasswordPrompt, spec, validate)
+            : await clack.password({ message: spec.message, validate });
           break;
         case 'select':
           result = await clack.select({

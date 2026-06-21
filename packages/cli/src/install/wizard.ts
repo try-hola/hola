@@ -35,12 +35,25 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
   for (const field of INSTALL_SCHEMA) {
     if (field.requiredWhen && !field.requiredWhen(config)) continue;
 
-    // A `fromEnv` field offers a value already set in the environment (AWS_*),
-    // so the user accepts it instead of pasting. For a masked secret we can't
-    // prefill the prompt, so a blank answer means "use the detected value" and
-    // is not rejected by the field's validator.
+    // A `fromEnv` field offers a value already set in the environment (AWS_*); the
+    // prompt prefills with it (masked secrets render as dots) so the user just
+    // presses Enter. A blank answer still means "use the detected value" and is
+    // not rejected by the field's validator.
     const envVal = field.fromEnv ? env[field.key]?.trim() || undefined : undefined;
-    const fallback = initial[field.key] ?? envVal ?? defaultFor(field, config);
+
+    // A literal "undefined"/"null" in `initial` is corruption, not a real prior
+    // value — earlier releases could mis-collect a masked secret and write
+    // `AWS_SECRET_ACCESS_KEY=undefined` into .env. Never let that shadow a good value.
+    const prior = initial[field.key];
+    const priorVal = prior === 'undefined' || prior === 'null' ? undefined : prior;
+
+    // For env-sourced fields the live environment is authoritative: a stale value
+    // in an existing .env must not override what the operator just exported. Other
+    // fields prefer the existing .env so host-generated secrets (HOLA_API_KEY)
+    // survive a `hola init --force` re-run.
+    const fallback = field.fromEnv
+      ? envVal ?? priorVal ?? defaultFor(field, config)
+      : priorVal ?? envVal ?? defaultFor(field, config);
 
     let message = field.help ? `${field.prompt}\n  ${field.help}` : field.prompt;
     if (envVal && field.secret) message = `${field.prompt} (found in your environment — press Enter to use it)`;

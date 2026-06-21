@@ -43,6 +43,33 @@ describe('runWizard — AWS credentials from the environment', () => {
     expect(config.AWS_SECRET_ACCESS_KEY).toBe('env-secret');
   });
 
+  it('ignores a corrupt "undefined" AWS secret in an existing .env and uses the env value', async () => {
+    // A prior buggy release could write `AWS_SECRET_ACCESS_KEY=undefined` into .env.
+    // On re-run that parsed value must not shadow the real environment credential.
+    const env = { AWS_ACCESS_KEY_ID: 'AKIAENV', AWS_SECRET_ACCESS_KEY: 'good-secret', AWS_REGION: 'us-east-1' };
+    const { config } = await runWizard({
+      prompter: scriptedPrompter(route53Base), // secret omitted → prompter returns the computed default
+      initial: { AWS_SECRET_ACCESS_KEY: 'undefined' },
+      checks: noChecks,
+      env,
+    });
+    expect(config.AWS_SECRET_ACCESS_KEY).toBe('good-secret');
+  });
+
+  it('lets the live environment win over a stale AWS secret in an existing .env', async () => {
+    // fromEnv fields are environment-sourced; the value the operator just exported
+    // takes precedence over whatever an old .env still holds.
+    const env = { AWS_ACCESS_KEY_ID: 'AKIAENV', AWS_SECRET_ACCESS_KEY: 'fresh-secret', AWS_REGION: 'us-east-1' };
+    const { config } = await runWizard({
+      prompter: scriptedPrompter(route53Base),
+      initial: { AWS_SECRET_ACCESS_KEY: 'stale-old-secret', AWS_ACCESS_KEY_ID: 'AKIASTALE' },
+      checks: noChecks,
+      env,
+    });
+    expect(config.AWS_SECRET_ACCESS_KEY).toBe('fresh-secret');
+    expect(config.AWS_ACCESS_KEY_ID).toBe('AKIAENV');
+  });
+
   it('still prompts (and validates) when nothing is in the environment', async () => {
     await expect(
       runWizard({
