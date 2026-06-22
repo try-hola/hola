@@ -24,7 +24,12 @@ const WITH_COMPOSE = 'services:\n  app:\n    image: nginx:1.27\n';
 // Stand-in for the remote catalog: one app ships a compose, one doesn't.
 function makeCatalog(): CatalogArg {
   return {
-    getApp: async (appId: string) => ({ id: appId, name: appId, icon: '📦' }),
+    getApp: async (appId: string) => ({
+      id: appId,
+      name: appId,
+      // A URL icon for one app, to assert the icon flows through unchanged.
+      icon: appId === 'with-compose' ? 'https://cdn.example.com/with-compose.png' : '📦',
+    }),
     getVersionDetail: async (appId: string) =>
       appId === 'with-compose'
         ? { defaultEnv: [], defaults: { ports: [], volumes: [] }, composeOverride: WITH_COMPOSE }
@@ -70,6 +75,16 @@ describe('Catalog → draft compose (#82)', () => {
 
     const artifacts = await drafts.getFinalizedArtifacts(draftId);
     expect(artifacts?.composeOverride).toContain('nginx:1.27');
+  });
+
+  test('persists the catalog icon on the draft and carries it through finalize (#238)', async () => {
+    const { draftId } = await drafts.createDraft({ appId: 'with-compose', version: '1.0.0' });
+    const draft = await drafts.getDraft(draftId);
+    expect(draft.icon).toBe('https://cdn.example.com/with-compose.png');
+
+    await drafts.finalizeDraft(draftId);
+    const artifacts = await drafts.getFinalizedArtifacts(draftId);
+    expect(artifacts?.manifest.icon).toBe('https://cdn.example.com/with-compose.png');
   });
 
   test('falls back to empty composeOverride when the bundle has none', async () => {
