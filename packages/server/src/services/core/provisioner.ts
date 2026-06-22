@@ -19,6 +19,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import { getLogger } from '../../lib/logger';
 import { ProvisioningError } from '../../middleware/error-mapping';
 import type { AuthConfig } from '../../config/auth';
+import { DEFAULT_ADMIN_GROUP } from '../../config/oidc';
 import type { AuthMode, ProvisionedAuthRef, ForwardAuthMiddleware } from '@hola/shared';
 import { APP_HOST_TOKEN } from '@hola/shared/compose-validate';
 import type { ServiceHealth, HealthCheckable } from './types';
@@ -54,6 +55,10 @@ export interface ProvisionInput {
     /** Extra redirect URIs (beyond redirectPath) to register on the client. May
      *  contain the ${HOLA_APP_HOST} token or a non-http scheme (mobile callback). */
     extraRedirectUris?: string[];
+    /** Admin-by-group via a scalar role claim (e.g. Immich's `immich_role`). The
+     *  provisioner emits `claim`=`adminValue` for `adminGroup` members else
+     *  `memberValue`, riding on `scope` (default `profile`). */
+    roleClaim?: { claim: string; adminGroup?: string; adminValue?: string; memberValue?: string; scope?: string };
   };
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
@@ -173,6 +178,11 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_brands.view_brand',
   'authentik_brands.change_brand',
   'authentik_core.view_propertymapping',
+  // Create/update a custom OAuth2 scope mapping for admin-by-group role claims
+  // (e.g. Immich's immich_role). view_scopemapping is the typed-endpoint read perm.
+  'authentik_providers_oauth2.add_scopemapping',
+  'authentik_providers_oauth2.change_scopemapping',
+  'authentik_providers_oauth2.view_scopemapping',
   'authentik_outposts.view_outpost',
   'authentik_outposts.change_outpost',
   'authentik_flows.view_flow',
@@ -295,11 +305,17 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const existing = input.existingRef;
     if (existing && existing.mode === 'native-oidc' && existing.providerPk != null) {
       const provider = await this.api<AuthentikOAuth2Provider>('GET', `/api/v3/providers/oauth2/${existing.providerPk}/`);
+      const reuseSlug = existing.applicationSlug ?? slug;
+      // Ensure the role-claim mapping (idempotent) and attach it if not already —
+      // covers an app that added roleClaim to its manifest after first install.
+      const roleClaimPk = await this.ensureRoleClaimMapping(oidc.roleClaim, reuseSlug);
+      const mappings = provider.property_mappings ?? [];
+      const mergedMappings = roleClaimPk && !mappings.includes(roleClaimPk) ? [...mappings, roleClaimPk] : undefined;
       await this.api('PATCH', `/api/v3/providers/oauth2/${existing.providerPk}/`, {
         redirect_uris: redirectUris,
+        ...(mergedMappings ? { property_mappings: mergedMappings } : {}),
       });
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
-      const reuseSlug = existing.applicationSlug ?? slug;
       return {
         env: this.oidcEnv(oidc, provider.client_id, provider.client_secret, redirectUri, reuseSlug),
         credentials: { clientId: provider.client_id, clientSecret: provider.client_secret, issuer: this.issuerUrl(reuseSlug), redirectUri },
@@ -311,11 +327,14 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const clientId = randomUUID();
     const clientSecret = randomBytes(32).toString('hex');
 
-    const [authFlow, invalidationFlow, propertyMappings] = await Promise.all([
+    const [authFlow, invalidationFlow, propertyMappings, roleClaimPk] = await Promise.all([
       this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
       this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
       this.resolveScopeMappingPks(oidc.scopes),
+      this.ensureRoleClaimMapping(oidc.roleClaim, slug),
     ]);
+    // Attach the admin-by-group role claim alongside the standard scope mappings.
+    const allMappings = roleClaimPk ? [...propertyMappings, roleClaimPk] : propertyMappings;
 
     const provider = await this.api<AuthentikOAuth2Provider>('POST', '/api/v3/providers/oauth2/', {
       name: `hola-${input.appName}-${input.deploymentId.slice(0, 8)}`,
@@ -325,7 +344,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       client_id: clientId,
       client_secret: clientSecret,
       redirect_uris: redirectUris,
-      property_mappings: propertyMappings,
+      property_mappings: allMappings,
       sub_mode: 'hashed_user_id',
     });
 
@@ -1035,6 +1054,64 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     return pks;
   }
 
+  /**
+   * Ensure an Authentik scope mapping that emits an app's admin-by-group role
+   * claim (e.g. Immich's `immich_role` = "admin"/"user"), and return its pk to
+   * attach to the provider. The mapping rides on a scope the client already
+   * requests (default `profile`) — Authentik intersects requested∩configured
+   * scopes, so a bespoke scope name would be dropped unless the client also asked
+   * for it; reusing `profile` makes the claim merge in with no client change.
+   *
+   * Idempotent via a stable `managed` key (queried on the polymorphic endpoint the
+   * scoped token can read; written via the typed scope endpoint). Best-effort: a
+   * failure logs and returns undefined rather than aborting the deploy — the app
+   * then needs a manual admin promotion, surfaced in logs.
+   */
+  private async ensureRoleClaimMapping(
+    roleClaim: NonNullable<ProvisionInput['oidc']>['roleClaim'],
+    slug: string
+  ): Promise<string | undefined> {
+    if (!roleClaim) return undefined;
+    const claim = roleClaim.claim;
+    const adminGroup = roleClaim.adminGroup ?? DEFAULT_ADMIN_GROUP;
+    const adminValue = roleClaim.adminValue ?? 'admin';
+    const memberValue = roleClaim.memberValue ?? 'user';
+    const scopeName = roleClaim.scope ?? 'profile';
+    const managed = `goauthentik.io/hola/${slug}-roleclaim`;
+    // JSON.stringify yields double-quoted literals that are also valid Python strings.
+    const expression =
+      `return {${JSON.stringify(claim)}: ${JSON.stringify(adminValue)} ` +
+      `if ak_is_group_member(request.user, name=${JSON.stringify(adminGroup)}) ` +
+      `else ${JSON.stringify(memberValue)}}`;
+    const body = {
+      name: `hola ${claim} (${slug})`,
+      scope_name: scopeName,
+      description: 'Hola: role claim derived from group membership',
+      expression,
+      managed,
+    };
+    try {
+      const found = await this.api<{ results: Array<{ pk: string }> }>(
+        'GET',
+        `/api/v3/propertymappings/all/?managed=${encodeURIComponent(managed)}`
+      );
+      const existing = found.results?.[0];
+      if (existing) {
+        await this.api('PATCH', `/api/v3/propertymappings/provider/scope/${existing.pk}/`, body);
+        return existing.pk;
+      }
+      const created = await this.api<{ pk: string }>('POST', '/api/v3/propertymappings/provider/scope/', body);
+      return created.pk;
+    } catch (error) {
+      this.logger.warn('Could not ensure role-claim mapping; app may need a manual admin promotion', {
+        slug,
+        claim,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
   // ---- scoped-token bootstrap -------------------------------------------
 
   /**
@@ -1159,6 +1236,7 @@ interface AuthentikOAuth2Provider {
   pk: number;
   client_id: string;
   client_secret: string;
+  property_mappings?: string[];
 }
 
 // ---------------------------------------------------------------------------

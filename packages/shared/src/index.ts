@@ -370,6 +370,20 @@ export type AppAuthConfig = {
     // (see Homepage's registry renderer + ADR 0002) reads this file and writes the
     // app config, so the server stays out of per-app config formats.
     credentialsFile?: { path: string };
+    // Admin-by-group for apps that derive their role from a SCALAR OIDC claim
+    // (e.g. Immich's `immich_role` = "admin"/"user"), rather than reading the raw
+    // `groups` list like Gitea. The provisioner creates an Authentik scope mapping
+    // that emits `claim` = `adminValue` for members of `adminGroup` (default the
+    // platform admin group), else `memberValue`, and rides it on the `scope` the
+    // client already requests (default `profile`). Lets the first SSO login land a
+    // member of the admin group as an app admin with no manual promotion.
+    roleClaim?: {
+      claim: string;
+      adminGroup?: string;
+      adminValue?: string;
+      memberValue?: string;
+      scope?: string;
+    };
   };
   // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.
   ldap?: {

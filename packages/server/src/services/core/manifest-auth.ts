@@ -70,6 +70,26 @@ function coerceOidcCredentialsFile(v: unknown): { path: string } | undefined {
   return { path };
 }
 
+/** Coerce an admin-by-group role-claim directive. `claim` is required; the rest
+ *  (admin group, claim values, the scope it rides on) have provisioner defaults. */
+function coerceOidcRoleClaim(
+  v: unknown
+): { claim: string; adminGroup?: string; adminValue?: string; memberValue?: string; scope?: string } | undefined {
+  const rec = asRecord(v);
+  const claim = asString(rec?.claim);
+  if (!claim) return undefined;
+  const out: { claim: string; adminGroup?: string; adminValue?: string; memberValue?: string; scope?: string } = { claim };
+  const adminGroup = asString(rec?.adminGroup);
+  if (adminGroup) out.adminGroup = adminGroup;
+  const adminValue = asString(rec?.adminValue);
+  if (adminValue) out.adminValue = adminValue;
+  const memberValue = asString(rec?.memberValue);
+  if (memberValue) out.memberValue = memberValue;
+  const scope = asString(rec?.scope);
+  if (scope) out.scope = scope;
+  return out;
+}
+
 /** Coerce a post-deploy OIDC setup command. Requires a non-empty string[] command. */
 function coerceOidcSetup(value: unknown): OidcSetupCommand | undefined {
   const rec = asRecord(value);
@@ -115,6 +135,7 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     const staticEnv = coerceStringRecord(oidc?.staticEnv);
     const extraRedirectUris = asStringArray(oidc?.extraRedirectUris);
     const credentialsFile = coerceOidcCredentialsFile(oidc?.credentialsFile);
+    const roleClaim = coerceOidcRoleClaim(oidc?.roleClaim);
     // Require redirectPath + scopes, and at least one wiring mechanism (env, setup,
     // or a creds file a bundle sidecar renders). Unknown manifest fields are dropped
     // downstream (see catalog.ts), so every carried field must be coerced explicitly.
@@ -127,6 +148,7 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
       ...(staticEnv ? { staticEnv } : {}),
       ...(extraRedirectUris ? { extraRedirectUris } : {}),
       ...(credentialsFile ? { credentialsFile } : {}),
+      ...(roleClaim ? { roleClaim } : {}),
     };
   }
 
