@@ -54,8 +54,16 @@ function installFetch(handler?: (call: RecordedCall) => Response | undefined) {
     if (method === 'GET' && url.pathname.startsWith('/api/v3/flows/instances/')) {
       return json({ pk: `flow-${url.pathname.split('/').slice(-2, -1)[0]}` });
     }
-    if (method === 'GET' && url.pathname.startsWith('/api/v3/propertymappings/provider/scope/')) {
-      return json({ results: [{ pk: `scope-${url.searchParams.get('scope_name')}` }] });
+    // Polymorphic property-mappings list (the typed provider/scope endpoint 403s
+    // for the scoped token — see resolveScopeMappingPks / issue #144). Default
+    // scope mappings carry stable `managed` identifiers.
+    if (method === 'GET' && url.pathname === '/api/v3/propertymappings/all/') {
+      return json({ results: [
+        { pk: 'scope-openid', managed: 'goauthentik.io/providers/oauth2/scope-openid', scope_name: 'openid' },
+        { pk: 'scope-profile', managed: 'goauthentik.io/providers/oauth2/scope-profile', scope_name: 'profile' },
+        { pk: 'scope-email', managed: 'goauthentik.io/providers/oauth2/scope-email', scope_name: 'email' },
+        { pk: 'mapping-unrelated', managed: 'goauthentik.io/providers/ldap/something', scope_name: undefined },
+      ] });
     }
     if (method === 'POST' && url.pathname === '/api/v3/providers/oauth2/') {
       return json({ pk: 42, client_id: body.client_id, client_secret: body.client_secret }, 201);
@@ -138,6 +146,12 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(pbody.authorization_flow).toBeTruthy();
     expect(pbody.invalidation_flow).toBeTruthy();
 
+    // Scope mappings were resolved from the polymorphic endpoint and attached, so
+    // the OIDC client releases openid/profile/email claims (issue #144). The
+    // provisioner must NOT hit the typed endpoint the scoped token is denied.
+    expect(pbody.property_mappings).toEqual(['scope-openid', 'scope-profile', 'scope-email']);
+    expect(calls.some(c => c.path.startsWith('/api/v3/propertymappings/provider/scope/'))).toBe(false);
+
     // An application was linked to the provider pk.
     const appCall = calls.find(c => c.method === 'POST' && c.path === '/api/v3/core/applications/')!;
     expect(appCall).toBeDefined();
@@ -153,6 +167,40 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref.mode).toBe('native-oidc');
     expect(result.ref.providerPk).toBe(42);
     expect(result.ref.applicationSlug).toBeTruthy();
+  });
+
+  test('native-oidc resolves scope mappings by managed id when scope_name is absent', async () => {
+    // The polymorphic endpoint doesn't always surface scope_name; the `managed`
+    // identifier is the stable fallback (issue #144).
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path === '/api/v3/propertymappings/all/') return json({ results: [
+        { pk: 'pk-openid', managed: 'goauthentik.io/providers/oauth2/scope-openid' },
+        { pk: 'pk-profile', managed: 'goauthentik.io/providers/oauth2/scope-profile' },
+        { pk: 'pk-email', managed: 'goauthentik.io/providers/oauth2/scope-email' },
+      ] });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision(OIDC_INPUT);
+
+    const pbody = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/oauth2/')!.body as Record<string, unknown>;
+    expect(pbody.property_mappings).toEqual(['pk-openid', 'pk-profile', 'pk-email']);
+  });
+
+  test('native-oidc still provisions (with no scope mappings) if listing them fails', async () => {
+    // Best-effort: a 403/500 on the list must not abort the whole provision.
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path === '/api/v3/propertymappings/all/') return new Response('denied', { status: 403 });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision(OIDC_INPUT);
+
+    const pbody = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/oauth2/')!.body as Record<string, unknown>;
+    expect(pbody.property_mappings).toEqual([]);
+    expect(result.ref.providerPk).toBe(42);
   });
 
   test('native-oidc injects explicit IdP endpoints + static env (Postiz-style apps)', async () => {
@@ -356,7 +404,9 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
       if (method === 'POST' && url.pathname === '/api/v3/core/tokens/') { tokenCreated = true; return json({ pk: 1 }, 201); }
       // OIDC provisioning calls (should use the scoped token):
       if (method === 'GET' && url.pathname.startsWith('/api/v3/flows/instances/')) return json({ pk: 'flow' });
-      if (method === 'GET' && url.pathname.startsWith('/api/v3/propertymappings/provider/scope/')) return json({ results: [{ pk: 'm' }] });
+      if (method === 'GET' && url.pathname === '/api/v3/propertymappings/all/') return json({ results: [
+        { pk: 'm', managed: 'goauthentik.io/providers/oauth2/scope-openid', scope_name: 'openid' },
+      ] });
       if (method === 'POST' && url.pathname === '/api/v3/providers/oauth2/') return json({ pk: 1, client_id: body.client_id, client_secret: body.client_secret }, 201);
       if (method === 'POST' && url.pathname === '/api/v3/core/applications/') return json({ pk: 2 }, 201);
       return new Response('unexpected', { status: 500 });
