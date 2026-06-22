@@ -101,9 +101,18 @@ export const InstallWizard: React.FC = () => {
       try {
         const result = await createDraftHook.createDraft({ appId });
 
-        // Update state with draft data
+        // Update state with draft data. Float required-but-empty secrets to the
+        // top so the operator sees what they must fill first (env order doesn't
+        // affect deployment). Stable otherwise, and sorted once at load so rows
+        // don't jump around as values are typed in.
         setSystemEnvVars(result.systemEnv);
-        setEnvVars(result.appEnv);
+        const needsValue = (e: AppEnvVar) => Boolean(e.key && e.isSecret && !e.value);
+        setEnvVars(
+          [...result.appEnv]
+            .map((env, i) => ({ env, i }))
+            .sort((a, b) => Number(needsValue(b.env)) - Number(needsValue(a.env)) || a.i - b.i)
+            .map(({ env }) => env)
+        );
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
 
