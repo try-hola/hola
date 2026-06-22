@@ -1219,3 +1219,63 @@ export class MockProvisionerService implements ProvisionerService {
     return { created: false };
   }
 }
+
+// ---------------------------------------------------------------------------
+// None backend — a real no-op used in PRODUCTION when HOLA_AUTH_MODE != authentik.
+// ---------------------------------------------------------------------------
+
+/**
+ * No-op provisioner for production deployments without an auth backend
+ * (`HOLA_AUTH_MODE != authentik`). Issue #110: the Mock provisioner is for
+ * test/dev and injects *fake* OIDC creds / a dead forward-auth middleware, which
+ * is wrong on a real host — it gave native-oidc apps junk `auth.mock` values and
+ * pointed forward-auth apps at a non-existent outpost.
+ *
+ * Instead this injects NOTHING for modes that can safely run without SSO, and
+ * REFUSES the ones that can't:
+ *  - `native-oidc` / `none`: no-op — the app keeps its own login.
+ *  - `forward-auth` / `native-ldap`: throw — a forward-auth route would be gated
+ *    by a dead outpost (unreachable) and an LDAP app would have no bind account,
+ *    so fail the deploy loudly with an actionable error rather than ship a broken
+ *    app. The operator must enable Authentik for these.
+ */
+export class NoneProvisionerService implements ProvisionerService {
+  private logger = getLogger().child({ service: 'NoneProvisionerService' });
+
+  async healthCheck(): Promise<ServiceHealth> {
+    return { healthy: true, lastCheck: new Date() };
+  }
+
+  async provision(input: ProvisionInput): Promise<ProvisionResult> {
+    if (input.mode === 'forward-auth' || input.mode === 'native-ldap') {
+      throw new ProvisioningError(
+        `App "${input.appName}" requires auth mode "${input.mode}", which needs an auth backend. Set HOLA_AUTH_MODE=authentik to install it.`
+      );
+    }
+    if (input.mode === 'native-oidc') {
+      this.logger.info('No auth backend; skipping native-oidc provisioning — app keeps its own login', {
+        deploymentId: input.deploymentId,
+        appName: input.appName,
+      });
+    }
+    return { env: {}, ref: { mode: input.mode } };
+  }
+
+  async deprovision(input: DeprovisionInput): Promise<void> {
+    // Nothing was ever provisioned.
+    this.logger.debug('No-op deprovision', { deploymentId: input.deploymentId, mode: input.ref?.mode });
+  }
+
+  async provisionPlatformOidc(): Promise<PlatformOidcResult> {
+    // Never reached in production: initializePlatformAuth() bails when mode != authentik.
+    throw new ProvisioningError('Dashboard OIDC requires HOLA_AUTH_MODE=authentik');
+  }
+
+  async ensureAdminGroup(): Promise<void> {
+    // No auth backend to hold a group.
+  }
+
+  async ensureBootstrapAdmin(): Promise<{ created: boolean; recoveryLink?: string }> {
+    return { created: false };
+  }
+}
