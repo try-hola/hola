@@ -155,6 +155,46 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref.applicationSlug).toBeTruthy();
   });
 
+  test('native-oidc injects explicit IdP endpoints + static env (Postiz-style apps)', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision({
+      deploymentId: 'dep-postiz0123456789',
+      appName: 'postiz',
+      mode: 'native-oidc' as const,
+      host: 'postiz.example.com',
+      oidc: {
+        redirectPath: '/settings',
+        scopes: ['openid', 'profile', 'email'],
+        env: {
+          issuer: 'POSTIZ_OAUTH_URL',
+          clientId: 'POSTIZ_OAUTH_CLIENT_ID',
+          clientSecret: 'POSTIZ_OAUTH_CLIENT_SECRET',
+          authUrl: 'POSTIZ_OAUTH_AUTH_URL',
+          tokenUrl: 'POSTIZ_OAUTH_TOKEN_URL',
+          userinfoUrl: 'POSTIZ_OAUTH_USERINFO_URL',
+        },
+        staticEnv: {
+          POSTIZ_GENERIC_OAUTH: 'true',
+          NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME: 'Authentik',
+        },
+      },
+    });
+
+    // Explicit Authentik endpoints (global, not per-application).
+    expect(result.env.POSTIZ_OAUTH_AUTH_URL).toBe('https://auth.example.com/application/o/authorize/');
+    expect(result.env.POSTIZ_OAUTH_TOKEN_URL).toBe('https://auth.example.com/application/o/token/');
+    expect(result.env.POSTIZ_OAUTH_USERINFO_URL).toBe('https://auth.example.com/application/o/userinfo/');
+    // Per-app issuer + generated creds.
+    expect(result.env.POSTIZ_OAUTH_URL).toBe(`https://auth.example.com/application/o/${result.ref.applicationSlug}/`);
+    expect(typeof result.env.POSTIZ_OAUTH_CLIENT_ID).toBe('string');
+    expect(typeof result.env.POSTIZ_OAUTH_CLIENT_SECRET).toBe('string');
+    // Static literals only present because OIDC was provisioned.
+    expect(result.env.POSTIZ_GENERIC_OAUTH).toBe('true');
+    expect(result.env.NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME).toBe('Authentik');
+  });
+
   test('rolls back the provider if application creation fails', async () => {
     installFetch(call => {
       if (call.method === 'POST' && call.path === '/api/v3/core/applications/') {
