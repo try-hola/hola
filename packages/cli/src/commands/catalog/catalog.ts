@@ -1,6 +1,8 @@
 import { HolaSdk } from '@hola/sdk';
 import type { GetCatalogAppsResponse } from '@hola/shared';
 
+import { maybeNotifyUpdate } from '../../lib/update-notice';
+
 export interface CatalogOptions {
   category?: string;
   limit?: number | string;
@@ -30,6 +32,7 @@ export async function runCatalog(
 
     if (!res.items.length) {
       console.log('No apps found. (Is HOLA_CATALOG_URL set on the server?)');
+      await maybeNotifyUpdate(sdk, opts);
       return;
     }
 
@@ -38,6 +41,7 @@ export async function runCatalog(
       console.log(`${(app.icon || '📦')} ${app.id.padEnd(idWidth)}  ${app.description}`);
     }
     console.log(`\n${res.total} app(s). Install with: hola install <id>`);
+    await maybeNotifyUpdate(sdk, opts);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`Catalog list failed: ${msg}`);

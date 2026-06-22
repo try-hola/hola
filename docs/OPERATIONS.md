@@ -218,9 +218,11 @@ curl -fsSL <bundle-url> | tar xz -C .   # extract the new bundle over the dir
 HOLA_BOOTSTRAP=1 ./scripts/install.sh   # idempotent: pulls images, recreates changed services
 ```
 
-State in the `hola-data` volume is preserved across upgrades. The web dashboard and
-the CLI both surface an "update available" notice (a cached check against the
-newest published release) pointing you to `hola update`.
+State in the `hola-data` volume is preserved across upgrades. The web dashboard
+shows an "update available" banner, and the CLI appends a one-line notice to any
+command that talks to the server (both read one cached server-side check against
+the newest published release). Run `hola update --check` for the discrete report,
+or set `HOLA_NO_UPDATE_NOTICE=1` to silence the per-command notice.
 
 ## Troubleshooting
 

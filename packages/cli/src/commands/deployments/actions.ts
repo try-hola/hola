@@ -2,6 +2,7 @@ import { HolaSdk } from '@hola/sdk';
 import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse } from '@hola/shared';
 
 import { watchJob, reportDeployError } from '../../lib/deploy-flow';
+import { maybeNotifyUpdate } from '../../lib/update-notice';
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 
 export interface ActionOptions {
@@ -36,6 +37,7 @@ export async function runDeploymentAction(
       out(status ? `Done (${status}).` : 'Done.');
     }
     if (status === 'failed') process.exitCode = 1;
+    await maybeNotifyUpdate(sdk, opts);
     return { jobId: res.jobId, status };
   } catch (err) {
     return reportDeployError(err);
@@ -77,6 +79,7 @@ export async function runRollback(
       out(status ? `Done (${status}).` : 'Done.');
     }
     if (status === 'failed') process.exitCode = 1;
+    await maybeNotifyUpdate(sdk, opts);
     return res;
   } catch (err) {
     return reportDeployError(err);
@@ -133,6 +136,7 @@ export async function runUninstall(
     } else {
       out(`Uninstalled ${name}.`);
     }
+    await maybeNotifyUpdate(sdk, opts);
     return { uninstalled: deploymentId };
   } catch (err) {
     if (err instanceof PromptCancelled) {

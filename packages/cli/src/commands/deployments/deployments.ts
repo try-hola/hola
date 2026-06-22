@@ -3,6 +3,7 @@ import { API } from '@hola/shared';
 import type { GetDeploymentsResponse } from '@hola/shared';
 
 import { streamSSE } from '../../lib/sse';
+import { maybeNotifyUpdate } from '../../lib/update-notice';
 
 export interface DeploymentsListOptions {
   status?: string;
@@ -27,6 +28,7 @@ export async function runDeploymentsList(
     }
     if (!res.items.length) {
       console.log('No deployments.');
+      await maybeNotifyUpdate(sdk, opts);
       return;
     }
     const idWidth = Math.max(2, ...res.items.map(d => d.id.length));
@@ -36,6 +38,7 @@ export async function runDeploymentsList(
       console.log(`${d.id.padEnd(idWidth)}  ${d.name.padEnd(nameWidth)}  ${d.status.padEnd(10)}${url}`);
     }
     console.log(`\n${res.total} deployment(s).`);
+    await maybeNotifyUpdate(sdk, opts);
   } catch (err) {
     reportListError(err);
   }
@@ -70,11 +73,13 @@ export async function runDeploymentLogs(
     const entries = res.entries ?? [];
     if (!entries.length) {
       console.log('No logs.');
+      await maybeNotifyUpdate(sdk, opts);
       return;
     }
     for (const e of entries) {
       console.log(`${e.timestamp ? `${e.timestamp} ` : ''}${e.message ?? ''}`);
     }
+    await maybeNotifyUpdate(sdk, opts);
   } catch (err) {
     reportListError(err);
   }
