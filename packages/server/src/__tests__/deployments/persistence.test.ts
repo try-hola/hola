@@ -187,12 +187,14 @@ describe('Deployment persistence (real service)', () => {
     expect(rollback.previousReleaseId).toBe(promoted.releaseId);
   });
 
-  test('a deployment created without a name defaults to the app slug', async () => {
+  test('a deployment created without a name defaults to the catalog product name', async () => {
     const { drafts, deployments } = makeSystem();
     const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });
     const detail = await deployments.getDeployment(created.deploymentId);
-    // Not an opaque "deployment-<id>" placeholder — the UI shows the app.
-    expect(detail.name).toBe('gitea');
+    // The catalog product name is persisted at install (carried via the finalized
+    // manifest), so the UI shows a readable name without a live catalog join —
+    // never an opaque "deployment-<id>" placeholder. Falls back to the app slug.
+    expect(detail.name).toBe('Test App');
   });
 
   test('a failed promotion leaves the previous release active', async () => {

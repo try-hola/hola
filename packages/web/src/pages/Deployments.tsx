@@ -18,7 +18,6 @@ import type {
 } from '@hola/shared';
 import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
-import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 
@@ -33,10 +32,6 @@ const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
 
 const GRID_COLS =
   'grid grid-cols-[2.4fr_1.1fr_0.9fr_1.9fr_0.9fr_130px] gap-[14px] px-[18px]';
-
-// Module-level constant so its identity is stable across renders (matches Apps.tsx).
-// A fresh object literal here would change every render and re-fetch the catalog.
-const CATALOG_PARAMS = { page: 1, limit: 100 };
 
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
@@ -65,15 +60,6 @@ export const Deployments: React.FC = () => {
 
   const deployments = deploymentsResponse?.items || [];
   const totalDeployments = deploymentsResponse?.total || 0;
-
-  // Join app id -> catalog product name + glyph so the "App" column shows the
-  // real app (e.g. "Uptime Kuma" 📈), not a "deployment-<id>" placeholder.
-  const { data: catalogData } = useCatalogAppsApi(CATALOG_PARAMS);
-  const appMeta = React.useMemo(() => {
-    const map = new Map<string, { name: string; icon: string }>();
-    for (const app of catalogData?.items ?? []) map.set(app.id, { name: app.name, icon: app.icon });
-    return map;
-  }, [catalogData]);
 
   const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart') => {
     try {
@@ -221,9 +207,10 @@ export const Deployments: React.FC = () => {
 
           {/* Body rows */}
           {deployments.map((deployment) => {
-            const meta = appMeta.get(deployment.app);
-            const displayName = meta?.name || deployment.app || deployment.name;
-            const displayIcon = meta?.icon || deployment.icon;
+            // Name + icon are persisted on the deployment (seeded from the catalog
+            // at install), falling back to the app id for older records.
+            const displayName = deployment.name || deployment.app;
+            const displayIcon = deployment.icon;
             return (
             <div
               key={deployment.id}

@@ -26,7 +26,8 @@ function makeCatalog(): CatalogArg {
   return {
     getApp: async (appId: string) => ({
       id: appId,
-      name: appId,
+      // A product name distinct from the id, to assert it flows through.
+      name: appId === 'with-compose' ? 'With Compose' : appId,
       // A URL icon for one app, to assert the icon flows through unchanged.
       icon: appId === 'with-compose' ? 'https://cdn.example.com/with-compose.png' : '📦',
     }),
@@ -77,14 +78,16 @@ describe('Catalog → draft compose (#82)', () => {
     expect(artifacts?.composeOverride).toContain('nginx:1.27');
   });
 
-  test('persists the catalog icon on the draft and carries it through finalize (#238)', async () => {
+  test('persists the catalog icon + display name on the draft and carries them through finalize (#238)', async () => {
     const { draftId } = await drafts.createDraft({ appId: 'with-compose', version: '1.0.0' });
     const draft = await drafts.getDraft(draftId);
     expect(draft.icon).toBe('https://cdn.example.com/with-compose.png');
+    expect(draft.displayName).toBe('With Compose');
 
     await drafts.finalizeDraft(draftId);
     const artifacts = await drafts.getFinalizedArtifacts(draftId);
     expect(artifacts?.manifest.icon).toBe('https://cdn.example.com/with-compose.png');
+    expect(artifacts?.manifest.displayName).toBe('With Compose');
   });
 
   test('falls back to empty composeOverride when the bundle has none', async () => {

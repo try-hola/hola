@@ -455,9 +455,11 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
-        // Default to the app slug (e.g. "uptime-kuma") so the UI shows the app,
-        // not an opaque "deployment-<id>" placeholder. A caller-supplied name wins.
-        name: request.name || app,
+        // Default to the catalog product name (e.g. "Uptime Kuma"), falling back
+        // to the app slug — so the UI shows a readable app name without a live
+        // catalog lookup, never an opaque "deployment-<id>". A caller-supplied
+        // name wins.
+        name: request.name || artifacts?.manifest.displayName || app,
         app,
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
