@@ -144,10 +144,6 @@ const PROVISIONER_PERMISSIONS = [
   'authentik_providers_oauth2.view_oauth2provider',
   'authentik_providers_oauth2.change_oauth2provider',
   'authentik_providers_oauth2.delete_oauth2provider',
-  // Read OAuth2 scope mappings to attach openid/profile/email to provisioned
-  // clients (the generic core.view_propertymapping is insufficient for the
-  // provider/scope subclass endpoint — Authentik returns 403 without this).
-  'authentik_providers_oauth2.view_scopemapping',
   'authentik_providers_proxy.add_proxyprovider',
   'authentik_providers_proxy.view_proxyprovider',
   'authentik_providers_proxy.change_proxyprovider',
@@ -977,22 +973,40 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
   }
 
-  /** Best-effort: collect scope-mapping pks for the requested scope names. */
+  /**
+   * Resolve scope-mapping pks for the requested scope names so the provisioned
+   * OIDC provider releases the standard `openid`/`profile`/`email` claims.
+   *
+   * Reads the polymorphic `/api/v3/propertymappings/all/` endpoint and filters
+   * CLIENT-SIDE — the TYPED `/api/v3/propertymappings/provider/scope/` endpoint
+   * needs the `authentik_providers_oauth2.view_scopemapping` model permission the
+   * least-privilege scoped token is denied (403), so providers ended up with no
+   * scope mappings and degraded SSO (issue #144). The polymorphic endpoint only
+   * needs the generic `authentik_core.view_propertymapping` the token already
+   * holds — the same pattern resolveLoginStagePk() uses for the login stage.
+   *
+   * Matches each scope by its stable `managed` identifier (Authentik's default
+   * scope mappings are `goauthentik.io/providers/oauth2/scope-<scope>`) or, when
+   * the serializer exposes it, by `scope_name`. Best-effort: a list failure logs
+   * and returns nothing rather than aborting the whole provision.
+   */
   private async resolveScopeMappingPks(scopes: string[]): Promise<string[]> {
+    type ScopeMapping = { pk: string; managed?: string | null; scope_name?: string };
+    let mappings: ScopeMapping[];
+    try {
+      mappings = (await this.api<{ results: ScopeMapping[] }>('GET', '/api/v3/propertymappings/all/')).results ?? [];
+    } catch (error) {
+      this.logger.warn('Could not list OIDC scope mappings; provider will have none', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
     const pks: string[] = [];
     for (const scope of scopes) {
-      try {
-        const res = await this.api<{ results: Array<{ pk: string }> }>(
-          'GET',
-          `/api/v3/propertymappings/provider/scope/?scope_name=${encodeURIComponent(scope)}`
-        );
-        if (res.results?.[0]?.pk) pks.push(res.results[0].pk);
-      } catch (error) {
-        this.logger.warn('Could not resolve OIDC scope mapping; continuing', {
-          scope,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      const managed = `goauthentik.io/providers/oauth2/scope-${scope}`;
+      const match = mappings.find((m) => m.scope_name === scope || m.managed === managed);
+      if (match) pks.push(match.pk);
+      else this.logger.warn('No OIDC scope mapping found for scope; continuing', { scope });
     }
     return pks;
   }
