@@ -21,9 +21,41 @@ export type StructuredLog = SharedLogEntry & { target: LoggingTarget };
 export interface LoggingService extends HealthCheckable {
   log(target: LoggingTarget, level: SharedLogEntry['level'], message: string, metadata?: Record<string, unknown>): Promise<void>;
   onLog(target: LoggingTarget, listener: Listener<StructuredLog>): { unsubscribe(): void };
+  /** Recent buffered log lines for a target, oldest-first. Lets the Logs tab
+   *  show why a finished/failed job ended instead of "No logs available"
+   *  (the live SSE stream alone has nothing to replay once the job is over). */
+  recentLogs(target: LoggingTarget, limit?: number): StructuredLog[];
   // Convenience
   logJob(jobId: string, level: SharedLogEntry['level'], message: string, metadata?: Record<string, unknown>): Promise<void>;
   logDeployment(deploymentId: string, level: SharedLogEntry['level'], message: string, metadata?: Record<string, unknown>): Promise<void>;
+}
+
+/** Per-target in-memory ring buffer of recent log lines. Bounded two ways so a
+ *  long-lived server can't leak: at most MAX_LINES per target, and at most
+ *  MAX_TARGETS distinct targets (oldest target evicted first). */
+class LogRingBuffer {
+  private static readonly MAX_LINES = 1000;
+  private static readonly MAX_TARGETS = 256;
+  private buffers = new Map<string, StructuredLog[]>();
+
+  push(key: string, entry: StructuredLog): void {
+    let buf = this.buffers.get(key);
+    if (!buf) {
+      buf = [];
+      this.buffers.set(key, buf);
+      if (this.buffers.size > LogRingBuffer.MAX_TARGETS) {
+        const oldest = this.buffers.keys().next().value;
+        if (oldest !== undefined) this.buffers.delete(oldest);
+      }
+    }
+    buf.push(entry);
+    if (buf.length > LogRingBuffer.MAX_LINES) buf.splice(0, buf.length - LogRingBuffer.MAX_LINES);
+  }
+
+  recent(key: string, limit?: number): StructuredLog[] {
+    const buf = this.buffers.get(key) ?? [];
+    return limit && limit < buf.length ? buf.slice(buf.length - limit) : [...buf];
+  }
 }
 
 class SimplePubSub<TopicKey, Payload> {
@@ -61,6 +93,7 @@ export class RealLoggingService implements LoggingService {
   private logger = getLogger().child({ service: 'RealLoggingService' });
   private storage: StorageService;
   private bus = new SimplePubSub<string, StructuredLog>();
+  private buffer = new LogRingBuffer();
   private initialized = false;
 
   constructor(storage?: StorageService) {
@@ -106,7 +139,8 @@ export class RealLoggingService implements LoggingService {
       target,
     };
 
-    // Broadcast first for live subscribers
+    // Retain for the snapshot/replay buffer, then broadcast to live subscribers.
+    this.buffer.push(this.targetKey(target), entry);
     this.bus.emit(this.targetKey(target), entry);
 
     // Persist via file logger (best-effort)
@@ -124,6 +158,10 @@ export class RealLoggingService implements LoggingService {
     return this.bus.subscribe(this.targetKey(target), listener);
   }
 
+  recentLogs(target: LoggingTarget, limit?: number): StructuredLog[] {
+    return this.buffer.recent(this.targetKey(target), limit);
+  }
+
   async logJob(jobId: string, level: SharedLogEntry['level'], message: string, metadata?: Record<string, unknown>): Promise<void> {
     return this.log({ kind: 'job', id: jobId }, level, message, metadata);
   }
@@ -139,6 +177,7 @@ export class RealLoggingService implements LoggingService {
 export class MockLoggingService implements LoggingService {
   private logger = getLogger().child({ service: 'MockLoggingService' });
   private bus = new SimplePubSub<string, StructuredLog>();
+  private buffer = new LogRingBuffer();
 
   private targetKey(target: LoggingTarget): string {
     return target.kind + ':' + target.id;
@@ -156,12 +195,17 @@ export class MockLoggingService implements LoggingService {
       message,
       target,
     };
+    this.buffer.push(this.targetKey(target), entry);
     this.bus.emit(this.targetKey(target), entry);
     this.logger.debug('Mock log', { target, level, message });
   }
 
   onLog(target: LoggingTarget, listener: Listener<StructuredLog>): { unsubscribe(): void } {
     return this.bus.subscribe(this.targetKey(target), listener);
+  }
+
+  recentLogs(target: LoggingTarget, limit?: number): StructuredLog[] {
+    return this.buffer.recent(this.targetKey(target), limit);
   }
 
   async logJob(jobId: string, level: SharedLogEntry['level'], message: string, metadata?: Record<string, unknown>): Promise<void> {

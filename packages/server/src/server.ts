@@ -387,13 +387,19 @@ async function route(url: URL, req: Request): Promise<Response> {
           timestamp: j.finishedAt ?? j.startedAt,
         }));
 
-      const erroredDeployments = deployments.filter(d => d.status === 'error').length;
-      const failedRecentJobs = recentJobs.filter(j => j.status === 'failed').length;
+      // One incident, one alert: a failed install surfaces as BOTH an errored
+      // deployment and a failed job — fold the job into its deployment so it
+      // isn't double-counted. Standalone failed jobs (no errored deployment,
+      // e.g. system jobs) still count on their own.
+      const erroredDeploymentIds = new Set(deployments.filter(d => d.status === 'error').map(d => d.id));
+      const unattributedFailedJobs = recentJobs.filter(
+        j => j.status === 'failed' && !(j.deploymentId && erroredDeploymentIds.has(j.deploymentId))
+      ).length;
 
       const payload: GetSummaryResponse = {
         deploymentsCount: deployments.length,
         activeJobsCount,
-        alertsCount: erroredDeployments + failedRecentJobs,
+        alertsCount: erroredDeploymentIds.size + unattributedFailedJobs,
         recentJobs,
         system: systemStatus,
       };
@@ -1062,12 +1068,21 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Snapshot of prior job logs. Live job logs stream from `/logs/stream` below;
-  // there is no historical log buffer yet, so this returns an empty snapshot
-  // rather than fabricated sample lines.
+  // Snapshot of prior job logs from the logging service's in-memory ring buffer,
+  // so a finished/failed job still shows why it ended (the live `/logs/stream`
+  // below has nothing to replay once the job is over).
   const jobLogsMatch = pathname.match(/^\/api\/jobs\/([^/]+)\/logs$/);
   if (jobLogsMatch && req.method === 'GET') {
-    return json({ items: [] });
+    const jobId = jobLogsMatch[1];
+    const items = getServices().logging
+      .recentLogs({ kind: 'job', id: jobId })
+      .map(entry => ({
+        timestamp: entry.timestamp,
+        service: entry.service,
+        level: entry.level,
+        message: entry.message,
+      }));
+    return json({ items });
   }
 
   // Job Logs SSE Stream - new endpoint for real-time job logs and updates
@@ -1080,6 +1095,19 @@ async function route(url: URL, req: Request): Promise<Response> {
         logger,
         onSubscribe(controller) {
           controller.heartbeat();
+          // Replay buffered history first so a tab opened mid/post-run sees the
+          // prior lines (incl. the failure) before live lines start flowing.
+          for (const entry of services.logging.recentLogs({ kind: 'job', id: jobId })) {
+            controller.send({
+              type: 'log',
+              data: {
+                timestamp: entry.timestamp,
+                service: entry.service,
+                level: entry.level,
+                message: entry.message,
+              },
+            });
+          }
           const sub = services.logging.onLog({ kind: 'job', id: jobId }, entry => {
             controller.send({
               type: 'log',

@@ -1175,9 +1175,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
-        // deploy / start / rollback -> compose up
+        // deploy / start / rollback -> pull images, then compose up
         const provisioned = await this.provisionAuth(deployment);
-        const res = await this.dockerService.composeUp(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
+        const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
+
+        // Pull first (generous timeout) so `up` isn't gated on download time —
+        // large stacks like Postiz used to be SIGKILLed mid-pull by up's 2-min cap.
+        await logBoth('info', 'Pulling images (first install can take several minutes)…');
+        const pull = await this.dockerService.composePull(composeDir, projectName);
+        if (!pull.success) throw new Error(`Image pull failed: ${pull.output}`);
+        await ctx.setProgress(60);
+
+        const res = await this.dockerService.composeUp(composeDir, projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
