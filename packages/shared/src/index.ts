@@ -334,7 +334,25 @@ export type AppAuthConfig = {
     // their base URL and have no env var for the literal callback URL (e.g.
     // Actual Budget uses ACTUAL_OPENID_SERVER_HOSTNAME). issuer/clientId/
     // clientSecret are always required when an env map is present.
-    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string };
+    //
+    // `authUrl`/`tokenUrl`/`userinfoUrl` are for apps that DON'T do OIDC
+    // discovery from the issuer and need the IdP's explicit endpoints (e.g.
+    // Postiz's POSTIZ_OAUTH_AUTH_URL/TOKEN_URL/USERINFO_URL). Hola fills them
+    // from the provider's well-known Authentik endpoints.
+    env?: {
+      issuer: string;
+      clientId: string;
+      clientSecret: string;
+      redirectUri?: string;
+      authUrl?: string;
+      tokenUrl?: string;
+      userinfoUrl?: string;
+    };
+    // Literal env to set ONLY when this app's OIDC is actually provisioned —
+    // e.g. an enable flag and the SSO button label (POSTIZ_GENERIC_OAUTH=true,
+    // NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME=Authentik). Kept out of the app's
+    // always-on defaultEnv so a non-SSO install doesn't show a dead SSO button.
+    staticEnv?: Record<string, string>;
     setup?: OidcSetupCommand;
   };
   // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.

@@ -37,8 +37,19 @@ export interface ProvisionInput {
     /** The app's expected env-var NAMES for each OIDC setting (optional — apps that
      *  configure OIDC via a setup command rather than env omit this). `redirectUri`
      *  is optional: apps that derive their own redirect URI from their base URL have
-     *  no env var for the literal callback. */
-    env?: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string };
+     *  no env var for the literal callback. `authUrl`/`tokenUrl`/`userinfoUrl` are
+     *  for apps that need the IdP's explicit endpoints instead of discovery. */
+    env?: {
+      issuer: string;
+      clientId: string;
+      clientSecret: string;
+      redirectUri?: string;
+      authUrl?: string;
+      tokenUrl?: string;
+      userinfoUrl?: string;
+    };
+    /** Literal env injected only when OIDC is provisioned (enable flag, button label). */
+    staticEnv?: Record<string, string>;
   };
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
@@ -270,7 +281,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
       const reuseSlug = existing.applicationSlug ?? slug;
       return {
-        env: this.oidcEnv(oidc.env, provider.client_id, provider.client_secret, redirectUri, reuseSlug),
+        env: this.oidcEnv(oidc, provider.client_id, provider.client_secret, redirectUri, reuseSlug),
         credentials: { clientId: provider.client_id, clientSecret: provider.client_secret, issuer: this.issuerUrl(reuseSlug), redirectUri },
         ref: existing,
       };
@@ -315,15 +326,14 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     this.logger.info('Provisioned OIDC client', { deploymentId: input.deploymentId, providerPk: provider.pk, slug });
 
     return {
-      env: this.oidcEnv(oidc.env, clientId, clientSecret, redirectUri, slug),
+      env: this.oidcEnv(oidc, clientId, clientSecret, redirectUri, slug),
       credentials: { clientId, clientSecret, issuer: this.issuerUrl(slug), redirectUri },
       ref: { mode: 'native-oidc', providerPk: provider.pk, applicationSlug: slug, clientId },
     };
   }
 
   private issuerUrl(slug: string): string {
-    const base = this.config.authentikPublicUrl || this.config.authentikUrl || '';
-    return `${base}/application/o/${slug}/`;
+    return `${this.oauthBase()}/application/o/${slug}/`;
   }
 
   // ---- platform (dashboard) OIDC ----------------------------------------
@@ -916,20 +926,35 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   }
 
   private oidcEnv(
-    names: { issuer: string; clientId: string; clientSecret: string; redirectUri?: string } | undefined,
+    oidc: ProvisionInput['oidc'],
     clientId: string,
     clientSecret: string,
     redirectUri: string,
     slug: string
   ): Record<string, string> {
-    if (!names) return {};
-    return {
-      [names.issuer]: this.issuerUrl(slug),
-      [names.clientId]: clientId,
-      [names.clientSecret]: clientSecret,
+    const out: Record<string, string> = {};
+    const names = oidc?.env;
+    if (names) {
+      out[names.issuer] = this.issuerUrl(slug);
+      out[names.clientId] = clientId;
+      out[names.clientSecret] = clientSecret;
       // Only inject the literal redirect URI when the app exposes an env var for it.
-      ...(names.redirectUri ? { [names.redirectUri]: redirectUri } : {}),
-    };
+      if (names.redirectUri) out[names.redirectUri] = redirectUri;
+      // Explicit IdP endpoints for apps that don't discover from the issuer.
+      // These are Authentik's global OIDC endpoints (not per-application).
+      const base = this.oauthBase();
+      if (names.authUrl) out[names.authUrl] = `${base}/application/o/authorize/`;
+      if (names.tokenUrl) out[names.tokenUrl] = `${base}/application/o/token/`;
+      if (names.userinfoUrl) out[names.userinfoUrl] = `${base}/application/o/userinfo/`;
+    }
+    // Literal env to set only when OIDC is provisioned (enable flag, button label).
+    if (oidc?.staticEnv) Object.assign(out, oidc.staticEnv);
+    return out;
+  }
+
+  /** Public Authentik base URL for building OIDC endpoint URLs. */
+  private oauthBase(): string {
+    return this.config.authentikPublicUrl || this.config.authentikUrl || '';
   }
 
   /**
