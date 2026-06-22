@@ -29,17 +29,20 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     return `deployment-detail-${deploymentId}`;
   }, [deploymentId]);
 
-  const fetchData = React.useCallback(async () => {
+  // `force` bypasses the 30s cache read — required for polling, since a status
+  // mid-transition (installing/updating) would otherwise be served stale for up
+  // to 30s and never appear to progress.
+  const fetchData = React.useCallback(async (force = false) => {
     if (!deploymentId || !cacheKey) {
       setState({ data: null, loading: false, error: null });
       return;
     }
 
-    const cached = globalCache.get(cacheKey);
     const now = Date.now();
-    
-    // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
+    const cached = globalCache.get(cacheKey);
+
+    // Check cache first (unless forced)
+    if (!force && cached && (now - cached.timestamp) < 30000) {
       setState({
         data: cached.data as GetDeploymentResponse,
         loading: false,
@@ -47,9 +50,9 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
       });
       return;
     }
-    
+
     setState(prev => ({ ...prev, loading: true, error: null }));
-    
+
     try {
       const result = await api.deployments.byId(deploymentId) as GetDeploymentResponse;
       globalCache.set(cacheKey, { data: result, timestamp: now });
@@ -66,6 +69,17 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
   React.useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Auto-refresh while a deployment is mid-transition so the status badge moves
+  // from "Installing"/"Updating" to its terminal state without a manual reload
+  // (the deploy lifecycle runs asynchronously server-side).
+  const status = state.data?.status;
+  const isTransitional = status === 'installing' || status === 'updating';
+  React.useEffect(() => {
+    if (!isTransitional) return;
+    const interval = setInterval(() => { void fetchData(true); }, 4000);
+    return () => clearInterval(interval);
+  }, [isTransitional, fetchData]);
 
   // Update configuration
   const updateConfiguration = React.useCallback(async (request: PatchDeploymentRequest) => {
