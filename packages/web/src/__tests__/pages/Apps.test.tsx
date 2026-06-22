@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { API } from '@hola/shared';
@@ -52,7 +52,10 @@ describe('Apps landing', () => {
     // The deployment's internal name must NOT be shown.
     expect(screen.queryByText('deployment-gitea-abc12345')).not.toBeInTheDocument();
     expect(screen.getByText('🍵')).toBeInTheDocument(); // catalog icon wins over fallback
-    expect(screen.getByText('Running')).toBeInTheDocument(); // status pill label
+    // Running tiles read as launchable ("Open"), not a status pill.
+    expect(screen.getByText('Open')).toBeInTheDocument();
+    // …and keep a manage shortcut to their deployment detail for troubleshooting.
+    expect(screen.getByTitle('Manage & logs')).toHaveAttribute('href', '/deployments/gitea-abc12345');
   });
 
   it('renders every installed app, not just running ones', async () => {
@@ -72,7 +75,7 @@ describe('Apps landing', () => {
     // Running app opens externally; stopped app links to its detail page. Tiles
     // show the catalog product name.
     expect(await screen.findByTitle('Open Alpha')).toHaveAttribute('href', 'https://a.local.hola');
-    expect(screen.getByTitle('Bravo')).toHaveAttribute('href', '/deployments/b-1');
+    expect(screen.getByTitle('Bravo — view deployment')).toHaveAttribute('href', '/deployments/b-1');
   });
 
   it('falls back to the app id when the catalog has no match', async () => {
@@ -84,9 +87,30 @@ describe('Apps landing', () => {
     renderApps();
 
     // No catalog entry → fall back to the app id, never the deployment name.
-    const link = await screen.findByTitle('uptime-kuma');
+    const link = await screen.findByTitle('uptime-kuma — view deployment');
     expect(link).toHaveAttribute('href', '/deployments/x-1');
     expect(screen.queryByText('deployment-x-1')).not.toBeInTheDocument();
+  });
+
+  it('filters the grid by the search box', async () => {
+    mockApi(
+      [
+        { id: 'a-1', name: 'deployment-a-1', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
+        { id: 'b-1', name: 'deployment-b-1', app: 'b', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://b.local.hola' },
+      ],
+      [
+        { id: 'a', name: 'Alpha', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
+        { id: 'b', name: 'Bravo', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
+      ],
+    );
+
+    renderApps();
+
+    expect(await screen.findByText('Alpha')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Search apps…'), { target: { value: 'brav' } });
+
+    expect(screen.getByText('Bravo')).toBeInTheDocument();
+    expect(screen.queryByText('Alpha')).not.toBeInTheDocument();
   });
 
   it('shows an empty state when nothing is installed', async () => {
