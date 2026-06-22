@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ChevronRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download } from 'lucide-react';
+import { ChevronRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2 } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
 import type {
   AppEnvVar,
@@ -351,6 +351,20 @@ export const InstallWizard: React.FC = () => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // Fill a secret field with a cryptographically-random value (32 bytes → 64
+  // hex chars, matching `openssl rand -hex 32`). Reveals it so the operator can
+  // see/copy what was generated. Used for required secrets like Postiz's
+  // JWT_SECRET that just need to be random and stable, not human-chosen.
+  const generateSecret = async (index: number) => {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    if (envVars[index]?.key) {
+      setShowSecrets(prev => ({ ...prev, [envVars[index].key]: true }));
+    }
+    await updateEnvVar(index, 'value', hex);
+  };
+
   const handleFileUpload = async (files: FileList | null) => {
     if (!files || files.length === 0 || !draftId) return;
     
@@ -604,8 +618,13 @@ services:
               <h4 className="text-[13.5px] font-semibold text-text-strong mb-3">Application variables</h4>
 
               <div className="space-y-3 mb-3">
-                {envVars.map((env, index) => (
-                  <div key={index} className="grid grid-cols-12 gap-3 items-center p-[14px] bg-surface-2 rounded-[10px] border border-border-soft">
+                {envVars.map((env, index) => {
+                  // A populated secret with no value is what keeps Next disabled
+                  // (canProceed, case 0). Mark it so the operator can see exactly
+                  // which row to fix in a long list.
+                  const blocking = Boolean(env.key && env.isSecret && !env.value);
+                  return (
+                  <div key={index} className={`grid grid-cols-12 gap-3 items-center p-[14px] bg-surface-2 rounded-[10px] border ${blocking ? 'border-warning/60' : 'border-border-soft'}`}>
                     <div className="col-span-3">
                       <input
                         type="text"
@@ -618,19 +637,29 @@ services:
                     <div className="col-span-4 relative flex items-center">
                       <input
                         type={env.isSecret && !showSecrets[env.key] ? 'password' : 'text'}
-                        placeholder="Value"
+                        placeholder={blocking ? 'Required — click 🪄 to generate' : 'Value'}
                         value={env.value}
                         onChange={(e) => updateEnvVar(index, 'value', e.target.value)}
-                        className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] pr-10 text-[13px] font-mono outline-none focus:border-primary"
+                        className={`w-full h-10 bg-surface-0 border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary ${blocking ? 'border-warning/60' : 'border-border'} ${env.isSecret ? 'pr-[60px]' : ''}`}
                       />
                       {env.isSecret && (
-                        <button
-                          type="button"
-                          onClick={() => toggleSecretVisibility(env.key)}
-                          className="absolute right-[11px] flex text-text-faint hover:text-text-strong transition-colors"
-                        >
-                          {showSecrets[env.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            title="Generate a random secret"
+                            onClick={() => generateSecret(index)}
+                            className="absolute right-[36px] flex text-text-faint hover:text-primary transition-colors"
+                          >
+                            <Wand2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => toggleSecretVisibility(env.key)}
+                            className="absolute right-[11px] flex text-text-faint hover:text-text-strong transition-colors"
+                          >
+                            {showSecrets[env.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </>
                       )}
                     </div>
                     <div className="col-span-1 flex items-center justify-center">
@@ -661,8 +690,19 @@ services:
                       </button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
+
+              {envVars.some(env => env.key && env.isSecret && !env.value) && (
+                <p className="flex items-center gap-2 mb-3 text-[12.5px] text-text-muted">
+                  <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
+                  <span>
+                    Some secrets need a value before you can continue. Use the
+                    {' '}<Wand2 className="inline w-3.5 h-3.5 align-text-bottom" /> button to generate a random one.
+                  </span>
+                </p>
+              )}
 
               <button
                 onClick={addEnvVar}
