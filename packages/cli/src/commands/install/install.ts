@@ -4,12 +4,29 @@ import type { CreateDraftResponse, GetDraftResponse, AppEnvVar } from '@hola/sha
 import { finalizeAndDeploy, reportDeployError, type DeployResult } from '../../lib/deploy-flow';
 
 export interface InstallOptions {
-  version?: string;
+  /** From `--app-version`. Not `--version` — that's sade's global flag and never reaches us. */
+  appVersion?: string;
   name?: string;
   set?: string | string[];
   noStream?: boolean;
   json?: boolean;
   strict?: boolean;
+}
+
+/**
+ * Split an inline `<appId>@<version>` into its parts. An explicit `--app-version`
+ * (passed via `flagVersion`) wins over the inline suffix. Splits on the last `@`
+ * so app ids that themselves contain `@` are preserved. Returns `latest` when no
+ * version is given anywhere — the server resolves that to the newest release.
+ */
+export function resolveAppAndVersion(
+  appId: string,
+  flagVersion?: string
+): { appId: string; version: string } {
+  const at = appId.lastIndexOf('@');
+  const inlineVersion = at > 0 ? appId.slice(at + 1) : undefined;
+  const bareAppId = at > 0 ? appId.slice(0, at) : appId;
+  return { appId: bareAppId, version: flagVersion || inlineVersion || 'latest' };
 }
 
 /** Parse repeated `--set KEY=VALUE` into a map. */
@@ -31,12 +48,12 @@ function parseSet(set?: string | string[]): Record<string, string> {
  * web install wizard drives.
  */
 export async function runInstall(
-  appId: string,
+  rawAppId: string,
   opts: InstallOptions,
   injected?: { sdk?: HolaSdk }
 ): Promise<DeployResult | undefined> {
   const sdk = injected?.sdk ?? new HolaSdk();
-  const version = opts.version ?? 'latest';
+  const { appId, version } = resolveAppAndVersion(rawAppId, opts.appVersion);
   const name = opts.name ?? appId;
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
 

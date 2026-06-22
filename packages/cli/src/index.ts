@@ -91,10 +91,14 @@ prog
   });
 
 // install — install a catalog app by id (draft from catalog → finalize → deploy)
+// Note: the app version is `--app-version`, not `--version` — the latter is sade's
+// global flag (prints the CLI version), so it can never reach this handler. You can
+// also pin a version inline as `hola install <appId>@<version>`.
 prog
   .command('install <appId>')
   .describe('Install a catalog app: draft from catalog → validate → finalize → deploy → watch')
-  .option('--version', 'App version', 'latest')
+  .example('install uptime-kuma@1.2.1')
+  .option('--app-version', 'App version to install (or use <appId>@<version>)', 'latest')
   .option('--name', 'Deployment name (default: the app id)')
   .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
   .option('--strict', 'Fail on validation warnings', false)

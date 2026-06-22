@@ -38,7 +38,7 @@ Commands are registered in `src/index.ts` with lazy loaders and implemented unde
 
 ### Catalog & install
 - `hola catalog [query]` — browse/search the app catalog. Options: `--category`, `--limit`, `--json`.
-- `hola install <appId>` — install a catalog app (draft from catalog → validate → finalize → deploy → watch). Options: `--version`, `--name`, `--set KEY=VALUE` (repeatable), `--strict`, `--no-stream`, `--json`.
+- `hola install <appId>` — install a catalog app (draft from catalog → validate → finalize → deploy → watch). Pin a version with `--app-version` or inline as `hola install <appId>@<version>` (defaults to the newest release). Options: `--app-version`, `--name`, `--set KEY=VALUE` (repeatable), `--strict`, `--no-stream`, `--json`.
 
 ### Deployments
 - `hola deployments` — list deployments. Options: `--status`, `--json`.
