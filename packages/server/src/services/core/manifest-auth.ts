@@ -48,6 +48,28 @@ function coerceOidcEnv(
   return { ...required, ...(redirectUri ? { redirectUri } : {}) };
 }
 
+/** Coerce a flat string→string record (e.g. oidc.staticEnv); undefined unless it
+ *  is a record with at least one non-empty string value. */
+function coerceStringRecord(v: unknown): Record<string, string> | undefined {
+  const rec = asRecord(v);
+  if (!rec) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(rec)) {
+    if (typeof val !== 'string' || val.length === 0) return undefined;
+    out[k] = val;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** Coerce an OIDC credentials-file directive: the data-root-relative `path` where
+ *  the server drops the provisioned creds JSON for a bundle sidecar to render. */
+function coerceOidcCredentialsFile(v: unknown): { path: string } | undefined {
+  const rec = asRecord(v);
+  const path = asString(rec?.path);
+  if (!path) return undefined;
+  return { path };
+}
+
 /** Coerce a post-deploy OIDC setup command. Requires a non-empty string[] command. */
 function coerceOidcSetup(value: unknown): OidcSetupCommand | undefined {
   const rec = asRecord(value);
@@ -90,9 +112,22 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     const scopes = asStringArray(oidc?.scopes);
     const env = coerceOidcEnv(oidc?.env);
     const setup = coerceOidcSetup(oidc?.setup);
-    // Require redirectPath + scopes, and at least one wiring mechanism (env or setup).
-    if (!redirectPath || !scopes || (!env && !setup)) return undefined;
-    result.oidc = { redirectPath, scopes, ...(env ? { env } : {}), ...(setup ? { setup } : {}) };
+    const staticEnv = coerceStringRecord(oidc?.staticEnv);
+    const extraRedirectUris = asStringArray(oidc?.extraRedirectUris);
+    const credentialsFile = coerceOidcCredentialsFile(oidc?.credentialsFile);
+    // Require redirectPath + scopes, and at least one wiring mechanism (env, setup,
+    // or a creds file a bundle sidecar renders). Unknown manifest fields are dropped
+    // downstream (see catalog.ts), so every carried field must be coerced explicitly.
+    if (!redirectPath || !scopes || (!env && !setup && !credentialsFile)) return undefined;
+    result.oidc = {
+      redirectPath,
+      scopes,
+      ...(env ? { env } : {}),
+      ...(setup ? { setup } : {}),
+      ...(staticEnv ? { staticEnv } : {}),
+      ...(extraRedirectUris ? { extraRedirectUris } : {}),
+      ...(credentialsFile ? { credentialsFile } : {}),
+    };
   }
 
   if (m === 'native-ldap') {

@@ -354,6 +354,22 @@ export type AppAuthConfig = {
     // always-on defaultEnv so a non-SSO install doesn't show a dead SSO button.
     staticEnv?: Record<string, string>;
     setup?: OidcSetupCommand;
+    // Extra redirect URIs to register on the OIDC client, beyond the one derived
+    // from `redirectPath`. Each entry may contain the `${HOLA_APP_HOST}` token
+    // (expanded to the app's public host) OR a non-http scheme. For apps whose
+    // OIDC client needs several callbacks across web + mobile — e.g. Immich uses
+    // `/auth/login`, `/user-settings`, and the mobile `app.immich:///oauth-callback`.
+    extraRedirectUris?: string[];
+    // For apps that ingest OIDC ONLY from a config FILE written before first boot
+    // (e.g. Immich: the admin UI is locked when a config file is present, there
+    // are no OIDC env vars, and `${ENV}` is not expanded inside the file). When set,
+    // the server writes the provisioned OIDC values as a GENERIC JSON creds file —
+    // `{ issuer, clientId, clientSecret, redirectUri }` — to `path` (relative to the
+    // app's `${HOLA_APP_DATA}` root) before the stack starts. Rendering those creds
+    // into the app's own config format is the BUNDLE's job: a sidecar/init container
+    // (see Homepage's registry renderer + ADR 0002) reads this file and writes the
+    // app config, so the server stays out of per-app config formats.
+    credentialsFile?: { path: string };
   };
   // For `native-ldap`: the env-var NAMES this app expects its LDAP bind settings in.
   ldap?: {

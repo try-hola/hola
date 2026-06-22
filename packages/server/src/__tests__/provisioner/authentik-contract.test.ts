@@ -169,6 +169,35 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref.applicationSlug).toBeTruthy();
   });
 
+  test('native-oidc registers extra redirect URIs (host token + non-http scheme) for web+mobile apps', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    // Immich-shaped: web login derives from redirectPath; user-settings carries
+    // the ${HOLA_APP_HOST} token; the mobile callback is a custom scheme.
+    await svc.provision({
+      deploymentId: 'dep-immich0123456789',
+      appName: 'immich',
+      mode: 'native-oidc' as const,
+      host: 'immich.example.com',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'profile', 'email'],
+        extraRedirectUris: [
+          'https://${HOLA_APP_HOST}/user-settings',
+          'app.immich:///oauth-callback',
+        ],
+      },
+    });
+
+    const pbody = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/oauth2/')!.body as Record<string, unknown>;
+    expect(pbody.redirect_uris).toEqual([
+      { matching_mode: 'strict', url: 'https://immich.example.com/auth/login' },
+      { matching_mode: 'strict', url: 'https://immich.example.com/user-settings' },
+      { matching_mode: 'strict', url: 'app.immich:///oauth-callback' },
+    ]);
+  });
+
   test('native-oidc resolves scope mappings by managed id when scope_name is absent', async () => {
     // The polymorphic endpoint doesn't always surface scope_name; the `managed`
     // identifier is the stable fallback (issue #144).

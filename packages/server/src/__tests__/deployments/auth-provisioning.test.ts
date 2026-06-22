@@ -220,6 +220,44 @@ describe('Auth provisioning lifecycle', () => {
     expect(meta.metadata.auth.ref.providerPk).toBe(42);
   });
 
+  test('native-oidc credentialsFile: writes the provisioned OIDC creds JSON into the data root before start (for a bundle sidecar to render)', async () => {
+    const prev = process.env.HOLA_APPS_BIND_ROOT;
+    process.env.HOLA_APPS_BIND_ROOT = join(dataRoot, 'apps');
+    try {
+      const auth: AppAuthConfig = {
+        mode: 'native-oidc',
+        oidc: {
+          redirectPath: '/auth/login',
+          scopes: ['openid', 'profile', 'email'],
+          extraRedirectUris: ['https://${HOLA_APP_HOST}/user-settings', 'app.immich:///oauth-callback'],
+          credentialsFile: { path: 'oidc.json' },
+        },
+      };
+      const sys = makeSystem({ auth });
+      const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      // A GENERIC creds file (not the app's config format) was written under
+      // <HOLA_APPS_BIND_ROOT>/<deploymentId>/ (the host path ${HOLA_APP_DATA} maps to).
+      const file = join(process.env.HOLA_APPS_BIND_ROOT, created.deploymentId, 'oidc.json');
+      const doc = JSON.parse(await readFile(file, 'utf-8')) as { issuer: string; clientId: string; clientSecret: string; redirectUri: string };
+      expect(doc.clientId).toBe('cid-123');
+      expect(doc.clientSecret).toBe('csecret-456');
+      expect(doc.issuer).toBe('https://auth.example.com/application/o/gitea-x/');
+      expect(doc.redirectUri).toBe('https://gitea.local.hola/auth/login');
+
+      // The provisioner received the extra redirect URIs to register on the client.
+      const spy = sys.provisioner as SpyProvisioner;
+      expect(spy.provisions[0].oidc?.extraRedirectUris).toEqual([
+        'https://${HOLA_APP_HOST}/user-settings',
+        'app.immich:///oauth-callback',
+      ]);
+    } finally {
+      if (prev === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
+      else process.env.HOLA_APPS_BIND_ROOT = prev;
+    }
+  });
+
   test('resolves install tokens (${HOLA_APP_HOST} / ${HOLA_BASE_DOMAIN}) in app env', async () => {
     const sys = makeSystem({ auth: undefined });
     const compose = [

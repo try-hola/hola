@@ -104,6 +104,58 @@ describe('coerceManifestAuth', () => {
     ).toBeUndefined();
   });
 
+  test('native-oidc carries staticEnv (the SSO enable flag/button label)', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/cb',
+        scopes: ['openid'],
+        env: { issuer: 'ISS', clientId: 'CID', clientSecret: 'SEC' },
+        staticEnv: { POSTIZ_GENERIC_OAUTH: 'true', NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME: 'Authentik' },
+      },
+    });
+    expect(result?.oidc?.staticEnv).toEqual({
+      POSTIZ_GENERIC_OAUTH: 'true',
+      NEXT_PUBLIC_POSTIZ_OAUTH_DISPLAY_NAME: 'Authentik',
+    });
+  });
+
+  test('native-oidc carries extraRedirectUris and a credentialsFile, and credentialsFile alone is a valid wiring mechanism', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'profile', 'email'],
+        extraRedirectUris: ['https://${HOLA_APP_HOST}/user-settings', 'app.immich:///oauth-callback'],
+        credentialsFile: { path: 'oidc.json' },
+      },
+    });
+    expect(result).toEqual({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'profile', 'email'],
+        extraRedirectUris: ['https://${HOLA_APP_HOST}/user-settings', 'app.immich:///oauth-callback'],
+        credentialsFile: { path: 'oidc.json' },
+      },
+    });
+  });
+
+  test('native-oidc with neither env, setup, nor credentialsFile degrades to undefined', () => {
+    expect(
+      coerceManifestAuth({ mode: 'native-oidc', oidc: { redirectPath: '/cb', scopes: ['openid'] } })
+    ).toBeUndefined();
+  });
+
+  test('native-oidc credentialsFile missing its path degrades to undefined', () => {
+    expect(
+      coerceManifestAuth({
+        mode: 'native-oidc',
+        oidc: { redirectPath: '/cb', scopes: ['openid'], credentialsFile: {} },
+      })
+    ).toBeUndefined();
+  });
+
   test('coerces native-ldap and forward-auth blocks', () => {
     expect(
       coerceManifestAuth({
