@@ -54,6 +54,10 @@ export interface DockerService {
   checkDockerAvailability(): Promise<boolean>;
   
   // Compose operations
+  /** Pull all images for a project ahead of `up`, with a generous timeout.
+   *  Image pulls for large multi-service apps (e.g. Postiz) routinely exceed the
+   *  short `up` timeout; pulling first means `up` only has to start local images. */
+  composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
   composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
   composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
@@ -154,18 +158,51 @@ export class RealDockerService implements DockerService, HealthCheckable {
     return info.available;
   }
 
-  async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+  async composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
     try {
-      this.logger.info('Starting compose project', { projectPath, projectName });
-      
+      this.logger.info('Pulling compose images', { projectPath, projectName });
+
       const composeFile = join(projectPath, 'docker-compose.yml');
       if (!existsSync(composeFile)) {
         throw new Error(`docker-compose.yml not found at ${composeFile}`);
       }
-      
+
+      // `--quiet`: suppress per-layer progress (it produced ~100KB of noise and
+      // buried real errors); only warnings/errors are printed. 30-minute ceiling
+      // accommodates large first-time pulls on a slow homelab connection.
+      const { stdout, stderr } = await execFileAsync(
+        'docker',
+        ['compose', '-f', composeFile, '-p', projectName, 'pull', '--quiet'],
+        { cwd: projectPath, timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024 }
+      );
+      const output = [stdout, stderr].filter(Boolean).join('\n');
+      this.logger.info('Compose images pulled', { projectName, output: output.substring(0, 1000) });
+      return { success: true, output };
+    } catch (error) {
+      // execFile rejects on non-zero exit (e.g. denied/manifest-unknown) or on
+      // timeout; surface stdout+stderr+message so the caller logs the real cause.
+      const e = error as { stdout?: string; stderr?: string; message?: string };
+      const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n') || String(error);
+      this.logger.error('Failed to pull compose images', error instanceof Error ? error : undefined, { projectName });
+      return { success: false, output };
+    }
+  }
+
+  async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+    try {
+      this.logger.info('Starting compose project', { projectPath, projectName });
+
+      const composeFile = join(projectPath, 'docker-compose.yml');
+      if (!existsSync(composeFile)) {
+        throw new Error(`docker-compose.yml not found at ${composeFile}`);
+      }
+
+      // Images are pre-pulled by composePull, so `up` only starts local images.
+      // The 5-minute timeout covers container creation for large stacks (it is
+      // no longer gated on download time).
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" up -d`,
-        { cwd: projectPath, timeout: 120000 } // 2 minute timeout
+        { cwd: projectPath, timeout: 300000 } // 5 minute timeout
       );
       
       const output = [stdout, stderr].filter(Boolean).join('\n');
@@ -624,6 +661,11 @@ export class MockDockerService implements DockerService {
 
   async checkDockerAvailability(): Promise<boolean> {
     return true;
+  }
+
+  async composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose pull', { projectPath, projectName });
+    return { success: true, output: `[mock] Project ${projectName} images pulled` };
   }
 
   async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {

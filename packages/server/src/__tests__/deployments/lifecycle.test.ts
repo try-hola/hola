@@ -114,11 +114,11 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     expect((await deployments.getDeployment(created.deploymentId)).status).toBe('stopped');
   });
 
-  test('a Compose failure marks the job and the deployment failed', async () => {
-    const failingDocker = {
-      ...new MockDockerService(),
-      composeUp: async () => ({ success: false, output: 'mock: image pull failed' }),
-    } as unknown as DockerService;
+  test('a Compose up failure marks the job and the deployment failed', async () => {
+    // Override on a real instance so the other methods (incl. composePull) keep
+    // working — only `up` fails, exercising the post-pull failure path.
+    const failingDocker = new MockDockerService();
+    failingDocker.composeUp = async () => ({ success: false, output: 'mock: compose up failed' });
 
     const { jobs, drafts, deployments } = makeSystem(failingDocker);
     const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea' });
@@ -127,6 +127,26 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     expect(job.status).toBe('failed');
 
     expect((await deployments.getDeployment(created.deploymentId)).status).toBe('error');
+  });
+
+  test('an image-pull failure fails the deploy before Compose up runs', async () => {
+    const pullFailingDocker = new MockDockerService();
+    let upCalled = false;
+    pullFailingDocker.composePull = async () => ({ success: false, output: 'denied: requested access to the resource is denied' });
+    pullFailingDocker.composeUp = async () => { upCalled = true; return { success: true, output: '' }; };
+
+    const { jobs, drafts, deployments, logging } = makeSystem(pullFailingDocker);
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea' });
+
+    const lines: string[] = [];
+    const sub = logging.onLog({ kind: 'deployment', id: created.deploymentId }, (log) => lines.push(log.message));
+    const job = await waitForJob(jobs, created.jobId!);
+    sub.unsubscribe();
+
+    expect(job.status).toBe('failed');
+    expect(upCalled).toBe(false);
+    expect((await deployments.getDeployment(created.deploymentId)).status).toBe('error');
+    expect(lines.some(m => m.includes('Image pull failed') && m.includes('denied'))).toBe(true);
   });
 
   test('lifecycle logs are streamed to the deployment log target', async () => {

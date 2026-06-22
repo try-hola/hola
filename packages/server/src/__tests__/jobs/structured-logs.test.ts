@@ -46,7 +46,7 @@ describe('Jobs and Structured Logs', () => {
   });
 
   describe('Job logs SSE', () => {
-    it('GET /api/jobs/:id/logs returns a JSON snapshot (live logs are on /logs/stream)', async () => {
+    it('GET /api/jobs/:id/logs returns an empty snapshot for a job with no logs', async () => {
       const services = getServices();
   // Use a valid JobType ('install' used for generic log stream testing)
   const job = await services.jobs.createJob({ type: 'install', deploymentId: 'homeassistant-main' });
@@ -58,6 +58,22 @@ describe('Jobs and Structured Logs', () => {
       expect(res.headers.get('content-type')).toContain('application/json');
       const body = await res.json();
       expect(body).toEqual({ items: [] });
+    }, TEST_TIMEOUT);
+
+    it('GET /api/jobs/:id/logs replays buffered lines so a finished job still shows why it ended', async () => {
+      const services = getServices();
+      const job = await services.jobs.createJob({ type: 'install', deploymentId: 'postiz-main' });
+      const jobId = job.id;
+
+      await services.logging.logJob(jobId, 'info', 'Pulling images (first install can take several minutes)…');
+      await services.logging.logJob(jobId, 'error', 'Image pull failed: denied');
+
+      const res = await fetch(`${BASE_URL}${API.jobs.logs(jobId)}`);
+      expect(res.ok).toBe(true);
+      const body = await res.json() as { items: Array<{ level: string; message: string }> };
+      expect(body.items).toHaveLength(2);
+      expect(body.items[0]).toMatchObject({ level: 'info' });
+      expect(body.items[1]).toMatchObject({ level: 'error', message: 'Image pull failed: denied' });
     }, TEST_TIMEOUT);
 
     it('GET /api/deployments/:id/logs returns a real container-log snapshot as JSON', async () => {
