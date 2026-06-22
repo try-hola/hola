@@ -10,10 +10,14 @@ export interface ControllableEventSourceInstance {
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: ((event: Event) => void) | null;
   close(): void;
-  
+  addEventListener(type: string, listener: (event: MessageEvent) => void): void;
+  removeEventListener(type: string, listener: (event: MessageEvent) => void): void;
+
   // Test control methods
   simulateOpen(): void;
   simulateMessage(data: string): void;
+  /** Dispatch a NAMED SSE event (e.g. 'heartbeat') to addEventListener listeners. */
+  simulateNamedEvent(type: string, data: string): void;
   simulateError(): void;
   simulateClose(): void;
 }
@@ -33,6 +37,7 @@ class ControllableEventSourceImpl implements ControllableEventSourceInstance {
   public onmessage: ((event: MessageEvent) => void) | null = null;
   public onerror: ((event: Event) => void) | null = null;
   public readyState = 0; // CONNECTING
+  private namedListeners = new Map<string, Set<(event: MessageEvent) => void>>();
 
   constructor(
     public url: string,
@@ -43,6 +48,21 @@ class ControllableEventSourceImpl implements ControllableEventSourceInstance {
 
   close(): void {
     this.readyState = 2; // CLOSED
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent) => void): void {
+    if (!this.namedListeners.has(type)) this.namedListeners.set(type, new Set());
+    this.namedListeners.get(type)!.add(listener);
+  }
+
+  removeEventListener(type: string, listener: (event: MessageEvent) => void): void {
+    this.namedListeners.get(type)?.delete(listener);
+  }
+
+  simulateNamedEvent(type: string, data: string): void {
+    if (this.readyState !== 1) return;
+    const event = new MessageEvent(type, { data });
+    this.namedListeners.get(type)?.forEach(listener => listener(event));
   }
 
   // Test control methods

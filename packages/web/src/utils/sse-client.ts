@@ -17,7 +17,12 @@ const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & { even
   maxReconnectDelay: 30000,
   reconnectAttempts: 10,
   heartbeatInterval: 30000,
-  heartbeatTimeout: 5000,
+  // Watchdog window for a silent-but-open stream. Must comfortably exceed the
+  // server's heartbeat cadence (15s) so a single delayed/dropped keep-alive
+  // doesn't tear down an idle log stream. At 5s, any stream not emitting a log
+  // line every 5s (an idle app, or a failed deploy with no containers) was
+  // killed on a loop — which is why streaming logs appeared never to work.
+  heartbeatTimeout: 45000,
   eventTypes: [],
   headers: {},
   eventSourceFactory: undefined,
@@ -159,6 +164,13 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
       };
 
       eventSource.onmessage = handleMessage;
+      // The server sends keep-alives as a NAMED `heartbeat` SSE event, which the
+      // EventSource spec routes to addEventListener('heartbeat', …), NOT to
+      // onmessage. Without this listener the watchdog never saw heartbeats and
+      // an idle stream timed out. (Guarded for mock EventSources used in tests.)
+      if (typeof eventSource.addEventListener === 'function') {
+        eventSource.addEventListener('heartbeat', () => scheduleHeartbeat());
+      }
       eventSource.onerror = () => handleError('Connection error');
     } catch (err) {
       handleError(err instanceof Error ? err.message : 'Failed to connect');
