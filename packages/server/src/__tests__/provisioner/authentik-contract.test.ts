@@ -403,6 +403,12 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
         return json({ pk: 'g1' });
       }
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'recovery-flow' }] });
+      // Self-heal check: the flow already ends with a user_login stage → no repair.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=recovery-flow')) return json({ results: [
+        { pk: 'b0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
+        { pk: 'b1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
+        { pk: 'b2', order: 2, stage_obj: { component: 'ak-stage-user-login-form' } },
+      ] });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
       if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/recovery/abc' });
       return undefined;
@@ -436,6 +442,11 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
         flowQueries += 1;
         return json({ results: flowQueries >= 3 ? [{ pk: 'recovery-flow' }] : [] }); // empty until the 3rd poll
       }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=recovery-flow')) return json({ results: [
+        { pk: 'b0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
+        { pk: 'b1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
+        { pk: 'b2', order: 2, stage_obj: { component: 'ak-stage-user-login-form' } },
+      ] });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
       if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/recovery/late' });
       return undefined;
@@ -471,8 +482,18 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
       // default-password-change exists with two stages to reuse.
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?slug=default-password-change')) return json({ results: [{ pk: 'pw-flow' }] });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=pw-flow')) return json({ results: [{ stage: 'prompt-stage', order: 0 }, { stage: 'write-stage', order: 1 }] });
-      // The built-in Login stage we append so the operator is signed in on success.
-      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/all/?name__iexact=default-authentication-login')) return json({ results: [{ pk: 'login-stage' }] });
+      // Self-heal reads the new flow's bindings (prompt + write, no login yet)…
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=hola-recovery-pk')) return json({ results: [
+        { pk: 'rb0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
+        { pk: 'rb1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
+      ] });
+      // …then resolves the Login stage via the TYPED user_login endpoint (the
+      // polymorphic /stages/all/ endpoint ignores name__iexact and would return a
+      // password stage as results[0]).
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/user_login/')) return json({ results: [
+        { pk: 'pw-login-decoy', name: 'default-source-enrollment-login' },
+        { pk: 'login-stage', name: 'default-authentication-login' },
+      ] });
       if (call.method === 'POST' && call.path === '/api/v3/flows/instances/') { created.push('flow'); return json({ pk: 'hola-recovery-pk' }, 201); }
       if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { const b = call.body as { stage: string; order: number }; created.push(`bind:${b.stage}@${b.order}`); return json({ pk: 'b' }, 201); }
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
@@ -501,6 +522,11 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
       if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'recovery-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=recovery-flow')) return json({ results: [
+        { pk: 'b0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
+        { pk: 'b1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
+        { pk: 'b2', order: 2, stage_obj: { component: 'ak-stage-user-login-form' } },
+      ] });
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: null }] });
       // Authentik returns the link on the INTERNAL host the API was called on.
       if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'http://authentik-server:9000/if/flow/hola-recovery/?flow_token=tok' });
@@ -516,6 +542,42 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     expect(publicLink.origin + publicLink.pathname).toBe('https://auth.example.com/if/flow/hola-recovery/');
     expect(publicLink.searchParams.get('flow_token')).toBe('tok');
     expect(publicLink.searchParams.get('next')).toBe('/application/launch/hola-dashboard/');
+  });
+
+  test('ensureBootstrapAdmin repairs a legacy recovery flow that lacks the login stage', async () => {
+    // Reproduces the host bug: an existing flow ends with a stray PASSWORD stage
+    // (mis-bound by the old /stages/all/ filter) instead of a user_login stage,
+    // so the operator was never signed in. Self-heal must drop the password
+    // binding and append a real user_login stage.
+    const deleted: string[] = [];
+    const bound: Array<{ target: string; stage: string; order: number }> = [];
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') return json({ pk: 101, last_login: null }, 201);
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [] }] });
+      if (call.method === 'PATCH' && call.path === '/api/v3/core/groups/g1/') return json({ pk: 'g1' });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/instances/?designation=recovery')) return json({ results: [{ pk: 'broken-flow' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/flows/bindings/?target=broken-flow')) return json({ results: [
+        { pk: 'b0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
+        { pk: 'b1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
+        { pk: 'bpw', order: 2, stage_obj: { component: 'ak-stage-password-form' } }, // the bug
+      ] });
+      if (call.method === 'DELETE' && call.path.startsWith('/api/v3/flows/bindings/')) { deleted.push(call.path); return new Response(null, { status: 204 }); }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/user_login/')) return json({ results: [{ pk: 'login-stage', name: 'default-authentication-login' }] });
+      if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { bound.push(call.body as { target: string; stage: string; order: number }); return json({ pk: 'nb' }, 201); }
+      // Brand already bound to this flow → no re-patch needed.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: 'broken-flow' }] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/101/recovery/') return json({ link: 'https://auth.example.com/if/flow/hola-recovery/?flow_token=t' });
+      return undefined;
+    });
+    calls.length = 0;
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    await svc.ensureBootstrapAdmin('hola-admins');
+
+    // Deleted exactly the stray password binding…
+    expect(deleted).toEqual(['/api/v3/flows/bindings/bpw/']);
+    // …and appended the user_login stage after the two kept stages (order 2).
+    expect(bound).toEqual([{ target: 'broken-flow', stage: 'login-stage', order: 2 }]);
   });
 
   test('ensureBootstrapAdmin no-ops without HOLA_ADMIN_EMAIL', async () => {
