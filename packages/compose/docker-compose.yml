@@ -108,11 +108,12 @@ services:
       # Remote app catalog (JSON). The turnkey default lives in .env.example; blank
       # disables the catalog. See README "App catalog".
       - HOLA_CATALOG_URL=${HOLA_CATALOG_URL:-}
-      # Auth/SSO: when HOLA_AUTH_MODE=authentik the server provisions per-app auth
-      # (OIDC clients, etc.) against the Authentik stack below. `none` disables it.
-      # See README "Authentication & SSO". URL is the internal compose DNS name;
+      # Auth/SSO: with HOLA_AUTH_MODE=authentik (the standard) the server
+      # provisions per-app auth (OIDC clients, etc.) against the Authentik stack
+      # below. `none` disables it (advanced/dev escape hatch). See README
+      # "Authentication & SSO". URL is the internal compose DNS name;
       # PUBLIC_URL/API_TOKEN are written into .env by scripts/install.sh.
-      - HOLA_AUTH_MODE=${HOLA_AUTH_MODE:-none}
+      - HOLA_AUTH_MODE=${HOLA_AUTH_MODE:-authentik}
       - HOLA_AUTHENTIK_URL=${HOLA_AUTHENTIK_URL:-http://authentik-server:9000}
       - HOLA_AUTHENTIK_PUBLIC_URL=${HOLA_AUTHENTIK_PUBLIC_URL:-}
       # The server self-bootstraps a least-privilege scoped token from the admin

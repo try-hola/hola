@@ -57,7 +57,8 @@ set `HOLA_TOKEN`. Development and test run with auth disabled. See ADR 0001.
 The web dashboard reads `GET /api/auth/config` (unauthenticated) at load to pick a
 login flow:
 
-- **SSO (recommended).** With `HOLA_AUTH_MODE=authentik`, the server self-provisions
+- **SSO (default).** With `HOLA_AUTH_MODE=authentik` (what `hola init` always sets),
+  the server self-provisions
   a public OIDC client for the dashboard at startup (registered at
   `https://<HOLA_DOMAIN>/auth/callback`) and the login screen shows **Sign in with
   SSO** — an Authorization Code + PKCE flow against Authentik. The browser sends the
@@ -95,11 +96,12 @@ deployment's list, detail, and history views. See the
 
 ### Single sign-on (SSO)
 
-Set `HOLA_AUTH_MODE=authentik` in `.env` to deploy **Authentik** alongside the
-stack and have Hola auto-provision each catalog app's auth on install (OIDC
-today). `install.sh` generates the bootstrap secrets and activates the
-`authentik` compose profile. It is opt-in (Authentik needs ~2 GB RAM + Postgres);
-the default `none` deploys apps without auth wiring. See the SSO notes in the
+SSO is the default. `HOLA_AUTH_MODE=authentik` deploys **Authentik** alongside the
+stack and has Hola auto-provision each catalog app's auth on install (OIDC today);
+`hola init` always sets it and `install.sh` generates the bootstrap secrets and
+activates the `authentik` compose profile. Authentik needs ~2 GB RAM + Postgres.
+Setting `HOLA_AUTH_MODE=none` by hand opts out (apps deploy without auth wiring) —
+an advanced/dev escape hatch, not offered by the installer. See the SSO notes in the
 compose [README](../packages/compose/README.md#authentication--sso).
 
 ### Routing generation

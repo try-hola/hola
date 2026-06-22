@@ -45,6 +45,9 @@ ensure_secret() { # generate only if currently blank/missing
 }
 
 AUTH_MODE="$(env_get HOLA_AUTH_MODE | tr -d '"'"'"' ' | xargs || true)"
+# SSO is the default — an unset/blank mode means authentik (matches the compose
+# `${HOLA_AUTH_MODE:-authentik}` default). Only an explicit `none` opts out.
+AUTH_MODE="${AUTH_MODE:-authentik}"
 if [[ "$AUTH_MODE" == "authentik" ]]; then
   echo "[install] HOLA_AUTH_MODE=authentik: provisioning Authentik secrets"
   if ! command -v openssl >/dev/null 2>&1; then
