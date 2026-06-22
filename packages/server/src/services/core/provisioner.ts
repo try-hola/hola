@@ -662,6 +662,10 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       )).results?.[0]?.pk;
       if (!flowPk) flowPk = await this.createRecoveryFlow();
       if (!flowPk) return false; // couldn't find or create one yet — retry later
+      // Self-heal: make sure the flow ends by logging the user in. Runs for an
+      // existing flow too (found by designation above), so legacy installs whose
+      // flow was built with the wrong terminal stage converge without a rebuild.
+      await this.ensureRecoveryFlowAutoLogin(flowPk);
       const brands = await this.api<{ results: Array<{ brand_uuid: string; flow_recovery: string | null }> }>(
         'GET', '/api/v3/core/brands/?default=true'
       );
@@ -715,34 +719,87 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     for (const b of bindings) {
       await this.api('POST', '/api/v3/flows/bindings/', { target: flow.pk, stage: b.stage, order: b.order });
     }
-    // Append the Login stage as the final binding so the operator is signed in on
-    // success. Degrade gracefully (warn, no auto-login) if none is found — the
-    // password-set part still works.
-    const loginStagePk = await this.resolveLoginStagePk();
-    if (loginStagePk) {
-      const lastOrder = bindings.reduce((max, b) => Math.max(max, b.order), -1);
-      await this.api('POST', '/api/v3/flows/bindings/', { target: flow.pk, stage: loginStagePk, order: lastOrder + 1 });
-    } else {
-      this.logger.warn('No Login stage found; recovery flow will set the password but not auto-sign-in', { slug });
-    }
-    this.logger.info('Created a recovery flow (Authentik ships none)', { flowPk: flow.pk, slug, autoLogin: !!loginStagePk });
+    // The terminal Login stage (so set-password ALSO signs the operator in) is
+    // added by ensureRecoveryFlowAutoLogin, which the caller runs for both fresh
+    // and pre-existing flows.
+    this.logger.info('Created a recovery flow (Authentik ships none)', { flowPk: flow.pk, slug });
     return flow.pk;
   }
 
+  /** Admin-form `component` of a bound stage, identifying its type. */
+  private static readonly LOGIN_STAGE_COMPONENT = 'ak-stage-user-login-form';
+  /** Stages that must never be in the recovery flow — they re-prompt for credentials. */
+  private static readonly STRAY_RECOVERY_STAGE_COMPONENTS = new Set([
+    'ak-stage-password-form',
+    'ak-stage-identification-form',
+  ]);
+
   /**
-   * Resolve the pk of Authentik's built-in Login stage (the one the default
-   * authentication flow ends with). The `stages/all` endpoint lists every stage
-   * type; match the default name and fall back to the first Login-component stage.
+   * Ensure a recovery flow ends by logging the user in: the reused Prompt +
+   * User Write stages, then a `user_login` stage. Removes any stray credential
+   * stages and appends the login stage if missing. Idempotent.
+   *
+   * This repairs flows built by earlier releases that bound the WRONG terminal
+   * stage: `resolveLoginStagePk` used `/api/v3/stages/all/?name__iexact=…`, but
+   * that polymorphic endpoint IGNORES the filter and returns every stage, so
+   * `results[0]` was whatever sorted first (a password stage) — leaving the
+   * operator unauthenticated after set-password and bounced to a login screen.
+   */
+  private async ensureRecoveryFlowAutoLogin(flowPk: string): Promise<void> {
+    const bindings = (await this.api<{
+      results: Array<{ pk: string; order: number; stage_obj?: { component?: string } }>;
+    }>('GET', `/api/v3/flows/bindings/?target=${flowPk}&ordering=order`)).results ?? [];
+
+    let changed = false;
+    // Drop stray credential stages (e.g. the mis-bound password stage).
+    for (const b of bindings) {
+      if (RealAuthentikProvisionerService.STRAY_RECOVERY_STAGE_COMPONENTS.has(b.stage_obj?.component ?? '')) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/flows/bindings/${b.pk}/`);
+        changed = true;
+      }
+    }
+
+    const hasLogin = bindings.some(
+      (b) => b.stage_obj?.component === RealAuthentikProvisionerService.LOGIN_STAGE_COMPONENT,
+    );
+    if (!hasLogin) {
+      const loginStagePk = await this.resolveLoginStagePk();
+      if (loginStagePk) {
+        const keptMaxOrder = bindings
+          .filter((b) => !RealAuthentikProvisionerService.STRAY_RECOVERY_STAGE_COMPONENTS.has(b.stage_obj?.component ?? ''))
+          .reduce((max, b) => Math.max(max, b.order), -1);
+        await this.api('POST', '/api/v3/flows/bindings/', {
+          target: flowPk,
+          stage: loginStagePk,
+          order: keptMaxOrder + 1,
+        });
+        changed = true;
+      } else {
+        this.logger.warn('No Login stage found; recovery flow will set the password but not auto-sign-in', { flowPk });
+      }
+    }
+
+    if (changed) this.logger.info('Repaired recovery flow auto-login bindings', { flowPk });
+  }
+
+  /**
+   * Resolve the pk of Authentik's built-in Login (`user_login`) stage — the one
+   * the default authentication flow ends with, which attaches the pending user
+   * to a session.
+   *
+   * Uses the TYPED `/api/v3/stages/user_login/` endpoint, NOT the polymorphic
+   * `/api/v3/stages/all/`: the latter ignores `name__iexact` and returns every
+   * stage type, so taking `results[0]` there hands back whatever sorts first
+   * (often a password stage). `/stages/user_login/` only ever returns user_login
+   * stages, so even the fallback is a valid login stage.
    */
   private async resolveLoginStagePk(): Promise<string | undefined> {
-    const byName = (await this.api<{ results: Array<{ pk: string }> }>(
-      'GET', '/api/v3/stages/all/?name__iexact=default-authentication-login'
-    )).results?.[0]?.pk;
-    if (byName) return byName;
-    const all = (await this.api<{ results: Array<{ pk: string; component?: string }> }>(
-      'GET', '/api/v3/stages/all/'
+    const stages = (await this.api<{ results: Array<{ pk: string; name?: string }> }>(
+      'GET', '/api/v3/stages/user_login/'
     )).results ?? [];
-    return all.find((s) => s.component === 'ak-stage-user-login')?.pk;
+    if (!stages.length) return undefined;
+    const preferred = stages.find((s) => (s.name ?? '').toLowerCase() === 'default-authentication-login');
+    return (preferred ?? stages[0]).pk;
   }
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */
