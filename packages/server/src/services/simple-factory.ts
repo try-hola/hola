@@ -24,7 +24,7 @@ import { RealDraftService, MockDraftService, type DraftService } from './core/dr
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
 import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
 import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
-import { RealAuthentikProvisionerService, MockProvisionerService, type ProvisionerService } from './core/provisioner';
+import { RealAuthentikProvisionerService, MockProvisionerService, NoneProvisionerService, type ProvisionerService } from './core/provisioner';
 import { authConfig } from '../config/auth';
 
 /**
@@ -169,11 +169,13 @@ export function createServices(env: ServiceEnvironment): Services {
   // Shared draft service: the deployment service builds releases from its finalized artifacts.
   const drafts = new RealDraftService(storage, catalog, validation);
 
-  // Provision auth artifacts against the configured platform; no-op when disabled.
+  // Provision auth artifacts against the configured platform. When no backend is
+  // configured (mode != authentik) use the real no-op provisioner — NOT the Mock,
+  // which injects fake creds / a dead forward-auth gate into real apps (#110).
   const provisioner: ProvisionerService =
     authConfig.mode === 'authentik'
       ? new RealAuthentikProvisionerService(authConfig)
-      : new MockProvisionerService();
+      : new NoneProvisionerService();
 
   return {
     storage,
