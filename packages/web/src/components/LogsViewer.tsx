@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { 
   Activity, 
   AlertCircle, 
@@ -97,12 +97,11 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   showJobStatus = false
 }) => {
   // Use SSE for real-time logs
-  const { 
-    logs: sseLogsData, 
-    connectionState, 
-    error: sseError, 
+  const {
+    logs: sseLogsData,
+    connectionState,
     isConnected,
-    clearLogs: clearSSELogs 
+    clearLogs: clearSSELogs
   } = useLogsSSE(deploymentId, jobId);
 
   // Local state for managing logs and UI
@@ -117,6 +116,16 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   const [loading, setLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
+  // Whether the viewport is pinned to the bottom (tail mode). Tracked in a ref so
+  // scroll events don't re-render; flips to false when the user scrolls up and
+  // back to true when they return to the bottom.
+  const stickToBottomRef = useRef(true);
+
+  const handleLogsScroll = useCallback(() => {
+    const c = logsContainerRef.current;
+    if (!c) return;
+    stickToBottomRef.current = c.scrollHeight - c.scrollTop - c.clientHeight < 40;
+  }, []);
 
   // Merge SSE logs with existing logs
   React.useEffect(() => {
@@ -134,13 +143,6 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
       });
     }
   }, [sseLogsData]);
-
-  // Set error from SSE
-  React.useEffect(() => {
-    if (sseError) {
-      setError(sseError);
-    }
-  }, [sseError]);
 
   // Load initial logs and job data
   const loadInitialData = useCallback(async () => {
@@ -179,11 +181,15 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
     loadInitialData();
   }, [loadInitialData]);
 
-  // Auto-scroll to bottom when new logs arrive and streaming is enabled
-  useEffect(() => {
-    if (isStreaming && logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
+  // Tail mode: pin the viewport to the bottom as new logs arrive, so the newest
+  // line is always visible and older lines scroll off the top. Skipped while
+  // paused or once the user has scrolled up to read history. useLayoutEffect runs
+  // before paint so the jump isn't visible. Instant (not smooth) keeps up with
+  // bursts (smooth animations queue and never reach bottom under load).
+  useLayoutEffect(() => {
+    if (!isStreaming || !stickToBottomRef.current) return;
+    const c = logsContainerRef.current;
+    if (c) c.scrollTop = c.scrollHeight;
   }, [allLogs, isStreaming]);
 
   // Connection status indicator
@@ -255,7 +261,11 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
     clearSSELogs();
   };
 
-  const LogsContent = () => (
+  // A JSX element, NOT an inline component. Rendering `<LogsContent />` created a
+  // new component type every render, so React remounted the whole log DOM on each
+  // new line — destroying the scroll container and snapping the viewport to the
+  // top. As an element it reconciles in place, preserving scroll position.
+  const logsBody = (
     <div className={`bg-surface-1 rounded-lg border border-border ${className}`}>
       {/* Header */}
       <div className="p-4 border-b border-border">
@@ -336,10 +346,12 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
           </div>
         </div>
 
-        {/* Error Display */}
-        {error && (
+        {/* Error Display — a load error, or a LIVE connection error. Not latched:
+            it clears as soon as the stream reconnects (connectionState leaves
+            'error'), instead of lingering while logs are happily streaming. */}
+        {(error || connectionState === 'error') && (
           <div className="mb-4 p-3 bg-danger/10 border border-danger/20 rounded text-danger text-sm">
-            {error}
+            {error ?? 'Connection error'}
             {connectionState === 'error' && (
               <div className="mt-2 text-xs">
                 Connection failed. Logs will be updated when connection is restored.
@@ -404,8 +416,9 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
       </div>
 
       {/* Logs Content */}
-      <div 
+      <div
         ref={logsContainerRef}
+        onScroll={handleLogsScroll}
         className={`font-mono text-sm bg-surface-0 overflow-y-auto ${isFullscreen ? 'h-[calc(100vh-200px)]' : maxHeight}`}
       >
         <div className="p-4 space-y-1">
@@ -458,11 +471,11 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
           </button>
         </div>
         <div className="flex-1 p-4">
-          <LogsContent />
+          {logsBody}
         </div>
       </div>
     );
   }
 
-  return <LogsContent />;
+  return logsBody;
 };
