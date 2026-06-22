@@ -20,6 +20,7 @@ import { getLogger } from '../../lib/logger';
 import { ProvisioningError } from '../../middleware/error-mapping';
 import type { AuthConfig } from '../../config/auth';
 import type { AuthMode, ProvisionedAuthRef, ForwardAuthMiddleware } from '@hola/shared';
+import { APP_HOST_TOKEN } from '@hola/shared/compose-validate';
 import type { ServiceHealth, HealthCheckable } from './types';
 
 export interface ProvisionInput {
@@ -50,6 +51,9 @@ export interface ProvisionInput {
     };
     /** Literal env injected only when OIDC is provisioned (enable flag, button label). */
     staticEnv?: Record<string, string>;
+    /** Extra redirect URIs (beyond redirectPath) to register on the client. May
+     *  contain the ${HOLA_APP_HOST} token or a non-http scheme (mobile callback). */
+    extraRedirectUris?: string[];
   };
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
@@ -193,6 +197,25 @@ function slugify(s: string): string {
     .slice(0, 50);
 }
 
+/**
+ * Build the Authentik `redirect_uris` list: the primary URI (from redirectPath)
+ * plus any manifest-declared extras, with the `${HOLA_APP_HOST}` token expanded
+ * to the app's public host. Extras may be full https URLs or a non-http scheme
+ * (e.g. a mobile callback `app.immich:///oauth-callback`). De-duplicated; all
+ * registered with strict matching. A manifest with no extras yields exactly the
+ * single strict URI Hola has always emitted.
+ */
+function buildRedirectUris(
+  host: string,
+  primary: string,
+  extras?: string[]
+): Array<{ matching_mode: 'strict'; url: string }> {
+  const urls = [primary, ...(extras ?? []).map(u => u.replaceAll(APP_HOST_TOKEN, host))];
+  const seen = new Set<string>();
+  const deduped = urls.filter(u => (seen.has(u) ? false : (seen.add(u), true)));
+  return deduped.map(url => ({ matching_mode: 'strict', url }));
+}
+
 export class RealAuthentikProvisionerService implements ProvisionerService {
   private logger = getLogger().child({ service: 'RealAuthentikProvisionerService' });
 
@@ -265,14 +288,15 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     if (!oidc) throw new ProvisioningError('native-oidc requires an oidc config block');
 
     const redirectUri = `https://${input.host}${oidc.redirectPath}`;
+    const redirectUris = buildRedirectUris(input.host, redirectUri, oidc.extraRedirectUris);
     const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
 
-    // Idempotent re-provision: reuse the existing client, refresh its redirect URI.
+    // Idempotent re-provision: reuse the existing client, refresh its redirect URIs.
     const existing = input.existingRef;
     if (existing && existing.mode === 'native-oidc' && existing.providerPk != null) {
       const provider = await this.api<AuthentikOAuth2Provider>('GET', `/api/v3/providers/oauth2/${existing.providerPk}/`);
       await this.api('PATCH', `/api/v3/providers/oauth2/${existing.providerPk}/`, {
-        redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
+        redirect_uris: redirectUris,
       });
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
       const reuseSlug = existing.applicationSlug ?? slug;
@@ -300,7 +324,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       client_type: 'confidential',
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uris: [{ matching_mode: 'strict', url: redirectUri }],
+      redirect_uris: redirectUris,
       property_mappings: propertyMappings,
       sub_mode: 'hashed_user_id',
     });

@@ -1129,6 +1129,46 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
+  /**
+   * Write the provisioned OIDC credentials as a GENERIC JSON file into an app's
+   * data root BEFORE the stack starts (manifest `auth.oidc.credentialsFile`), for
+   * apps that ingest OIDC only from a file read at boot (e.g. Immich — UI locked,
+   * no OIDC env vars). The file holds `{ issuer, clientId, clientSecret,
+   * redirectUri }`; a sidecar/init container in the app BUNDLE renders it into the
+   * app's own config format (see Homepage's registry renderer + ADR 0002), so the
+   * server never deals with per-app config formats. The path is relative to
+   * `${HOLA_APP_DATA}` (the same per-install root compose mounts). No-op without a
+   * credentialsFile directive or credentials. Written 0600 (holds the secret).
+   */
+  private async writeOidcCredentialsFile(
+    deployment: EnhancedDeploymentDetail,
+    provisioned: { credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> },
+    logBoth: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>
+  ): Promise<void> {
+    const cf = provisioned.auth.oidc?.credentialsFile;
+    const creds = provisioned.credentials;
+    if (!cf || !creds) return;
+
+    const content = JSON.stringify(
+      { issuer: creds.issuer, clientId: creds.clientId, clientSecret: creds.clientSecret, redirectUri: creds.redirectUri },
+      null,
+      2
+    );
+
+    // Resolve under the app's data root; reject path traversal out of it.
+    const rel = cf.path.replace(/^\/+/, '');
+    if (rel.split('/').includes('..')) {
+      throw new Error(`Invalid auth.oidc.credentialsFile path '${cf.path}' (must stay within the app data root)`);
+    }
+    const root = this.appRootFor(deployment.id);
+    const target = `${root}/${rel}`;
+    const slash = target.lastIndexOf('/');
+    if (slash > root.length) await this.storageService.ensureDir(target.slice(0, slash));
+    else await this.storageService.ensureDir(root);
+    await this.storageService.writeFile(target, content, 0o600);
+    await logBoth('info', `Auth: wrote OIDC credentials file ${rel} for the bundle to render`);
+  }
+
   private jobTypeToAction(type: Job['type']): string {
     switch (type) {
       case 'stop': return 'stop';
@@ -1173,7 +1213,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextLifecycle = 'stopped';
       } else if (action === 'restart') {
         const provisioned = await this.provisionAuth(deployment);
-        const res = await this.dockerService.composeRestart(await this.materializeCompose(deployment, provisioned?.env ?? {}), projectName);
+        const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
+        if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
+        const res = await this.dockerService.composeRestart(composeDir, projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
@@ -1183,6 +1225,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // deploy / start / rollback -> pull images, then compose up
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
+        // Drop the provisioned OIDC creds file into the data root before `up` so a
+        // bundle sidecar can render the app's SSO config for first boot (e.g. Immich).
+        if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
 
         // Pull first (generous timeout) so `up` isn't gated on download time —
         // large stacks like Postiz used to be SIGKILLed mid-pull by up's 2-min cap.
