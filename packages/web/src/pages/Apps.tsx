@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Package, Plus } from 'lucide-react';
+import { ExternalLink, Package, Plus, Search, SlidersHorizontal } from 'lucide-react';
 
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { useCatalogAppsApi } from '../hooks/useCatalogApi';
@@ -9,12 +9,16 @@ import { StatusBadge } from '../components/ui/StatusBadge';
 import type { GetDeploymentsRequest } from '@hola/shared';
 
 /**
- * Apps — the default landing: a launcher for installed apps.
+ * Apps — the default landing: an Okta/Entra-style launcher for installed apps.
  *
- * Everything here is data the server already owns (deployments + the catalog for
- * icons), joined client-side — no separate dashboard app to keep in sync. Every
- * installed app is shown: running apps with a URL open in a new tab; the rest
- * link to their deployment detail so a tile is never a dead end.
+ * The job here is *launch*, not manage. Running apps are full-colour tiles that
+ * open the app in a new tab; everything technical (logs, lifecycle, config) lives
+ * on the Deployments page. Non-running apps are dimmed and route to their
+ * deployment detail so a tile is never a dead end, and every running tile keeps a
+ * subtle "manage" shortcut to its detail for troubleshooting.
+ *
+ * Data is what the server already owns — deployments plus the catalog (for the
+ * product name and, as a fallback, the icon) — joined client-side.
  */
 
 const DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 100 };
@@ -23,6 +27,7 @@ const CATALOG_PARAMS = { page: 1, limit: 100 };
 export const Apps: React.FC = () => {
   const { data: deploymentsData, loading, error } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
   const { data: catalogData } = useCatalogAppsApi(CATALOG_PARAMS);
+  const [query, setQuery] = React.useState('');
 
   // Join app id -> catalog icon + display name so tiles show the real app glyph
   // and product name (e.g. "Uptime Kuma"), not the deployment's internal name.
@@ -43,9 +48,19 @@ export const Apps: React.FC = () => {
     [apps],
   );
 
+  // Client-side filter over the product name, deployment name, and app id.
+  const visibleApps = React.useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return apps;
+    return apps.filter((a) => {
+      const name = (nameByApp.get(a.app) || a.app || a.name).toLowerCase();
+      return name.includes(q) || a.app.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
+    });
+  }, [apps, query, nameByApp]);
+
   return (
     <div className="animate-fadein">
-      <div className="flex items-end gap-3.5 mb-[22px]">
+      <div className="flex items-end gap-3.5 mb-[22px] flex-wrap">
         <div>
           <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Your apps</h1>
           <p className="mt-1.5 text-text-muted text-sm">
@@ -55,6 +70,20 @@ export const Apps: React.FC = () => {
           </p>
         </div>
         <div className="flex-1" />
+        {apps.length > 0 && (
+          <div className="relative flex items-center">
+            <span className="absolute left-[11px] flex text-text-faint">
+              <Search className="w-4 h-4" />
+            </span>
+            <input
+              type="text"
+              placeholder="Search apps…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              className="h-10 w-56 bg-surface-1 border border-border rounded-[10px] text-text-strong pl-[34px] pr-3 text-[13.5px] outline-none focus:border-primary"
+            />
+          </div>
+        )}
         <Link
           to="/catalog"
           className="flex items-center gap-2 h-10 px-4 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 transition"
@@ -72,50 +101,81 @@ export const Apps: React.FC = () => {
         </div>
       )}
 
-      {!loading && !error && apps.length > 0 && (
-        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(212px,1fr))]">
-          {apps.map((app) => {
+      {!loading && !error && visibleApps.length > 0 && (
+        <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+          {visibleApps.map((app) => {
             const icon = iconByApp.get(app.app) || app.icon || '';
             // Prefer the catalog product name; fall back to the app id (always
             // readable) before the deployment's internal name.
             const displayName = nameByApp.get(app.app) || app.app || app.name;
             const openable = app.status === 'running' && !!app.url;
 
-            const tile = (
-              <div className="group relative h-full bg-surface-1 border border-border rounded-[14px] p-[22px] transition hover:-translate-y-[3px] hover:border-primary hover:shadow-elevation-4">
-                <div className="flex items-start justify-between">
-                  <AppIcon name={displayName} emoji={icon} size={54} />
-                  {openable && (
-                    <ExternalLink className="w-4 h-4 text-text-faint group-hover:text-primary transition-colors" />
+            return (
+              <div
+                key={app.id}
+                className={`group relative flex flex-col items-center text-center bg-surface-1 border border-border rounded-[14px] px-4 pt-[26px] pb-5 transition hover:-translate-y-[3px] hover:border-primary hover:shadow-elevation-4 ${
+                  openable ? '' : 'opacity-70 hover:opacity-100'
+                }`}
+              >
+                {/* Stretched primary action: launch when running, else go to detail.
+                    A sibling (not nested) of the manage link below, so the HTML
+                    stays valid while the whole tile is clickable. */}
+                {openable ? (
+                  <a
+                    href={app.url!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`Open ${displayName}`}
+                    title={`Open ${displayName}`}
+                    className="absolute inset-0 z-[1] rounded-[14px]"
+                  />
+                ) : (
+                  <Link
+                    to={`/deployments/${app.id}`}
+                    aria-label={`${displayName} — view deployment`}
+                    title={`${displayName} — view deployment`}
+                    className="absolute inset-0 z-[1] rounded-[14px]"
+                  />
+                )}
+
+                {/* Manage shortcut (running tiles only — non-running tiles already
+                    route to the detail). Sits above the stretched link. */}
+                {openable && (
+                  <Link
+                    to={`/deployments/${app.id}`}
+                    onClick={(e) => e.stopPropagation()}
+                    title="Manage & logs"
+                    aria-label={`Manage ${displayName}`}
+                    className="absolute top-2.5 right-2.5 z-[2] w-7 h-7 flex items-center justify-center rounded-[8px] text-text-faint opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary-weak transition"
+                  >
+                    <SlidersHorizontal className="w-[15px] h-[15px]" />
+                  </Link>
+                )}
+                {openable && (
+                  <ExternalLink className="absolute top-2.5 left-2.5 w-4 h-4 text-text-faint opacity-0 group-hover:opacity-100 group-hover:text-primary transition" />
+                )}
+
+                <AppIcon name={displayName} emoji={icon} size={60} />
+                <div className="mt-3.5 font-semibold text-[14.5px] leading-tight truncate max-w-full">
+                  {displayName}
+                </div>
+                <div className="mt-2 min-h-[24px] flex items-center">
+                  {openable ? (
+                    <span className="text-[12.5px] text-text-faint">Open</span>
+                  ) : (
+                    <StatusBadge status={app.status} />
                   )}
                 </div>
-                <div className="mt-4 font-semibold text-base truncate">{displayName}</div>
-                <div className="mt-2">
-                  <StatusBadge status={app.status} />
-                </div>
-                {app.url && (
-                  <div className="mt-2 font-mono text-[11.5px] text-text-faint truncate">{app.url}</div>
-                )}
               </div>
             );
-
-            return openable ? (
-              <a
-                key={app.id}
-                href={app.url!}
-                target="_blank"
-                rel="noopener noreferrer"
-                title={`Open ${displayName}`}
-                className="block"
-              >
-                {tile}
-              </a>
-            ) : (
-              <Link key={app.id} to={`/deployments/${app.id}`} title={displayName} className="block">
-                {tile}
-              </Link>
-            );
           })}
+        </div>
+      )}
+
+      {/* No results for the current search (but apps do exist). */}
+      {!loading && !error && apps.length > 0 && visibleApps.length === 0 && (
+        <div className="px-5 py-16 text-center text-text-muted text-sm bg-surface-1 border border-dashed border-border rounded-[14px]">
+          No apps match “{query}”.
         </div>
       )}
 

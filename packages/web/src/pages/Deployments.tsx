@@ -117,7 +117,8 @@ export const Deployments: React.FC = () => {
         <div>
           <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Deployments</h1>
           <p className="mt-1.5 text-text-muted text-sm">
-            {totalDeployments} deployments across your server.
+            Status, logs, and lifecycle controls for all {totalDeployments} installed apps. To just
+            open an app, head to <Link to="/apps" className="text-primary hover:underline">Your apps</Link>.
           </p>
         </div>
         <div className="flex-1" />
