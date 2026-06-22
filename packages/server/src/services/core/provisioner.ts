@@ -787,19 +787,25 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
    * the default authentication flow ends with, which attaches the pending user
    * to a session.
    *
-   * Uses the TYPED `/api/v3/stages/user_login/` endpoint, NOT the polymorphic
-   * `/api/v3/stages/all/`: the latter ignores `name__iexact` and returns every
-   * stage type, so taking `results[0]` there hands back whatever sorts first
-   * (often a password stage). `/stages/user_login/` only ever returns user_login
-   * stages, so even the fallback is a valid login stage.
+   * Reads the polymorphic `/api/v3/stages/all/` endpoint and filters CLIENT-SIDE
+   * by the user_login `component`. Two pitfalls this avoids:
+   *  - `/stages/all/` IGNORES `?name__iexact=…` and returns every stage type, so
+   *    `results[0]` is whatever sorts first (often a password stage) — never
+   *    trust the server-side name filter here.
+   *  - The TYPED `/api/v3/stages/user_login/` endpoint would be cleaner, but the
+   *    least-privilege scoped provisioning token gets 403 on it; `/stages/all/`
+   *    is readable with the token (it's what the rest of provisioning uses).
+   * Each listed stage carries its admin `component`, so match `ak-stage-user-login-form`
+   * and prefer the one named `default-authentication-login`.
    */
   private async resolveLoginStagePk(): Promise<string | undefined> {
-    const stages = (await this.api<{ results: Array<{ pk: string; name?: string }> }>(
-      'GET', '/api/v3/stages/user_login/'
+    const all = (await this.api<{ results: Array<{ pk: string; name?: string; component?: string }> }>(
+      'GET', '/api/v3/stages/all/'
     )).results ?? [];
-    if (!stages.length) return undefined;
-    const preferred = stages.find((s) => (s.name ?? '').toLowerCase() === 'default-authentication-login');
-    return (preferred ?? stages[0]).pk;
+    const logins = all.filter((s) => s.component === RealAuthentikProvisionerService.LOGIN_STAGE_COMPONENT);
+    if (!logins.length) return undefined;
+    const preferred = logins.find((s) => (s.name ?? '').toLowerCase() === 'default-authentication-login');
+    return (preferred ?? logins[0]).pk;
   }
 
   /** Add a proxy provider to the embedded outpost; returns the outpost pk. */

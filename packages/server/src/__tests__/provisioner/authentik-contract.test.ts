@@ -487,12 +487,15 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
         { pk: 'rb0', order: 0, stage_obj: { component: 'ak-stage-prompt-form' } },
         { pk: 'rb1', order: 1, stage_obj: { component: 'ak-stage-user-write-form' } },
       ] });
-      // …then resolves the Login stage via the TYPED user_login endpoint (the
-      // polymorphic /stages/all/ endpoint ignores name__iexact and would return a
-      // password stage as results[0]).
-      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/user_login/')) return json({ results: [
-        { pk: 'pw-login-decoy', name: 'default-source-enrollment-login' },
-        { pk: 'login-stage', name: 'default-authentication-login' },
+      // …then resolves the Login stage from /stages/all/ by COMPONENT. That
+      // endpoint ignores name__iexact and lists every stage (a password stage
+      // sorts first here), and the scoped token can't read the typed
+      // /stages/user_login/ endpoint — so the code must filter by component and
+      // prefer the default-authentication-login name, not take results[0].
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/all/')) return json({ results: [
+        { pk: 'pw-stage', name: 'default-authentication-password', component: 'ak-stage-password-form' },
+        { pk: 'src-login', name: 'default-source-enrollment-login', component: 'ak-stage-user-login-form' },
+        { pk: 'login-stage', name: 'default-authentication-login', component: 'ak-stage-user-login-form' },
       ] });
       if (call.method === 'POST' && call.path === '/api/v3/flows/instances/') { created.push('flow'); return json({ pk: 'hola-recovery-pk' }, 201); }
       if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { const b = call.body as { stage: string; order: number }; created.push(`bind:${b.stage}@${b.order}`); return json({ pk: 'b' }, 201); }
@@ -563,7 +566,10 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
         { pk: 'bpw', order: 2, stage_obj: { component: 'ak-stage-password-form' } }, // the bug
       ] });
       if (call.method === 'DELETE' && call.path.startsWith('/api/v3/flows/bindings/')) { deleted.push(call.path); return new Response(null, { status: 204 }); }
-      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/user_login/')) return json({ results: [{ pk: 'login-stage', name: 'default-authentication-login' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/stages/all/')) return json({ results: [
+        { pk: 'pw-stage', name: 'default-authentication-password', component: 'ak-stage-password-form' },
+        { pk: 'login-stage', name: 'default-authentication-login', component: 'ak-stage-user-login-form' },
+      ] });
       if (call.method === 'POST' && call.path === '/api/v3/flows/bindings/') { bound.push(call.body as { target: string; stage: string; order: number }); return json({ pk: 'nb' }, 201); }
       // Brand already bound to this flow → no re-patch needed.
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/brands/')) return json({ results: [{ brand_uuid: 'b1', flow_recovery: 'broken-flow' }] });

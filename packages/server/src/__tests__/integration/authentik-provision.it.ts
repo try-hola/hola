@@ -305,15 +305,16 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
     };
     expect(bindings.body.results.length).toBe(3);
     // The final (highest-order) binding is Authentik's user_login stage, so
-    // setting the password also signs the operator in. Resolve it via the TYPED
-    // user_login endpoint — /api/v3/stages/all/ ignores name__iexact and returns
-    // every stage (results[0] is a password stage), which is exactly the bug that
-    // left the flow without a login stage.
+    // setting the password also signs the operator in. Resolve it the same way
+    // the code does: /api/v3/stages/all/ filtered by component (it ignores
+    // name__iexact and lists a password stage first — the original bug).
     const lastStage = [...bindings.body.results].sort((a, b) => b.order - a.order)[0].stage;
-    const loginStages = (await akGet('/api/v3/stages/user_login/')) as {
-      status: number; body: { results: Array<{ pk: string; name: string }> };
+    const allStages = (await akGet('/api/v3/stages/all/')) as {
+      status: number; body: { results: Array<{ pk: string; name: string; component: string }> };
     };
-    const expectedLogin = loginStages.body.results.find((s) => s.name === 'default-authentication-login');
+    const expectedLogin = allStages.body.results.find(
+      (s) => s.component === 'ak-stage-user-login-form' && s.name === 'default-authentication-login',
+    );
     expect(expectedLogin).toBeDefined();
     expect(lastStage).toBe(expectedLogin!.pk);
   }, 180_000);
