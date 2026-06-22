@@ -459,7 +459,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // not an opaque "deployment-<id>" placeholder. A caller-supplied name wins.
         name: request.name || app,
         app,
-        icon: '📦',
+        // Persist the catalog icon (emoji or image URL) carried through the
+        // finalized manifest, so the launcher and registry feed have a stable
+        // icon without a live catalog lookup. Falls back to a generic glyph.
+        icon: artifacts?.manifest.icon || '📦',
         status: 'installing',
         lifecycleState: 'releasing',
         draftId: request.draftId,

@@ -384,6 +384,9 @@ export type Draft = {
   draftId: string;
   appId: string;
   version?: string;
+  // App icon (emoji or image URL) seeded from the catalog and carried through
+  // finalize so the deployment can persist it without a live catalog lookup.
+  icon?: string;
   systemOverrides: Record<string, string>;
   appEnv: AppEnvVar[];
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
