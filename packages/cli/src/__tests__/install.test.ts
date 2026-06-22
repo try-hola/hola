@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { runInstall } from '../commands/install/install';
+import { runInstall, resolveAppAndVersion } from '../commands/install/install';
 import type { HolaSdk } from '@hola/sdk';
 
 function makeSdk(overrides: { drafts?: Record<string, unknown> } = {}) {
@@ -68,5 +68,42 @@ describe('install', () => {
     expect(res).toBeUndefined();
     expect(sdk.drafts.create).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+  });
+
+  it('pins the version from --app-version', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { appVersion: '1.2.1', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'gitea', version: '1.2.1' });
+  });
+
+  it('pins the version from an inline <appId>@<version>', async () => {
+    const sdk = makeSdk();
+    await runInstall('uptime-kuma@1.2.1', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'uptime-kuma', version: '1.2.1' });
+  });
+
+  it('lets --app-version win over an inline suffix and defaults the name to the bare id', async () => {
+    const sdk = makeSdk();
+    const res = await runInstall('uptime-kuma@9.9.9', { appVersion: '1.2.1', noStream: true, json: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'uptime-kuma', version: '1.2.1' });
+    expect(res?.deploymentId).toBe('dep1');
+  });
+});
+
+describe('resolveAppAndVersion', () => {
+  it('defaults to latest when no version is given', () => {
+    expect(resolveAppAndVersion('gitea')).toEqual({ appId: 'gitea', version: 'latest' });
+  });
+
+  it('reads an inline @version', () => {
+    expect(resolveAppAndVersion('gitea@1.2.1')).toEqual({ appId: 'gitea', version: '1.2.1' });
+  });
+
+  it('prefers the explicit flag over the inline suffix', () => {
+    expect(resolveAppAndVersion('gitea@1.0.0', '2.0.0')).toEqual({ appId: 'gitea', version: '2.0.0' });
+  });
+
+  it('splits on the last @ so the version is taken from the suffix', () => {
+    expect(resolveAppAndVersion('ns/app@3.1.4')).toEqual({ appId: 'ns/app', version: '3.1.4' });
   });
 });
