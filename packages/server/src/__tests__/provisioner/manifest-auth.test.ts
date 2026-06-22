@@ -147,6 +147,38 @@ describe('coerceManifestAuth', () => {
     ).toBeUndefined();
   });
 
+  test('native-oidc carries a roleClaim (admin-by-group), claim required + defaults left to provisioner', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'profile', 'email'],
+        credentialsFile: { path: 'oidc.json' },
+        roleClaim: { claim: 'immich_role', adminGroup: 'hola-admins', adminValue: 'admin', memberValue: 'user' },
+      },
+    });
+    expect(result?.oidc?.roleClaim).toEqual({
+      claim: 'immich_role',
+      adminGroup: 'hola-admins',
+      adminValue: 'admin',
+      memberValue: 'user',
+    });
+  });
+
+  test('native-oidc roleClaim without a claim name is dropped (the rest still coerces)', () => {
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/cb',
+        scopes: ['openid'],
+        env: { issuer: 'ISS', clientId: 'CID', clientSecret: 'SEC' },
+        roleClaim: { adminGroup: 'hola-admins' },
+      },
+    });
+    expect(result?.oidc?.roleClaim).toBeUndefined();
+    expect(result?.oidc?.env).toBeDefined();
+  });
+
   test('native-oidc credentialsFile missing its path degrades to undefined', () => {
     expect(
       coerceManifestAuth({

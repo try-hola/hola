@@ -58,12 +58,19 @@ function installFetch(handler?: (call: RecordedCall) => Response | undefined) {
     // for the scoped token — see resolveScopeMappingPks / issue #144). Default
     // scope mappings carry stable `managed` identifiers.
     if (method === 'GET' && url.pathname === '/api/v3/propertymappings/all/') {
+      // A `?managed=` lookup (role-claim idempotency probe) filters by that id;
+      // nothing pre-exists in the happy path, so it returns empty -> create.
+      if (url.searchParams.has('managed')) return json({ results: [] });
       return json({ results: [
         { pk: 'scope-openid', managed: 'goauthentik.io/providers/oauth2/scope-openid', scope_name: 'openid' },
         { pk: 'scope-profile', managed: 'goauthentik.io/providers/oauth2/scope-profile', scope_name: 'profile' },
         { pk: 'scope-email', managed: 'goauthentik.io/providers/oauth2/scope-email', scope_name: 'email' },
         { pk: 'mapping-unrelated', managed: 'goauthentik.io/providers/ldap/something', scope_name: undefined },
       ] });
+    }
+    // Create an OAuth2 scope mapping (admin-by-group role claim).
+    if (method === 'POST' && url.pathname === '/api/v3/propertymappings/provider/scope/') {
+      return json({ pk: 'roleclaim-pk' }, 201);
     }
     if (method === 'POST' && url.pathname === '/api/v3/providers/oauth2/') {
       return json({ pk: 42, client_id: body.client_id, client_secret: body.client_secret }, 201);
@@ -196,6 +203,38 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
       { matching_mode: 'strict', url: 'https://immich.example.com/user-settings' },
       { matching_mode: 'strict', url: 'app.immich:///oauth-callback' },
     ]);
+  });
+
+  test('native-oidc provisions an admin-by-group role claim and attaches it to the provider', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({
+      deploymentId: 'dep-immich0123456789',
+      appName: 'immich',
+      mode: 'native-oidc' as const,
+      host: 'immich.example.com',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'profile', 'email'],
+        roleClaim: { claim: 'immich_role', adminGroup: 'hola-admins', adminValue: 'admin', memberValue: 'user' },
+      },
+    });
+
+    // A scope mapping was created riding on `profile` (a scope the client already
+    // requests), with a group-membership expression and a stable managed id.
+    const mapCall = calls.find(c => c.method === 'POST' && c.path === '/api/v3/propertymappings/provider/scope/')!;
+    expect(mapCall).toBeDefined();
+    const mb = mapCall.body as Record<string, string>;
+    expect(mb.scope_name).toBe('profile');
+    expect(mb.managed).toMatch(/^goauthentik\.io\/hola\/.*-roleclaim$/);
+    expect(mb.expression).toBe(
+      'return {"immich_role": "admin" if ak_is_group_member(request.user, name="hola-admins") else "user"}'
+    );
+
+    // Its pk was attached to the provider alongside the standard scope mappings.
+    const pbody = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/oauth2/')!.body as Record<string, unknown>;
+    expect(pbody.property_mappings).toEqual(['scope-openid', 'scope-profile', 'scope-email', 'roleclaim-pk']);
   });
 
   test('native-oidc resolves scope mappings by managed id when scope_name is absent', async () => {
