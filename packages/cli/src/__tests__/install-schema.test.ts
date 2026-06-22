@@ -16,10 +16,11 @@ describe('install schema', () => {
     expect(defaultFor(authDomain, { HOLA_BASE_DOMAIN: 'hola.example.com' })).toBe('auth.hola.example.com');
   });
 
-  it('defaults SSO to authentik (secure by default) with it listed first', () => {
+  it('forces SSO to authentik — not a prompt, written as a fixed value', () => {
     const authMode = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_AUTH_MODE')!;
-    expect(defaultFor(authMode, {})).toBe('authentik');
-    expect(authMode.options?.[0]?.value).toBe('authentik');
+    expect(authMode.fixed).toBe('authentik');
+    // No longer an interactive choice: no options, so 'none' can't be selected.
+    expect(authMode.options).toBeUndefined();
   });
 
   it('reuses the first email (Let\'s Encrypt) as the default for the admin email', () => {
@@ -54,22 +55,22 @@ describe('install schema', () => {
     expect(cf.requiredWhen!({ ACME_DNS_PROVIDER: 'cloudflare' })).toBe(true);
     expect(cf.requiredWhen!({ ACME_DNS_PROVIDER: 'route53' })).toBe(false);
     expect(aws.requiredWhen!({ ACME_DNS_PROVIDER: 'route53' })).toBe(true);
-    expect(authDomain.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(true);
-    expect(authDomain.requiredWhen!({ HOLA_AUTH_MODE: 'none' })).toBe(false);
+    // Authentik is always on, so its login domain is always required (no gate).
+    expect(authDomain.requiredWhen).toBeUndefined();
   });
 
-  it('prompts the named admin only under authentik; username/name only once an email is given', () => {
+  it('always prompts the admin email; username/name only once an email is given', () => {
     const email = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_EMAIL')!;
     const username = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_USERNAME')!;
     const name = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_ADMIN_NAME')!;
 
-    expect(email.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(true);
-    expect(email.requiredWhen!({ HOLA_AUTH_MODE: 'none' })).toBe(false);
+    // Authentik is mandatory, so the named-admin email is always offered (optional value).
+    expect(email.requiredWhen).toBeUndefined();
 
     // Username/name are skipped when no admin email was supplied.
-    expect(username.requiredWhen!({ HOLA_AUTH_MODE: 'authentik' })).toBe(false);
-    expect(username.requiredWhen!({ HOLA_AUTH_MODE: 'authentik', HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
-    expect(name.requiredWhen!({ HOLA_AUTH_MODE: 'authentik', HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
+    expect(username.requiredWhen!({})).toBe(false);
+    expect(username.requiredWhen!({ HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
+    expect(name.requiredWhen!({ HOLA_ADMIN_EMAIL: 'me@x.io' })).toBe(true);
 
     // Username defaults to the email local part.
     expect(defaultFor(username, { HOLA_ADMIN_EMAIL: 'paul@x.io' })).toBe('paul');

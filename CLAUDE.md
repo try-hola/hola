@@ -71,7 +71,9 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   Authentik's embedded outpost), and `native-ldap` (per-app bind accounts). The
   interface is platform-agnostic (an Authelia+LLDAP backend is tracked in #88). The
   server self-bootstraps a least-privilege scoped token from an admin bootstrap
-  token. Authentik is opt-in via `HOLA_AUTH_MODE=authentik` (a compose profile).
+  token. Authentik is the **default** — `hola init` always sets
+  `HOLA_AUTH_MODE=authentik` (a compose profile); `none` remains an internal
+  dev/test mode, not an install-time choice.
 
 ## Conventions
 

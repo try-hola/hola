@@ -35,6 +35,12 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
   for (const field of INSTALL_SCHEMA) {
     if (field.requiredWhen && !field.requiredWhen(config)) continue;
 
+    // Fixed fields are written verbatim, never prompted (e.g. HOLA_AUTH_MODE).
+    if (field.fixed !== undefined) {
+      config[field.key] = field.fixed;
+      continue;
+    }
+
     // A `fromEnv` field offers a value already set in the environment (AWS_*); the
     // prompt prefills with it (masked secrets render as dots) so the user just
     // presses Enter. A blank answer still means "use the detected value" and is

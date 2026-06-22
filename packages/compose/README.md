@@ -217,15 +217,16 @@ Apps are pulled from GHCR (`ghcr.io/try-hola/*`) as OCI bundles; the bundle's `c
 becomes the deployment. Pulling requires the package to be **public** (or a registry token).
 
 ## Authentication & SSO
-Catalog apps can integrate with single sign-on. When enabled, Hola deploys **Authentik** (an
-all-in-one SSO platform) as part of the stack and **auto-provisions** each app's auth on install —
-e.g. for an app with native OIDC, Hola creates the OAuth2 client in Authentik and injects the
+Catalog apps integrate with single sign-on. Hola deploys **Authentik** (an all-in-one SSO
+platform) as part of the stack and **auto-provisions** each app's auth on install — e.g. for an
+app with native OIDC, Hola creates the OAuth2 client in Authentik and injects the
 issuer/client id/secret into the app, so SSO works on first boot with no manual setup.
 
-This is **opt-in** (Authentik needs ~2 GB RAM + Postgres). Enable it in `.env`:
+This is the **default** (`hola init` always configures it; Authentik needs ~2 GB RAM + Postgres).
+The relevant `.env` keys:
 
 ```bash
-HOLA_AUTH_MODE=authentik          # default is `none` (no SSO platform)
+HOLA_AUTH_MODE=authentik          # standard; `none` opts out (advanced/dev only)
 HOLA_AUTHENTIK_DOMAIN=auth.example.com   # browser-facing login UI (needs DNS + TLS)
 ```
 

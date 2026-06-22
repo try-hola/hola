@@ -38,11 +38,13 @@ export interface InstallField {
   validate?: (v: string, c: ConfigMap) => string | undefined;
   /** When present and false for the current answers, the field is skipped. */
   requiredWhen?: (c: ConfigMap) => boolean;
+  /** Written to .env verbatim without prompting. Used for values that are no
+   *  longer a user choice (e.g. HOLA_AUTH_MODE is always `authentik`). */
+  fixed?: string;
 }
 
 const isRoute53 = (c: ConfigMap) => c.ACME_DNS_PROVIDER === 'route53';
 const isCloudflare = (c: ConfigMap) => c.ACME_DNS_PROVIDER === 'cloudflare';
-const isAuthentik = (c: ConfigMap) => c.HOLA_AUTH_MODE === 'authentik';
 
 /** IANA timezone of the machine running the wizard (e.g. America/New_York), or '' if undetectable. Honors $TZ. */
 export function systemTimeZone(): string {
@@ -153,23 +155,20 @@ export const INSTALL_SCHEMA: InstallField[] = [
     default: () => systemTimeZone(),
   },
   {
+    // SSO is always on: Hola provisions per-app auth against the bundled
+    // Authentik stack. Not a prompt — written as a constant. (`none` remains a
+    // valid internal mode for dev/tests, just not an install-time choice.)
     key: 'HOLA_AUTH_MODE',
-    type: 'select',
+    type: 'text',
     prompt: 'SSO platform for catalog apps',
-    help: 'Note: authentik brings up the bundled Authentik stack (~2 GB RAM)',
-    // Secure by default: provision per-app SSO unless the operator opts out.
-    default: 'authentik',
-    options: [
-      { value: 'authentik', label: 'authentik — auto-provision per-app SSO' },
-      { value: 'none', label: 'none — apps use their own auth' },
-    ],
+    fixed: 'authentik',
   },
   {
     key: 'HOLA_AUTHENTIK_DOMAIN',
     type: 'text',
     prompt: 'Authentik login domain',
+    help: 'The bundled Authentik SSO stack needs ~2 GB RAM + Postgres',
     default: (c) => (c.HOLA_BASE_DOMAIN ? `auth.${c.HOLA_BASE_DOMAIN}` : ''),
-    requiredWhen: isAuthentik,
     validate: isDomain,
   },
   // Note: we deliberately do NOT prompt for the built-in `akadmin` superuser's
@@ -185,7 +184,6 @@ export const INSTALL_SCHEMA: InstallField[] = [
     help: 'akadmin stays as a separate internal break-glass account; blank to use only that.',
     // Default to the first email given, so you sign in as yourself out of the box.
     default: (c) => c.LETSENCRYPT_EMAIL || '',
-    requiredWhen: isAuthentik,
     validate: isEmailOrEmpty,
   },
   {
@@ -194,13 +192,13 @@ export const INSTALL_SCHEMA: InstallField[] = [
     prompt: 'Your username',
     default: (c) => (c.HOLA_ADMIN_EMAIL ? c.HOLA_ADMIN_EMAIL.split('@')[0] : ''),
     // Only asked once a named admin email is given.
-    requiredWhen: (c) => isAuthentik(c) && !!c.HOLA_ADMIN_EMAIL?.trim(),
+    requiredWhen: (c) => !!c.HOLA_ADMIN_EMAIL?.trim(),
   },
   {
     key: 'HOLA_ADMIN_NAME',
     type: 'text',
     prompt: 'Your display name (optional)',
-    requiredWhen: (c) => isAuthentik(c) && !!c.HOLA_ADMIN_EMAIL?.trim(),
+    requiredWhen: (c) => !!c.HOLA_ADMIN_EMAIL?.trim(),
   },
   {
     key: 'HOLA_USE_AUTH',
