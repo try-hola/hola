@@ -166,12 +166,27 @@ still pass explicit `-f` flags either way.
 
 ## Upgrade
 
-The supported upgrade path is `hola bootstrap` with a newer CLI — it downloads the new bundle
-(which pins the new image tags) and re-runs the idempotent installer. On the host directly:
+The supported upgrade path is `hola update` with a newer CLI — config-preserving and
+no wizard:
 
 ```bash
-cd packages/compose
-./scripts/up.sh --pull always   # pull the version-pinned images and recreate changed services
+hola update --host user@your-vm          # upgrade to the CLI's version (add --dry-run to preview)
+hola update --host user@your-vm --check  # report CLI / installed / latest versions only
+```
+
+It downloads the new version-pinned bundle, extracts it over the install dir **without
+touching `.env` or `traefik/acme`**, and re-runs the idempotent installer (pull new images,
+backfill newly-required `.env` keys, recreate changed services). Keep the same `--dir` so the
+dir-relative ACME cert store carries forward. A pre-0.6.23 `HOLA_AUTH_MODE=none` host is
+surfaced — pass `--enable-sso` or `--keep-auth-mode` to choose; an unset mode is reconciled to
+the Authentik default automatically.
+
+On the host directly:
+
+```bash
+cd /opt/hola                              # the install dir
+curl -fsSL <bundle-url> | tar xz -C .     # extract the new bundle over the dir
+HOLA_BOOTSTRAP=1 ./scripts/install.sh     # idempotent: pulls images, recreates changed services
 ```
 
 (From a source checkout, `git pull` then `HOLA_BUILD=1 ./scripts/up.sh --build` to rebuild locally.)

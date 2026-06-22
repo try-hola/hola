@@ -48,6 +48,25 @@ prog
     await runBootstrap(camelKeys(opts));
   });
 
+// update — upgrade an existing install to this CLI's version (config-preserving, no wizard)
+prog
+  .command('update')
+  .describe('Upgrade an existing host to this CLI’s version over SSH — no wizard, preserves .env')
+  .option('--host', 'Target host, e.g. user@vm (required)')
+  .option('--repo', 'Hola repo to download release assets from', 'https://github.com/try-hola/hola.git')
+  .option('--ref', `Release tag to install (default cli-v${CLI_VERSION})`)
+  .option('--tarball-url', 'Override the compose-bundle download URL (advanced)')
+  .option('--dir', 'Install directory on the host', '/opt/hola')
+  .option('--enable-sso', 'For a HOLA_AUTH_MODE=none host: enable Authentik SSO (the new standard)', false)
+  .option('--keep-auth-mode', 'For a HOLA_AUTH_MODE=none host: keep SSO off (no prompt)', false)
+  .option('--check', 'Report CLI / installed / latest versions without changing anything', false)
+  .option('--dry-run', 'Print the plan without connecting', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (opts) => {
+    const { runUpdate } = await load(import('./commands/update/update'));
+    await runUpdate(camelKeys(opts));
+  });
+
 // teardown — remove a Hola deployment from a host over SSH (inverse of bootstrap)
 prog
   .command('teardown')

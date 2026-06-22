@@ -184,16 +184,43 @@ docker run --rm -v hola-data:/data -v "$PWD":/backup alpine \
 
 ## Upgrade
 
-Re-run `hola bootstrap` with a newer CLI: it downloads the new compose bundle
-(which pins the new `ghcr.io/try-hola` image tags) and re-runs the idempotent
-installer. On the host directly:
+The supported upgrade path is `hola update` — it brings an existing install up to
+the invoking CLI's version **without** re-running the setup wizard and **without**
+touching your `.env` or the ACME cert store:
 
 ```bash
-cd packages/compose
-./scripts/up.sh --pull always   # pull the version-pinned images, recreate changed services
+hola update --host user@vm          # upgrade to this CLI's version
+hola update --host user@vm --check  # just report CLI / installed / latest versions
 ```
 
-State in the `hola-data` volume is preserved across upgrades.
+It preflights the host, downloads the version-pinned compose bundle (pinning the
+new `ghcr.io/try-hola` image tags), extracts it over the install dir, and re-runs
+the idempotent installer — which pulls the new images, backfills any newly-required
+`.env` keys, and recreates only the changed services. Use the same `--ref`,
+`--tarball-url`, `--dir`, and `--dry-run` overrides as `hola bootstrap`.
+
+Keep the **same install dir** (`--dir`) across upgrades. The Let's Encrypt cert
+store is a dir-relative bind mount (`traefik/acme/acme.json`), so relocating the
+dir starts with an empty store and re-issues every cert.
+
+**Pre-0.6.23 hosts (no SSO).** Authentik became the default in 0.6.23. A host with
+an unset `HOLA_AUTH_MODE` is reconciled automatically (the installer enables
+Authentik and generates its secrets). A host pinned to an explicit
+`HOLA_AUTH_MODE=none` is left as-is and `update` asks you to choose — pass
+`--enable-sso` to turn SSO on (derives `auth.<base>` and pulls in ~2 GB of
+Authentik services) or `--keep-auth-mode` to keep it off.
+
+To upgrade on the host directly instead of over SSH:
+
+```bash
+cd /opt/hola               # the install dir
+curl -fsSL <bundle-url> | tar xz -C .   # extract the new bundle over the dir
+HOLA_BOOTSTRAP=1 ./scripts/install.sh   # idempotent: pulls images, recreates changed services
+```
+
+State in the `hola-data` volume is preserved across upgrades. The web dashboard and
+the CLI both surface an "update available" notice (a cached check against the
+newest published release) pointing you to `hola update`.
 
 ## Troubleshooting
 

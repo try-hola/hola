@@ -1,6 +1,7 @@
 import React, { ReactNode, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
+import { UpdateAvailableBanner } from '../UpdateAvailableBanner';
 
 interface AppShellProps {
   children: ReactNode;
@@ -17,6 +18,7 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
       />
       <div className="flex flex-1 flex-col min-w-0">
         <Topbar />
+        <UpdateAvailableBanner />
         <main className="flex-1 overflow-y-auto relative">
           <div className="px-8 py-7 max-w-[1280px] mx-auto">{children}</div>
         </main>

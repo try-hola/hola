@@ -38,6 +38,7 @@ import {
   type PatchBackupSettingsRequest,
   type PatchBackupSettingsResponse,
   type GetSystemStatusResponse,
+  type GetUpdateCheckResponse,
   type Job,
   type JobStatus,
   type RollbackRequest,
@@ -1302,6 +1303,17 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const services = getServices();
       const payload: GetSystemStatusResponse = await services.systemMonitoring.getSystemStatus();
+      return json(payload);
+    } catch (error) {
+      return errorResponse(req, error);
+    }
+  }
+
+  // Update-availability check (cached GitHub release lookup; shared by web + CLI)
+  if (pathname === API.system.updateCheck && req.method === 'GET') {
+    try {
+      const services = getServices();
+      const payload: GetUpdateCheckResponse = await services.updateCheck.check();
       return json(payload);
     } catch (error) {
       return errorResponse(req, error);

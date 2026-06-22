@@ -291,6 +291,7 @@ export const api = {
   // System status
   system: {
     status: () => apiClient.get(API.system.status),
+    updateCheck: () => apiClient.get(API.system.updateCheck),
   },
 
   // Catalog with smart caching
