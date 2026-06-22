@@ -49,9 +49,11 @@ export interface FinalizedManifest {
   draftId: string;
   appId: string;
   version?: string;
-  // App icon (emoji or image URL) carried from the catalog so the deployment
-  // record can persist it without re-reading the catalog at create time.
+  // App icon (emoji or image URL) and product display name carried from the
+  // catalog so the deployment record can persist both without re-reading the
+  // catalog at create time.
   icon?: string;
+  displayName?: string;
   systemOverrides: Record<string, string>;
   appEnv: AppEnvVar[];
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
@@ -320,6 +322,7 @@ export class RealDraftService implements DraftService {
         appId: request.appId,
         version: request.version,
         icon: app.icon,
+        displayName: app.name,
         systemOverrides: {},
         appEnv: defaults.env,
         ports: defaults.defaults.ports,
@@ -605,9 +608,10 @@ export class RealDraftService implements DraftService {
         }
       }
 
-      // `icon` is presentation, not part of the deployable spec, so it's added
-      // outside canonicalSpec — keeping the checksum a pure function of the spec.
-      const manifest = { ...canonicalSpec, icon: draft.icon, checksum, finalizedAt };
+      // `icon`/`displayName` are presentation, not part of the deployable spec,
+      // so they're added outside canonicalSpec — keeping the checksum a pure
+      // function of the spec.
+      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, checksum, finalizedAt };
       await this.storageService.writeFile(
         `${finalizedDir}/manifest.json`,
         JSON.stringify(manifest, null, 2)
@@ -705,6 +709,7 @@ export class MockDraftService implements DraftService {
       appId: request.appId,
       version: request.version,
       icon: '📦',
+      displayName: 'Mock App',
       systemOverrides: {},
       appEnv: [ { key: 'APP_PORT', value: '8080', isSecret: false, description: 'Application port' } ],
       ports: [{ host: 8080, container: 80, protocol: 'tcp' }],
@@ -716,7 +721,7 @@ export class MockDraftService implements DraftService {
 
     return {
       draftId,
-      app: { id: request.appId, name: 'Mock App', icon: draft.icon ?? '📦' },
+      app: { id: request.appId, name: draft.displayName ?? 'Mock App', icon: draft.icon ?? '📦' },
       systemEnv: [],
       appEnv: draft.appEnv,
       defaults: { ports: draft.ports, volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }] },
@@ -820,6 +825,7 @@ export class MockDraftService implements DraftService {
       appId: draft.appId,
       version: draft.version,
       icon: draft.icon,
+      displayName: draft.displayName,
       systemOverrides: draft.systemOverrides,
       appEnv: draft.appEnv,
       ports: draft.ports,

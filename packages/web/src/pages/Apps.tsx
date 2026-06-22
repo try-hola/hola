@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import { ExternalLink, Package, Plus, Search, SlidersHorizontal } from 'lucide-react';
 
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
-import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import type { GetDeploymentsRequest } from '@hola/shared';
@@ -17,30 +16,16 @@ import type { GetDeploymentsRequest } from '@hola/shared';
  * deployment detail so a tile is never a dead end, and every running tile keeps a
  * subtle "manage" shortcut to its detail for troubleshooting.
  *
- * Data is what the server already owns — deployments plus the catalog (for the
- * product name and, as a fallback, the icon) — joined client-side.
+ * The name and icon are persisted on the deployment at install (seeded from the
+ * catalog), so this renders from the deployments list alone — no live catalog
+ * join, and it keeps working if the catalog is unreachable.
  */
 
 const DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 100 };
-const CATALOG_PARAMS = { page: 1, limit: 100 };
 
 export const Apps: React.FC = () => {
   const { data: deploymentsData, loading, error } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
-  const { data: catalogData } = useCatalogAppsApi(CATALOG_PARAMS);
   const [query, setQuery] = React.useState('');
-
-  // Join app id -> catalog icon + display name so tiles show the real app glyph
-  // and product name (e.g. "Uptime Kuma"), not the deployment's internal name.
-  const iconByApp = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const app of catalogData?.items ?? []) map.set(app.id, app.icon);
-    return map;
-  }, [catalogData]);
-  const nameByApp = React.useMemo(() => {
-    const map = new Map<string, string>();
-    for (const app of catalogData?.items ?? []) map.set(app.id, app.name);
-    return map;
-  }, [catalogData]);
 
   const apps = React.useMemo(() => deploymentsData?.items ?? [], [deploymentsData]);
   const runningCount = React.useMemo(
@@ -48,15 +33,12 @@ export const Apps: React.FC = () => {
     [apps],
   );
 
-  // Client-side filter over the product name, deployment name, and app id.
+  // Client-side filter over the app name and id.
   const visibleApps = React.useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return apps;
-    return apps.filter((a) => {
-      const name = (nameByApp.get(a.app) || a.app || a.name).toLowerCase();
-      return name.includes(q) || a.app.toLowerCase().includes(q) || a.name.toLowerCase().includes(q);
-    });
-  }, [apps, query, nameByApp]);
+    return apps.filter((a) => a.name.toLowerCase().includes(q) || a.app.toLowerCase().includes(q));
+  }, [apps, query]);
 
   return (
     <div className="animate-fadein">
@@ -104,10 +86,10 @@ export const Apps: React.FC = () => {
       {!loading && !error && visibleApps.length > 0 && (
         <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
           {visibleApps.map((app) => {
-            const icon = iconByApp.get(app.app) || app.icon || '';
-            // Prefer the catalog product name; fall back to the app id (always
-            // readable) before the deployment's internal name.
-            const displayName = nameByApp.get(app.app) || app.app || app.name;
+            // Name + icon are persisted on the deployment at install (seeded from
+            // the catalog), falling back to the app id for older records.
+            const icon = app.icon || '';
+            const displayName = app.name || app.app;
             const openable = app.status === 'running' && !!app.url;
 
             return (

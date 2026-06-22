@@ -17,14 +17,11 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
-function mockApi(deployments: unknown[], catalog: unknown[]) {
+// The launcher renders from the deployments list alone — name + icon are persisted
+// on each deployment at install, so there's no live catalog join here.
+function mockApi(deployments: unknown[]) {
   global.fetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
-    if (url.includes(API.catalog.apps)) {
-      return new Response(JSON.stringify({ items: catalog, page: 1, limit: 100, total: catalog.length }), {
-        status: 200, headers: { 'Content-Type': 'application/json' },
-      });
-    }
     if (url.includes(API.deployments.base)) {
       return new Response(JSON.stringify({ items: deployments, page: 1, limit: 100, total: deployments.length }), {
         status: 200, headers: { 'Content-Type': 'application/json' },
@@ -37,10 +34,9 @@ function mockApi(deployments: unknown[], catalog: unknown[]) {
 const renderApps = () => render(<MemoryRouter><Apps /></MemoryRouter>);
 
 describe('Apps landing', () => {
-  it('shows the catalog product name (not the deployment name) and links to the public URL', async () => {
+  it('renders the persisted app name + icon and launches the public URL', async () => {
     mockApi(
-      [{ id: 'gitea-abc12345', name: 'deployment-gitea-abc12345', app: 'gitea', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://gitea.local.hola' }],
-      [{ id: 'gitea', name: 'Gitea', description: '', icon: '🍵', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false }],
+      [{ id: 'gitea-abc12345', name: 'Gitea', app: 'gitea', icon: '🍵', status: 'running', ports: [], lastUpdated: 'now', url: 'https://gitea.local.hola' }],
     );
 
     renderApps();
@@ -49,58 +45,43 @@ describe('Apps landing', () => {
     expect(link).toHaveAttribute('href', 'https://gitea.local.hola');
     expect(link).toHaveAttribute('target', '_blank');
     expect(screen.getByText('Gitea')).toBeInTheDocument();
-    // The deployment's internal name must NOT be shown.
-    expect(screen.queryByText('deployment-gitea-abc12345')).not.toBeInTheDocument();
-    expect(screen.getByText('🍵')).toBeInTheDocument(); // catalog icon wins over fallback
+    expect(screen.getByText('🍵')).toBeInTheDocument(); // persisted icon
     // Running tiles read as launchable ("Open"), not a status pill.
     expect(screen.getByText('Open')).toBeInTheDocument();
     // …and keep a manage shortcut to their deployment detail for troubleshooting.
     expect(screen.getByTitle('Manage & logs')).toHaveAttribute('href', '/deployments/gitea-abc12345');
   });
 
-  it('renders every installed app, not just running ones', async () => {
+  it('renders every installed app; running launches externally, others route to detail', async () => {
     mockApi(
       [
-        { id: 'a-1', name: 'deployment-a-1', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
-        { id: 'b-1', name: 'deployment-b-1', app: 'b', icon: '📦', status: 'stopped', ports: [], lastUpdated: 'now' },
-      ],
-      [
-        { id: 'a', name: 'Alpha', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
-        { id: 'b', name: 'Bravo', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
+        { id: 'a-1', name: 'Alpha', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
+        { id: 'b-1', name: 'Bravo', app: 'b', icon: '📦', status: 'stopped', ports: [], lastUpdated: 'now' },
       ],
     );
 
     renderApps();
 
-    // Running app opens externally; stopped app links to its detail page. Tiles
-    // show the catalog product name.
     expect(await screen.findByTitle('Open Alpha')).toHaveAttribute('href', 'https://a.local.hola');
     expect(screen.getByTitle('Bravo — view deployment')).toHaveAttribute('href', '/deployments/b-1');
   });
 
-  it('falls back to the app id when the catalog has no match', async () => {
+  it('falls back to the app id when the deployment has no display name', async () => {
     mockApi(
-      [{ id: 'x-1', name: 'deployment-x-1', app: 'uptime-kuma', icon: '📦', status: 'installing', ports: [], lastUpdated: 'now' }],
-      [],
+      [{ id: 'x-1', name: '', app: 'uptime-kuma', icon: '📦', status: 'installing', ports: [], lastUpdated: 'now' }],
     );
 
     renderApps();
 
-    // No catalog entry → fall back to the app id, never the deployment name.
     const link = await screen.findByTitle('uptime-kuma — view deployment');
     expect(link).toHaveAttribute('href', '/deployments/x-1');
-    expect(screen.queryByText('deployment-x-1')).not.toBeInTheDocument();
   });
 
   it('filters the grid by the search box', async () => {
     mockApi(
       [
-        { id: 'a-1', name: 'deployment-a-1', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
-        { id: 'b-1', name: 'deployment-b-1', app: 'b', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://b.local.hola' },
-      ],
-      [
-        { id: 'a', name: 'Alpha', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
-        { id: 'b', name: 'Bravo', description: '', icon: '📦', category: 'apps', rating: 0, downloads: 0, tags: [], featured: false },
+        { id: 'a-1', name: 'Alpha', app: 'a', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://a.local.hola' },
+        { id: 'b-1', name: 'Bravo', app: 'b', icon: '📦', status: 'running', ports: [], lastUpdated: 'now', url: 'https://b.local.hola' },
       ],
     );
 
@@ -114,7 +95,7 @@ describe('Apps landing', () => {
   });
 
   it('shows an empty state when nothing is installed', async () => {
-    mockApi([], []);
+    mockApi([]);
     renderApps();
     await waitFor(() => {
       expect(screen.getByText(/No apps installed yet/i)).toBeInTheDocument();
