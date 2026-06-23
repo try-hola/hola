@@ -6,7 +6,7 @@
  */
 
 import { promises as fs } from 'fs';
-import { join, dirname, isAbsolute } from 'path';
+import { join, dirname, isAbsolute, resolve, relative, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { getLogger } from '../../lib/logger';
@@ -281,7 +281,18 @@ export class RealStorageService implements StorageService {
 
   // Utility operations
   private resolveStoragePath(path: string): string {
-    return isAbsolute(path) ? path : this.resolveHolaPath(path);
+    // Absolute paths are deliberate (e.g. the apps bind root, which lives outside
+    // the hola data dir) and pass through. Relative paths resolve under the data
+    // root and MUST stay inside it: reject any that climb out via '..' so an
+    // untrusted component (e.g. an uploaded file name) can't write outside it.
+    if (isAbsolute(path)) return path;
+    const base = resolve(this.config.holaDir);
+    const resolved = resolve(base, path);
+    const rel = relative(base, resolved);
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`Path '${path}' escapes the storage root`);
+    }
+    return resolved;
   }
 
   resolveHolaPath(...segments: string[]): string {

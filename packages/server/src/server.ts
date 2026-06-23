@@ -661,10 +661,22 @@ async function route(url: URL, req: Request): Promise<Response> {
         };
       }
 
+      // The file name becomes part of the on-disk blob path, so it must be a bare
+      // file name — reject path separators / '..' the same way `path` is guarded
+      // above (else a crafted name could traverse outside the draft directory).
+      if (
+        fileData.name.includes('/') ||
+        fileData.name.includes('\\') ||
+        fileData.name === '.' ||
+        fileData.name === '..'
+      ) {
+        return json({ error: { code: 'INVALID_NAME', message: 'File name must not contain path separators or ".."' } }, { status: 400 });
+      }
+
       const services = getServices();
       const payload = await services.drafts.uploadFile(draftId, fileData);
-      
-      logger.info('File uploaded successfully', { 
+
+      logger.info('File uploaded successfully', {
         requestId: context?.requestId, 
         draftId,
         uploadId: payload.uploadId,
@@ -1242,11 +1254,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json(payload);
     } catch (error) {
       logger.error('Failed to update system settings', error as Error);
-      // Return validation error or service error
-      return json(
-        { error: { code: 'UPDATE_FAILED', message: error instanceof Error ? error.message : 'Failed to update settings' } }, 
-        { status: 500 }
-      );
+      // Route through the shared mapper so a typed ValidationError keeps its
+      // user-facing message + 400, but an unexpected error returns a generic 500
+      // instead of leaking internal details (paths, driver errors).
+      return errorResponse(req, error);
     }
   }
 
@@ -1289,11 +1300,8 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json(payload);
     } catch (error) {
       logger.error('Failed to update backup settings', error as Error);
-      // Return validation error or service error
-      return json(
-        { error: { code: 'UPDATE_FAILED', message: error instanceof Error ? error.message : 'Failed to update backup settings' } }, 
-        { status: 500 }
-      );
+      // Sanitize via the shared mapper (see system-settings handler above).
+      return errorResponse(req, error);
     }
   }
 

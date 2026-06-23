@@ -59,10 +59,12 @@ export function createRequestMiddleware() {
     const url = new URL(req.url);
     const userContext = extractUserContext(req);
     
-    // Extract auth context (if available from auth middleware)
+    // Auth runs INSIDE next() (authMiddleware is nested below this middleware), so
+    // the principal isn't known yet at request start — it's backfilled after
+    // next() returns, below. This read is null on the first pass.
     const authContext = getAuthContext(req);
     const principal = authContext?.principal;
-    
+
     // Create request-scoped logger
     const logContext: LogContext = {
       requestId,
@@ -126,26 +128,38 @@ export function createRequestMiddleware() {
       );
     }
     
+    // authMiddleware ran inside next(), so the principal is known now — backfill
+    // it onto the stored context (for anything that reads it post-hoc) and the
+    // completion log, restoring per-principal audit visibility.
+    const resolvedAuth = getAuthContext(req);
+    if (resolvedAuth) {
+      context.auth = resolvedAuth;
+      context.principal = resolvedAuth.principal;
+    }
+
     // Add request ID to response headers
     const headers = new Headers(response.headers);
     headers.set('x-request-id', requestId);
-    
+
     const finalResponse = new Response(response.body, {
       status: response.status,
       statusText: response.statusText,
       headers,
     });
-    
+
     // Record metrics and log completion
     const duration = Date.now() - startTime;
     const status = finalResponse.status;
-    
+
     recordHttpRequest(req.method, url.pathname, status, duration);
-    
+
     logger.info('Request completed', {
       status,
       duration,
       error: error?.message,
+      authenticated: resolvedAuth?.isAuthenticated ?? false,
+      principalId: resolvedAuth?.principal?.id,
+      principalType: resolvedAuth?.principal?.type,
     });
     
     return finalResponse;

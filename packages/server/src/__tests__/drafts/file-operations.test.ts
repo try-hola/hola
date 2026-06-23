@@ -67,6 +67,28 @@ describe('Draft File Operations', () => {
     expect(uploadResult.kind).toBe('composeOverride');
   });
 
+  test('should reject an upload whose name contains path separators or ".."', async () => {
+    const createResponse = await makeRequest<CreateDraftResponse>({
+      method: 'POST',
+      url: `${baseURL}/api/drafts`,
+      body: { appId: 'nextcloud', version: '1.0.0' } as CreateDraftRequest,
+    });
+    const draft = createResponse.data!;
+
+    const uploadResponse = await makeRequest<UploadDraftFileResponse>({
+      method: 'POST',
+      url: `${baseURL}/api/drafts/${draft.draftId}/uploads`,
+      body: {
+        name: '../../../../etc/passwd', // traversal in the file name
+        content: Buffer.from('x').toString('base64'),
+        kind: 'additionalFile',
+      },
+    });
+
+    expect(uploadResponse.success).toBe(false);
+    expect(uploadResponse.error?.code).toBe('INVALID_NAME');
+  });
+
   test('should delete a file from draft', async () => {
     // Create a draft first
     const createRequest: CreateDraftRequest = {
