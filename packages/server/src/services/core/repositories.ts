@@ -157,9 +157,13 @@ export class DatabaseSettingsRepository implements SettingsRepository {
       const data = JSON.stringify(settings);
       const now = new Date().toISOString();
 
+      // UPSERT (not INSERT OR REPLACE): REPLACE deletes the conflicting row and
+      // re-inserts, resetting created_at and churning the autoincrement id on
+      // every save. ON CONFLICT updates in place, preserving id + created_at.
       await this.db.run(`
-        INSERT OR REPLACE INTO settings (type, data, updated_at)
+        INSERT INTO settings (type, data, updated_at)
         VALUES (?, ?, ?)
+        ON CONFLICT(type) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
       `, ['system', data, now]);
 
       this.logger.info('System settings updated in database');
@@ -199,9 +203,11 @@ export class DatabaseSettingsRepository implements SettingsRepository {
       const data = JSON.stringify(settings);
       const now = new Date().toISOString();
 
+      // UPSERT in place to preserve id + created_at (see updateSystemSettings).
       await this.db.run(`
-        INSERT OR REPLACE INTO settings (type, data, updated_at)
+        INSERT INTO settings (type, data, updated_at)
         VALUES (?, ?, ?)
+        ON CONFLICT(type) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
       `, ['backup', data, now]);
 
       this.logger.info('Backup settings updated in database');

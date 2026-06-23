@@ -37,6 +37,9 @@ export interface StorageService extends HealthCheckable {
   // File operations
   // `mode` (e.g. 0o600) restricts permissions for files holding secrets.
   writeFile(path: string, content: string | Buffer, mode?: number): Promise<void>;
+  /** Append to a file (creating it + parent dirs if needed). Use for append-only
+   *  files like logs, where rewriting the whole file would be O(size) and racy. */
+  appendFile(path: string, content: string | Buffer): Promise<void>;
   readFile(path: string): Promise<Buffer>;
   readFileAsString(path: string, encoding?: BufferEncoding): Promise<string>;
   deleteFile(path: string): Promise<void>;
@@ -203,6 +206,21 @@ export class RealStorageService implements StorageService {
     }
   }
 
+  async appendFile(path: string, content: string | Buffer): Promise<void> {
+    path = this.resolveStoragePath(path);
+
+    try {
+      if (this.config.createDirs) {
+        await this.ensureDir(dirname(path));
+      }
+      await fs.appendFile(path, content);
+      this.logger.debug('File appended', { path });
+    } catch (error) {
+      this.logger.error('Failed to append file', error as Error, { path });
+      throw new Error(`Failed to append file ${path}: ${error}`, { cause: error });
+    }
+  }
+
   private async writeFileAtomic(path: string, content: string | Buffer, mode?: number): Promise<void> {
     const tempPath = `${path}.tmp.${randomUUID()}`;
 
@@ -350,6 +368,12 @@ export class MockStorageService implements StorageService {
     const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
     this.files.set(path, buffer);
     this.logger.debug('Mock file written', { path, size: buffer.length, mode });
+  }
+
+  async appendFile(path: string, content: string | Buffer): Promise<void> {
+    const buffer = Buffer.isBuffer(content) ? content : Buffer.from(content);
+    const existing = this.files.get(path);
+    this.files.set(path, existing ? Buffer.concat([existing, buffer]) : buffer);
   }
 
   async readFile(path: string): Promise<Buffer> {

@@ -45,49 +45,58 @@ export class RealBundleService implements BundleService, HealthCheckable {
 
   async ensurePulled(opts: { appId: string; version: string; ociRef: string }): Promise<BundleInfo> {
     this.enforceAllowlist(opts.ociRef);
-    const dest = join(this.baseCache, sanitize(opts.appId), sanitize(opts.version));
-    mkdirSync(dest, { recursive: true });
-
-    // Touch cache entry for LRU tracking
-    this.cacheManager.touch(opts.appId, opts.version);
-
-    // If already has compose.yaml and manifest.json, assume cached
-    if (existsSync(join(dest, 'compose.yaml')) && existsSync(join(dest, 'manifest.json'))) {
-      this.logger.debug('Bundle already cached', { appId: opts.appId, version: opts.version });
-      return { localPath: dest, ...this.safeStat(dest) };
-    }
-
-    // Clean dest to avoid mixed content
-    try { rmSync(dest, { recursive: true, force: true }); } catch { /* ignore existing */ }
-    mkdirSync(dest, { recursive: true });
-
-    // Run cache cleanup before pulling new content
-    await this.cleanup();
-
-    // oras pull to a temp dir then move is ideal; for simplicity, pull into dest
-    const pullCmd = `oras pull --include-subject ${shellEscape(opts.ociRef)} -o ${shellEscape(dest)}`;
-    this.logger.info('Pulling OCI bundle via ORAS', { ref: opts.ociRef, dest });
+    // Protect this bundle from eviction while we pull and return it: cleanup()
+    // runs inside ensurePulled, so a concurrent pull could otherwise rmSync a
+    // bundle dir that's mid-pull/in-use. (The cache's "never evict in-use" guard
+    // was previously dead because nothing ever marked a bundle in-use.)
+    this.cacheManager.markInUse(opts.appId, opts.version);
     try {
-      const { stdout, stderr } = await execAsync(pullCmd);
-      this.logger.debug('ORAS pull output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
-    } catch (error) {
-      this.logger.error('ORAS pull failed', error as Error, { ref: opts.ociRef });
-      throw new Error('ORAS_PULL_FAILED', { cause: error });
-    }
+      const dest = join(this.baseCache, sanitize(opts.appId), sanitize(opts.version));
+      mkdirSync(dest, { recursive: true });
 
-    // Optional signature verify-if-present
-    if (catalogConfig.signaturePolicy !== 'none') {
-      const verifyResult = await this.verifySignature(dest);
-      if (catalogConfig.signaturePolicy === 'required' && !verifyResult.verified) {
-        this.logger.error('Bundle signature verification failed', undefined, { ref: opts.ociRef, error: verifyResult.error });
-        rmSync(dest, { recursive: true, force: true });
-        throw new Error('SIGNATURE_VERIFICATION_FAILED');
-      } else if (!verifyResult.verified) {
-        this.logger.warn('Bundle signature verification failed but policy is optional', { ref: opts.ociRef, error: verifyResult.error });
+      // Touch cache entry for LRU tracking
+      this.cacheManager.touch(opts.appId, opts.version);
+
+      // If already has compose.yaml and manifest.json, assume cached
+      if (existsSync(join(dest, 'compose.yaml')) && existsSync(join(dest, 'manifest.json'))) {
+        this.logger.debug('Bundle already cached', { appId: opts.appId, version: opts.version });
+        return { localPath: dest, ...this.safeStat(dest) };
       }
-    }
 
-    return { localPath: dest, ...this.safeStat(dest) };
+      // Clean dest to avoid mixed content
+      try { rmSync(dest, { recursive: true, force: true }); } catch { /* ignore existing */ }
+      mkdirSync(dest, { recursive: true });
+
+      // Run cache cleanup before pulling new content
+      await this.cleanup();
+
+      // oras pull to a temp dir then move is ideal; for simplicity, pull into dest
+      const pullCmd = `oras pull --include-subject ${shellEscape(opts.ociRef)} -o ${shellEscape(dest)}`;
+      this.logger.info('Pulling OCI bundle via ORAS', { ref: opts.ociRef, dest });
+      try {
+        const { stdout, stderr } = await execAsync(pullCmd);
+        this.logger.debug('ORAS pull output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
+      } catch (error) {
+        this.logger.error('ORAS pull failed', error as Error, { ref: opts.ociRef });
+        throw new Error('ORAS_PULL_FAILED', { cause: error });
+      }
+
+      // Optional signature verify-if-present
+      if (catalogConfig.signaturePolicy !== 'none') {
+        const verifyResult = await this.verifySignature(dest);
+        if (catalogConfig.signaturePolicy === 'required' && !verifyResult.verified) {
+          this.logger.error('Bundle signature verification failed', undefined, { ref: opts.ociRef, error: verifyResult.error });
+          rmSync(dest, { recursive: true, force: true });
+          throw new Error('SIGNATURE_VERIFICATION_FAILED');
+        } else if (!verifyResult.verified) {
+          this.logger.warn('Bundle signature verification failed but policy is optional', { ref: opts.ociRef, error: verifyResult.error });
+        }
+      }
+
+      return { localPath: dest, ...this.safeStat(dest) };
+    } finally {
+      this.cacheManager.markNotInUse(opts.appId, opts.version);
+    }
   }
 
   async validateLayout(bundlePath: string): Promise<{ ok: boolean; errors: string[]; warnings: string[] }> {
