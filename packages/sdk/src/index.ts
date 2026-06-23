@@ -4,7 +4,7 @@ import {
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
-  ValidateDraftResponse, FinalizeDraftResponse,
+  ValidateDraftResponse, EnhancedPreflightResponse, FinalizeDraftResponse,
   // Phase 7 Deployment types
   CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
@@ -100,7 +100,7 @@ export class HolaSdk {
     removeFile: (draftId: string, uploadId: string) => 
       this.delete<DeleteDraftFileResponse>(API.drafts.uploadById(draftId, uploadId)),
     validate: (draftId: string) => this.post<ValidateDraftResponse>(API.drafts.validate(draftId)),
-    preflight: (draftId: string) => this.post<ValidateDraftResponse>(API.drafts.preflight(draftId)),
+    preflight: (draftId: string) => this.post<EnhancedPreflightResponse>(API.drafts.preflight(draftId)),
     finalize: (draftId: string) => this.post<FinalizeDraftResponse>(API.drafts.finalize(draftId)),
   };
 
