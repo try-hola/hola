@@ -37,22 +37,9 @@ export function useLiveJobUpdates(jobId?: string, options?: {
         progress: event.data.progress,
         finishedAt: event.data.finishedAt,
       });
-      
-      // Update cache for job detail if available
-      const cacheKey = `job-${jobId}`;
-      const cached = globalCache.get(cacheKey);
-      if (cached && cached.data && typeof cached.data === 'object') {
-        globalCache.set(cacheKey, {
-          ...cached,
-          data: {
-            ...(cached.data as Job),
-            status: event.data.status,
-            progress: event.data.progress,
-            finishedAt: event.data.finishedAt,
-          },
-          timestamp: Date.now(),
-        });
-      }
+      // Note: no cache write here — the only job cache key is the parameterized
+      // list key (`jobs-<params>` in useJobsApi), which a single job update can't
+      // target; the live UI is driven by the jobData state above.
     }
   }, [jobId]);
 
@@ -128,23 +115,10 @@ export function useLiveSystemStatus() {
         ...event.data,
       } as SystemStatus));
       setLastUpdate(new Date().toISOString());
-      
-      // Update summary cache if available
-      const summaryCache = globalCache.get('dashboard-summary');
-      if (summaryCache && summaryCache.data && typeof summaryCache.data === 'object') {
-        const summaryData = summaryCache.data as GetSummaryResponse;
-        globalCache.set('dashboard-summary', {
-          ...summaryCache,
-          data: {
-            ...summaryData,
-            system: {
-              ...summaryData.system,
-              ...event.data,
-            },
-          },
-          timestamp: Date.now(),
-        });
-      }
+      // Note: no cache write here — useWorkingApi reads `dashboard-summary` as a
+      // bare value (not the {data,timestamp} wrapper this used to write) and never
+      // populates that key, so the write was a dead no-op; the live UI is driven by
+      // the systemStatus state above.
     }
   }, []);
 
@@ -219,8 +193,11 @@ export function useLiveDeploymentStatus(deploymentId?: string) {
         lastUpdated: event.data.lastUpdated,
       });
       
-      // Update deployment cache if available
-      const cacheKey = `deployment-${deploymentId}`;
+      // Refresh the cached deployment detail so the live status reaches it (the
+      // reader, useDeploymentDetailApi, keys on `deployment-detail-<id>` — this
+      // previously wrote `deployment-<id>`, which no reader reads, so the SSE
+      // update never reached the cache).
+      const cacheKey = `deployment-detail-${deploymentId}`;
       const cached = globalCache.get(cacheKey);
       if (cached && cached.data && typeof cached.data === 'object') {
         const deploymentData = cached.data as DeploymentDetail;

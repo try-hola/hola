@@ -70,6 +70,11 @@ export function usePoll<T>(
   const mountedRef = useRef(true);
   const timeoutRef = useRef<number | null>(null);
   const isPollingRef = useRef(false);
+  // Live consecutive-error count. scheduleNext's setTimeout closure must read this
+  // (not the captured state.errorCount), since its recursive call reuses the same
+  // closure — closing over state would freeze the count, so backoff never grew and
+  // the maxErrors stop-check never tripped.
+  const errorCountRef = useRef(0);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -92,6 +97,7 @@ export function usePoll<T>(
 
       if (!mountedRef.current) return false;
 
+      errorCountRef.current = 0;
       setState(prev => ({
         ...prev,
         data,
@@ -105,7 +111,8 @@ export function usePoll<T>(
       if (!mountedRef.current) return false;
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
+
+      errorCountRef.current += 1;
       setState(prev => ({
         ...prev,
         loading: false,
@@ -128,8 +135,12 @@ export function usePoll<T>(
 
       const success = await fetchData();
 
-      // If we hit max errors, stop polling
-      if (!success && state.errorCount + 1 >= maxErrors) {
+      // Read the LIVE error count (fetchData just updated the ref) — not a stale
+      // captured state.errorCount.
+      const errorCount = errorCountRef.current;
+
+      // If we hit max consecutive errors, stop polling.
+      if (!success && errorCount >= maxErrors) {
         isPollingRef.current = false;
         setState(prev => ({ ...prev, isPolling: false }));
         return;
@@ -139,7 +150,7 @@ export function usePoll<T>(
       let nextInterval = interval;
       if (!success && errorBackoff.enabled) {
         nextInterval = calculateBackoffDelay(
-          state.errorCount + 1,
+          errorCount,
           errorBackoff.baseDelay,
           errorBackoff.maxDelay
         );
@@ -147,13 +158,14 @@ export function usePoll<T>(
 
       scheduleNext(nextInterval);
     }, nextDelay);
-  }, [interval, fetchData, state.errorCount, maxErrors, errorBackoff]);
+  }, [interval, fetchData, maxErrors, errorBackoff]);
 
   // Start polling
   const start = useCallback(() => {
     if (isPollingRef.current) return;
 
     isPollingRef.current = true;
+    errorCountRef.current = 0;
     setState(prev => ({ ...prev, isPolling: true, errorCount: 0 }));
 
     // Do initial fetch then schedule polling
@@ -181,6 +193,7 @@ export function usePoll<T>(
   // Reset all state
   const reset = useCallback(() => {
     stop();
+    errorCountRef.current = 0;
     setState({
       data: null,
       loading: false,
