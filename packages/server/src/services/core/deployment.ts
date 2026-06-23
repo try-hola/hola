@@ -42,6 +42,7 @@ import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService, JobContext } from './jobs';
+import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
 import type { RoutingService } from './routing';
@@ -1215,7 +1216,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
         if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
-        const res = await this.dockerService.composeRestart(composeDir, projectName);
+        // Use `up -d` (recreate) rather than `docker compose restart`: restart
+        // restarts the existing containers in place and would NOT re-read the
+        // freshly materialized compose, so changed env/labels (e.g. updated OIDC
+        // wiring) would silently never reach the app. `up -d` recreates only the
+        // services whose config changed, using the already-present images.
+        const res = await this.dockerService.composeUp(composeDir, projectName);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
@@ -1235,6 +1241,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const pull = await this.dockerService.composePull(composeDir, projectName);
         if (!pull.success) throw new Error(`Image pull failed: ${pull.output}`);
         await ctx.setProgress(60);
+
+        // Cooperative cancellation: bail out before recreating containers (the
+        // irreversible step) if the job was cancelled during the long pull.
+        if (ctx.isCancelled()) throw new JobCancelledError();
 
         const res = await this.dockerService.composeUp(composeDir, projectName);
         output = res.output;
@@ -1385,11 +1395,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {
     const auth = deployment.metadata.auth;
     if (!auth) return;
-    await this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.ref });
-    // Tear down the extra forward-auth provider from a `fallback: forward-auth` too.
-    if (auth.fallbackRef) {
-      await this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.fallbackRef });
-    }
+    // Tear down both refs independently: a failure deprovisioning the primary
+    // must not leave the `fallback: forward-auth` provider (and its outpost
+    // binding) orphaned in the auth backend. Surface the first error after both
+    // attempts so the caller still sees the failure.
+    const results = await Promise.allSettled([
+      this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.ref }),
+      auth.fallbackRef
+        ? this.provisioner.deprovision({ deploymentId: deployment.id, ref: auth.fallbackRef })
+        : Promise.resolve(),
+    ]);
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) throw failed.reason;
   }
 
   protected override async loadFinalizedArtifacts(draftId: string): Promise<FinalizedArtifacts | null> {
