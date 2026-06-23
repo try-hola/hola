@@ -27,7 +27,7 @@ import type {
   GetSettingsResponse, PatchSettingsRequest, PatchSettingsResponse,
   GetBackupSettingsResponse, PatchBackupSettingsRequest, PatchBackupSettingsResponse,
   // System types
-  GetSystemStatusResponse
+  GetSystemStatusResponse, GetUpdateCheckResponse
 } from '@hola/shared';
 import { globalCache, CacheTTL } from './cache';
 import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
@@ -285,8 +285,10 @@ export class SdkAdapter {
 
   // System status
   system = {
-    status: (): Promise<GetSystemStatusResponse> => 
+    status: (): Promise<GetSystemStatusResponse> =>
       this.getWithCache('/api/system/status', () => this.sdk.get<GetSystemStatusResponse>('/api/system/status')),
+    updateCheck: (): Promise<GetUpdateCheckResponse> =>
+      this.getWithCache('/api/system/update-check', () => this.sdk.get<GetUpdateCheckResponse>('/api/system/update-check')),
   };
 
   // Catalog with smart caching

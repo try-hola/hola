@@ -1,0 +1,221 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+import { runUpdate, type UpdateResult, type UpdateCheckReport } from '../commands/update/update';
+import { scriptedPrompter } from '../install/prompter';
+import type { Runner } from '../lib/runner';
+
+const OK_PREFLIGHT = 'docker=ok\ncurl=ok\ntar=ok\ncompose=ok\ndockerperm=ok\n';
+
+const ENV_AUTHENTIK =
+  'HOLA_DOMAIN=apps.example.com\nHOLA_BASE_DOMAIN=hola.example.com\nHOLA_AUTH_MODE=authentik\nHOLA_AUTHENTIK_DOMAIN=auth.hola.example.com\n';
+const ENV_NONE = 'HOLA_DOMAIN=apps.example.com\nHOLA_BASE_DOMAIN=hola.example.com\nHOLA_AUTH_MODE=none\n';
+
+const EXAMPLE_BASE = 'HOLA_DOMAIN=\nHOLA_BASE_DOMAIN=\nHOLA_AUTH_MODE=authentik\n';
+
+function makeRunner(opts?: {
+  preflight?: string;
+  env?: string;
+  version?: string;
+  /** The .env.example shipped by the OLD (installed) bundle, read before extract. */
+  oldExample?: string;
+  /** The .env.example shipped by the NEW bundle, read after extract. */
+  newExample?: string;
+}): Runner & { calls: { cmd: string; input?: string }[] } {
+  const preflight = opts?.preflight ?? OK_PREFLIGHT;
+  const env = opts?.env ?? ENV_AUTHENTIK;
+  const version = opts?.version ?? '0.6.20';
+  const oldExample = opts?.oldExample ?? EXAMPLE_BASE;
+  const newExample = opts?.newExample ?? EXAMPLE_BASE;
+  const calls: { cmd: string; input?: string }[] = [];
+  return {
+    calls,
+    ssh: vi.fn(async (_host: string, cmd: string, o?: { input?: string }) => {
+      calls.push({ cmd, input: o?.input });
+      if (cmd.includes('command -v')) return { code: 0, stdout: preflight, stderr: '' };
+      // The combined state read (version + old .env.example + .env) is matched first.
+      if (cmd.includes('__HOLA_ENV__')) {
+        return { code: 0, stdout: `__HOLA_VERSION__=${version}\n__HOLA_EXAMPLE__\n${oldExample}\n__HOLA_ENV__\n${env}`, stderr: '' };
+      }
+      if (cmd.includes('.env.example')) return { code: 0, stdout: newExample, stderr: '' };
+      if (cmd.includes('cat') && cmd.includes('/VERSION')) return { code: 0, stdout: version, stderr: '' };
+      if (cmd.includes('compose ps')) return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
+    }),
+    local: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
+  } as Runner & { calls: { cmd: string; input?: string }[] };
+}
+
+describe('hola update', () => {
+  beforeEach(() => { process.exitCode = 0; });
+  afterEach(() => { process.exitCode = 0; });
+
+  it('runs the upgrade steps in order without writing the .env', async () => {
+    const runner = makeRunner();
+    const res = (await runUpdate(
+      { host: 'me@vm', ref: 'cli-v0.6.23', json: true },
+      { prompter: scriptedPrompter({}), runner },
+    )) as UpdateResult;
+
+    expect(res.steps).toEqual([
+      'Preflight host',
+      'Read current install',
+      'Download Hola 0.6.23 stack into /opt/hola',
+      'Check config drift (.env.example vs .env)',
+      'Run install.sh',
+    ]);
+    // No `.env` is ever rewritten — it's preserved in place.
+    expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/.env'))).toBe(false);
+    expect(res.fromVersion).toBe('0.6.20');
+    expect(res.toVersion).toBe('0.6.23');
+    expect(res.ssoAction).toBe('already-on');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('downloads the version-pinned bundle and extracts over the dir (no .env, no acme)', async () => {
+    const runner = makeRunner();
+    await runUpdate(
+      { host: 'me@vm', ref: 'cli-v0.6.23', dir: '/opt/hola', json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    const fetch = runner.calls.find((c) => c.cmd.includes('tar xz -C /opt/hola'))!;
+    expect(fetch.cmd).toMatch(/curl -fsSL \S*releases\/download\/cli-v0\.6\.23\/hola-compose-0\.6\.23\.tar\.gz/);
+    // Update never creates the dir (it must already exist) — no mkdir/sudo dance.
+    expect(fetch.cmd).not.toContain('mkdir');
+  });
+
+  it('honors --tarball-url', async () => {
+    const runner = makeRunner();
+    await runUpdate(
+      { host: 'me@vm', tarballUrl: 'https://example.com/custom.tar.gz', json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL https://example.com/custom.tar.gz'))).toBe(true);
+  });
+
+  it('aborts when no install (.env) is found on the host', async () => {
+    const runner = makeRunner({ env: '' });
+    const res = await runUpdate(
+      { host: 'me@vm', json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
+  });
+
+  it('aborts before install when preflight finds Docker missing', async () => {
+    const runner = makeRunner({ preflight: 'docker=missing\ncurl=ok\ntar=ok\ncompose=missing\ndockerperm=fail\n' });
+    const res = await runUpdate({ host: 'me@vm', json: true }, { prompter: scriptedPrompter({}), runner });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
+  });
+
+  it('requires --host', async () => {
+    const res = await runUpdate({ json: true }, { prompter: scriptedPrompter({}), runner: makeRunner() });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('--dry-run connects to nothing and exits 0', async () => {
+    const runner = makeRunner();
+    const res = (await runUpdate(
+      { host: 'me@vm', dryRun: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    )) as UpdateResult;
+    expect(runner.calls).toHaveLength(0);
+    expect(res.steps.length).toBeGreaterThan(0);
+    expect(process.exitCode).toBe(0);
+  });
+
+  // --- Auth-mode reconciliation (issue #149) --------------------------------
+
+  it('explicit HOLA_AUTH_MODE=none + --enable-sso flips the mode and derives the domain', async () => {
+    const runner = makeRunner({ env: ENV_NONE });
+    const res = (await runUpdate(
+      { host: 'me@vm', enableSso: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    )) as UpdateResult;
+    expect(res.ssoAction).toBe('enabled');
+    const setEnv = runner.calls.find((c) => c.cmd.includes('_set HOLA_AUTH_MODE'))!;
+    expect(setEnv.cmd).toContain('_set HOLA_AUTH_MODE authentik');
+    // Domain derived from HOLA_BASE_DOMAIN since the .env had none.
+    expect(setEnv.cmd).toContain('_set HOLA_AUTHENTIK_DOMAIN auth.hola.example.com');
+  });
+
+  it('explicit HOLA_AUTH_MODE=none + --keep-auth-mode keeps it off and writes no env change', async () => {
+    const runner = makeRunner({ env: ENV_NONE });
+    const res = (await runUpdate(
+      { host: 'me@vm', keepAuthMode: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    )) as UpdateResult;
+    expect(res.ssoAction).toBe('kept-none');
+    expect(runner.calls.some((c) => c.cmd.includes('_set HOLA_AUTH_MODE'))).toBe(false);
+  });
+
+  it('explicit none under --json with no decision flag aborts', async () => {
+    const runner = makeRunner({ env: ENV_NONE });
+    const res = await runUpdate({ host: 'me@vm', json: true }, { prompter: scriptedPrompter({}), runner });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
+  });
+
+  it('--enable-sso and --keep-auth-mode together is rejected', async () => {
+    const runner = makeRunner({ env: ENV_NONE });
+    const res = await runUpdate(
+      { host: 'me@vm', enableSso: true, keepAuthMode: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+  });
+
+  // --- Config drift ---------------------------------------------------------
+
+  it('warns only about genuinely new required keys (not auto-managed or defaulted ones)', async () => {
+    const runner = makeRunner({
+      // This release adds a new blank required key plus an auto-managed Authentik secret.
+      newExample: `${EXAMPLE_BASE}HOLA_NEW_THING=\nAUTHENTIK_NEW_SECRET=\nHOLA_WITH_DEFAULT=somevalue\n`,
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runUpdate({ host: 'me@vm' }, { prompter: scriptedPrompter({}), runner });
+      const printed = log.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(printed).toContain('HOLA_NEW_THING');
+      // Auto-managed (install.sh generates it) and defaulted keys are NOT flagged.
+      expect(printed).not.toContain('AUTHENTIK_NEW_SECRET');
+      expect(printed).not.toContain('HOLA_WITH_DEFAULT');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('does not warn on a same-version re-run (old and new .env.example match)', async () => {
+    const runner = makeRunner();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runUpdate({ host: 'me@vm' }, { prompter: scriptedPrompter({}), runner });
+      const printed = log.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(printed).not.toContain('New required config');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  // --- `--check` ------------------------------------------------------------
+
+  it('--check reports installed / latest / updateAvailable without mutating', async () => {
+    const runner = makeRunner({ version: '0.6.20' });
+    const res = (await runUpdate(
+      { host: 'me@vm', check: true, json: true },
+      { prompter: scriptedPrompter({}), runner, fetchLatest: async () => ({ version: '0.6.25', url: 'https://example.com/r' }) },
+    )) as UpdateCheckReport;
+    expect(res.installed).toBe('0.6.20');
+    expect(res.latest).toBe('0.6.25');
+    expect(res.updateAvailable).toBe(true);
+    expect(res.releaseUrl).toBe('https://example.com/r');
+    // No install/extract happened.
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh') || c.cmd.includes('tar xz'))).toBe(false);
+  });
+});

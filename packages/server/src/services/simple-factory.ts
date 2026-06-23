@@ -16,6 +16,7 @@ import { resolveAdminApiKey, createAdminApiKeyProvider } from './auth/api-key-co
 import { createOidcAuthProvider } from './auth/oidc-provider';
 import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
 import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
+import { RealUpdateCheckService, MockUpdateCheckService, type UpdateCheckService } from './core/update-check';
 import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
 import { RealJobService, MockJobService, type JobService } from './core/jobs';
 import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
@@ -38,6 +39,7 @@ export interface Services {
   auth: AuthService;
   docker: DockerService;
   systemMonitoring: SystemMonitoringService;
+  updateCheck: UpdateCheckService;
   logging: LoggingService;
   jobs: JobService;
   catalog: CatalogService;
@@ -77,6 +79,7 @@ export function createServices(env: ServiceEnvironment): Services {
       auth: new MockAuthService(),
       docker: new MockDockerService(),
       systemMonitoring: new MockSystemMonitoringService(),
+      updateCheck: new MockUpdateCheckService(),
       logging: new MockLoggingService(),
       jobs,
       catalog: new MockCatalogService(),
@@ -125,6 +128,7 @@ export function createServices(env: ServiceEnvironment): Services {
       auth: authService,
       docker,
       systemMonitoring,
+      updateCheck: new MockUpdateCheckService(),
       logging,
       jobs,
       catalog,
@@ -185,6 +189,7 @@ export function createServices(env: ServiceEnvironment): Services {
     auth: authService,
     docker,
     systemMonitoring,
+    updateCheck: new RealUpdateCheckService(),
     logging,
     jobs,
     catalog,

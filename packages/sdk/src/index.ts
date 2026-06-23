@@ -13,7 +13,9 @@ import {
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
-  GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse
+  GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  // System types
+  GetUpdateCheckResponse
 } from '@hola/shared';
 
 export type SdkInitOptions = {
@@ -126,6 +128,7 @@ export class HolaSdk {
   system = {
     status: () => this.get(API.system.status),
     health: () => this.get(API.system.health),
+    updateCheck: () => this.get<GetUpdateCheckResponse>(API.system.updateCheck),
   };
 }
 

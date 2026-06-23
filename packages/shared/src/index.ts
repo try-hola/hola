@@ -68,11 +68,49 @@ export const API = {
   system: {
     status: '/api/system/status',
     health: '/api/system/health',
+    updateCheck: '/api/system/update-check',
     healthz: '/healthz',
     readyz: '/readyz',
     metrics: '/metrics',
   },
 } as const;
+
+// ------------------------------------------------------
+// Version comparison (shared by the server update-check and the CLI)
+// ------------------------------------------------------
+
+/**
+ * Compare two semver-ish version strings (e.g. `0.6.23`, `0.6.23-rc.1`). Returns
+ * a negative number if `a < b`, positive if `a > b`, and 0 if equal. Tolerant of
+ * a leading `v`/`cli-v` and of differing segment counts; a release ranks above a
+ * prerelease of the same numeric version (`1.2.0` > `1.2.0-rc.1`). Non-numeric
+ * release segments fall back to a string compare so it never throws.
+ */
+export function compareVersions(a: string, b: string): number {
+  const parse = (v: string) => {
+    const cleaned = v.trim().replace(/^cli-v/, '').replace(/^v/, '');
+    const [core, pre = ''] = cleaned.split('-', 2);
+    const nums = core.split('.').map((n) => parseInt(n, 10) || 0);
+    return { nums, pre };
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  const len = Math.max(pa.nums.length, pb.nums.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa.nums[i] ?? 0) - (pb.nums[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  // Same numeric core: a release (no prerelease tag) outranks a prerelease.
+  if (!pa.pre && pb.pre) return 1;
+  if (pa.pre && !pb.pre) return -1;
+  if (pa.pre === pb.pre) return 0;
+  return pa.pre < pb.pre ? -1 : 1;
+}
+
+/** True when `candidate` is a strictly newer version than `current`. */
+export function isNewerVersion(candidate: string, current: string): boolean {
+  return compareVersions(candidate, current) > 0;
+}
 
 // ------------------------------------------------------
 // Common helpers
@@ -682,6 +720,26 @@ export type PatchBackupSettingsResponse = GetBackupSettingsResponse;
 // System status
 // ------------------------------------------------------
 export type GetSystemStatusResponse = SystemStatus;
+
+/**
+ * Result of the update-available check shared by the web dashboard and the CLI.
+ * The server computes this from its own pinned version vs. the newest published
+ * `cli-v*` release, caching the outbound GitHub call so many clients share one
+ * lookup. `latest`/`releaseUrl` are null when the check could not be performed
+ * (offline, rate-limited) — in that case `updateAvailable` is false (fail-safe).
+ */
+export type UpdateCheckResult = {
+  /** The version this server is running (its pinned image tag). */
+  current: string;
+  /** The newest published release version, or null if the check failed. */
+  latest: string | null;
+  /** True only when `latest` is a strictly newer version than `current`. */
+  updateAvailable: boolean;
+  /** Link to the latest release's notes, or null if unknown. */
+  releaseUrl: string | null;
+};
+
+export type GetUpdateCheckResponse = UpdateCheckResult;
 
 export type SystemHealthResponse = {
   healthStatus: Record<string, {

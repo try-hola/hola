@@ -2,6 +2,7 @@ import { HolaSdk } from '@hola/sdk';
 import type { CreateDraftResponse, GetDraftResponse, AppEnvVar } from '@hola/shared';
 
 import { finalizeAndDeploy, reportDeployError, type DeployResult } from '../../lib/deploy-flow';
+import { maybeNotifyUpdate } from '../../lib/update-notice';
 
 export interface InstallOptions {
   /** From `--app-version`. Not `--version` — that's sade's global flag and never reaches us. */
@@ -80,6 +81,7 @@ export async function runInstall(
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else out(`Done. ${appId} → job status: ${result.status}`);
     if (result.status === 'failed' || result.status === 'error') process.exitCode = 1;
+    await maybeNotifyUpdate(sdk, opts);
     return result;
   } catch (err) {
     return reportDeployError(err);

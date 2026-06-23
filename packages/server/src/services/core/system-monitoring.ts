@@ -35,6 +35,11 @@ const HOLA_VERSION: string = (() => {
   }
 })();
 
+/** The running Hola version (see HOLA_VERSION above). Shared with the update-check service. */
+export function getHolaVersion(): string {
+  return HOLA_VERSION;
+}
+
 export interface DiskUsage {
   freeBytes: number;
   totalBytes: number;
