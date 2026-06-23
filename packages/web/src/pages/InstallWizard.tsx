@@ -273,7 +273,14 @@ export const InstallWizard: React.FC = () => {
     }
   };
 
-  const updatePort = async (index: number, field: keyof DraftDefaults['ports'][0], value: string | number) => {
+  // Parse a port input into a number, or undefined when cleared/invalid — never
+  // NaN, which would be persisted into the draft and serialize to null.
+  const parsePortInput = (value: string): number | undefined => {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
+  const updatePort = async (index: number, field: keyof DraftDefaults['ports'][0], value: string | number | undefined) => {
     const updated = [...ports];
     updated[index] = { ...updated[index], [field]: value };
     setPorts(updated);
@@ -897,7 +904,7 @@ services:
                         type="number"
                         placeholder="Host port"
                         value={port.host || ''}
-                        onChange={(e) => updatePort(index, 'host', parseInt(e.target.value))}
+                        onChange={(e) => updatePort(index, 'host', parsePortInput(e.target.value))}
                         className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary"
                       />
                     </div>
@@ -906,7 +913,7 @@ services:
                         type="number"
                         placeholder="Container port"
                         value={port.container || ''}
-                        onChange={(e) => updatePort(index, 'container', parseInt(e.target.value))}
+                        onChange={(e) => updatePort(index, 'container', parsePortInput(e.target.value))}
                         className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary"
                       />
                     </div>
