@@ -288,16 +288,20 @@ export function createTimeoutMiddleware(timeoutMs: number = 30000) {
     request: Request,
     handler: (req: Request) => Promise<Response>
   ): Promise<Response> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
+      timer = setTimeout(() => {
         reject(new TimeoutError(`Request timeout after ${timeoutMs}ms`));
       }, timeoutMs);
     });
 
-    return Promise.race([
-      handler(request),
-      timeoutPromise,
-    ]);
+    try {
+      return await Promise.race([handler(request), timeoutPromise]);
+    } finally {
+      // Clear the timer once the race settles so a fast request doesn't leave a
+      // 30s timer (and its rejected promise) armed per request.
+      if (timer) clearTimeout(timer);
+    }
   };
 }
 

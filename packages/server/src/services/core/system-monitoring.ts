@@ -91,7 +91,6 @@ export interface SystemMonitoringService {
 export class RealSystemMonitoringService implements SystemMonitoringService, HealthCheckable {
   private logger = getLogger().child({ service: 'SystemMonitoringService' });
   private holaDataPath: string;
-  private monitoringInterval?: NodeJS.Timeout;
 
   constructor(holaDataPath?: string) {
     this.holaDataPath = holaDataPath || getHolaDataDir();
@@ -103,24 +102,29 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
     try {
       this.logger.debug('Getting disk usage', { path: targetPath });
       
-      // Use df command for accurate disk usage on Unix systems
-      const { stdout } = await execAsync(`df -B1 "${targetPath}"`);
+      // Use df for accurate disk usage on Unix systems. `-P` (POSIX) guarantees
+      // exactly one physical line per filesystem, so a long device name can't wrap
+      // the data onto a second line and break parsing (which silently fell back to
+      // a fabricated estimate). `-B1` reports raw bytes.
+      const { stdout } = await execAsync(`df -P -B1 "${targetPath}"`);
       const lines = stdout.trim().split('\n');
-      
+
       if (lines.length < 2) {
         throw new Error('Invalid df output');
       }
-      
-      // Parse df output (format: Filesystem 1B-blocks Used Available Use% Mounted)
-      const parts = lines[1].split(/\s+/);
+
+      // Data is the last line: Filesystem 1B-blocks Used Available Capacity Mounted.
+      const parts = lines[lines.length - 1].trim().split(/\s+/);
       if (parts.length < 4) {
         throw new Error('Unable to parse df output');
       }
-      
+
       const totalBytes = parseInt(parts[1], 10);
       const usedBytes = parseInt(parts[2], 10);
       const freeBytes = parseInt(parts[3], 10);
-      const percentUsed = Math.round((usedBytes / totalBytes) * 100);
+      // Guard against a zero/NaN total (e.g. a pseudo-filesystem) so percentUsed
+      // never becomes NaN/Infinity — mirrors getMemoryUsage.
+      const percentUsed = totalBytes > 0 ? Math.round((usedBytes / totalBytes) * 100) : 0;
       
       this.logger.debug('Disk usage retrieved', {
         path: targetPath,
@@ -402,8 +406,11 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
       this.logger.error('Failed to get initial system status', error instanceof Error ? error : undefined);
     });
     
-    // Periodic updates
-    this.monitoringInterval = setInterval(async () => {
+    // Periodic updates. Keep the handle LOCAL to this subscription: the service is
+    // a process-wide singleton, so storing the timer on a shared instance field
+    // meant a second subscriber overwrote the first's handle — leaking the first
+    // timer forever and making stop() clear the wrong one.
+    let timer: ReturnType<typeof setInterval> | undefined = setInterval(async () => {
       try {
         const status = await this.getSystemStatus();
         callback(status);
@@ -411,12 +418,12 @@ export class RealSystemMonitoringService implements SystemMonitoringService, Hea
         this.logger.error('Failed to get system status during monitoring', error instanceof Error ? error : undefined);
       }
     }, interval);
-    
+
     return {
       stop: () => {
-        if (this.monitoringInterval) {
-          clearInterval(this.monitoringInterval);
-          this.monitoringInterval = undefined;
+        if (timer) {
+          clearInterval(timer);
+          timer = undefined;
           this.logger.info('System monitoring stopped');
         }
       },

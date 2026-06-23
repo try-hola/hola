@@ -232,22 +232,49 @@ export function getMetrics(): Metrics {
   return globalMetrics;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEPLOY_ID_RE = /^[a-z0-9][a-z0-9-]*-[0-9a-f]{8}$/i; // slug + 8 hex (makeDeploymentId)
+const JOB_ID_RE = /^job_\d+_[a-z0-9]+$/i;
+const HEX_ID_RE = /^[0-9a-f]{12,}$/i;
+
+/**
+ * Collapse per-resource identifiers (deployment/draft/job ids, UUIDs, numbers)
+ * in a request path to placeholders, so the path used as a metric label has
+ * BOUNDED cardinality. Without this, every distinct id mints a permanent new
+ * label series in the (never-evicted) counter/timer maps — an unbounded memory
+ * leak that an attacker hitting random paths could amplify.
+ */
+export function templateMetricPath(path: string): string {
+  return path
+    .split('/')
+    .map((seg) => {
+      if (!seg) return seg;
+      if (/^\d+$/.test(seg)) return ':n';
+      if (UUID_RE.test(seg) || DEPLOY_ID_RE.test(seg) || JOB_ID_RE.test(seg) || HEX_ID_RE.test(seg)) {
+        return ':id';
+      }
+      return seg;
+    })
+    .join('/');
+}
+
 /**
  * Standard metrics for HTTP requests
  */
 export function recordHttpRequest(method: string, path: string, status: number, duration: number): void {
   const metrics = getMetrics();
-  
+  const templatedPath = templateMetricPath(path);
+
   metrics.counter('http_requests').increment({
     method,
-    path,
+    path: templatedPath,
     status: status.toString(),
     status_class: `${Math.floor(status / 100)}xx`
   });
-  
+
   metrics.timer('http_request_duration').record(duration, {
     method,
-    path,
+    path: templatedPath,
     status: status.toString()
   });
 }
