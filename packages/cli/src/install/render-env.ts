@@ -5,6 +5,20 @@
 
 import { INSTALL_SCHEMA, defaultFor, type ConfigMap, type InstallField } from './schema';
 
+/**
+ * Docker Compose interpolates `$` in `.env` values (`$FOO` / `${FOO}`), so a
+ * literal `$` must be written as `$$`. These helpers keep the in-memory config
+ * always *unescaped* and the file always *escaped*, so a secret containing `$`
+ * (Cloudflare token, AWS key, …) survives the round-trip instead of being
+ * silently corrupted by compose, and re-runs don't double-escape.
+ */
+export function escapeEnvValue(value: string): string {
+  return value.replace(/\$/g, () => '$$');
+}
+function unescapeEnvValue(value: string): string {
+  return value.replace(/\$\$/g, () => '$');
+}
+
 /** Parse a `.env` text into a flat map (ignores comments/blank lines). */
 export function parseEnv(text: string): ConfigMap {
   const out: ConfigMap = {};
@@ -12,7 +26,7 @@ export function parseEnv(text: string): ConfigMap {
     const line = raw.trim();
     if (!line || line.startsWith('#') || !line.includes('=')) continue;
     const eq = line.indexOf('=');
-    out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+    out[line.slice(0, eq).trim()] = unescapeEnvValue(line.slice(eq + 1).trim());
   }
   return out;
 }
@@ -26,7 +40,7 @@ export function renderEnv(config: ConfigMap, baseText: string): string {
   const appended: string[] = [];
   for (const [key, value] of Object.entries(config)) {
     const re = new RegExp(`^${escapeRe(key)}=.*$`, 'm');
-    const line = `${key}=${value}`;
+    const line = `${key}=${escapeEnvValue(value)}`;
     if (re.test(text)) {
       // Function replacement avoids `$&`/`$1` interpretation in the value.
       text = text.replace(re, () => line);

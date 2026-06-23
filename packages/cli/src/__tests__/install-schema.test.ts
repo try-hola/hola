@@ -152,9 +152,12 @@ describe('renderEnv', () => {
     expect(out).toContain('NEW_KEY=v');
   });
 
-  it('does not interpret $ in values', () => {
-    const out = renderEnv({ TOK: 'a$&b' }, 'TOK=old\n');
-    expect(out).toContain('TOK=a$&b');
+  it('escapes $ so compose .env interpolation keeps values literal, and round-trips via parseEnv', () => {
+    const out = renderEnv({ TOK: 'a$b$&c' }, 'TOK=old\n');
+    // Stored as `$$` so `docker compose` interpolation yields the literal value…
+    expect(out).toContain('TOK=a$$b$$&c');
+    // …and reading it back unescapes to the original (e.g. for `hola credentials`).
+    expect(parseEnv(out).TOK).toBe('a$b$&c');
   });
 
   it('schemaTemplate emits a documented stub for off-repo runs', () => {

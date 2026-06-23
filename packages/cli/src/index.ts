@@ -2,7 +2,7 @@
 import sade from 'sade';
 
 import { CLI_VERSION } from './version';
-import { camelKeys } from './lib/opts';
+import { camelKeys, streamOpts } from './lib/opts';
 
 // Lazy command loaders to avoid unnecessary dependencies until invoked
 const load = async <T,>(p: Promise<T>): Promise<T> => p;
@@ -106,7 +106,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (appId, opts) => {
     const { runInstall } = await load(import('./commands/install/install'));
-    await runInstall(appId, camelKeys(opts));
+    await runInstall(appId, streamOpts(opts));
   });
 
 // deployments — list installed deployments
@@ -139,7 +139,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
-    await runDeploymentAction('stop', deploymentId, camelKeys(opts));
+    await runDeploymentAction('stop', deploymentId, streamOpts(opts));
   });
 
 prog
@@ -149,7 +149,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runDeploymentAction } = await load(import('./commands/deployments/actions'));
-    await runDeploymentAction('restart', deploymentId, camelKeys(opts));
+    await runDeploymentAction('restart', deploymentId, streamOpts(opts));
   });
 
 // uninstall — remove a deployment (containers, data, auth) — destructive
@@ -173,7 +173,7 @@ prog
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runRollback } = await load(import('./commands/deployments/actions'));
-    await runRollback(deploymentId, camelKeys(opts));
+    await runRollback(deploymentId, streamOpts(opts));
   });
 
 // Fallback banner when no args
