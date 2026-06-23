@@ -306,14 +306,21 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     if (existing && existing.mode === 'native-oidc' && existing.providerPk != null) {
       const provider = await this.api<AuthentikOAuth2Provider>('GET', `/api/v3/providers/oauth2/${existing.providerPk}/`);
       const reuseSlug = existing.applicationSlug ?? slug;
-      // Ensure the role-claim mapping (idempotent) and attach it if not already —
-      // covers an app that added roleClaim to its manifest after first install.
-      const roleClaimPk = await this.ensureRoleClaimMapping(oidc.roleClaim, reuseSlug);
-      const mappings = provider.property_mappings ?? [];
-      const mergedMappings = roleClaimPk && !mappings.includes(roleClaimPk) ? [...mappings, roleClaimPk] : undefined;
+      // Self-heal on every redeploy: re-resolve the standard scope mappings and the
+      // role-claim mapping and (re)attach them. An app first provisioned during a
+      // transient scope-listing failure (empty property_mappings) would otherwise
+      // stay permanently degraded — the dashboard path already self-heals this way.
+      // Union with what's already attached so a transient re-failure can't wipe a
+      // provider's mappings, and mappings we don't manage aren't dropped.
+      const [scopePks, roleClaimPk] = await Promise.all([
+        this.resolveScopeMappingPks(oidc.scopes),
+        this.ensureRoleClaimMapping(oidc.roleClaim, reuseSlug, oidc.scopes),
+      ]);
+      const desired = new Set<string>([...(provider.property_mappings ?? []), ...scopePks]);
+      if (roleClaimPk) desired.add(roleClaimPk);
       await this.api('PATCH', `/api/v3/providers/oauth2/${existing.providerPk}/`, {
         redirect_uris: redirectUris,
-        ...(mergedMappings ? { property_mappings: mergedMappings } : {}),
+        property_mappings: [...desired],
       });
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
       return {
@@ -331,7 +338,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
       this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
       this.resolveScopeMappingPks(oidc.scopes),
-      this.ensureRoleClaimMapping(oidc.roleClaim, slug),
+      this.ensureRoleClaimMapping(oidc.roleClaim, slug, oidc.scopes),
     ]);
     // Attach the admin-by-group role claim alongside the standard scope mappings.
     const allMappings = roleClaimPk ? [...propertyMappings, roleClaimPk] : propertyMappings;
@@ -1057,26 +1064,42 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
   /**
    * Ensure an Authentik scope mapping that emits an app's admin-by-group role
    * claim (e.g. Immich's `immich_role` = "admin"/"user"), and return its pk to
-   * attach to the provider. The mapping rides on a scope the client already
-   * requests (default `profile`) — Authentik intersects requested∩configured
-   * scopes, so a bespoke scope name would be dropped unless the client also asked
-   * for it; reusing `profile` makes the claim merge in with no client change.
+   * attach to the provider. The mapping must ride on a scope the client actually
+   * requests — Authentik intersects requested∩configured scopes, so a claim on an
+   * unrequested scope is silently dropped. So the default scope is chosen from the
+   * app's own requested scopes (preferring `profile`/`email`) rather than a fixed
+   * `profile` the app may not request.
    *
    * Idempotent via a stable `managed` key (queried on the polymorphic endpoint the
    * scoped token can read; written via the typed scope endpoint). Best-effort: a
    * failure logs and returns undefined rather than aborting the deploy — the app
    * then needs a manual admin promotion, surfaced in logs.
    */
+  /**
+   * Pick a scope the client actually requests to carry the admin-by-group role
+   * claim. Authentik only emits a scope's mappings when the client asks for that
+   * scope, so the claim must ride on a requested scope. Prefer profile/email;
+   * otherwise any requested non-openid scope; else openid (or profile if the list
+   * is somehow empty).
+   */
+  private defaultRoleClaimScope(requestedScopes: string[]): string {
+    for (const preferred of ['profile', 'email']) {
+      if (requestedScopes.includes(preferred)) return preferred;
+    }
+    return requestedScopes.find((s) => s !== 'openid') ?? requestedScopes[0] ?? 'profile';
+  }
+
   private async ensureRoleClaimMapping(
     roleClaim: NonNullable<ProvisionInput['oidc']>['roleClaim'],
-    slug: string
+    slug: string,
+    requestedScopes: string[]
   ): Promise<string | undefined> {
     if (!roleClaim) return undefined;
     const claim = roleClaim.claim;
     const adminGroup = roleClaim.adminGroup ?? DEFAULT_ADMIN_GROUP;
     const adminValue = roleClaim.adminValue ?? 'admin';
     const memberValue = roleClaim.memberValue ?? 'user';
-    const scopeName = roleClaim.scope ?? 'profile';
+    const scopeName = roleClaim.scope ?? this.defaultRoleClaimScope(requestedScopes);
     const managed = `goauthentik.io/hola/${slug}-roleclaim`;
     // JSON.stringify yields double-quoted literals that are also valid Python strings.
     const expression =
