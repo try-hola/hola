@@ -43,10 +43,12 @@ export interface OidcConfig {
   redirectUri?: string;
   scopes: string[];
   /**
-   * Optional Authentik group that grants full (write) capabilities. When set,
-   * users outside it authenticate as read-only. When unset, any user who obtains
-   * a valid token for the dashboard client is treated as admin (Authentik's
-   * application-access policy is then the sole gate).
+   * Authentik group that grants full (write) capabilities; users outside it
+   * authenticate as read-only. Set to `'*'` to explicitly treat every
+   * authenticated dashboard user as admin (the IdP's application-access policy is
+   * then the sole gate). When unset, the provider fails closed — authenticated
+   * users are read-only — so a missing/forgotten config can't silently grant
+   * admin to everyone (see OidcAuthProvider.resolveIsAdmin).
    */
   adminGroup?: string;
 }
@@ -96,7 +98,8 @@ export function resolveOidcConfig(): OidcConfig {
   // client is self-provisioned (Authentik): the server provisions that group and
   // seeds superusers into it, so the operator stays admin. For an external IdP
   // (explicit HOLA_OIDC_ISSUER) we can't assume the group exists, so leave it unset
-  // unless the operator opts in. Explicit env always wins.
+  // unless the operator opts in — in which case the provider fails closed to
+  // read-only (set HOLA_OIDC_ADMIN_GROUP, or '*' for admin-for-all). Env wins.
   const selfProvisioned = !process.env.HOLA_OIDC_ISSUER;
   const adminGroup =
     process.env.HOLA_OIDC_ADMIN_GROUP?.trim() || (selfProvisioned ? DEFAULT_ADMIN_GROUP : undefined);

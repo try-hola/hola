@@ -9,6 +9,18 @@
  * Architecture note: Hola routes all application ingress through Traefik, so
  * publishing host ports is unsupported. Any `ports:` entry is therefore an
  * error (`HOST_PORT_NOT_ALLOWED`); use `expose:` for container-internal ports.
+ * `network_mode: host` is rejected for the same reason — it publishes every
+ * container port on the host, bypassing the `ports:` rule
+ * (`HOST_NETWORK_MODE_NOT_ALLOWED`).
+ *
+ * Images must be pinned for reproducible deploys: an explicit, immutable tag or
+ * an `@sha256:` digest. A missing tag (implicitly `:latest`) or a known mutable
+ * tag (`latest`, `stable`, …) is an error (`IMAGE_MISSING_TAG` /
+ * `IMAGE_MUTABLE_TAG`).
+ *
+ * The document is parsed with YAML merge keys resolved (`merge: true`) so that
+ * fields pulled in via an anchor (`<<: *anchor`) are validated exactly as Docker
+ * Compose sees them — otherwise a host port hidden behind a merge would slip past.
  */
 
 import { parse as parseYAML } from 'yaml';
@@ -20,6 +32,7 @@ interface RawService {
   build?: unknown;
   ports?: unknown;
   expose?: unknown;
+  network_mode?: unknown;
   environment?: unknown;
   volumes?: unknown;
   networks?: unknown;
@@ -53,6 +66,13 @@ const SERVICE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 // Permissive image reference: optional registry[:port]/, path, optional :tag, optional @sha256:digest.
 const IMAGE_REF_RE =
   /^([a-z0-9.-]+(:[0-9]+)?\/)?[a-z0-9][a-z0-9._/-]*(:[\w][\w.-]*)?(@sha256:[a-f0-9]{64})?$/i;
+// Floating tags that move over time — pinning to them defeats reproducible
+// deploys, so they are rejected unless the reference is also digest-pinned.
+const MUTABLE_IMAGE_TAGS = new Set([
+  'latest', 'stable', 'edge', 'nightly', 'rolling', 'current', 'lts',
+  'dev', 'devel', 'develop', 'main', 'master', 'mainline', 'trunk',
+  'release', 'beta', 'alpha', 'rc', 'canary', 'next', 'unstable',
+]);
 // Env var keys: POSIX-ish (letter/underscore start).
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -235,6 +255,18 @@ function validateSecrets(
   });
 }
 
+/**
+ * Extract the tag from an image reference, ignoring the registry-port colon
+ * (`registry:5000/img`) and any `@sha256:` digest. Returns undefined when no
+ * tag is present (an implicit `:latest`).
+ */
+function imageTag(ref: string): string | undefined {
+  const withoutDigest = ref.split('@', 1)[0];
+  const lastSegment = withoutDigest.slice(withoutDigest.lastIndexOf('/') + 1);
+  const colon = lastSegment.indexOf(':');
+  return colon === -1 ? undefined : lastSegment.slice(colon + 1);
+}
+
 function validateImage(svc: RawService, name: string, issues: ValidationIssue[]): void {
   const hasImage = typeof svc.image === 'string' && svc.image.trim().length > 0;
   const hasBuild = svc.build !== undefined && svc.build !== null;
@@ -249,9 +281,29 @@ function validateImage(svc: RawService, name: string, issues: ValidationIssue[])
     const ref = (svc.image as string).trim();
     if (!IMAGE_REF_RE.test(ref)) {
       issues.push(issue('INVALID_IMAGE_REF', 'error', `Invalid image reference '${ref}'`, `services.${name}.image`));
-    } else if (!ref.includes(':') && !ref.includes('@')) {
-      issues.push(issue('IMAGE_MISSING_TAG', 'warning', `Image '${ref}' has no tag; consider pinning a version`, `services.${name}.image`));
+    } else if (!ref.includes('@')) {
+      // Not digest-pinned — require a specific, immutable tag.
+      const tag = imageTag(ref);
+      if (tag === undefined) {
+        issues.push(issue('IMAGE_MISSING_TAG', 'error',
+          `Image '${ref}' has no tag (implicitly ':latest', which is mutable); pin a specific version or an '@sha256:' digest`,
+          `services.${name}.image`));
+      } else if (MUTABLE_IMAGE_TAGS.has(tag.toLowerCase())) {
+        issues.push(issue('IMAGE_MUTABLE_TAG', 'error',
+          `Image '${ref}' uses mutable tag '${tag}'; pin a specific version or an '@sha256:' digest`,
+          `services.${name}.image`));
+      }
     }
+  }
+}
+
+function validateNetworkMode(svc: RawService, name: string, issues: ValidationIssue[]): void {
+  // `network_mode: host` shares the host network namespace and publishes every
+  // listening port on the host — the same exposure `ports:` is forbidden for.
+  if (typeof svc.network_mode === 'string' && svc.network_mode.trim().toLowerCase() === 'host') {
+    issues.push(issue('HOST_NETWORK_MODE_NOT_ALLOWED', 'error',
+      `Service '${name}' uses 'network_mode: host', which publishes all of its ports on the host; ingress is handled by Traefik. Remove it and use 'expose' for container-internal ports.`,
+      `services.${name}.network_mode`));
   }
 }
 
@@ -310,6 +362,7 @@ export function validateComposeObject(parsed: unknown): ValidationIssue[] {
     const svc = rawSvc as RawService;
     validateImage(svc, name, issues);
     validatePorts(svc, name, issues);
+    validateNetworkMode(svc, name, issues);
     validateEnvironment(svc.environment, `services.${name}.environment`, issues);
     validateVolumes(svc.volumes, `services.${name}.volumes`, volumeNames, issues);
     validateNetworks(svc.networks, `services.${name}.networks`, networkNames, issues);
@@ -329,7 +382,10 @@ export function validateComposeObject(parsed: unknown): ValidationIssue[] {
 export function validateComposeDocument(yamlText: string): ValidationIssue[] {
   let parsed: unknown;
   try {
-    parsed = parseYAML(yamlText);
+    // Resolve YAML merge keys (`<<: *anchor`) so fields inherited via an anchor
+    // are validated exactly as Docker Compose materializes them; otherwise a
+    // host port (or any guarded field) hidden behind a merge would slip past.
+    parsed = parseYAML(yamlText, { merge: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown parse error';
     return [issue('INVALID_YAML', 'error', `Invalid Compose YAML: ${message}`)];

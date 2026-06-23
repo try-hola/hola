@@ -30,6 +30,14 @@ const READONLY_CAPABILITIES = [
   'read:catalog',
 ];
 
+/**
+ * Sentinel for `HOLA_OIDC_ADMIN_GROUP` that opts every authenticated dashboard
+ * user into admin — i.e. the IdP's own application-access policy is the sole
+ * gate. This must be set EXPLICITLY: without it, a missing admin group fails
+ * closed to read-only rather than silently granting admin to everyone.
+ */
+const ADMIN_GROUP_WILDCARD = '*';
+
 interface OidcClaims extends JWTPayload {
   email?: string;
   name?: string;
@@ -49,11 +57,15 @@ export class OidcAuthProvider implements AuthProvider {
   private jwksByUri = new Map<string, JWTVerifyGetKey>();
   // Cache discovered jwks_uri per issuer to avoid a discovery fetch on every token.
   private jwksUriByIssuer = new Map<string, string>();
+  // Warn at most once when OIDC is enabled with no admin group (users fail closed
+  // to read-only) — avoids logging on every token while still surfacing the gap.
+  private warnedNoAdminGroup = false;
 
   /** Allow tests/config changes to drop cached discovery + key sets. */
   resetCache(): void {
     this.jwksByUri.clear();
     this.jwksUriByIssuer.clear();
+    this.warnedNoAdminGroup = false;
   }
 
   async authenticate(token: string): Promise<AuthResult> {
@@ -131,10 +143,28 @@ export class OidcAuthProvider implements AuthProvider {
     return false;
   }
 
+  /**
+   * Decide whether a verified principal is an admin. Fails closed: an admin
+   * group must be configured (or the explicit `*` opt-in) for write access, so a
+   * misconfigured/external IdP with no admin group yields read-only users rather
+   * than granting admin to everyone who holds a valid token.
+   */
+  private resolveIsAdmin(groups: string[], cfg: OidcConfig): boolean {
+    if (cfg.adminGroup === ADMIN_GROUP_WILDCARD) return true; // explicit "any authenticated user is admin"
+    if (cfg.adminGroup) return groups.includes(cfg.adminGroup);
+    if (!this.warnedNoAdminGroup) {
+      this.warnedNoAdminGroup = true;
+      this.logger.warn(
+        'OIDC has no admin group configured; authenticated users are read-only. ' +
+          'Set HOLA_OIDC_ADMIN_GROUP to a group name (or "*" to grant admin to every authenticated user).',
+      );
+    }
+    return false;
+  }
+
   private toPrincipal(claims: OidcClaims, cfg: OidcConfig): Principal {
     const groups = Array.isArray(claims.groups) ? claims.groups : [];
-    // Admin unless an admin group is configured and the user isn't in it.
-    const isAdmin = !cfg.adminGroup || groups.includes(cfg.adminGroup);
+    const isAdmin = this.resolveIsAdmin(groups, cfg);
     const name =
       claims.name || claims.preferred_username || claims.given_name || claims.email || 'OIDC User';
 

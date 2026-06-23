@@ -102,13 +102,36 @@ describe('OidcAuthProvider', () => {
     expect(resolveOidcConfig().adminGroup).toBe('custom-admins');
   });
 
-  it('accepts a valid token (aud = clientId) and maps an admin principal', async () => {
+  it('accepts a valid token (aud = clientId) and maps the principal identity', async () => {
+    process.env.HOLA_OIDC_ADMIN_GROUP = 'hola-admins';
     const provider = new OidcAuthProvider();
-    const token = await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc', extra: { email: 'a@b.c', name: 'Ada' } });
+    const token = await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc', extra: { email: 'a@b.c', name: 'Ada', groups: ['hola-admins'] } });
     const res = await provider.authenticate(token);
     expect(res.success).toBe(true);
     expect(res.principal?.id).toBe('abc');
     expect(res.principal?.email).toBe('a@b.c');
+    expect(res.principal?.capabilities).toContain('*');
+  });
+
+  it('fails closed to read-only when OIDC has no admin group (external IdP)', async () => {
+    // beforeEach sets HOLA_OIDC_ISSUER (external IdP) and clears HOLA_OIDC_ADMIN_GROUP,
+    // so adminGroup is unset — a valid token must NOT be granted admin.
+    expect(resolveOidcConfig().adminGroup).toBeUndefined();
+    const provider = new OidcAuthProvider();
+    const token = await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc' });
+    const res = await provider.authenticate(token);
+    expect(res.success).toBe(true);
+    expect(res.principal?.roles).toEqual(['user']);
+    expect(res.principal?.capabilities).not.toContain('*');
+    expect(res.principal?.capabilities).toContain('read:deployments');
+  });
+
+  it('HOLA_OIDC_ADMIN_GROUP="*" explicitly grants admin to any authenticated user', async () => {
+    process.env.HOLA_OIDC_ADMIN_GROUP = '*';
+    const provider = new OidcAuthProvider();
+    const token = await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc' }); // no groups claim
+    const res = await provider.authenticate(token);
+    expect(res.success).toBe(true);
     expect(res.principal?.capabilities).toContain('*');
   });
 

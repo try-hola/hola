@@ -431,6 +431,83 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });
   });
 
+  test('forward-auth provision binds the declared groups to the application (access restriction)', async () => {
+    const bindings: Array<{ target: unknown; group: unknown }> = [];
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) {
+        return json({ results: [] }); // not pre-existing → created
+      }
+      if (call.method === 'POST' && call.path === '/api/v3/core/groups/') {
+        const name = (call.body as { name: string }).name;
+        return json({ pk: `grp-${name}` }, 201);
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/policies/bindings/?target=')) {
+        return json({ results: [] }); // no prior bindings
+      }
+      if (call.method === 'POST' && call.path === '/api/v3/policies/bindings/') {
+        const b = call.body as { target: unknown; group: unknown };
+        bindings.push({ target: b.target, group: b.group });
+        return json({ pk: `bind-${bindings.length}` }, 201);
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+      forwardAuth: { allowedGroups: ['finance', 'ops'] },
+    });
+
+    // Each declared group was created and bound to the application pk (7), so only
+    // their members pass the outpost — not every authenticated user.
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/core/groups/' && (c.body as { name: string }).name === 'finance')).toBe(true);
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/core/groups/' && (c.body as { name: string }).name === 'ops')).toBe(true);
+    expect(bindings).toEqual([
+      { target: 7, group: 'grp-finance' },
+      { target: 7, group: 'grp-ops' },
+    ]);
+  });
+
+  test('forward-auth provision with no declared groups creates no policy bindings (stays open)', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+    });
+
+    expect(calls.some(c => c.path.startsWith('/api/v3/policies/bindings/'))).toBe(false);
+  });
+
+  test('forward-auth provision fails closed when the group restriction cannot be applied', async () => {
+    installFetch((call) => {
+      // Group lookup succeeds, but binding the policy fails — must not ship open.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'grp-finance' }] });
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/policies/bindings/?target=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/policies/bindings/') return new Response('boom', { status: 500 });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await expect(svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+      forwardAuth: { allowedGroups: ['finance'] },
+    })).rejects.toThrow();
+
+    // The half-provisioned app + provider were torn down rather than left open.
+    expect(calls.some(c => c.method === 'DELETE' && c.path === '/api/v3/providers/proxy/55/')).toBe(true);
+    expect(calls.some(c => c.method === 'DELETE' && c.path.startsWith('/api/v3/core/applications/'))).toBe(true);
+  });
+
   test('forward-auth deprovision detaches the outpost then deletes app + provider', async () => {
     installFetch();
     const svc = new RealAuthentikProvisionerService(CONFIG);
