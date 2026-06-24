@@ -64,6 +64,9 @@ export interface FinalizedManifest {
   // Cross-app capabilities consumed (e.g. `app-registry`); carried so the
   // deploy lifecycle can publish the right feeds without re-reading the bundle.
   consumes?: string[];
+  // The compose service to route to / inject auth env into; carried so
+  // materializeCompose targets the right service for multi-service apps.
+  ingressService?: string;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -329,6 +332,7 @@ export class RealDraftService implements DraftService {
         composeOverride,
         auth: defaults.auth,
         consumes: defaults.consumes,
+        ingressService: defaults.ingressService,
         files: [],
       };
 
@@ -581,6 +585,7 @@ export class RealDraftService implements DraftService {
         composeOverride: draft.composeOverride ?? '',
         auth: draft.auth,
         consumes: draft.consumes,
+        ingressService: draft.ingressService,
         files: specFiles,
       };
 
@@ -661,7 +666,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[] }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
@@ -670,6 +675,7 @@ export class RealDraftService implements DraftService {
         composeOverride: versionDetail.composeOverride ?? '',
         auth: versionDetail.auth,
         consumes: versionDetail.consumes,
+        ingressService: versionDetail.ingressService,
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
@@ -830,6 +836,7 @@ export class MockDraftService implements DraftService {
       appEnv: draft.appEnv,
       ports: draft.ports,
       composeOverride: draft.composeOverride ?? '',
+      ingressService: draft.ingressService,
       files: [],
       checksum: 'mock-checksum',
       finalizedAt: new Date().toISOString(),

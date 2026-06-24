@@ -47,7 +47,11 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
 - **Ingress is Traefik-only.** Apps are reachable through Traefik routing, not
   by publishing host ports. There is no host-port registry; the Compose
   validator rejects `ports:` exposure (use `expose:` for container-internal
-  ports).
+  ports). The server attaches one **ingress service** to the `hola` network and
+  injects auth env into it; it uses the bundle manifest's `ingress.service`, else
+  the service named after the app id, else the first service. So a multi-service
+  app whose web service is neither named after the app id nor listed first is
+  routed correctly as long as its manifest declares `ingress.service`.
 
 ## Server services
 

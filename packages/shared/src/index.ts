@@ -291,6 +291,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // (e.g. `app-registry`). The server writes the corresponding feed into the
   // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
   consumes?: string[];
+  // The compose service Traefik should route to and that receives injected auth
+  // env, for multi-service apps whose web/ingress service isn't named after the
+  // app id (the default heuristic). Sourced from the bundle manifest's
+  // `ingress.service`.
+  ingressService?: string;
 };
 
 // ------------------------------------------------------
@@ -429,6 +434,10 @@ export type Draft = {
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
+  // The compose service to route to / inject auth env into, for multi-service
+  // apps whose ingress service isn't named after the app id. Seeded from the
+  // bundle manifest and carried through finalize (read-only; not user-editable).
+  ingressService?: string;
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 

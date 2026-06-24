@@ -860,11 +860,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // pure, so compute it once up front and reuse it below.
     const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app });
 
+    // The compose service Traefik routes to and that receives injected auth env.
+    // Prefer the manifest-declared ingress service (multi-service apps whose web
+    // service isn't named after the app id), falling back to the app id; the
+    // compose-network helpers fall back further to the first service if neither
+    // names an existing one.
+    const ingressService = (await this.readActiveIngressService(deployment)) ?? deployment.app;
+
     // Attach the ingress service to the Traefik network so the emitted routing
     // config can reach it (the alias must match the routing service name).
     let content = raw;
     try {
-      content = attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService: deployment.app });
+      content = attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService });
     } catch (error) {
       this.logger.warn('Could not attach app to Traefik network; deploying compose as-is', {
         deploymentId: deployment.id,
@@ -877,7 +884,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // auth was never wired (a security-relevant bypass).
     const hasSecret = Object.keys(injectedEnv).length > 0;
     if (hasSecret) {
-      content = injectEnvironment(content, injectedEnv, { ingressService: deployment.app });
+      content = injectEnvironment(content, injectedEnv, { ingressService });
     }
 
     // Resolve the per-app data root: apps declare persistent storage under the
@@ -949,6 +956,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       return manifest.consumes ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** The active release's declared ingress/web compose service, if any. */
+  private async readActiveIngressService(deployment: EnhancedDeploymentDetail): Promise<string | undefined> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return undefined;
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      return manifest.ingressService;
+    } catch {
+      return undefined;
     }
   }
 
