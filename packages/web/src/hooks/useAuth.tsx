@@ -114,16 +114,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let config: AuthConfigResponse;
-      try {
-        const res = await fetch(apiUrl('/api/auth/config'), { credentials: 'include' });
-        config = (await res.json()) as AuthConfigResponse;
-      } catch {
-        // Can't reach the server — treat as unauthenticated so the UI can show an error.
-        if (!cancelled) { setMode('apikey'); setStatus('unauthenticated'); }
-        return;
+      // Retry the config fetch a few times: a transient blip (a 502 while the
+      // server restarts, a momentary network drop) must NOT force the dashboard to
+      // the apikey login on an OIDC deployment — which would also make the OIDC
+      // callback discard its authorization code (AuthCallback bails on non-oidc).
+      let config: AuthConfigResponse | undefined;
+      for (let attempt = 0; attempt < 3 && !cancelled; attempt++) {
+        try {
+          const res = await fetch(apiUrl('/api/auth/config'), { credentials: 'include' });
+          if (!res.ok) throw new Error(`auth config ${res.status}`);
+          config = (await res.json()) as AuthConfigResponse;
+          break;
+        } catch {
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
       }
       if (cancelled) return;
+      if (!config) {
+        // Still unreachable after retries — fall back so the UI can surface an
+        // error/login (the server is genuinely down, so OIDC couldn't complete anyway).
+        setMode('apikey');
+        setStatus('unauthenticated');
+        return;
+      }
       setMode(config.mode);
 
       if (config.mode === 'none') {

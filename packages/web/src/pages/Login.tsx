@@ -54,7 +54,10 @@ export const Login: React.FC = () => {
 
   // While the auto-redirect (or the post-config 'loading' window for OIDC) is in
   // flight, show a quiet "signing you in" state rather than flashing the button.
-  if (status === 'loading' || autoRedirecting) {
+  // `autoRedirecting` is seeded from `mode`, which is null on the first render, so
+  // also cover the window where mode has resolved to 'oidc' but the effect below
+  // hasn't yet decided whether to redirect or fall back to the manual button.
+  if (status === 'loading' || autoRedirecting || (mode === 'oidc' && !decided.current)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-0 text-text-strong px-4">
         <div className="flex flex-col items-center gap-3 animate-fadein">

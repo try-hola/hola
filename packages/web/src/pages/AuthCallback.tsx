@@ -29,15 +29,22 @@ export const AuthCallback: React.FC = () => {
     return () => { cancelled = true; };
   }, [mode, completeOidcLogin, navigate]);
 
-  // Server isn't using OIDC (or auth is off) — nothing to complete here.
-  if (mode && mode !== 'oidc') return <Navigate to="/" replace />;
+  // We landed here with an authorization code. If auth resolved to non-OIDC, the
+  // boot config likely mis-resolved (e.g. it failed and fell back to apikey) —
+  // don't silently discard the code; surface an error so the user can retry.
+  const hasOidcCode = new URLSearchParams(window.location.search).has('code');
+
+  // Non-OIDC with nothing pending — we shouldn't be here; go home.
+  if (mode && mode !== 'oidc' && !hasOidcCode) return <Navigate to="/" replace />;
+
+  const stuck = mode !== null && mode !== 'oidc' && hasOidcCode;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface-0 text-text-strong px-4">
       <div className="flex flex-col items-center gap-3 animate-fadein">
-        {error ? (
+        {error || stuck ? (
           <>
-            <p className="text-danger text-sm" role="alert">{error}</p>
+            <p className="text-danger text-sm" role="alert">{error ?? "Couldn't complete sign-in. Please try again."}</p>
             <button
               onClick={() => navigate('/login', { replace: true })}
               className="h-9 px-4 bg-surface-2 border border-border rounded-[9px] text-sm hover:border-primary transition"
