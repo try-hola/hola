@@ -237,6 +237,49 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(pbody.property_mappings).toEqual(['scope-openid', 'scope-profile', 'scope-email', 'roleclaim-pk']);
   });
 
+  test('native-oidc role claim rides on a scope the client actually requests (not a hardcoded profile)', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({
+      deploymentId: 'dep-app00000123456789',
+      appName: 'app',
+      mode: 'native-oidc' as const,
+      host: 'app.example.com',
+      oidc: {
+        redirectPath: '/auth/login',
+        scopes: ['openid', 'email'], // NO 'profile'
+        roleClaim: { claim: 'app_role', adminGroup: 'hola-admins', adminValue: 'admin', memberValue: 'user' },
+      },
+    });
+
+    // The claim must ride on a REQUESTED scope ('email'), else Authentik drops it.
+    const mapCall = calls.find(c => c.method === 'POST' && c.path === '/api/v3/propertymappings/provider/scope/')!;
+    expect((mapCall.body as Record<string, string>).scope_name).toBe('email');
+  });
+
+  test('native-oidc reuse re-resolves and reattaches scope mappings (heals a degraded provider)', async () => {
+    installFetch((call) => {
+      // Existing provider created during a transient scope-listing failure → no mappings.
+      if (call.method === 'GET' && call.path === '/api/v3/providers/oauth2/42/') {
+        return json({ pk: 42, client_id: 'cid', client_secret: 'sec', property_mappings: [] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({ ...OIDC_INPUT, existingRef: { mode: 'native-oidc', providerPk: 42, applicationSlug: 'gitea-dep-abcd' } });
+
+    // The reuse PATCH (re)attaches the standard scope mappings even though the
+    // provider had none — previously these were never healed on reuse.
+    const patch = calls.find(c => c.method === 'PATCH' && c.path === '/api/v3/providers/oauth2/42/')!;
+    expect(patch).toBeDefined();
+    const pm = (patch.body as { property_mappings: string[] }).property_mappings;
+    expect(pm).toContain('scope-openid');
+    expect(pm).toContain('scope-profile');
+    expect(pm).toContain('scope-email');
+  });
+
   test('native-oidc resolves scope mappings by managed id when scope_name is absent', async () => {
     // The polymorphic endpoint doesn't always surface scope_name; the `managed`
     // identifier is the stable fallback (issue #144).
