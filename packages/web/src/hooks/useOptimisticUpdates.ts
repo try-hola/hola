@@ -96,6 +96,12 @@ export function useOptimisticUpdates<T>() {
           clearTimeout(rollbackTimer);
         }
 
+        // The rollback timer may have already fired and reverted the cache while a
+        // slow-but-successful action was still in flight. The action succeeded, so
+        // re-assert the updated value rather than leave the cache showing the
+        // rolled-back (pre-update) state, which would diverge from the server.
+        globalCache.set(cacheKey, optimisticData);
+
         // Remove from pending updates on success
         setPendingUpdates(prev => {
           const next = new Map(prev);

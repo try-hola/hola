@@ -51,3 +51,7 @@ packages/*/coverage
 
 # Bun compile scratch artifacts
 *.bun-build
+
+# Core dumps (e.g. from a crashed test worker)
+core
+core.*
