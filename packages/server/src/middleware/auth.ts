@@ -7,7 +7,7 @@
 import { getLogger } from '../lib/logger';
 import type { Principal, AuthService, Capability } from '../services/auth/auth-service';
 import { getServices } from '../services/simple-factory';
-import { featureFlags } from '../config/features';
+import { featureFlags, environmentConfig } from '../config/features';
 
 export interface AuthContext {
   isAuthenticated: boolean;
@@ -48,11 +48,17 @@ function extractToken(req: Request): string | null {
     return sessionCookie;
   }
 
-  // Try query parameter (less secure, for development)
-  const url = new URL(req.url);
-  const queryToken = url.searchParams.get('token') || url.searchParams.get('api_key');
-  if (queryToken) {
-    return queryToken;
+  // Try query parameter — only outside production. The browser authenticates SSE
+  // (EventSource can't set headers) via the same-origin HttpOnly session cookie
+  // above, so a query-string credential is purely a dev/testing convenience; in
+  // production it would leak the admin key into proxy/access logs and browser
+  // history, so it's disabled there.
+  if (environmentConfig.enableDevApi) {
+    const url = new URL(req.url);
+    const queryToken = url.searchParams.get('token') || url.searchParams.get('api_key');
+    if (queryToken) {
+      return queryToken;
+    }
   }
 
   return null;
