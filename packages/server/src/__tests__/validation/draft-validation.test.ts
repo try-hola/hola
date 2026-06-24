@@ -77,12 +77,29 @@ services:
       draftWith(`
 services:
   web:
-    image: nginx
+    image: nginx:1.27
+    environment:
+      - KEY=a
+      - KEY=b
 `),
     );
 
     expect(report.ok).toBe(true);
-    expect(report.warnings.some((w) => w.code === 'IMAGE_MISSING_TAG')).toBe(true);
+    expect(report.warnings.some((w) => w.code === 'DUPLICATE_ENV_KEY')).toBe(true);
+  });
+
+  test('an unpinned image tag blocks the draft (ok is false)', async () => {
+    const svc = makeValidationService();
+    const report = await svc.validateDraft(
+      draftWith(`
+services:
+  web:
+    image: nginx
+`),
+    );
+
+    expect(report.ok).toBe(false);
+    expect(report.errors.some((e) => e.code === 'IMAGE_MISSING_TAG')).toBe(true);
   });
 });
 

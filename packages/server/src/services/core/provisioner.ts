@@ -484,8 +484,11 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const existing = input.existingRef;
     if (existing && existing.mode === 'forward-auth' && existing.providerPk != null) {
       await this.api('PATCH', `/api/v3/providers/proxy/${existing.providerPk}/`, { external_host: externalHost });
+      const reuseSlug = existing.applicationSlug ?? slug;
+      // Re-reconcile the group restriction so it tracks manifest changes across redeploys.
+      await this.reconcileForwardAuthGroups(reuseSlug, input.forwardAuth?.allowedGroups ?? []);
       this.logger.info('Reused existing forward-auth provider', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
-      return { env: {}, ref: existing, middleware: this.forwardAuthMiddleware(existing.applicationSlug ?? slug) };
+      return { env: {}, ref: existing, middleware: this.forwardAuthMiddleware(reuseSlug) };
     }
 
     const [authFlow, invalidationFlow] = await Promise.all([
@@ -501,13 +504,15 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       external_host: externalHost,
     });
 
+    let applicationPk: string;
     try {
-      await this.api('POST', '/api/v3/core/applications/', {
+      const app = await this.api<{ pk: string }>('POST', '/api/v3/core/applications/', {
         name: `${input.appName} (${input.deploymentId.slice(0, 8)})`,
         slug,
         provider: provider.pk,
         meta_launch_url: externalHost,
       });
+      applicationPk = app.pk;
     } catch (error) {
       await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${provider.pk}/`);
       throw new ProvisioningError('failed to create Authentik application', error);
@@ -516,6 +521,18 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     // Bind the provider to the embedded outpost so it actually enforces auth.
     const outpostPk = await this.addProviderToEmbeddedOutpost(provider.pk);
 
+    // Restrict access to the declared groups (if any). Fail closed: if the
+    // restriction can't be applied, tear the app down rather than ship it open
+    // to every authenticated user.
+    try {
+      await this.reconcileForwardAuthGroups(slug, input.forwardAuth?.allowedGroups ?? [], applicationPk);
+    } catch (error) {
+      if (outpostPk != null) await this.removeProviderFromOutpost(outpostPk, provider.pk);
+      await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(slug)}/`);
+      await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${provider.pk}/`);
+      throw new ProvisioningError('failed to apply forward-auth group restriction', error);
+    }
+
     this.logger.info('Provisioned forward-auth provider', { deploymentId: input.deploymentId, providerPk: provider.pk, slug, outpostPk });
 
     return {
@@ -523,6 +540,77 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       ref: { mode: 'forward-auth', providerPk: provider.pk, applicationSlug: slug, outpostPk },
       middleware: this.forwardAuthMiddleware(slug),
     };
+  }
+
+  /**
+   * Reconcile an app's Authentik access policy to exactly the declared groups.
+   * Hola owns these per-app applications, so it manages all group bindings on
+   * them: missing groups are bound, groups no longer declared are unbound, and
+   * an empty list leaves the app open to any authenticated user (the default).
+   * Named groups are created if absent (empty), which fails closed until an
+   * operator populates them.
+   */
+  private async reconcileForwardAuthGroups(
+    slug: string,
+    groupNames: string[],
+    applicationPk?: string,
+  ): Promise<void> {
+    const names = groupNames.map((g) => g.trim()).filter(Boolean);
+    // Fresh provision with no restriction declared: the app was just created, so
+    // there are no prior bindings to reconcile — leave it open to any
+    // authenticated user (the documented default). Avoids an extra round-trip on
+    // the common path.
+    if (names.length === 0 && applicationPk) return;
+
+    const appPk =
+      applicationPk ??
+      (await this.api<{ pk: string }>('GET', `/api/v3/core/applications/${encodeURIComponent(slug)}/`)).pk;
+
+    const desired = new Set<string>();
+    for (const name of names) desired.add(await this.findOrCreateGroupPk(name));
+
+    // Existing group-type bindings on this application (ignore policy/user bindings).
+    const bindings =
+      (await this.api<{ results: Array<{ pk: string; group: string | null }> }>(
+        'GET',
+        `/api/v3/policies/bindings/?target=${encodeURIComponent(appPk)}`,
+      )).results ?? [];
+    const boundGroups = new Map<string, string>(); // groupPk -> bindingPk
+    for (const b of bindings) if (b.group) boundGroups.set(b.group, b.pk);
+
+    let order = bindings.length;
+    for (const groupPk of desired) {
+      if (!boundGroups.has(groupPk)) {
+        await this.api('POST', '/api/v3/policies/bindings/', {
+          target: appPk,
+          group: groupPk,
+          order: order++,
+          enabled: true,
+        });
+      }
+    }
+    for (const [groupPk, bindingPk] of boundGroups) {
+      if (!desired.has(groupPk)) {
+        await this.apiDeleteIgnoreMissing(`/api/v3/policies/bindings/${bindingPk}/`);
+      }
+    }
+
+    if (desired.size > 0) {
+      this.logger.info('Applied forward-auth group restriction', { slug, groups: names });
+    }
+  }
+
+  /** Find a group by exact name, creating it (empty) if absent; returns its pk. */
+  private async findOrCreateGroupPk(name: string): Promise<string> {
+    const found = await this.api<{ results: Array<{ pk: string }> }>(
+      'GET',
+      `/api/v3/core/groups/?name=${encodeURIComponent(name)}`,
+    );
+    const existing = found.results?.[0];
+    if (existing) return existing.pk;
+    const created = await this.api<{ pk: string }>('POST', '/api/v3/core/groups/', { name });
+    this.logger.info('Created Authentik group for forward-auth restriction', { name, pk: created.pk });
+    return created.pk;
   }
 
   /** Ensure the admin group exists and contains every current superuser. */

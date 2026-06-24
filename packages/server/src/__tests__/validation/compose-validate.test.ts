@@ -120,6 +120,107 @@ services:
 `;
       expect(validateComposeDocument(yaml)).toEqual([]);
     });
+
+    test('network_mode: host is rejected (publishes all ports on the host)', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    network_mode: host
+`;
+      const errs = errors(validateComposeDocument(yaml));
+      expect(errs).toHaveLength(1);
+      expect(errs[0].code).toBe('HOST_NETWORK_MODE_NOT_ALLOWED');
+      expect(errs[0].path).toBe('services.web.network_mode');
+    });
+
+    test('non-host network_mode (e.g. service:) is allowed', () => {
+      const yaml = `
+services:
+  app:
+    image: nginx:1.27
+  sidecar:
+    image: curlimages/curl:8.7.1
+    network_mode: "service:app"
+`;
+      expect(validateComposeDocument(yaml)).toEqual([]);
+    });
+
+    test('a host port hidden behind a YAML merge key is still rejected', () => {
+      // Without merge-key resolution, `<<: *ports` would leave `ports` invisible
+      // to the validator while Docker Compose still publishes it.
+      const yaml = `
+x-ports: &ports
+  ports:
+    - "9090:90"
+services:
+  web:
+    image: nginx:1.27
+    <<: *ports
+`;
+      const errs = errors(validateComposeDocument(yaml));
+      expect(errs).toHaveLength(1);
+      expect(errs[0].code).toBe('HOST_PORT_NOT_ALLOWED');
+    });
+  });
+
+  describe('image tag pinning', () => {
+    test('explicit mutable tag (latest) is rejected', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:latest
+`;
+      const errs = errors(validateComposeDocument(yaml));
+      expect(errs).toHaveLength(1);
+      expect(errs[0].code).toBe('IMAGE_MUTABLE_TAG');
+      expect(errs[0].path).toBe('services.web.image');
+    });
+
+    test('other mutable tags (stable) are rejected', () => {
+      const yaml = `
+services:
+  web:
+    image: traefik:stable
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('IMAGE_MUTABLE_TAG');
+    });
+
+    test('a specific version tag passes clean', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27.0
+`;
+      expect(validateComposeDocument(yaml)).toEqual([]);
+    });
+
+    test('a digest-pinned image passes clean even with a mutable-looking tag', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:latest@sha256:0000000000000000000000000000000000000000000000000000000000000000
+`;
+      expect(validateComposeDocument(yaml)).toEqual([]);
+    });
+
+    test('a registry-port reference is tagged correctly (not confused with the tag colon)', () => {
+      const yaml = `
+services:
+  web:
+    image: registry.example.com:5000/team/app:2.1.0
+`;
+      expect(validateComposeDocument(yaml)).toEqual([]);
+    });
+
+    test('a registry-port reference with no tag is still rejected', () => {
+      const yaml = `
+services:
+  web:
+    image: registry.example.com:5000/team/app
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('IMAGE_MISSING_TAG');
+    });
   });
 
   describe('service shape', () => {
@@ -152,15 +253,16 @@ services:
       expect(validateComposeDocument(yaml)).toEqual([]);
     });
 
-    test('image without tag warns but does not error', () => {
+    test('image without tag is rejected (implicit :latest is mutable)', () => {
       const yaml = `
 services:
   web:
     image: nginx
 `;
-      const issues = validateComposeDocument(yaml);
-      expect(errors(issues)).toEqual([]);
-      expect(codes(issues)).toContain('IMAGE_MISSING_TAG');
+      const errs = errors(validateComposeDocument(yaml));
+      expect(errs).toHaveLength(1);
+      expect(errs[0].code).toBe('IMAGE_MISSING_TAG');
+      expect(errs[0].path).toBe('services.web.image');
     });
 
     test('invalid service name is rejected', () => {
