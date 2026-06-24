@@ -186,8 +186,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
 
       const manifest: Manifest = JSON.parse(raw) as unknown as Manifest;
 
-      // minimal validation
-      if (!manifest || !Array.isArray(manifest.defaultEnv) || typeof manifest.defaults !== 'object') {
+      // minimal validation. `defaults` is optional (an app may declare only
+      // defaultEnv with no extra ports/volumes), so only reject it when present
+      // but malformed — `typeof undefined !== 'object'` must not fail a valid
+      // manifest. Downstream reads already use `manifest.defaults?.…`.
+      if (!manifest || !Array.isArray(manifest.defaultEnv) || (manifest.defaults !== undefined && typeof manifest.defaults !== 'object')) {
         throw new Error('MANIFEST_MISSING_FIELDS');
       }
 

@@ -56,6 +56,9 @@ export class RealFileLogger implements FileLogger {
   private buffer: LogEntry[] = [];
   private flushTimer?: NodeJS.Timeout;
   private initialized = false;
+  // Serializes flush() calls (the 5s timer and synchronous error-level logging
+  // both trigger it) so they can't interleave and drop already-drained entries.
+  private flushChain: Promise<void> = Promise.resolve();
 
   private readonly levelPriorities: Record<LogLevel, number> = {
     debug: 0,
@@ -163,6 +166,16 @@ export class RealFileLogger implements FileLogger {
   }
 
   async flush(): Promise<void> {
+    // Chain onto the previous flush so only one runs at a time; keep the chain
+    // alive even if a flush rejects (catch on the stored chain) so one failure
+    // doesn't wedge every future flush. The caller still observes this flush's
+    // result via `run`.
+    const run = this.flushChain.then(() => this.doFlush());
+    this.flushChain = run.catch(() => {});
+    return run;
+  }
+
+  private async doFlush(): Promise<void> {
     if (this.buffer.length === 0) {
       return;
     }
@@ -172,23 +185,19 @@ export class RealFileLogger implements FileLogger {
 
     try {
       const content = this.formatEntries(entries);
-      
+
       // Check if rotation is needed
       await this.checkRotation();
 
-      // Append to current log file
+      // Append to the current log file rather than read-modify-write the whole
+      // file: O(append) instead of O(file size) per flush, and no read-then-write
+      // window for a concurrent flush to clobber (flushes are also serialized).
       const logFilePath = this.storage.resolveHolaPath('logs', this.currentLogFile);
-      
-      let existingContent = '';
-      if (await this.storage.fileExists(logFilePath)) {
-        existingContent = await this.storage.readFileAsString(logFilePath);
-      }
+      await this.storage.appendFile(logFilePath, content);
 
-      await this.storage.writeFile(logFilePath, existingContent + content);
-
-      this.logger.debug('Log entries flushed', { 
-        count: entries.length, 
-        file: this.currentLogFile 
+      this.logger.debug('Log entries flushed', {
+        count: entries.length,
+        file: this.currentLogFile
       });
     } catch (error) {
       this.logger.error('Failed to flush log entries', error as Error);
