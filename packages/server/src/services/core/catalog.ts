@@ -182,6 +182,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         };
         auth?: unknown;
         consumes?: unknown;
+        ingress?: { service?: unknown; port?: unknown };
       };
 
       const manifest: Manifest = JSON.parse(raw) as unknown as Manifest;
@@ -239,7 +240,16 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
 
-      return { ...merged, composeOverride, auth, consumes } satisfies GetCatalogAppVersionDetailResponse;
+      // Which compose service is the web/ingress one — the app's bundle manifest
+      // declares it as `ingress.service`. Lets the server route to / inject auth
+      // env into the right service for a multi-service app whose ingress isn't
+      // named after the app id (the default heuristic). Non-empty string only.
+      const ingressService =
+        typeof manifest.ingress?.service === 'string' && manifest.ingress.service.trim()
+          ? manifest.ingress.service.trim()
+          : undefined;
+
+      return { ...merged, composeOverride, auth, consumes, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

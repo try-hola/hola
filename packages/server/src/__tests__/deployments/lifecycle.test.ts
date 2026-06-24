@@ -9,6 +9,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { parse } from 'yaml';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -100,6 +101,40 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     expect(materialized).toContain('hola');
     expect(materialized).toContain('aliases');
     expect(materialized).toContain('external: true');
+  });
+
+  test('attaches the manifest-declared ingress service, not the first service', async () => {
+    const storage = new RealStorageService({ holaDir: dataRoot });
+    const database = new RealDatabaseService(storage);
+    const logging = new RealLoggingService(storage);
+    const jobs = new RealJobService(database, logging);
+    const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
+    // Catalog declares 'web' as the ingress service for a multi-service app whose
+    // web service is neither named after the app id ('myapp') nor listed first.
+    const catalog = {
+      getApp: async (appId: string) => ({ id: appId, name: 'App', icon: '📦' }),
+      getVersionDetail: async () => ({
+        defaultEnv: [],
+        defaults: { ports: [], volumes: [] },
+        ingressService: 'web',
+      }),
+    } as unknown as CatalogArg;
+    const drafts = new RealDraftService(storage, catalog, makeValidation());
+    const deployments = new RealDeploymentService(storage, jobs, new MockDockerService(), drafts, routing, logging, new MockProvisionerService());
+
+    const multiCompose = 'services:\n  db:\n    image: postgres:16\n  web:\n    image: nginx:1.27\n';
+    const { draftId } = await drafts.createDraft({ appId: 'myapp', version: '1.0.0' });
+    await drafts.updateDraft(draftId, { composeOverride: multiCompose });
+    await drafts.finalizeDraft(draftId);
+    const created = await deployments.createFromDraft({ draftId, name: 'myapp' });
+    const job = await waitForJob(jobs, created.jobId!);
+    expect(job.status).toBe('completed');
+
+    const materialized = await storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    const doc = parse(materialized) as { services: Record<string, { networks?: Record<string, unknown> }> };
+    // The hola network alias landed on 'web' (the declared ingress), not 'db' (first).
+    expect(doc.services.web.networks?.hola).toBeDefined();
+    expect(doc.services.db.networks?.hola).toBeUndefined();
   });
 
   test('stop action runs Compose down and converges to stopped', async () => {

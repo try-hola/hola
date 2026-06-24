@@ -33,6 +33,7 @@ volumes:
 
 const MANIFEST = JSON.stringify({
   name: APP_ID,
+  ingress: { service: 'fixtureapp', port: 80 },
   defaultEnv: [{ key: 'APP_ENV', value: 'production', isSecret: false }],
   defaults: {
     ports: [{ container: 80, protocol: 'tcp' }],
@@ -92,5 +93,8 @@ describe('RealCatalogService composeOverride (#82)', () => {
     expect(detail.composeOverride).toBe(COMPOSE);
     // Defaults are still merged from manifest/compose as before.
     expect(detail.defaults.ports.some(p => p.container === 80)).toBe(true);
+    // The manifest's ingress.service is surfaced so the deploy lifecycle can
+    // route to / inject auth env into the right service.
+    expect(detail.ingressService).toBe('fixtureapp');
   });
 });
