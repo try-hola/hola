@@ -42,47 +42,18 @@ function formatSSEEvent(event: SSERawEvent): string {
 export function createSSEStream(options: SSEStreamOptions): ReadableStream<Uint8Array> {
   const { onSubscribe, heartbeatIntervalMs = 15000, logger, keepAliveEvent } = options;
 
+  // Teardown shared between start() and cancel(). The Streams runtime does NOT
+  // treat start()'s return value as a teardown hook — only cancel() runs when the
+  // client disconnects — so cancel() must invoke this to stop the heartbeat timer
+  // and run the onSubscribe cleanup. Otherwise every dropped connection leaks a
+  // timer and its subscription (e.g. a `docker compose logs -f` child process).
+  let teardown: (() => void) | undefined;
+
   return new ReadableStream<Uint8Array>({
     start(controller) {
       let isClosed = false;
       let cleanup: (() => void) | undefined;
       let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-
-      const safeEmit = (event: SSERawEvent) => {
-        if (isClosed) return;
-        try {
-          controller.enqueue(encoder.encode(formatSSEEvent(event)));
-        } catch (error) {
-          isClosed = true;
-          logger?.debug?.('SSE enqueue failed; closing stream', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          try {
-            controller.close();
-          } catch {
-            // ignore double close
-          }
-          cleanup?.();
-        }
-      };
-
-      const api: SSEStreamController = {
-        send(event) {
-          safeEmit({ event: 'message', data: event });
-        },
-        sendRaw(event) {
-          safeEmit(event);
-        },
-        heartbeat(data = {}) {
-          safeEmit({ event: 'heartbeat', data });
-        },
-        close() {
-          if (isClosed) return;
-          isClosed = true;
-          cleanup?.();
-          controller.close();
-        },
-      };
 
       const clear = () => {
         if (heartbeatTimer) {
@@ -99,6 +70,50 @@ export function createSSEStream(options: SSEStreamOptions): ReadableStream<Uint8
           }
           cleanup = undefined;
         }
+      };
+
+      const safeEmit = (event: SSERawEvent) => {
+        if (isClosed) return;
+        try {
+          controller.enqueue(encoder.encode(formatSSEEvent(event)));
+        } catch (error) {
+          isClosed = true;
+          logger?.debug?.('SSE enqueue failed; closing stream', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          try {
+            controller.close();
+          } catch {
+            // ignore double close
+          }
+          clear();
+        }
+      };
+
+      const api: SSEStreamController = {
+        send(event) {
+          safeEmit({ event: 'message', data: event });
+        },
+        sendRaw(event) {
+          safeEmit(event);
+        },
+        heartbeat(data = {}) {
+          safeEmit({ event: 'heartbeat', data });
+        },
+        close() {
+          if (isClosed) return;
+          isClosed = true;
+          clear();
+          controller.close();
+        },
+      };
+
+      // Expose teardown so cancel() (client disconnect) stops the heartbeat timer
+      // and runs the onSubscribe cleanup.
+      teardown = () => {
+        if (isClosed) return;
+        isClosed = true;
+        clear();
       };
 
       try {
@@ -120,16 +135,12 @@ export function createSSEStream(options: SSEStreamOptions): ReadableStream<Uint8
         logger?.error?.('SSE subscription failed', error instanceof Error ? error : undefined);
         api.sendRaw({ event: 'error', data: { message: 'internal_error' } });
         api.close();
-        return clear;
       }
-
-      return () => {
-        isClosed = true;
-        clear();
-      };
     },
     cancel() {
-      // No-op: cleanup handled by start return function
+      // The client disconnected (or the reader was cancelled): stop the heartbeat
+      // timer and run the onSubscribe cleanup so nothing leaks per dropped stream.
+      teardown?.();
     },
   });
 }
