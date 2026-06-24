@@ -23,6 +23,18 @@ import type { Job as SharedJob, JobStatus as SharedJobStatus, JobType as SharedJ
 
 export type JobUpdate = { id: string; status: SharedJobStatus; progress?: number; finishedAt?: string };
 
+/**
+ * Thrown by an executor (or a cooperative checkpoint) to signal that a job was
+ * cancelled mid-flight, as opposed to failing. The job service records it as
+ * `cancelled` rather than `failed`.
+ */
+export class JobCancelledError extends Error {
+  constructor() {
+    super('Job cancelled');
+    this.name = 'JobCancelledError';
+  }
+}
+
 export interface CreateJobParams {
   type: SharedJobType;
   payload?: Record<string, unknown>;
@@ -139,6 +151,7 @@ export class RealJobService implements JobService {
         const handled = await this.executor(ctx);
         if (handled) {
           await this.repo.updateStatus(id, 'completed');
+          this.cancelled.delete(id);
           const finishedAt = new Date().toISOString();
           this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt });
           await this.logging.logJob(id, 'info', 'Job completed');
@@ -193,10 +206,17 @@ export class RealJobService implements JobService {
       this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt });
       await this.logging.logJob(id, 'info', 'Job completed');
     } catch (error) {
-      await this.repo.update(id, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
       const finishedAt = new Date().toISOString();
-      this.bus.emit(id, { id, status: 'failed', finishedAt });
-      await this.logging.logJob(id, 'error', 'Job failed', { error: error instanceof Error ? error.message : String(error) });
+      if (error instanceof JobCancelledError) {
+        await this.repo.updateStatus(id, 'cancelled');
+        this.cancelled.delete(id);
+        this.bus.emit(id, { id, status: 'failed', finishedAt });
+        await this.logging.logJob(id, 'warn', 'Job cancelled');
+      } else {
+        await this.repo.update(id, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
+        this.bus.emit(id, { id, status: 'failed', finishedAt });
+        await this.logging.logJob(id, 'error', 'Job failed', { error: error instanceof Error ? error.message : String(error) });
+      }
     } finally {
       this.running--;
       this.tick();
@@ -212,12 +232,21 @@ export class RealJobService implements JobService {
   private async ensureStarted() {
     if (this.started) return;
     await this.db.initialize();
-    // Re-enqueue any pending jobs
     try {
+      // Re-enqueue jobs that were still queued when the process stopped.
       const pending = await this.repo.findByStatus('pending');
       pending.forEach(j => this.enqueue(j.id));
+      // Any job left 'running' was orphaned by a crash/restart — no executor is
+      // driving it anymore — so fail it rather than leave the deployment wedged
+      // showing an in-progress job that never resolves.
+      const orphaned = await this.repo.findByStatus('running');
+      for (const j of orphaned) {
+        await this.repo.update(j.id, { status: 'failed', error: 'Interrupted by server restart' });
+        this.bus.emit(j.id, { id: j.id, status: 'failed', finishedAt: new Date().toISOString() });
+        await this.logging.logJob(j.id, 'error', 'Job failed: interrupted by server restart');
+      }
     } catch (e) {
-      this.logger.warn('Failed to load pending jobs', { error: e instanceof Error ? e.message : String(e) });
+      this.logger.warn('Failed to recover jobs on startup', { error: e instanceof Error ? e.message : String(e) });
     }
     this.started = true;
   }
@@ -236,11 +265,27 @@ export class RealJobService implements JobService {
   }
 
   async cancelJob(id: string): Promise<void> {
-  // Mark for cooperative cancellation and remove from queue if present
-  this.cancelled.add(id);
-  this.queue = this.queue.filter(j => j !== id);
-  await this.repo.updateStatus(id, 'cancelled');
-  this.bus.emit(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
+    const entity = await this.repo.findById(id);
+    // Never overwrite a job that already reached a terminal state — doing so would
+    // corrupt its recorded outcome (e.g. rewriting a 'completed' job to 'cancelled').
+    if (!entity || entity.status === 'completed' || entity.status === 'failed' || entity.status === 'cancelled') {
+      return;
+    }
+    // Flag for cooperative cancellation and drop it from the queue if still waiting.
+    this.cancelled.add(id);
+    this.queue = this.queue.filter(j => j !== id);
+    if (entity.status === 'running') {
+      // A running job is finalized by runJob once a cooperative checkpoint observes
+      // the flag (it throws JobCancelledError) — writing a terminal status here would
+      // be clobbered by the executor's own completion write. Best-effort: a single
+      // long-running Compose call can't be interrupted, so cancellation only takes
+      // effect at the next checkpoint.
+      return;
+    }
+    // Not yet running: finalize now so a dequeued job doesn't sit pending forever.
+    await this.repo.updateStatus(id, 'cancelled');
+    this.cancelled.delete(id);
+    this.bus.emit(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
   }
 
   async getJob(id: string): Promise<SharedJob | null> {
