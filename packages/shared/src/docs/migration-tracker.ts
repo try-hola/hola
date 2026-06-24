@@ -442,7 +442,11 @@ This document tracks all changes to the Hola API across different versions.
 
 `;
 
-  for (const version of API_VERSION_HISTORY.reverse()) {
+  // Iterate newest-first on a COPY — Array.reverse() mutates in place, and
+  // API_VERSION_HISTORY is shared module state that getLatestVersion/getVersion/
+  // generateMigrationGuide rely on being in chronological order (this once left
+  // it permanently reversed and made generateChangelog non-idempotent).
+  for (const version of [...API_VERSION_HISTORY].reverse()) {
     changelog += `## [${version.version}] - ${version.releaseDate}
 
 ${version.description}
