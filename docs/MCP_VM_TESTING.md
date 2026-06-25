@@ -73,7 +73,9 @@ VNC to the public internet, and **no secrets are committed**.
    ```
 
    The baked user (`--user`, default `hola`) must match `VM_SSH_USER` below. See
-   `--help` for storage/bridge/sizing flags.
+   `--help` for storage/bridge/sizing flags. To hand this off to an agent/person
+   with SSH access to the Proxmox host, use the runbook in
+   `docs/vm-e2e-host-setup.md` (also covers the one-time token role grant).
 
 1. **Open the repo in the devcontainer.** Claude Code runs *inside* it.
 
