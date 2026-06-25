@@ -1,6 +1,6 @@
 {
   "name": "@hola/compose",
-  "version": "0.6.25",
+  "version": "0.6.26",
   "private": true,
   "description": "Docker Compose stack for Hola (web, server, traefik)",
   "type": "module",
