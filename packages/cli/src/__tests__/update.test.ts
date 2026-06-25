@@ -203,6 +203,55 @@ describe('hola update', () => {
     }
   });
 
+  // --- CLI self-update before the server update -----------------------------
+
+  const NEWER = async () => ({ version: '9.9.9', url: 'https://example.com/r' });
+
+  it('self-updates the CLI (when newer) before updating the server', async () => {
+    const runner = makeRunner();
+    const selfUpdate = vi.fn(async () => 'skipped' as const);
+    await runUpdate(
+      { host: 'me@vm', json: true },
+      { prompter: scriptedPrompter({}), runner, fetchLatest: NEWER, selfUpdate },
+    );
+    expect(selfUpdate).toHaveBeenCalledWith(expect.objectContaining({ latestVersion: '9.9.9' }));
+    // It still proceeds to the server update afterwards.
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
+  });
+
+  it('--no-self-update (selfUpdate=false) skips the CLI self-update', async () => {
+    const runner = makeRunner();
+    const selfUpdate = vi.fn(async () => 'skipped' as const);
+    await runUpdate(
+      { host: 'me@vm', selfUpdate: false, json: true },
+      { prompter: scriptedPrompter({}), runner, fetchLatest: NEWER, selfUpdate },
+    );
+    expect(selfUpdate).not.toHaveBeenCalled();
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
+  });
+
+  it('a pinned --ref skips the CLI self-update', async () => {
+    const runner = makeRunner();
+    const selfUpdate = vi.fn(async () => 'skipped' as const);
+    await runUpdate(
+      { host: 'me@vm', ref: 'cli-v0.6.25', json: true },
+      { prompter: scriptedPrompter({}), runner, fetchLatest: NEWER, selfUpdate },
+    );
+    expect(selfUpdate).not.toHaveBeenCalled();
+  });
+
+  it('aborts (before touching the host) when the CLI binary is not writable', async () => {
+    const runner = makeRunner();
+    const selfUpdate = vi.fn(async () => 'not-writable' as const);
+    const res = await runUpdate(
+      { host: 'me@vm', json: true },
+      { prompter: scriptedPrompter({}), runner, fetchLatest: NEWER, selfUpdate },
+    );
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
+  });
+
   // --- `--check` ------------------------------------------------------------
 
   it('--check reports installed / latest / updateAvailable without mutating', async () => {
