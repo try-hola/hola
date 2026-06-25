@@ -1,5 +1,6 @@
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
 import type { EventSourceFactory, SSEOptions, SSEState } from './sse-types';
+import { getAuthToken, notifyUnauthorized } from './auth-token';
 
 export interface SSEClient {
   connect(): void;
@@ -36,6 +37,10 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
   let config = applyDefaults(initialOptions);
   let currentUrl: string | null = null;
   let eventSource: EventSource | null = null;
+  // Abort handle for the fetch-based transport (the default). Native EventSource
+  // can't send an Authorization header, so OIDC/Bearer auth needs a fetch stream
+  // instead; this lets cleanup() tear that fetch down.
+  let abortController: AbortController | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   let connectionState: SSEConnectionState = 'disconnected';
@@ -81,16 +86,22 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
     }
   }
 
-  function closeEventSource() {
+  function closeTransport() {
     if (eventSource) {
       eventSource.close();
       eventSource = null;
+    }
+    if (abortController) {
+      // Aborting rejects the in-flight fetch / pending reader.read(); the
+      // transport's own abort guard swallows the resulting AbortError.
+      abortController.abort();
+      abortController = null;
     }
   }
 
   function cleanup() {
     clearTimers();
-    closeEventSource();
+    closeTransport();
   }
 
   function scheduleHeartbeat() {
@@ -107,10 +118,12 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
     }
   }
 
-  function handleMessage(raw: MessageEvent<string>) {
+  // A data payload arrived (from either transport). Any traffic also resets the
+  // heartbeat watchdog, since it proves the stream is still flowing.
+  function handleData(data: string) {
     scheduleHeartbeat();
     try {
-      const evt: SSEEvent = JSON.parse(raw.data);
+      const evt: SSEEvent = JSON.parse(data);
       if (config.eventTypes.length > 0 && !config.eventTypes.includes(evt.type)) {
         return;
       }
@@ -120,6 +133,35 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
     } catch (err) {
       handleError(err instanceof Error ? err.message : 'Failed to parse event');
     }
+  }
+
+  // Parse one SSE frame (the lines between blank-line separators) and route it.
+  // The server emits the data payload as a named `message` event and keep-alives
+  // as a `heartbeat` event — mirror EventSource's dispatch for the fetch path.
+  function dispatchFrame(frame: string) {
+    let eventName = 'message';
+    const dataLines: string[] = [];
+    for (const line of frame.split('\n')) {
+      if (line === '' || line.startsWith(':')) continue; // blank or comment/keep-alive
+      const colon = line.indexOf(':');
+      const field = colon === -1 ? line : line.slice(0, colon);
+      let value = colon === -1 ? '' : line.slice(colon + 1);
+      if (value.startsWith(' ')) value = value.slice(1);
+      if (field === 'event') eventName = value;
+      else if (field === 'data') dataLines.push(value);
+      // `id`/`retry` are not used by this client
+    }
+    if (eventName === 'heartbeat') {
+      scheduleHeartbeat();
+      return;
+    }
+    if (dataLines.length === 0) return;
+    const data = dataLines.join('\n');
+    if (eventName === 'error') {
+      handleError('Stream error');
+      return;
+    }
+    handleData(data);
   }
 
   function computeReconnectDelay(attempt: number) {
@@ -147,31 +189,91 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
     }, computeReconnectDelay(attempt - 1));
   }
 
+  function onTransportOpen() {
+    reconnectAttempt = 0;
+    setState({ connectionState: 'connected', error: null });
+    scheduleHeartbeat();
+  }
+
+  // EventSource transport — used only when a factory is injected (tests, and the
+  // dev/admin-key cookie flow). It can't carry an Authorization header, which is
+  // why it isn't the default.
+  function connectEventSource(factory: EventSourceFactory, url: string) {
+    eventSource = factory(url);
+    eventSource.onopen = onTransportOpen;
+    eventSource.onmessage = (raw: MessageEvent<string>) => handleData(raw.data);
+    // The server sends keep-alives as a NAMED `heartbeat` SSE event, which the
+    // EventSource spec routes to addEventListener('heartbeat', …), NOT to
+    // onmessage. Without this listener the watchdog never saw heartbeats and
+    // an idle stream timed out. (Guarded for mock EventSources used in tests.)
+    if (typeof eventSource.addEventListener === 'function') {
+      eventSource.addEventListener('heartbeat', () => scheduleHeartbeat());
+    }
+    eventSource.onerror = () => handleError('Connection error');
+  }
+
+  // Default transport: fetch + ReadableStream. Unlike EventSource it can attach
+  // the OIDC Bearer token (and same-origin credentials for the admin-key cookie),
+  // so authenticated log streams actually connect instead of 401-looping. Mirrors
+  // the REST layer's auth (safeFetchEnhanced).
+  function connectFetch(url: string) {
+    const controller = new AbortController();
+    abortController = controller;
+    const token = getAuthToken();
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    fetch(url, { method: 'GET', headers, credentials: 'include', cache: 'no-store', signal: controller.signal })
+      .then(async response => {
+        if (controller.signal.aborted) return;
+        if (response.status === 401) {
+          notifyUnauthorized();
+          handleError('Unauthorized');
+          return;
+        }
+        if (!response.ok || !response.body) {
+          handleError(`HTTP ${response.status}`);
+          return;
+        }
+        onTransportOpen();
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (controller.signal.aborted) return;
+          if (done) {
+            handleError('Stream closed');
+            return;
+          }
+          // Accumulate and dispatch complete frames (separated by a blank line).
+          // CRLF is normalized so a split \r\n across chunks can't hide a boundary.
+          buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+          let sep: number;
+          while ((sep = buffer.indexOf('\n\n')) !== -1) {
+            dispatchFrame(buffer.slice(0, sep));
+            buffer = buffer.slice(sep + 2);
+          }
+        }
+      })
+      .catch(err => {
+        if (controller.signal.aborted) return;
+        handleError(err instanceof Error ? err.message : 'Connection error');
+      });
+  }
+
   function connect() {
     if (!currentUrl) {
       return;
     }
     cleanup();
     try {
-      const factory = config.eventSourceFactory ?? (url => new EventSource(url));
-      eventSource = factory(currentUrl);
       setState({ connectionState: 'connecting', error: null });
-
-      eventSource.onopen = () => {
-        reconnectAttempt = 0;
-        setState({ connectionState: 'connected', error: null });
-        scheduleHeartbeat();
-      };
-
-      eventSource.onmessage = handleMessage;
-      // The server sends keep-alives as a NAMED `heartbeat` SSE event, which the
-      // EventSource spec routes to addEventListener('heartbeat', …), NOT to
-      // onmessage. Without this listener the watchdog never saw heartbeats and
-      // an idle stream timed out. (Guarded for mock EventSources used in tests.)
-      if (typeof eventSource.addEventListener === 'function') {
-        eventSource.addEventListener('heartbeat', () => scheduleHeartbeat());
+      if (config.eventSourceFactory) {
+        connectEventSource(config.eventSourceFactory, currentUrl);
+      } else {
+        connectFetch(currentUrl);
       }
-      eventSource.onerror = () => handleError('Connection error');
     } catch (err) {
       handleError(err instanceof Error ? err.message : 'Failed to connect');
     }
