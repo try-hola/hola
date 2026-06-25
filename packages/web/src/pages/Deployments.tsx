@@ -8,7 +8,8 @@ import {
   Trash2,
   ExternalLink,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  AlertTriangle
 } from 'lucide-react';
 import type {
   DeploymentStatus,
@@ -79,17 +80,30 @@ export const Deployments: React.FC = () => {
     }
   }, [refetch]);
 
+  // Removal is destructive (full teardown + record deletion), so it's gated
+  // behind a confirmation dialog rather than firing on the first click.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   // Removal is a full teardown (stop + deprovision + release route + remove
   // record), distinct from the `stop` action — so it uses the DELETE endpoint,
   // not a lifecycle action, otherwise the route stays held and blocks reinstall.
-  const handleDelete = useCallback(async (deploymentId: string) => {
+  const confirmDelete = useCallback(async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await api.deployments.remove(deploymentId);
+      await api.deployments.remove(pendingDelete.id);
+      setPendingDelete(null);
       await refetch();
     } catch (error) {
       console.error('Error deleting deployment:', error);
+      setDeleteError(error instanceof Error ? error.message : 'Failed to remove deployment');
+    } finally {
+      setDeleting(false);
     }
-  }, [refetch]);
+  }, [pendingDelete, refetch]);
 
   // Calculate pagination info
   const totalPages = Math.ceil(totalDeployments / limit);
@@ -98,6 +112,63 @@ export const Deployments: React.FC = () => {
 
   return (
     <div className="animate-fadein">
+      {/* Removal confirmation dialog */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => { if (!deleting) setPendingDelete(null); }}
+        >
+          <div
+            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-dialog-title"
+          >
+            <div className="p-6">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-danger-weak text-danger">
+                  <AlertTriangle className="w-[18px] h-[18px]" />
+                </div>
+                <div className="min-w-0">
+                  <h2 id="remove-dialog-title" className="text-lg font-semibold m-0">Remove {pendingDelete.name}?</h2>
+                  <p className="mt-1.5 text-sm text-text-muted">
+                    This permanently removes the deployment: it stops and deletes the
+                    containers, deprovisions SSO, releases the route, and deletes its
+                    data. This can't be undone.
+                  </p>
+                </div>
+              </div>
+
+              {deleteError && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2.5">
+                <button
+                  onClick={() => setPendingDelete(null)}
+                  disabled={deleting}
+                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  disabled={deleting}
+                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {deleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {deleting ? 'Removing…' : 'Remove'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
         <div>
@@ -260,7 +331,8 @@ export const Deployments: React.FC = () => {
                   title="Remove"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleDelete(deployment.id);
+                    setDeleteError(null);
+                    setPendingDelete({ id: deployment.id, name: deployment.name });
                   }}
                   className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-danger hover:bg-danger-weak transition-colors"
                 >

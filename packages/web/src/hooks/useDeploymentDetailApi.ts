@@ -94,25 +94,38 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     return result;
   }, [deploymentId, cacheKey, fetchData]);
 
-  // Execute action
-  const executeAction = React.useCallback(async (action: 'start' | 'stop' | 'restart' | 'delete') => {
+  // Execute a lifecycle action (start/stop/restart). NOT delete — removal is a
+  // full teardown via the DELETE endpoint (see removeDeployment), not a lifecycle
+  // action, otherwise the Traefik route stays held and blocks reinstall.
+  const executeAction = React.useCallback(async (action: 'start' | 'stop' | 'restart') => {
     if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
-    
+
     const request: PostDeploymentActionRequest = { action };
     const result = await api.deployments.action(deploymentId, request);
-    
+
     // Invalidate cache and refetch
     globalCache.delete(cacheKey);
     await fetchData();
-    
+
     return result;
   }, [deploymentId, cacheKey, fetchData]);
 
-  return { 
-    ...state, 
+  // Remove the deployment entirely (stop + deprovision auth + release route +
+  // delete record + clean storage) via DELETE /api/deployments/:id. The caller
+  // navigates away on success since the deployment no longer exists.
+  const removeDeployment = React.useCallback(async () => {
+    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
+
+    await api.deployments.remove(deploymentId);
+    globalCache.delete(cacheKey);
+  }, [deploymentId, cacheKey]);
+
+  return {
+    ...state,
     refetch: fetchData,
     updateConfiguration,
-    executeAction
+    executeAction,
+    removeDeployment
   };
 }
 
