@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
 import {
@@ -91,8 +91,18 @@ export const DeploymentDetail: React.FC = () => {
     error,
     refetch: refetchDeployment,
     updateConfiguration,
-    executeAction
+    executeAction,
+    removeDeployment
   } = useDeploymentDetailApi(deploymentId);
+
+  const navigate = useNavigate();
+
+  // Removal confirmation dialog state. Removal is destructive (full teardown +
+  // record deletion), so it's gated behind a confirm step rather than firing on
+  // the first click.
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
 
   const {
     data: historyData,
@@ -216,7 +226,7 @@ export const DeploymentDetail: React.FC = () => {
     setDeploymentOverrides(newOverrides);
   };
 
-  const handleAction = async (action: 'start' | 'stop' | 'restart' | 'delete') => {
+  const handleAction = async (action: 'start' | 'stop' | 'restart') => {
     if (!deployment) return;
 
     const operationKey = `action-${action}`;
@@ -230,6 +240,25 @@ export const DeploymentDetail: React.FC = () => {
       // TODO: Show error message to user
     } finally {
       setOperationLoading(prev => ({ ...prev, [operationKey]: false }));
+    }
+  };
+
+  // Confirmed removal: full teardown via the DELETE endpoint, then back to the
+  // deployments list (the deployment no longer exists, so there's nothing to
+  // show here). On failure we keep the dialog open and surface the error inline.
+  const handleRemove = async () => {
+    if (!deployment) return;
+
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      await removeDeployment();
+      navigate('/deployments');
+    } catch (error) {
+      console.error('Error removing deployment:', error);
+      setRemoveError(error instanceof Error ? error.message : 'Failed to remove deployment');
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -775,6 +804,63 @@ export const DeploymentDetail: React.FC = () => {
 
   return (
     <div className="animate-fadein">
+      {/* Removal confirmation dialog */}
+      {showRemoveConfirm && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => { if (!removing) setShowRemoveConfirm(false); }}
+        >
+          <div
+            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-dialog-title"
+          >
+            <div className="p-6">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-danger-weak text-danger">
+                  <AlertTriangle className="w-[18px] h-[18px]" />
+                </div>
+                <div className="min-w-0">
+                  <h2 id="remove-dialog-title" className="text-lg font-semibold m-0">Remove {deployment.name}?</h2>
+                  <p className="mt-1.5 text-sm text-text-muted">
+                    This permanently removes the deployment: it stops and deletes the
+                    containers, deprovisions SSO, releases the route, and deletes its
+                    data. This can't be undone.
+                  </p>
+                </div>
+              </div>
+
+              {removeError && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{removeError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2.5">
+                <button
+                  onClick={() => setShowRemoveConfirm(false)}
+                  disabled={removing}
+                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRemove}
+                  disabled={removing}
+                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {removing ? <RotateCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                  {removing ? 'Removing…' : 'Remove'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Header card */}
       <div className="bg-surface-1 border border-border rounded-[14px] p-[20px_22px] mb-4">
         <div className="flex items-center gap-[15px] flex-wrap">
@@ -823,7 +909,7 @@ export const DeploymentDetail: React.FC = () => {
               Rollback
             </button>
             <button
-              onClick={() => handleAction('delete')}
+              onClick={() => { setRemoveError(null); setShowRemoveConfirm(true); }}
               className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger-weak text-danger border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:bg-danger hover:text-white transition-colors"
             >
               <Trash2 className="w-4 h-4" />
