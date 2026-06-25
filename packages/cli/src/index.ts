@@ -51,10 +51,11 @@ prog
 // update — upgrade an existing install to this CLI's version (config-preserving, no wizard)
 prog
   .command('update')
-  .describe('Upgrade an existing host to this CLI’s version over SSH — no wizard, preserves .env')
+  .describe('Upgrade the CLI to the latest release, then the host to match, over SSH — preserves .env')
   .option('--host', 'Target host, e.g. user@vm (required)')
   .option('--repo', 'Hola repo to download release assets from', 'https://github.com/try-hola/hola.git')
-  .option('--ref', `Release tag to install (default cli-v${CLI_VERSION})`)
+  .option('--ref', `Release tag to install (default cli-v${CLI_VERSION}); pinning a ref skips the CLI self-update`)
+  .option('--no-self-update', 'Don’t upgrade the CLI binary; only update the server to this CLI’s version')
   .option('--tarball-url', 'Override the compose-bundle download URL (advanced)')
   .option('--dir', 'Install directory on the host', '/opt/hola')
   .option('--enable-sso', 'For a HOLA_AUTH_MODE=none host: enable Authentik SSO (the new standard)', false)

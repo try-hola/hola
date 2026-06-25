@@ -5,6 +5,14 @@ import { parseEnv } from '../../install/render-env';
 import { systemRunner, type Runner } from '../../lib/runner';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { CLI_VERSION } from '../../version';
+import { selfUpdateCli, type SelfUpdateArgs, type SelfUpdateOutcome } from './self-update';
+
+// Self-update touches the real filesystem/network and re-execs the process, so
+// it's suppressed by default under the test runner (the same VITEST guard the SSE
+// client uses); unit tests exercise it via `selfUpdateCli` or an injected stub.
+const IS_TEST =
+  typeof process !== 'undefined' &&
+  !!(process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
 
 export interface UpdateOptions {
   host?: string;
@@ -19,6 +27,12 @@ export interface UpdateOptions {
   keepAuthMode?: boolean;
   /** Report versions (CLI / installed / latest release) without changing anything. */
   check?: boolean;
+  /**
+   * Set to `false` by `--no-self-update` (via mri negation) to skip upgrading the
+   * CLI binary and only update the server to this CLI's version. Default (enabled)
+   * brings the CLI up to the latest release first, then updates the server to match.
+   */
+  selfUpdate?: boolean;
   dryRun?: boolean;
   json?: boolean;
 }
@@ -119,9 +133,34 @@ async function fetchLatestRelease(
   }
 }
 
+/** Production CLI self-update: real binary path, fetch, spawn, and process exit. */
+function realSelfUpdate(args: SelfUpdateArgs): Promise<SelfUpdateOutcome> {
+  return selfUpdateCli(args, {
+    execPath: process.execPath,
+    platform: process.platform,
+    arch: process.arch,
+    userArgs: process.argv.slice(2),
+    baseEnv: process.env,
+    fetchImpl: fetch,
+    spawn: (cmd, a, env) =>
+      import('node:child_process').then(
+        ({ spawn }) =>
+          new Promise<number>((resolve, reject) => {
+            const child = spawn(cmd, a, { stdio: 'inherit', env });
+            child.on('error', reject);
+            child.on('close', (code) => resolve(code ?? 1));
+          }),
+      ),
+    exit: (code) => process.exit(code),
+    out: (msg) => console.log(msg),
+  });
+}
+
 /**
- * Config-preserving in-place upgrade of an existing install to the invoking CLI's
- * version. Over SSH it preflights the host, reads the current `.env`/VERSION,
+ * Config-preserving in-place upgrade. First self-updates the CLI to the latest
+ * release (unless --no-self-update or a pinned --ref) and re-execs, so the host is
+ * then brought up to that same version. Over SSH it preflights the host, reads the
+ * current `.env`/VERSION,
  * reconciles the auth mode to the Authentik-default baseline (prompting/flag-gated
  * for an explicit `none`), downloads the version-pinned bundle and extracts it over
  * the install dir WITHOUT touching `.env` or the ACME store, re-runs the idempotent
@@ -135,11 +174,14 @@ export async function runUpdate(
     runner?: Runner;
     /** Injectable release lookup for tests / `--check`. */
     fetchLatest?: (repo: string) => Promise<{ version: string; url: string } | null>;
+    /** Injectable CLI self-update (tests); defaults to the real fs/network/re-exec impl. */
+    selfUpdate?: (args: SelfUpdateArgs) => Promise<SelfUpdateOutcome>;
   },
 ): Promise<UpdateResult | UpdateCheckReport | undefined> {
   const prompter = injected?.prompter ?? clackPrompter();
   const runner = injected?.runner ?? systemRunner();
   const fetchLatest = injected?.fetchLatest ?? ((repo: string) => fetchLatestRelease(repo));
+  const selfUpdate = injected?.selfUpdate ?? realSelfUpdate;
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
 
   const host = opts.host;
@@ -195,7 +237,11 @@ export async function runUpdate(
         out(`Latest release:    ${colors.bold(report.latest ?? 'unavailable')}`);
         if (report.updateAvailable) {
           out(`\n${colors.yellow('A newer Hola version')} (${colors.bold(report.latest!)}) is available.`);
-          out(`Run ${colors.cyan(`hola update --host ${host}`)} to upgrade.`);
+          const behindLatest = isNewerVersion(report.latest!, CLI_VERSION);
+          out(
+            `Run ${colors.cyan(`hola update --host ${host}`)} to upgrade` +
+              (behindLatest ? ' the CLI and the server.' : ' the server.'),
+          );
         } else if (report.skew) {
           out(`\n${colors.yellow('Version skew:')} the server (${report.installed}) is older than your CLI (${report.cli}).`);
           out(`Run ${colors.cyan(`hola update --host ${host}`)} to bring it up to the CLI's version.`);
@@ -204,6 +250,43 @@ export async function runUpdate(
         }
       }
       return report;
+    }
+
+    // 0) Self-update the CLI to the latest release, then re-exec so the server
+    //    update runs at that version (so `hola update` brings BOTH up to date).
+    //    Skipped when the user pinned a version (--ref), opted out
+    //    (--no-self-update → selfUpdate === false), or we're already the re-exec'd
+    //    child (HOLA_SELF_UPDATED). Suppressed under the test runner unless a stub
+    //    is injected, so unit runs never touch the network or replace a binary.
+    const selfUpdateActive = !!injected?.selfUpdate || !IS_TEST;
+    if (
+      selfUpdateActive &&
+      opts.selfUpdate !== false &&
+      !opts.ref &&
+      !process.env.HOLA_SELF_UPDATED
+    ) {
+      const latest = await fetchLatest(repo);
+      if (latest && isNewerVersion(latest.version, CLI_VERSION)) {
+        const outcome = await selfUpdate({
+          repo,
+          latestVersion: latest.version,
+          currentVersion: CLI_VERSION,
+          dryRun: opts.dryRun,
+        });
+        // On a successful replace selfUpdate re-execs and never returns; reaching
+        // here means it didn't run. Only a non-writable binary is fatal — the user
+        // must upgrade the CLI out-of-band (or opt out) to avoid a CLI/server skew.
+        if (outcome === 'not-writable') {
+          throw new UpdateAbort(
+            `A newer Hola CLI (${latest.version}) is available, but this binary can't be replaced:\n` +
+              `  ${process.execPath}\n` +
+              `Upgrade the CLI, then re-run update:\n` +
+              `  curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh\n` +
+              `Or re-run with write access to that path, or pass --no-self-update to update the ` +
+              `server to v${CLI_VERSION} only.`,
+          );
+        }
+      }
     }
 
     // 1) Preflight (single remote probe → key=value lines). The host pulls
