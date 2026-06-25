@@ -63,6 +63,12 @@ services:
       # Let's Encrypt (HTTP-01). Requires public, resolvable domains.
       - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      # ACME CA directory. Defaults to Let's Encrypt PRODUCTION; override with the
+      # staging directory (https://acme-staging-v02.api.letsencrypt.org/directory)
+      # to exercise issuance without prod rate limits — e.g. on a test VM. Staging
+      # certs are untrusted (browser warning), so this is for testing the flow, not
+      # real TLS. Switching CA servers? Start from a fresh acme.json.
+      - --certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
       - --certificatesresolvers.le.acme.httpchallenge=true
       - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
     ports:

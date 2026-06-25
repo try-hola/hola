@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# bin/vm-test — end-to-end smoke test of the disposable-VM workflow.
+#
+# Usage: bin/vm-test [--dry-run] [--keep-on-fail] [--ssh] [-- <test command...>]
+#
+# Runs the full lifecycle a developer (or Claude Code) would drive:
+#   create VM -> wait for boot -> resolve VNC endpoint -> run tests ->
+#   snapshot on failure (if --keep-on-fail) -> always destroy on success.
+#
+# --ssh runs the test command ON the VM over SSH (waits for sshd first) — for
+# headless/non-GUI tests. Without it, the command runs locally in the container
+# (e.g. a suite that targets the VM over the network or drives it via the VNC MCP).
+#
+# With --dry-run it exercises every step without touching infrastructure, so it
+# doubles as a config check that proves the wiring end to end. The default test
+# command is a placeholder 'true'; pass your real test after '--', e.g.:
+#   bin/vm-test --ssh -- ./run-integration.sh
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+KEEP_ON_FAIL=0; USE_SSH=0
+TEST_CMD=(true)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    --keep-on-fail) KEEP_ON_FAIL=1; shift ;;
+    --ssh) USE_SSH=1; shift ;;
+    --) shift; TEST_CMD=("$@"); break ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+VMID=""
+cleanup() {
+  local rc=$1
+  [[ -z "$VMID" ]] && exit "$rc"
+  if [[ "$rc" -ne 0 && "$KEEP_ON_FAIL" == "1" ]]; then
+    warn "tests failed — keeping VM $VMID and snapshotting for inspection."
+    "$BIN_DIR/vm-snapshot" --vmid "$VMID" --name "failure-$(date -u +%Y%m%d-%H%M%S)" \
+      --desc "preserved by vm-test on failure" || true
+    warn "destroy it manually when done: bin/vm-destroy --vmid $VMID"
+  else
+    log "tearing down VM $VMID"
+    FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$VMID" || warn "teardown failed for VM $VMID — destroy manually."
+  fi
+  exit "$rc"
+}
+
+log "=== vm-test: provisioning disposable VM ==="
+VMID=$("$BIN_DIR/vm-create" | tail -1)
+trap 'cleanup $?' EXIT
+log "current test VM: $VMID"
+
+if [[ "$USE_SSH" == "1" ]]; then
+  log "=== vm-test: waiting for SSH ==="
+  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID"
+else
+  log "=== vm-test: waiting for boot + resolving VNC ==="
+  "$BIN_DIR/vm-connect" --vmid "$VMID" --wait
+fi
+
+log "=== vm-test: running tests ==="
+log "test command: ${TEST_CMD[*]} ($([[ "$USE_SSH" == 1 ]] && echo "on VM via SSH" || echo "in container"))"
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  log "DRY_RUN: skipping real test command; treating as success."
+elif [[ "$USE_SSH" == "1" ]]; then
+  "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "${TEST_CMD[@]}"
+else
+  "${TEST_CMD[@]}"
+fi
+
+log "=== vm-test: tests passed ==="
+# cleanup() runs via the EXIT trap and destroys the VM on success.

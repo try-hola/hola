@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "proxmox": {
+      "type": "http",
+      "url": "${PROXMOX_MCP_URL:-}",
+      "headers": {
+        "Authorization": "Bearer ${PROXMOX_MCP_TOKEN:-}"
+      }
+    },
+    "vnc": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@hrrrsn/mcp-vnc"],
+      "env": {
+        "VNC_HOST": "${VNC_HOST:-127.0.0.1}",
+        "VNC_PORT": "${VNC_PORT:-5900}",
+        "VNC_PASSWORD": "${VNC_PASSWORD:-}"
+      }
+    }
+  }
+}

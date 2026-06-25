@@ -85,8 +85,36 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 - Versions across published packages are kept in sync (`web` is intentionally
   `0.0.0`/unversioned).
 
+## Disposable-VM testing (Proxmox + VNC MCP)
+
+For end-to-end / GUI-driven testing you can drive a **throwaway Proxmox VM** from
+inside the devcontainer via two MCP servers wired up in `.mcp.json`: `proxmox`
+(VM lifecycle) and `vnc` (console interaction). Use them like this:
+
+- **Lifecycle** — prefer the `bin/` helpers (they also work for CI and have a
+  `--dry-run` mode): `bin/vm-create` → `bin/vm-connect --wait` → run tests →
+  `bin/vm-destroy`. `bin/vm-test` runs the whole create→test→teardown loop.
+- **SSH for non-GUI work** — for setup/installs/headless tests use `bin/vm-ssh --
+  <cmd>` (and `bin/vm-wait-ssh`) instead of VNC. `vm-create` injects an ephemeral
+  per-VM key via cloud-init; reserve the `vnc` MCP for actual GUI cases.
+- **Full e2e (CLI + browser)** — the **`vm-e2e` skill** (`.claude/skills/vm-e2e/`)
+  runs the whole loop: create VM → `hola bootstrap --host hola-vm-<id>` (the CLI's
+  own SSH installer; `vm-wait-ssh` writes the `~/.ssh/config` alias) → verify the
+  stack → drive the in-VM browser via the `vnc` MCP (`bin/vm-vnc-tunnel`) →
+  snapshot-on-fail / destroy-on-pass. Prefer it over hand-stitching the steps.
+- **Snapshot, don't lose a failure** — `bin/vm-snapshot` (or `bin/vm-test
+  --keep-on-fail`) before destroying when a run fails and you want to inspect it.
+- **Destroy is confirmed** — `bin/vm-destroy` requires interactive `yes` (or
+  `--yes`/`FORCE=1`); every state change is audited to `logs/vm-actions.log`.
+- **Secrets** come from `.devcontainer/mcp.env` (gitignored) or host env — never
+  hard-code them; use a least-privilege Proxmox API token. Run `bin/mcp-setup`
+  first to scaffold/validate the env and confirm the servers connect.
+
+Full guide: `docs/MCP_VM_TESTING.md`.
+
 ## Where to read more
 
+- `docs/MCP_VM_TESTING.md` — disposable-VM (Proxmox/VNC MCP) testing workflow.
 - `docs/ARCHITECTURE.md` — system design and deployment lifecycle.
 - `docs/OPERATIONS.md` — install, recovery, backup, SSO.
 - `packages/compose/README.md` — the production stack, catalog, and Authentik setup.

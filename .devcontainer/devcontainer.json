@@ -14,11 +14,25 @@
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/eitsupi/devcontainer-features/jq-likes:2": {},
     "ghcr.io/get2knowio/devcontainer-features/ai-clis:2": {
-      "omit": "codeRabbit,qmd"
+      "omit": "codeRabbit,qmd,beads"
     },
     "ghcr.io/get2knowio/devcontainer-features/modern-cli-tools:2": {},
     "ghcr.io/get2knowio/devcontainer-features/node-dev-tools:2": {},
     "ghcr.io/get2knowio/devcontainer-features/github-actions-tools:2": {}
+  },
+  "mounts": [
+    "source=${localWorkspaceFolder}/../apps,target=/workspaces/apps,type=bind,consistency=cached"
+  ],
+  "//mcp": "MCP / disposable-VM testing config — see docs/MCP_VM_TESTING.md. These forward MCP + Proxmox secrets from the HOST environment into the container (empty if unset on the host). The committed-but-secretless alternative is .devcontainer/mcp.env. NEVER commit real values.",
+  "containerEnv": {
+    "PROXMOX_MCP_URL": "${localEnv:PROXMOX_MCP_URL}",
+    "PROXMOX_MCP_TOKEN": "${localEnv:PROXMOX_MCP_TOKEN}",
+    "VNC_MCP_URL": "${localEnv:VNC_MCP_URL}",
+    "VNC_MCP_TOKEN": "${localEnv:VNC_MCP_TOKEN}",
+    "PROXMOX_API_URL": "${localEnv:PROXMOX_API_URL}",
+    "PROXMOX_NODE": "${localEnv:PROXMOX_NODE}",
+    "PROXMOX_TOKEN_ID": "${localEnv:PROXMOX_TOKEN_ID}",
+    "PROXMOX_TOKEN_SECRET": "${localEnv:PROXMOX_TOKEN_SECRET}"
   },
   "customizations": {
     "vscode": {
@@ -32,5 +46,5 @@
       ]
     }
   },
-  "postCreateCommand": "node --version && tsc --version"
+  "postCreateCommand": "node --version && tsc --version && chmod +x bin/mcp-setup bin/vm-create bin/vm-connect bin/vm-wait-ssh bin/vm-ssh bin/vm-vnc-tunnel bin/vm-snapshot bin/vm-destroy bin/vm-test && bin/mcp-setup --check || true"
 }

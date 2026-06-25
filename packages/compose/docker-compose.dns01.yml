@@ -39,6 +39,10 @@ services:
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
       - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      # ACME CA directory — defaults to production; set ACME_CA_SERVER to the
+      # staging directory to test wildcard issuance without prod rate limits.
+      # Staging certs are untrusted; start from a fresh acme.json when switching.
+      - --certificatesresolvers.le.acme.caserver=${ACME_CA_SERVER:-https://acme-v02.api.letsencrypt.org/directory}
       # DNS-01 instead of HTTP-01 — no inbound :80 reachability required.
       - --certificatesresolvers.le.acme.dnschallenge=true
       - --certificatesresolvers.le.acme.dnschallenge.provider=${ACME_DNS_PROVIDER}

@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# bin/vm-create — clone a disposable test VM from a template and boot it.
+#
+# Usage: bin/vm-create [--name NAME] [--template VMID] [--vmid VMID]
+#                      [--no-start] [--full] [--no-ssh] [--dry-run]
+#
+# Records the new VMID as the "current" test VM (.devcontainer/.vm-state) so the
+# other vm-* helpers default to it. Talks to the Proxmox REST API with a
+# least-privilege token. Non-destructive, so no confirmation is required.
+#
+# SSH provisioning (default when VM_SSH_USER is set; skip with --no-ssh):
+# generates an EPHEMERAL per-VM keypair and injects the public key via cloud-init
+# (sshkeys/ciuser) before first boot. Requires a cloud-init-enabled template with
+# the QEMU guest agent. The private key lives gitignored under .vm-keys and is
+# removed by vm-destroy. Then `bin/vm-ssh -- <cmd>` works for setup/installs/tests.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+START=1; PROVISION_SSH=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name) NAME=$2; shift 2 ;;
+    --template) VM_TEMPLATE_ID=$2; shift 2 ;;
+    --vmid) VM_ID=$2; shift 2 ;;
+    --full) VM_FULL_CLONE=1; shift ;;
+    --no-start) START=0; shift ;;
+    --no-ssh) PROVISION_SSH=0; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+require_vars PROXMOX_API_URL PROXMOX_NODE PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET VM_TEMPLATE_ID
+NODE=$(node)
+# SSH provisioning only applies when a cloud-init user is configured.
+[[ -z "${VM_SSH_USER:-}" ]] && PROVISION_SSH=0
+
+# Allocate a fresh VMID unless one was pinned.
+if [[ -z "${VM_ID:-}" ]]; then
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then VM_ID=999999
+  else VM_ID=$(proxmox_curl GET "/cluster/nextid" | pve_data); fi
+fi
+NAME="${NAME:-${VM_NAME_PREFIX:-hola-test}-${VM_ID}}"
+
+log "cloning template $VM_TEMPLATE_ID -> VM $VM_ID ($NAME) on node $NODE"
+audit "vm-create clone template=$VM_TEMPLATE_ID vmid=$VM_ID name=$NAME"
+
+clone_args=(--data-urlencode "newid=$VM_ID" --data-urlencode "name=$NAME")
+[[ "${VM_FULL_CLONE:-0}" == "1" ]] && clone_args+=(--data-urlencode "full=1")
+[[ -n "${VM_STORAGE:-}" ]] && clone_args+=(--data-urlencode "storage=$VM_STORAGE")
+
+proxmox_curl POST "/nodes/$NODE/qemu/$VM_TEMPLATE_ID/clone" "${clone_args[@]}" > /dev/null
+log "clone submitted."
+
+state_set VM_ID "$VM_ID"
+state_set VM_NAME "$NAME"
+state_set VM_NODE "$NODE"
+
+# Inject an ephemeral SSH key via cloud-init BEFORE first boot, so the guest
+# picks it up on the initial cloud-init run (no reboot needed).
+if [[ "$PROVISION_SSH" == "1" ]]; then
+  KEY="$KEYS_DIR/$VM_ID"
+  log "generating ephemeral SSH key for VM $VM_ID ($VM_SSH_USER@…)"
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    log "DRY_RUN: ssh-keygen -t ed25519 -f $KEY  +  cloud-init sshkeys/ciuser=$VM_SSH_USER"
+  else
+    mkdir -p "$KEYS_DIR"; chmod 700 "$KEYS_DIR"
+    rm -f "$KEY" "$KEY.pub"
+    ssh-keygen -q -t ed25519 -N '' -f "$KEY" -C "hola-test-$VM_ID"
+    # cloud-init wants the public key URL-encoded; --data-urlencode handles it.
+    ci_args=(--data-urlencode "ciuser=$VM_SSH_USER"
+             --data-urlencode "sshkeys=$(cat "$KEY.pub")")
+    [[ -n "${VM_IPCONFIG0:-}" ]] && ci_args+=(--data-urlencode "ipconfig0=$VM_IPCONFIG0")
+    proxmox_curl PUT "/nodes/$NODE/qemu/$VM_ID/config" "${ci_args[@]}" > /dev/null
+  fi
+  state_set VM_SSH_KEY "$KEY"
+  state_set VM_SSH_USER "$VM_SSH_USER"
+  audit "vm-create ssh-provision vmid=$VM_ID user=$VM_SSH_USER key=$KEY"
+fi
+
+if [[ "$START" == "1" ]]; then
+  log "starting VM $VM_ID"
+  audit "vm-create start vmid=$VM_ID"
+  proxmox_curl POST "/nodes/$NODE/qemu/$VM_ID/status/start" > /dev/null
+  if [[ "$PROVISION_SSH" == "1" ]]; then
+    log "VM $VM_ID starting. Once up:  bin/vm-ssh -- <cmd>   (or bin/vm-connect for VNC)"
+  else
+    log "VM $VM_ID starting. Wait for boot, then: bin/vm-connect"
+  fi
+else
+  log "VM $VM_ID created (not started). Start with: bin/vm-create --vmid $VM_ID  or the Proxmox UI."
+fi
+
+echo "$VM_ID"

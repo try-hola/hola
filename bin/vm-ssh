@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# bin/vm-ssh — run a command on (or open a shell to) the current test VM.
+#
+# Usage: bin/vm-ssh [--vmid VMID] [--dry-run] [-- <command...>]
+#
+# For setup, installs, and headless/non-GUI test cases — no VNC needed. Resolves
+# the VM's private IP via the QEMU guest agent (or VM_SSH_HOST) and connects with
+# the ephemeral per-VM key created by vm-create. Read-only against Proxmox.
+#
+# Examples:
+#   bin/vm-ssh -- sudo apt-get update && sudo apt-get install -y nginx
+#   bin/vm-ssh -- bash -lc 'cd /opt/app && ./run-tests.sh'
+#   bin/vm-ssh                      # interactive shell
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+CMD=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid) VM_ID=$2; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    --) shift; CMD=("$@"); break ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+VMID=$(resolve_vmid)
+NODE="${PROXMOX_NODE:-$(state_get VM_NODE)}"
+USER_NAME="${VM_SSH_USER:-$(state_get VM_SSH_USER)}"
+[[ -z "$USER_NAME" ]] && die "no SSH user (set VM_SSH_USER, or recreate the VM without --no-ssh)."
+KEY=$(vm_key_path "$VMID")
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  IP="${VM_SSH_HOST:-203.0.113.10}"  # placeholder, no infra touched
+else
+  [[ -f "$KEY" ]] || die "private key $KEY not found — was the VM created with SSH provisioning?"
+  require_vars PROXMOX_API_URL PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+  [[ -z "$NODE" ]] && die "PROXMOX_NODE not set and no node in state."
+  IP=$(resolve_vm_ip "$VMID" "$NODE")
+  [[ -z "$IP" ]] && die "could not resolve VM IP (guest agent not up yet?). Try: bin/vm-wait-ssh"
+  state_set VM_IP "$IP"
+fi
+
+ssh_opts "$KEY"
+audit "vm-ssh vmid=$VMID user=$USER_NAME host=$IP cmd=${CMD[*]:-<interactive>}"
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  log "DRY_RUN: ssh ${SSH_OPTS[*]} $USER_NAME@$IP ${CMD[*]:-<interactive shell>}"
+  exit 0
+fi
+
+if [[ ${#CMD[@]} -gt 0 ]]; then
+  exec ssh "${SSH_OPTS[@]}" "$USER_NAME@$IP" -- "${CMD[@]}"
+else
+  exec ssh "${SSH_OPTS[@]}" "$USER_NAME@$IP"
+fi

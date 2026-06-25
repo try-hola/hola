@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# bin/vm-snapshot — take (or list) snapshots of the current test VM.
+#
+# Usage: bin/vm-snapshot [--vmid VMID] [--name SNAPNAME] [--desc TEXT]
+#                        [--list] [--dry-run]
+#
+# Snapshots are non-destructive (creating one needs no confirmation). Handy to
+# capture a known-good state before a risky test, or to preserve a failure for
+# inspection instead of destroying the VM.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+LIST=0; SNAP=""; DESC="created by bin/vm-snapshot"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid) VM_ID=$2; shift 2 ;;
+    --name) SNAP=$2; shift 2 ;;
+    --desc) DESC=$2; shift 2 ;;
+    --list) LIST=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+VMID=$(resolve_vmid)
+NODE="${PROXMOX_NODE:-$(state_get VM_NODE)}"
+require_vars PROXMOX_API_URL PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+[[ -z "$NODE" ]] && die "PROXMOX_NODE not set and no node in state."
+
+if [[ "$LIST" == "1" ]]; then
+  log "snapshots for VM $VMID:"
+  proxmox_curl GET "/nodes/$NODE/qemu/$VMID/snapshot" \
+    | jq -r '.data[] | "  \(.name)\t\(.description // "")"'
+  exit 0
+fi
+
+# Default snapshot name is time-ordered but Math.random-free: use the VM's epoch
+# uptime is unavailable here, so fall back to a date-based name.
+SNAP="${SNAP:-snap-$(date -u +%Y%m%d-%H%M%S)}"
+
+log "snapshotting VM $VMID as '$SNAP'"
+audit "vm-snapshot vmid=$VMID name=$SNAP"
+proxmox_curl POST "/nodes/$NODE/qemu/$VMID/snapshot" \
+  --data-urlencode "snapname=$SNAP" \
+  --data-urlencode "description=$DESC" > /dev/null
+log "snapshot '$SNAP' requested for VM $VMID."
+echo "$SNAP"

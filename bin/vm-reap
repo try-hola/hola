@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# bin/vm-reap — find and destroy LEAKED test VMs (clones whose teardown was
+# skipped, e.g. a crashed run or lost devcontainer state).
+#
+# Usage: bin/vm-reap [--prefix NAME] [--yes] [--dry-run]
+#
+# Lists every VM on the node whose name starts with VM_NAME_PREFIX (default
+# "hola-test"), shows them, and destroys them via bin/vm-destroy. Templates are
+# NEVER reaped (template flag is skipped). DESTRUCTIVE: confirms once unless
+# --yes/FORCE=1. Runs from the container against the Proxmox API.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+PREFIX="${VM_NAME_PREFIX:-hola-test}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prefix) PREFIX=$2; shift 2 ;;
+    -y|--yes) ASSUME_YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+require_vars PROXMOX_API_URL PROXMOX_NODE PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+NODE=$(node)
+
+# List non-template VMs on the node whose name matches the prefix.
+mapfile -t MATCHES < <(
+  proxmox_curl GET "/nodes/$NODE/qemu" \
+    | jq -r --arg p "$PREFIX" \
+        '.data[] | select((.template // 0) != 1) | select(.name | startswith($p))
+         | "\(.vmid)\t\(.name)\t\(.status)"'
+)
+
+if [[ ${#MATCHES[@]} -eq 0 ]]; then
+  log "no leaked VMs matching '${PREFIX}*' on node $NODE."
+  exit 0
+fi
+
+log "leaked VMs matching '${PREFIX}*' on node $NODE:"
+printf '  %-8s %-28s %s\n' "VMID" "NAME" "STATUS" >&2
+for row in "${MATCHES[@]}"; do
+  IFS=$'\t' read -r vmid name status <<< "$row"
+  printf '  %-8s %-28s %s\n' "$vmid" "$name" "$status" >&2
+done
+
+confirm "About to DESTROY ${#MATCHES[@]} VM(s) listed above on node $NODE."
+
+for row in "${MATCHES[@]}"; do
+  IFS=$'\t' read -r vmid name status <<< "$row"
+  log "reaping $vmid ($name)"
+  audit "vm-reap vmid=$vmid name=$name"
+  if [[ "${DRY_RUN:-0}" == "1" ]]; then
+    DRY_RUN=1 FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$vmid" --yes || warn "reap failed for $vmid"
+  else
+    FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$vmid" --yes || warn "reap failed for $vmid"
+  fi
+done
+
+log "reap complete."
