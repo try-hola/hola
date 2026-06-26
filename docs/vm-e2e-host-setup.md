@@ -16,7 +16,7 @@ the Environment block.
 - `SSH_USER`  = _a **sudo-capable** user on `PVE_HOST`, e.g. `root` or `admin`_
 - `TOKEN_ID`  = _the API token id: `user@realm!tokenname`_
   - → `TOKEN_USER` = the `user@realm` part, `TOKEN_NAME` = the `tokenname` part
-- `TEMPLATE_ID` = `9000` (headless) · `DESKTOP_TEMPLATE_ID` = `9001` (optional, browser stage)
+- `TEMPLATE_ID` = `9000` (the headless template — UI testing is headless from the container)
 
 The baked guest user is `hola` by default and **must match `VM_SSH_USER`** in
 `.devcontainer/mcp.env`.
@@ -34,8 +34,7 @@ devcontainer**; your job ends at "template built + permissions granted + verifie
 
 **Where things run:** `qm`/`pveum`/`virt-customize` exist only on `PVE_HOST`, so
 run them there over SSH. Add `-t` to `ssh` if sudo prompts for a password. Don't
-destroy anything you didn't create; never print the VNC password except in your
-final report. `PVE_HOST` needs outbound internet (the build downloads the Ubuntu
+destroy anything you didn't create. `PVE_HOST` needs outbound internet (the build downloads the Ubuntu
 cloud image + apt packages). `bin/proxmox-build-template` is one self-contained
 file (sources nothing) meant to run as root on the PVE host.
 
@@ -44,7 +43,7 @@ file (sources nothing) meant to run as root on the PVE host.
 ssh SSH_USER@PVE_HOST 'pveversion'                              # confirm PVE 8+
 ssh SSH_USER@PVE_HOST 'pvesm status; cat /etc/pve/storage.cfg'  # pick a storage whose content includes "images" -> STORAGE (e.g. local-lvm)
 ssh SSH_USER@PVE_HOST 'ip -o link show type bridge'            # pick the LAN bridge -> BRIDGE (usually vmbr0)
-ssh SSH_USER@PVE_HOST 'qm status 9000; qm status 9001'        # "does not exist" = free; else pick free IDs via: pvesh get /cluster/nextid
+ssh SSH_USER@PVE_HOST 'qm status 9000'                        # "does not exist" = free; else pick a free ID via: pvesh get /cluster/nextid
 ```
 
 ### Step 1 — Grant privileges to the token + verify:
@@ -86,16 +85,8 @@ The `qm config 9000` output **must** contain ALL of: `template: 1`,
 `ostype: l26`. If any are missing the template won't work with our scripts — stop
 and report it.
 
-### Step 4 — (Optional) Desktop template (DESKTOP_TEMPLATE_ID) for the browser stage.
-Only if GUI/browser testing is wanted; this image is large and slow to build.
-Generate a VNC password and report it back (the devcontainer side must set the
-same value in `mcp.env`):
-```
-VNCPW=$(openssl rand -hex 12)
-ssh SSH_USER@PVE_HOST "sudo VNC_PASSWORD='$VNCPW' bash -s -- --id 9001 --desktop" < bin/proxmox-build-template
-ssh SSH_USER@PVE_HOST 'qm config 9001'     # same checks as Step 3
-echo "VNC_PASSWORD=$VNCPW"                   # include this in your report
-```
+(UI testing is headless from the container via `bin/vm-web-check`, so there's no
+desktop/VNC template to build — `9000` is all you need.)
 
 **If `virt-customize` errors** (appliance/permission issues), run
 `ssh SSH_USER@PVE_HOST 'sudo libguestfs-test-tool 2>&1 | tail -20'` and include the
@@ -103,10 +94,9 @@ output in your report.
 
 ### Report back exactly:
 1. PVE version; the STORAGE and BRIDGE you used.
-2. Template VMID(s) built (headless, and desktop if done).
+2. Template VMID built.
 3. The `--user` baked in (should be `hola`).
-4. Paste the two Step 1 verify outputs (ACL entry present + token `privsep=0`).
+4. Paste the Step 1 verify outputs (the three ACL entries + token `privsep=0`).
 5. Paste the `qm config <id>` lines proving `template: 1`, `agent: enabled=1`, and
    the cloudinit drive.
-6. If the desktop template was built: the `VNC_PASSWORD` value.
-7. Anything changed from defaults, and any check that failed.
+6. Anything changed from defaults, and any check that failed.

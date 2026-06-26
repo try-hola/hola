@@ -2,18 +2,18 @@
 name: vm-e2e
 description: >-
   End-to-end test Hola on a disposable Proxmox VM: spin up a throwaway VM, bootstrap
-  the hola CLI onto it over SSH, verify the stack, then drive the in-VM browser via
-  the VNC MCP server. Use when asked to e2e/smoke-test the CLI or dashboard against a
-  real host, test `hola bootstrap`, or validate the UI in a real browser. Needs a
-  Proxmox token + cloud-init template (see .devcontainer/mcp.env). All steps are
-  --dry-run-able.
+  the hola CLI onto it over SSH, verify the stack, then check the dashboard with a
+  headless browser. Use when asked to e2e/smoke-test the CLI or dashboard against a
+  real host, test `hola bootstrap`, or validate the UI. Needs a Proxmox token +
+  cloud-init template (see .devcontainer/mcp.env). All steps are --dry-run-able.
 ---
 
 # Hola end-to-end VM test
 
 Drives a full real-host test from inside the devcontainer using the `bin/vm-*`
-helpers (lifecycle over the Proxmox REST API) and the `vnc` MCP server (in-VM
-browser). Background: `docs/MCP_VM_TESTING.md`.
+helpers (VM lifecycle over the Proxmox REST API) and `bin/vm-web-check` (headless
+Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
+`docs/MCP_VM_TESTING.md`.
 
 ## Pick the mode from the user's request
 
@@ -25,9 +25,9 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
     It STILL installs released server/web images — `hola bootstrap` always pulls
     `ghcr.io/try-hola/{server,web}` (it never ships local app code). Testing local
     *server/web image* changes is a separate heavier path (see "Advanced" below).
-- **Browser stage**: include it only when the request involves the UI/dashboard/
-  browser AND a desktop+browser template is configured. Otherwise stop after the
-  CLI/stack verification (Tier 1) — it needs no VNC.
+- **Browser stage**: include it when the request involves the UI/dashboard.
+  `bin/vm-web-check` drives headless Chromium from the container against the
+  dashboard URL — no extra VM setup. Otherwise stop after CLI/stack verification.
 
 ## Preflight (do this first, once)
 
@@ -35,8 +35,7 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
    `VM_TEMPLATE_ID`, `VM_SSH_USER` are non-`(unset)`. If they're missing, STOP and
    tell the user to fill `.devcontainer/mcp.env` — don't guess infra values. If no
    template exists yet, point them at `bin/proxmox-build-template` (run on the
-   Proxmox host; `--desktop` for the browser stage) — `VM_SSH_USER` must match its
-   baked `--user`.
+   Proxmox host) — `VM_SSH_USER` must match its baked `--user`.
 2. **Hola config exists**: bootstrap needs a pre-rendered Hola `.env`
    (`.devcontainer/hola.env` by default; the wizard can't run headlessly). If it's
    missing, STOP and ask the user to generate it once: `hola init --out
@@ -47,7 +46,8 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
    are ever written to `hola.env` (self-signed TLS; the verify uses `curl -k`).
    See "DNS & TLS" in docs/MCP_VM_TESTING.md.
 3. Sanity-check with no infra: `bin/vm-test --dry-run`. It should exit 0.
-4. For the browser stage, confirm the `vnc` MCP server is approved (`/mcp`).
+4. For the browser stage, ensure Playwright's Chromium is installed (one-time):
+   `bun install && bunx playwright install --with-deps chromium`.
 
 ## Steps
 
@@ -86,16 +86,15 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
    ```
    Confirm `traefik`, `server`, and `web` are running. `hola bootstrap` also
    prints the admin API key (interactive runs) — capture it from its output.
-5. **Browser stage (optional)** — only if testing the UI:
+5. **Browser stage (optional)** — verify the dashboard renders with a headless
+   browser, from the container (no in-VM desktop/VNC):
    ```bash
-   bin/vm-vnc-tunnel --vmid "$VMID"   # forwards the VM's VNC to 127.0.0.1:5900
+   bin/vm-web-check          # reads URL+key from hola.env; screenshots to logs/web-check
    ```
-   Then use the **`vnc` MCP server** tools (`vnc_screenshot`, `vnc_move_mouse`,
-   `vnc_click`, `vnc_type_text`, `vnc_key_press`) to: open the browser in the VM,
-   navigate to `https://$HOLA_DOMAIN`, log in, and exercise the dashboard
-   (e.g. browse the catalog, install an app, confirm it deploys). Screenshot at
-   each checkpoint and describe what you observe. If `vnc` was spawned before the
-   tunnel, reconnect it via `/mcp`.
+   It loads the dashboard, signs in with the admin key, asserts the authenticated
+   `/apps` view, and exits non-zero on failure. Read the screenshots
+   (`logs/web-check/*.png`) and describe what you observe. For deeper UI flows
+   (browse the catalog, install an app), extend `bin/lib/web-check.mjs`.
 6. **Decide outcome**:
    - **Pass** → tear down: `FORCE=1 bin/vm-destroy --vmid "$VMID"`.
    - **Fail** → preserve for inspection instead of destroying:
@@ -103,12 +102,12 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
      bin/vm-snapshot --vmid "$VMID" --name "failure-<short-reason>"
      ```
      Report the failure, the snapshot name, and `bin/vm-destroy --vmid $VMID` to
-     clean up later. Close the tunnel: `bin/vm-vnc-tunnel --vmid "$VMID" --down`.
+     clean up later.
 
 ## Shortcuts
 
-- **Headless CLI/integration only** (no browser): `bin/vm-test --ssh -- <cmd>`
-  runs create → wait-ssh → `<cmd>` on the VM → teardown in one shot.
+- **CLI/integration on the VM**: `bin/vm-test --ssh -- <cmd>` runs create →
+  wait-ssh → `<cmd>` on the VM → teardown in one shot.
 - **Just rehearse the whole flow**: `bin/vm-test --dry-run`.
 
 ## Advanced — testing local server/web *image* changes
@@ -130,8 +129,8 @@ VM; for CLI/bootstrap testing, the normal `--local` flow above is enough.
 
 ## Guardrails
 
-- Never expose Proxmox or VNC publicly; everything rides the private network /
-  SSH tunnel. Use a least-privilege Proxmox API token.
+- Never expose Proxmox publicly; it rides the private network. Use a
+  least-privilege Proxmox API token.
 - `bin/vm-destroy` is destructive and asks for confirmation unless `FORCE=1`/
   `--yes`. Every state change is logged to `logs/vm-actions.log`.
 - VMs are disposable — prefer recreating over reusing a dirty VM. Always tear
