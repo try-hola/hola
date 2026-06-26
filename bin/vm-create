@@ -90,9 +90,9 @@ if [[ "$START" == "1" ]]; then
   audit "vm-create start vmid=$VM_ID"
   proxmox_curl POST "/nodes/$NODE/qemu/$VM_ID/status/start" > /dev/null
   if [[ "$PROVISION_SSH" == "1" ]]; then
-    log "VM $VM_ID starting. Once up:  bin/vm-ssh -- <cmd>   (or bin/vm-connect for VNC)"
+    log "VM $VM_ID starting. Once up:  bin/vm-wait-ssh  then  bin/vm-ssh -- <cmd>"
   else
-    log "VM $VM_ID starting. Wait for boot, then: bin/vm-connect"
+    log "VM $VM_ID starting (no SSH provisioning — set VM_SSH_USER to enable)."
   fi
 else
   log "VM $VM_ID created (not started). Start with: bin/vm-create --vmid $VM_ID  or the Proxmox UI."

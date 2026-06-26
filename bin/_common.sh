@@ -168,7 +168,7 @@ ssh_opts() {
 vm_alias() { echo "hola-vm-$1"; }
 
 # --- ~/.ssh/config bridge ----------------------------------------------------
-# `hola bootstrap` (and `vm-connect`/tunnels) shell out to the SYSTEM ssh, which
+# `hola bootstrap` (and bin/vm-ssh) shell out to the SYSTEM ssh, which
 # reads ~/.ssh/config. We write a delimited per-VM block so a plain
 # `ssh <alias>` / `hola bootstrap --host <alias>` uses the ephemeral key with no
 # extra flags. Idempotent; removed by vm-destroy.

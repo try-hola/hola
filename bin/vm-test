@@ -4,12 +4,12 @@
 # Usage: bin/vm-test [--dry-run] [--keep-on-fail] [--ssh] [-- <test command...>]
 #
 # Runs the full lifecycle a developer (or Claude Code) would drive:
-#   create VM -> wait for boot -> resolve VNC endpoint -> run tests ->
+#   create VM -> wait for SSH -> run tests ->
 #   snapshot on failure (if --keep-on-fail) -> always destroy on success.
 #
-# --ssh runs the test command ON the VM over SSH (waits for sshd first) — for
-# headless/non-GUI tests. Without it, the command runs locally in the container
-# (e.g. a suite that targets the VM over the network or drives it via the VNC MCP).
+# --ssh runs the test command ON the VM over SSH. Without it, the command runs
+# locally in the container (e.g. a suite — or bin/vm-web-check — that targets the
+# VM's services over the network).
 #
 # With --dry-run it exercises every step without touching infrastructure, so it
 # doubles as a config check that proves the wiring end to end. The default test
@@ -53,13 +53,8 @@ VMID=$("$BIN_DIR/vm-create" | tail -1)
 trap 'cleanup $?' EXIT
 log "current test VM: $VMID"
 
-if [[ "$USE_SSH" == "1" ]]; then
-  log "=== vm-test: waiting for SSH ==="
-  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID"
-else
-  log "=== vm-test: waiting for boot + resolving VNC ==="
-  "$BIN_DIR/vm-connect" --vmid "$VMID" --wait
-fi
+log "=== vm-test: waiting for SSH ==="
+"$BIN_DIR/vm-wait-ssh" --vmid "$VMID"
 
 log "=== vm-test: running tests ==="
 log "test command: ${TEST_CMD[*]} ($([[ "$USE_SSH" == 1 ]] && echo "on VM via SSH" || echo "in container"))"

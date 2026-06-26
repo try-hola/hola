@@ -3,7 +3,7 @@
 #
 # Usage: bin/vm-ssh [--vmid VMID] [--dry-run] [-- <command...>]
 #
-# For setup, installs, and headless/non-GUI test cases — no VNC needed. Resolves
+# For setup, installs, and command-line test cases on the VM. Resolves
 # the VM's private IP via the QEMU guest agent (or VM_SSH_HOST) and connects with
 # the ephemeral per-VM key created by vm-create. Read-only against Proxmox.
 #

@@ -27,8 +27,6 @@
   "containerEnv": {
     "PROXMOX_MCP_URL": "${localEnv:PROXMOX_MCP_URL}",
     "PROXMOX_MCP_TOKEN": "${localEnv:PROXMOX_MCP_TOKEN}",
-    "VNC_MCP_URL": "${localEnv:VNC_MCP_URL}",
-    "VNC_MCP_TOKEN": "${localEnv:VNC_MCP_TOKEN}",
     "PROXMOX_API_URL": "${localEnv:PROXMOX_API_URL}",
     "PROXMOX_NODE": "${localEnv:PROXMOX_NODE}",
     "PROXMOX_TOKEN_ID": "${localEnv:PROXMOX_TOKEN_ID}",
@@ -46,5 +44,5 @@
       ]
     }
   },
-  "postCreateCommand": "node --version && tsc --version && chmod +x bin/mcp-setup bin/vm-create bin/vm-connect bin/vm-wait-ssh bin/vm-ssh bin/vm-vnc-tunnel bin/vm-snapshot bin/vm-destroy bin/vm-test && bin/mcp-setup --check || true"
+  "postCreateCommand": "node --version && tsc --version && chmod +x bin/mcp-setup bin/vm-create bin/vm-wait-ssh bin/vm-ssh bin/vm-snapshot bin/vm-destroy bin/vm-reap bin/vm-test bin/vm-web-check && bin/mcp-setup --check || true"
 }

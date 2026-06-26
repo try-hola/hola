@@ -41,8 +41,8 @@ report() {
   fi
 }
 
-log "MCP server endpoints (used by Claude Code via .mcp.json):"
-for v in PROXMOX_MCP_URL PROXMOX_MCP_TOKEN VNC_MCP_URL VNC_MCP_TOKEN; do report "$v"; done
+log "Optional proxmox MCP server (used by Claude Code via .mcp.json):"
+for v in PROXMOX_MCP_URL PROXMOX_MCP_TOKEN; do report "$v"; done
 log "Proxmox API (used by bin/vm-* helper scripts):"
 for v in PROXMOX_API_URL PROXMOX_NODE PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET VM_TEMPLATE_ID; do report "$v"; done
 
@@ -53,7 +53,7 @@ if command -v claude > /dev/null 2>&1; then
   log "Claude Code MCP servers:"
   claude mcp list 2>&1 | sed 's/^/  /' || warn "claude mcp list failed (is the CLI configured?)"
   echo >&2
-  log "If proxmox/vnc show as 'pending approval', approve them once:"
+  log "If proxmox shows as 'pending approval', approve it once (optional):"
   log "  claude  →  /mcp  →  approve, or rerun in this project and accept the prompt."
 else
   warn "claude CLI not found on PATH; skipping MCP server listing."

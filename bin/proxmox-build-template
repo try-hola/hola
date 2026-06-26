@@ -5,23 +5,23 @@
 # (Proxmox VE 8+) and `virt-customize` (libguestfs-tools). Copy this one file to
 # the host and run it; it has no other dependencies on the repo.
 #
-# It produces a template that the repo's bin/vm-* helpers can clone:
+# It produces a headless template that the repo's bin/vm-* helpers can clone:
 #   • cloud-init enabled  → bin/vm-create injects the per-VM ephemeral SSH key
 #   • QEMU guest agent    → bin/vm-wait-ssh discovers the VM's IP
-#   • Docker + a sudo/docker user (default 'hola') → `hola bootstrap` preflight OK
-#   • --desktop (optional) → XFCE + Firefox + TigerVNC on :0/5900 for the vnc MCP
+#   • Docker + compose v2 + a sudo/docker user (default 'hola') → `hola bootstrap`
 #
 # The baked user MUST match VM_SSH_USER in .devcontainer/mcp.env (default 'hola').
+# UI testing is done headlessly from the container (bin/vm-web-check), so no
+# desktop/VNC is baked into the VM.
 #
 # Usage (on the Proxmox host):
-#   ./proxmox-build-template                       # headless template, VMID 9000
-#   ./proxmox-build-template --desktop --id 9001   # desktop+VNC template
+#   ./proxmox-build-template                  # build the template, VMID 9000
 #   ./proxmox-build-template --destroy --id 9000   # remove a template (teardown)
-#   ./proxmox-build-template --dry-run             # print the plan, change nothing
+#   ./proxmox-build-template --dry-run        # print the plan, change nothing
 #
 # Common flags / env (flag wins):
 #   --id N          TEMPLATE_ID      template VMID            (default 9000)
-#   --name NAME     TEMPLATE_NAME    template name           (default derived)
+#   --name NAME     TEMPLATE_NAME    template name           (default hola-test-template)
 #   --storage S     STORAGE          Proxmox storage         (default local-lvm)
 #   --bridge B      BRIDGE           network bridge          (default vmbr0)
 #   --user U        SSH_USER         baked admin user        (default hola)
@@ -29,8 +29,6 @@
 #   --disk N        DISK_SIZE        root disk GiB           (default 20)
 #   --memory N      MEMORY           template RAM MiB        (default 2048)
 #   --cores N       CORES            template vCPUs          (default 2)
-#   --desktop       DESKTOP=1        add XFCE+Firefox+TigerVNC
-#   --vnc-password  VNC_PASSWORD     in-guest VNC password   (desktop; required)
 #   --force         FORCE=1          destroy an existing VMID first
 #   --dry-run       DRY_RUN=1        print commands, do nothing
 set -euo pipefail
@@ -44,12 +42,10 @@ IMAGE_URL="${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-serv
 DISK_SIZE="${DISK_SIZE:-20}"
 MEMORY="${MEMORY:-2048}"
 CORES="${CORES:-2}"
-DESKTOP="${DESKTOP:-0}"
-VNC_PASSWORD="${VNC_PASSWORD:-}"
 FORCE="${FORCE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 DESTROY="${DESTROY:-0}"
-TEMPLATE_NAME="${TEMPLATE_NAME:-}"
+TEMPLATE_NAME="${TEMPLATE_NAME:-hola-test-template}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,18 +59,12 @@ while [[ $# -gt 0 ]]; do
     --disk) DISK_SIZE=$2; shift 2 ;;
     --memory) MEMORY=$2; shift 2 ;;
     --cores) CORES=$2; shift 2 ;;
-    --desktop) DESKTOP=1; shift ;;
-    --vnc-password) VNC_PASSWORD=$2; shift 2 ;;
     --force) FORCE=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
-
-if [[ -z "$TEMPLATE_NAME" ]]; then
-  [[ "$DESKTOP" == "1" ]] && TEMPLATE_NAME="hola-desktop-template" || TEMPLATE_NAME="hola-test-template"
-fi
 
 log()  { echo -e "\e[34m[tmpl]\e[0m $*" >&2; }
 warn() { echo -e "\e[33m[tmpl] warning:\e[0m $*" >&2; }
@@ -103,7 +93,6 @@ fi
 if [[ "$DRY_RUN" != "1" ]]; then
   command -v virt-customize >/dev/null || die "virt-customize missing: apt-get install -y libguestfs-tools"
 fi
-[[ "$DESKTOP" == "1" && -z "$VNC_PASSWORD" ]] && die "--desktop needs --vnc-password (must match VNC_PASSWORD in mcp.env)."
 
 if qm status "$TEMPLATE_ID" >/dev/null 2>&1; then
   [[ "$FORCE" == "1" ]] || die "VMID $TEMPLATE_ID already exists. Pass --force to replace it."
@@ -124,37 +113,20 @@ fi
 
 # --- 1b. per-build working copy (keep the cached download pristine) ----------
 # Never customize the shared cache in place — re-customizing would stack changes
-# across builds/flavors (a later --desktop build inheriting an earlier headless
-# build's edits). Each build gets its own copy. For --desktop, expand the root
-# filesystem UP FRONT: the heavy XFCE/Firefox apt step runs inside virt-customize,
-# before the disk is imported, so the later `qm resize` is too late to give it room
-# (the stock cloud image has a ~2.5G root; the desktop install needs ~1.7G more).
+# across rebuilds. Each build gets its own sparse copy; cloud-init grows the root
+# to DISK_SIZE on the clone's first boot (qm resize + growpart), so no offline
+# partition surgery is needed.
 BUILD="$WORK/build-$TEMPLATE_ID.qcow2"
+PROV=""
 cleanup() { rm -f "${BUILD:-}" "${PROV:-}"; }
 trap cleanup EXIT
-if [[ "$DESKTOP" == "1" ]]; then
-  if [[ "$DRY_RUN" == "1" ]]; then
-    echo "  + qemu-img create -f qcow2 $BUILD ${DISK_SIZE}G" >&2
-    echo "  + virt-resize --expand <root-part> $IMG $BUILD" >&2
-  else
-    # Largest partition = the root to expand (sizes in bytes, no -h).
-    ROOTPART=$(virt-filesystems --parts --long -a "$IMG" \
-      | awk '$2=="partition"{print $4"\t"$1}' | sort -rn | head -1 | cut -f2)
-    [[ -n "$ROOTPART" ]] || die "could not detect root partition in $IMG"
-    log "expanding image to ${DISK_SIZE}G for build (root $ROOTPART)"
-    qemu-img create -f qcow2 "$BUILD" "${DISK_SIZE}G" > /dev/null
-    virt-resize --expand "$ROOTPART" "$IMG" "$BUILD"
-  fi
-else
-  log "copying cached image to per-build working copy"
-  run cp --sparse=always "$IMG" "$BUILD"
-fi
+log "copying cached image to per-build working copy"
+run cp --sparse=always "$IMG" "$BUILD"
 
-# --- 2. customize the image (guest agent, docker, user, optional desktop) ----
-# The provisioning script is generated here so SSH_USER / VNC_PASSWORD are baked
-# in (virt-customize doesn't forward env to --run). It is chmod 600 and removed
-# on exit (with the build copy) by cleanup(); the VNC password lands only in the
-# image's vncpasswd file (expected).
+# --- 2. customize the image (guest agent, docker, compose, the SSH user) -----
+# The provisioning script is generated here so SSH_USER is baked in
+# (virt-customize doesn't forward env to --run). It is chmod 600 and removed on
+# exit (with the build copy) by cleanup().
 PROV="$(mktemp)"
 {
   echo '#!/bin/bash'
@@ -169,39 +141,6 @@ PROV="$(mktemp)"
   echo "usermod -aG sudo,docker $SSH_USER"
   echo "install -d -m 700 -o $SSH_USER -g $SSH_USER /home/$SSH_USER/.ssh"
   echo "printf '%s ALL=(ALL) NOPASSWD:ALL\\n' $SSH_USER > /etc/sudoers.d/90-hola && chmod 440 /etc/sudoers.d/90-hola"
-  if [[ "$DESKTOP" == "1" ]]; then
-    echo 'apt-get install -y xfce4 xfce4-goodies dbus-x11 tigervnc-standalone-server'
-    # Firefox from Mozilla's APT repo — a real .deb. Ubuntu's `firefox` is a snap
-    # transitional package that can't install/run under virt-customize.
-    echo 'install -d -m 0755 /etc/apt/keyrings'
-    echo 'curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg -o /etc/apt/keyrings/packages.mozilla.org.asc'
-    echo 'echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" > /etc/apt/sources.list.d/mozilla.list'
-    echo 'printf "Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n" > /etc/apt/preferences.d/mozilla'
-    echo 'apt-get update && apt-get install -y firefox'
-    echo "install -d -m 700 -o $SSH_USER -g $SSH_USER /home/$SSH_USER/.vnc"
-    echo "echo '$VNC_PASSWORD' | vncpasswd -f > /home/$SSH_USER/.vnc/passwd"
-    echo "chmod 600 /home/$SSH_USER/.vnc/passwd && chown $SSH_USER:$SSH_USER /home/$SSH_USER/.vnc/passwd"
-    echo "cat > /home/$SSH_USER/.vnc/xstartup <<'XS'"
-    echo '#!/bin/sh'
-    echo 'unset SESSION_MANAGER DBUS_SESSION_BUS_ADDRESS'
-    echo 'exec startxfce4'
-    echo 'XS'
-    echo "chmod 755 /home/$SSH_USER/.vnc/xstartup && chown $SSH_USER:$SSH_USER /home/$SSH_USER/.vnc/xstartup"
-    echo "cat > /etc/systemd/system/hola-vnc.service <<SVC"
-    echo '[Unit]'
-    echo 'Description=Hola test TigerVNC (:0 -> 127.0.0.1:5900)'
-    echo 'After=network.target'
-    echo '[Service]'
-    echo 'Type=simple'
-    echo "User=$SSH_USER"
-    echo "ExecStartPre=-/usr/bin/tigervncserver -kill :0"
-    echo "ExecStart=/usr/bin/tigervncserver -fg :0 -localhost yes -geometry 1280x800 -SecurityTypes VncAuth -PasswordFile /home/$SSH_USER/.vnc/passwd"
-    echo 'Restart=on-failure'
-    echo '[Install]'
-    echo 'WantedBy=multi-user.target'
-    echo 'SVC'
-    echo 'systemctl enable hola-vnc.service'
-  fi
   # sysprep: clean cloud-init state + reset machine-id so each clone is unique.
   echo 'cloud-init clean --logs || true'
   echo 'truncate -s 0 /etc/machine-id'
@@ -212,27 +151,15 @@ chmod 600 "$PROV"
 # Debug aid: KEEP_PROV=/path copies the generated provisioning script out for review.
 [[ -n "${KEEP_PROV:-}" ]] && cp "$PROV" "$KEEP_PROV"
 
-MEMSIZE=$([[ "$DESKTOP" == "1" ]] && echo 4096 || echo 2048)
-log "customizing image (desktop=$DESKTOP, user=$SSH_USER)"
-run virt-customize -a "$BUILD" --memsize "$MEMSIZE" --smp 2 --run "$PROV"
+log "customizing image (user=$SSH_USER)"
+run virt-customize -a "$BUILD" --memsize 2048 --smp 2 --run "$PROV"
 
 # --- 3. create the VM, attach the disk + cloud-init drive, templatize --------
-# Firmware: the --desktop build runs virt-resize, which can invalidate GRUB's
-# core embedding in the BIOS-boot partition of a GPT cloud image — leaving it
-# unbootable under SeaBIOS (blank console, no kernel). Boot desktop templates
-# under UEFI (OVMF) instead: UEFI loads GRUB from the EFI system partition by
-# path, unaffected by the partition expansion. Headless (no virt-resize) keeps
-# the known-good default SeaBIOS.
-fw=()
-if [[ "$DESKTOP" == "1" ]]; then
-  fw=(--bios ovmf --machine q35 --efidisk0 "$STORAGE:0,efitype=4m,pre-enrolled-keys=0")
-fi
-
 log "creating VM $TEMPLATE_ID ($TEMPLATE_NAME) on $STORAGE / $BRIDGE"
 run qm create "$TEMPLATE_ID" \
   --name "$TEMPLATE_NAME" --memory "$MEMORY" --cores "$CORES" --cpu host \
   --net0 "virtio,bridge=$BRIDGE" --scsihw virtio-scsi-single \
-  --ostype l26 --agent enabled=1 --serial0 socket --vga std "${fw[@]}"
+  --ostype l26 --agent enabled=1 --serial0 socket --vga std
 
 # PVE 8+: import the customized build copy straight into scsi0 in one step.
 run qm set "$TEMPLATE_ID" --scsi0 "$STORAGE:0,import-from=$BUILD,discard=on,ssd=1"
@@ -247,7 +174,6 @@ cat >&2 <<EOF
 
 Next, in .devcontainer/mcp.env (in the devcontainer):
   VM_TEMPLATE_ID=$TEMPLATE_ID
-  VM_SSH_USER=$SSH_USER$([[ "$DESKTOP" == "1" ]] && echo "
-  VNC_PASSWORD=<the --vnc-password you set>")
-Then: bin/vm-create  →  bin/vm-wait-ssh  →  hola bootstrap --host hola-vm-<id>$([[ "$DESKTOP" == "1" ]] && echo "  →  bin/vm-vnc-tunnel")
+  VM_SSH_USER=$SSH_USER
+Then: bin/vm-create  →  bin/vm-wait-ssh  →  hola bootstrap --host hola-vm-<id>
 EOF

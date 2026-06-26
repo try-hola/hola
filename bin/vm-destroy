@@ -41,12 +41,6 @@ audit "vm-destroy delete vmid=$VMID name=${NAME:-?}"
 proxmox_curl DELETE "/nodes/$NODE/qemu/$VMID?purge=1&destroy-unreferenced-disks=1" > /dev/null
 log "VM $VMID destroyed."
 
-# Close any VNC tunnel for this VM.
-tpid=$(state_get VNC_TUNNEL_PID)
-if [[ -n "$tpid" ]] && kill "$tpid" 2>/dev/null; then
-  log "closed VNC tunnel (pid $tpid)."
-fi
-
 # Remove the ~/.ssh/config alias block for this VM.
 remove_ssh_config "$VMID"
 
