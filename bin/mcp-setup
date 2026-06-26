@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# bin/mcp-setup — prepare the in-container MCP testing environment.
+#
+# Idempotent. Run once after opening the devcontainer (the postCreateCommand
+# also invokes it in --check mode). It:
+#   1. Creates .devcontainer/mcp.env from the template if missing.
+#   2. Validates the env and warns about anything still unset.
+#   3. Shows how Claude Code sees the project MCP servers (claude mcp list).
+#
+# Secrets are read from .devcontainer/mcp.env or the environment — never args.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+
+CHECK_ONLY=0
+[[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
+
+TEMPLATE="$ROOT_DIR/.devcontainer/mcp.env.example"
+
+# 1. Scaffold mcp.env from the template (does not overwrite an existing file).
+if [[ ! -f "$MCP_ENV_FILE" ]]; then
+  if [[ "$CHECK_ONLY" == "1" ]]; then
+    warn "no $MCP_ENV_FILE yet — run 'bin/mcp-setup' to create it from the template."
+  else
+    cp "$TEMPLATE" "$MCP_ENV_FILE"
+    log "created $MCP_ENV_FILE from template — edit it and add your secrets."
+    audit "created mcp.env from template"
+  fi
+fi
+
+load_env
+
+# 2. Report which of the relevant variables are set (without printing secrets).
+report() {
+  local name=$1; local val=${!name:-}
+  if [[ -z "$val" ]]; then
+    printf '  %-22s %s\n' "$name" "${C_YEL}(unset)${C_RST}"
+  elif [[ "$name" == *TOKEN* || "$name" == *SECRET* || "$name" == *PASSWORD* ]]; then
+    printf '  %-22s %s\n' "$name" "${C_DIM}set (hidden)${C_RST}"
+  else
+    printf '  %-22s %s\n' "$name" "$val"
+  fi
+}
+
+log "Optional proxmox MCP server (used by Claude Code via .mcp.json):"
+for v in PROXMOX_MCP_URL PROXMOX_MCP_TOKEN; do report "$v"; done
+log "Proxmox API (used by bin/vm-* helper scripts):"
+for v in PROXMOX_API_URL PROXMOX_NODE PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET VM_TEMPLATE_ID; do report "$v"; done
+
+# 3. Surface the project MCP servers as Claude Code sees them. Project-scoped
+# servers from .mcp.json start as "pending approval" — approve them once per
+# machine with `claude mcp` (or the in-session prompt) so Claude can connect.
+if command -v claude > /dev/null 2>&1; then
+  log "Claude Code MCP servers:"
+  claude mcp list 2>&1 | sed 's/^/  /' || warn "claude mcp list failed (is the CLI configured?)"
+  echo >&2
+  log "If proxmox shows as 'pending approval', approve it once (optional):"
+  log "  claude  →  /mcp  →  approve, or rerun in this project and accept the prompt."
+else
+  warn "claude CLI not found on PATH; skipping MCP server listing."
+fi
+
+log "Done. See docs/MCP_VM_TESTING.md for the full workflow."

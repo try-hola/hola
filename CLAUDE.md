@@ -85,8 +85,39 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 - Versions across published packages are kept in sync (`web` is intentionally
   `0.0.0`/unversioned).
 
+## Disposable-VM testing (Proxmox)
+
+For end-to-end testing you can drive a **throwaway Proxmox VM** from inside the
+devcontainer. VM lifecycle goes through the Proxmox REST API (the `bin/vm-*`
+helpers); an optional `proxmox` MCP server is wired in `.mcp.json` but the scripts
+cover everything. Use them like this:
+
+- **Lifecycle** — prefer the `bin/` helpers (they also work for CI and have a
+  `--dry-run` mode): `bin/vm-create` → `bin/vm-wait-ssh` → run tests →
+  `bin/vm-destroy`. `bin/vm-test` runs the whole create→test→teardown loop.
+- **SSH for on-VM work** — for setup/installs/CLI bootstrap/tests use `bin/vm-ssh
+  -- <cmd>` (and `bin/vm-wait-ssh`). `vm-create` injects an ephemeral per-VM key
+  via cloud-init and `vm-wait-ssh` writes a `~/.ssh/config` alias.
+- **UI testing is headless** — `bin/vm-web-check` drives Chromium (Playwright)
+  from the container against the dashboard URL (login + render assertions +
+  screenshots). No in-VM desktop or VNC.
+- **Full e2e (CLI + browser)** — the **`vm-e2e` skill** (`.claude/skills/vm-e2e/`)
+  runs the whole loop: create VM → `hola bootstrap --host hola-vm-<id>` (the CLI's
+  own SSH installer) → verify the stack → `bin/vm-web-check` →
+  snapshot-on-fail / destroy-on-pass. Prefer it over hand-stitching the steps.
+- **Snapshot, don't lose a failure** — `bin/vm-snapshot` (or `bin/vm-test
+  --keep-on-fail`) before destroying when a run fails and you want to inspect it.
+- **Destroy is confirmed** — `bin/vm-destroy` requires interactive `yes` (or
+  `--yes`/`FORCE=1`); every state change is audited to `logs/vm-actions.log`.
+- **Secrets** come from `.devcontainer/mcp.env` (gitignored) or host env — never
+  hard-code them; use a least-privilege Proxmox API token. Run `bin/mcp-setup`
+  first to scaffold/validate the env and confirm the servers connect.
+
+Full guide: `docs/MCP_VM_TESTING.md`.
+
 ## Where to read more
 
+- `docs/MCP_VM_TESTING.md` — disposable-VM (Proxmox) e2e testing workflow.
 - `docs/ARCHITECTURE.md` — system design and deployment lifecycle.
 - `docs/OPERATIONS.md` — install, recovery, backup, SSO.
 - `packages/compose/README.md` — the production stack, catalog, and Authentik setup.

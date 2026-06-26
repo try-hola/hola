@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "proxmox": {
+      "type": "http",
+      "url": "${PROXMOX_MCP_URL:-}",
+      "headers": {
+        "Authorization": "Bearer ${PROXMOX_MCP_TOKEN:-}"
+      }
+    }
+  }
+}

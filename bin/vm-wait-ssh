@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# bin/vm-wait-ssh — block until the current test VM accepts SSH (or time out).
+#
+# Usage: bin/vm-wait-ssh [--vmid VMID] [--timeout SECONDS] [--dry-run]
+#
+# Polls the guest agent for an IP, then probes SSH with the per-VM key until a
+# trivial command succeeds. Use before driving setup/tests over SSH so you don't
+# race the guest's cloud-init / sshd startup. Read-only against Proxmox.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+TIMEOUT=${VM_BOOT_TIMEOUT:-180}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid) VM_ID=$2; shift 2 ;;
+    --timeout) TIMEOUT=$2; shift 2 ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+VMID=$(resolve_vmid)
+NODE="${PROXMOX_NODE:-$(state_get VM_NODE)}"
+USER_NAME="${VM_SSH_USER:-$(state_get VM_SSH_USER)}"
+KEY=$(vm_key_path "$VMID")
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  log "DRY_RUN: would poll SSH on VM $VMID for up to ${TIMEOUT}s; treating as ready."
+  exit 0
+fi
+
+[[ -z "$USER_NAME" ]] && die "no SSH user (set VM_SSH_USER or recreate without --no-ssh)."
+[[ -f "$KEY" ]] || die "private key $KEY not found."
+require_vars PROXMOX_API_URL PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+[[ -z "$NODE" ]] && die "PROXMOX_NODE not set and no node in state."
+
+ssh_opts "$KEY"
+log "waiting up to ${TIMEOUT}s for SSH on VM $VMID..."
+deadline=$(( $(date +%s) + TIMEOUT ))
+while :; do
+  IP=$(resolve_vm_ip "$VMID" "$NODE")
+  if [[ -n "$IP" ]] && ssh "${SSH_OPTS[@]}" "$USER_NAME@$IP" -- true 2>/dev/null; then
+    state_set VM_IP "$IP"
+    # Write an ~/.ssh/config alias so `hola bootstrap --host <alias>` and plain
+    # `ssh <alias>` pick up the ephemeral key with no extra flags.
+    ALIAS=$(write_ssh_config "$VMID" "$IP" "$USER_NAME" "$KEY")
+    state_set VM_SSH_ALIAS "$ALIAS"
+    log "SSH ready: $USER_NAME@$IP  (ssh alias: $ALIAS)"
+    log "bootstrap with:  hola bootstrap --host $ALIAS"
+    exit 0
+  fi
+  [[ $(date +%s) -ge $deadline ]] && die "SSH not ready after ${TIMEOUT}s (IP=${IP:-unresolved})."
+  sleep 5
+done

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# bin/vm-destroy — stop and permanently delete the current (or given) test VM.
+#
+# Usage: bin/vm-destroy [--vmid VMID] [--yes] [--dry-run]
+#
+# DESTRUCTIVE: requires an interactive "yes" unless --yes / FORCE=1 is set. The
+# action is audit-logged. Purges the VM disks and removes any VMID references.
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid) VM_ID=$2; shift 2 ;;
+    -y|--yes) ASSUME_YES=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+VMID=$(resolve_vmid)
+NODE="${PROXMOX_NODE:-$(state_get VM_NODE)}"
+require_vars PROXMOX_API_URL PROXMOX_TOKEN_ID PROXMOX_TOKEN_SECRET
+[[ -z "$NODE" ]] && die "PROXMOX_NODE not set and no node in state."
+
+NAME=$(state_get VM_NAME)
+confirm "About to PERMANENTLY DESTROY VM $VMID ${NAME:+($NAME)} on node $NODE."
+
+# Best-effort graceful stop, then force-delete with disk purge.
+log "stopping VM $VMID"
+audit "vm-destroy stop vmid=$VMID name=${NAME:-?}"
+proxmox_curl POST "/nodes/$NODE/qemu/$VMID/status/stop" > /dev/null 2>&1 || \
+  warn "stop returned non-zero (VM may already be stopped); continuing."
+
+# Give the stop a moment to settle before delete (skipped in dry-run).
+[[ "${DRY_RUN:-0}" != "1" ]] && sleep 3
+
+log "deleting VM $VMID (purge disks)"
+audit "vm-destroy delete vmid=$VMID name=${NAME:-?}"
+proxmox_curl DELETE "/nodes/$NODE/qemu/$VMID?purge=1&destroy-unreferenced-disks=1" > /dev/null
+log "VM $VMID destroyed."
+
+# Remove the ~/.ssh/config alias block for this VM.
+remove_ssh_config "$VMID"
+
+# Remove the ephemeral per-VM SSH key (it dies with the VM).
+KEY="$KEYS_DIR/$VMID"
+if [[ -f "$KEY" || -f "$KEY.pub" ]]; then
+  rm -f "$KEY" "$KEY.pub"
+  log "removed ephemeral SSH key + ssh-config alias for VM $VMID."
+fi
+
+# Clear state if we just destroyed the recorded current VM.
+if [[ "$(state_get VM_ID)" == "$VMID" ]]; then
+  state_clear
+  log "cleared current-VM state."
+fi

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# bin/vm-web-check — headless-Chrome front-door test of a deployed Hola dashboard.
+#
+# No desktop, no VNC: drives Chromium (Playwright) from the container against the
+# dashboard URL over the network — loads the login page, signs in with the admin
+# key, asserts the dashboard renders, and writes screenshots to logs/web-check.
+#
+# Usage: bin/vm-web-check [--url URL] [--key KEY] [--out DIR]
+#
+# Defaults: URL from HOLA_DOMAIN and key from HOLA_API_KEY in the Hola env
+# (HOLA_ENV_FILE, default .devcontainer/hola.env — the same file bootstrap uses).
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+HOLA_ENV="${HOLA_ENV_FILE:-$ROOT_DIR/.devcontainer/hola.env}"
+hola_env_get() { [[ -f "$HOLA_ENV" ]] && grep -E "^$1=" "$HOLA_ENV" | tail -1 | cut -d= -f2- || true; }
+
+URL=""; KEY=""; OUT="$ROOT_DIR/logs/web-check"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --url) URL=$2; shift 2 ;;
+    --key) KEY=$2; shift 2 ;;
+    --out) OUT=$2; shift 2 ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+[[ -z "$URL" ]] && { d=$(hola_env_get HOLA_DOMAIN); [[ -n "$d" ]] && URL="https://$d"; }
+[[ -z "$KEY" ]] && KEY=$(hola_env_get HOLA_API_KEY)
+[[ -z "$URL" ]] && die "no dashboard URL — pass --url or set HOLA_DOMAIN in $HOLA_ENV"
+
+command -v bun > /dev/null || die "bun is required to run the headless check."
+if [[ ! -d "$ROOT_DIR/node_modules/playwright" ]]; then
+  die "playwright not installed. Run: bun install && bunx playwright install --with-deps chromium"
+fi
+
+log "headless front-door check: $URL"
+audit "vm-web-check url=$URL"
+HOLA_BASE_URL="$URL" HOLA_API_KEY="$KEY" WEB_CHECK_OUT="$OUT" bun "$BIN_DIR/lib/web-check.mjs"

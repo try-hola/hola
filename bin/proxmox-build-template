@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# proxmox-build-template — build the disposable-VM template for the vm-e2e flow.
+#
+# RUN THIS ON THE PROXMOX HOST as root (NOT in the devcontainer). It needs `qm`
+# (Proxmox VE 8+) and `virt-customize` (libguestfs-tools). Copy this one file to
+# the host and run it; it has no other dependencies on the repo.
+#
+# It produces a headless template that the repo's bin/vm-* helpers can clone:
+#   • cloud-init enabled  → bin/vm-create injects the per-VM ephemeral SSH key
+#   • QEMU guest agent    → bin/vm-wait-ssh discovers the VM's IP
+#   • Docker + compose v2 + a sudo/docker user (default 'hola') → `hola bootstrap`
+#
+# The baked user MUST match VM_SSH_USER in .devcontainer/mcp.env (default 'hola').
+# UI testing is done headlessly from the container (bin/vm-web-check), so no
+# desktop/VNC is baked into the VM.
+#
+# Usage (on the Proxmox host):
+#   ./proxmox-build-template                  # build the template, VMID 9000
+#   ./proxmox-build-template --destroy --id 9000   # remove a template (teardown)
+#   ./proxmox-build-template --dry-run        # print the plan, change nothing
+#
+# Common flags / env (flag wins):
+#   --id N          TEMPLATE_ID      template VMID            (default 9000)
+#   --name NAME     TEMPLATE_NAME    template name           (default hola-test-template)
+#   --storage S     STORAGE          Proxmox storage         (default local-lvm)
+#   --bridge B      BRIDGE           network bridge          (default vmbr0)
+#   --user U        SSH_USER         baked admin user        (default hola)
+#   --image-url U   IMAGE_URL        cloud image .img URL    (default Ubuntu 24.04)
+#   --disk N        DISK_SIZE        root disk GiB           (default 20)
+#   --memory N      MEMORY           template RAM MiB        (default 2048)
+#   --cores N       CORES            template vCPUs          (default 2)
+#   --force         FORCE=1          destroy an existing VMID first
+#   --dry-run       DRY_RUN=1        print commands, do nothing
+set -euo pipefail
+
+# --- defaults ---------------------------------------------------------------
+TEMPLATE_ID="${TEMPLATE_ID:-9000}"
+STORAGE="${STORAGE:-local-lvm}"
+BRIDGE="${BRIDGE:-vmbr0}"
+SSH_USER="${SSH_USER:-hola}"
+IMAGE_URL="${IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
+DISK_SIZE="${DISK_SIZE:-20}"
+MEMORY="${MEMORY:-2048}"
+CORES="${CORES:-2}"
+FORCE="${FORCE:-0}"
+DRY_RUN="${DRY_RUN:-0}"
+DESTROY="${DESTROY:-0}"
+TEMPLATE_NAME="${TEMPLATE_NAME:-hola-test-template}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --id) TEMPLATE_ID=$2; shift 2 ;;
+    --destroy) DESTROY=1; shift ;;
+    --name) TEMPLATE_NAME=$2; shift 2 ;;
+    --storage) STORAGE=$2; shift 2 ;;
+    --bridge) BRIDGE=$2; shift 2 ;;
+    --user) SSH_USER=$2; shift 2 ;;
+    --image-url) IMAGE_URL=$2; shift 2 ;;
+    --disk) DISK_SIZE=$2; shift 2 ;;
+    --memory) MEMORY=$2; shift 2 ;;
+    --cores) CORES=$2; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    --dry-run) DRY_RUN=1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+log()  { echo -e "\e[34m[tmpl]\e[0m $*" >&2; }
+warn() { echo -e "\e[33m[tmpl] warning:\e[0m $*" >&2; }
+die()  { echo -e "\e[31m[tmpl] error:\e[0m $*" >&2; exit 1; }
+# run: execute, or print under --dry-run.
+run()  { if [[ "$DRY_RUN" == "1" ]]; then echo "  + $*" >&2; else "$@"; fi; }
+
+# --- preflight --------------------------------------------------------------
+if [[ "$DRY_RUN" != "1" ]]; then
+  [[ $EUID -eq 0 ]] || die "must run as root on the Proxmox host."
+  command -v qm >/dev/null || die "qm not found — run this on a Proxmox VE host."
+fi
+
+# --- teardown: remove a template and stop ----------------------------------
+if [[ "$DESTROY" == "1" ]]; then
+  if [[ "$DRY_RUN" != "1" ]] && ! qm status "$TEMPLATE_ID" >/dev/null 2>&1; then
+    log "VMID $TEMPLATE_ID not found — nothing to destroy."; exit 0
+  fi
+  log "destroying template $TEMPLATE_ID"
+  run qm destroy "$TEMPLATE_ID" --purge
+  log "done."
+  exit 0
+fi
+
+# Building needs virt-customize; teardown above does not.
+if [[ "$DRY_RUN" != "1" ]]; then
+  command -v virt-customize >/dev/null || die "virt-customize missing: apt-get install -y libguestfs-tools"
+fi
+
+if qm status "$TEMPLATE_ID" >/dev/null 2>&1; then
+  [[ "$FORCE" == "1" ]] || die "VMID $TEMPLATE_ID already exists. Pass --force to replace it."
+  log "destroying existing VMID $TEMPLATE_ID (--force)"
+  run qm destroy "$TEMPLATE_ID" --purge
+fi
+
+# --- 1. fetch the cloud image (cached) --------------------------------------
+WORK="${WORK:-/var/lib/vz/template/hola}"
+IMG="$WORK/$(basename "$IMAGE_URL")"
+run mkdir -p "$WORK"
+if [[ -f "$IMG" ]]; then
+  log "reusing cached image $IMG"
+else
+  log "downloading $IMAGE_URL"
+  run curl -fSL --retry 3 -o "$IMG" "$IMAGE_URL"
+fi
+
+# --- 1b. per-build working copy (keep the cached download pristine) ----------
+# Never customize the shared cache in place — re-customizing would stack changes
+# across rebuilds. Each build gets its own sparse copy; cloud-init grows the root
+# to DISK_SIZE on the clone's first boot (qm resize + growpart), so no offline
+# partition surgery is needed.
+BUILD="$WORK/build-$TEMPLATE_ID.qcow2"
+PROV=""
+cleanup() { rm -f "${BUILD:-}" "${PROV:-}"; }
+trap cleanup EXIT
+log "copying cached image to per-build working copy"
+run cp --sparse=always "$IMG" "$BUILD"
+
+# --- 2. customize the image (guest agent, docker, compose, the SSH user) -----
+# The provisioning script is generated here so SSH_USER is baked in
+# (virt-customize doesn't forward env to --run). It is chmod 600 and removed on
+# exit (with the build copy) by cleanup().
+PROV="$(mktemp)"
+{
+  echo '#!/bin/bash'
+  echo 'set -eux'
+  echo 'export DEBIAN_FRONTEND=noninteractive'
+  echo 'apt-get update'
+  # docker.io = engine + CLI; docker-compose-v2 = the `docker compose` plugin that
+  # `hola bootstrap`'s preflight requires (docker.io alone does NOT include it).
+  echo 'apt-get install -y qemu-guest-agent docker.io docker-compose-v2 ca-certificates curl sudo'
+  echo 'systemctl enable qemu-guest-agent docker'
+  echo "id -u $SSH_USER >/dev/null 2>&1 || useradd -m -s /bin/bash $SSH_USER"
+  echo "usermod -aG sudo,docker $SSH_USER"
+  echo "install -d -m 700 -o $SSH_USER -g $SSH_USER /home/$SSH_USER/.ssh"
+  echo "printf '%s ALL=(ALL) NOPASSWD:ALL\\n' $SSH_USER > /etc/sudoers.d/90-hola && chmod 440 /etc/sudoers.d/90-hola"
+  # sysprep: clean cloud-init state + reset machine-id so each clone is unique.
+  echo 'cloud-init clean --logs || true'
+  echo 'truncate -s 0 /etc/machine-id'
+  echo 'rm -f /var/lib/dbus/machine-id && ln -sf /etc/machine-id /var/lib/dbus/machine-id'
+  echo 'apt-get clean'
+} > "$PROV"
+chmod 600 "$PROV"
+# Debug aid: KEEP_PROV=/path copies the generated provisioning script out for review.
+[[ -n "${KEEP_PROV:-}" ]] && cp "$PROV" "$KEEP_PROV"
+
+log "customizing image (user=$SSH_USER)"
+run virt-customize -a "$BUILD" --memsize 2048 --smp 2 --run "$PROV"
+
+# --- 3. create the VM, attach the disk + cloud-init drive, templatize --------
+log "creating VM $TEMPLATE_ID ($TEMPLATE_NAME) on $STORAGE / $BRIDGE"
+run qm create "$TEMPLATE_ID" \
+  --name "$TEMPLATE_NAME" --memory "$MEMORY" --cores "$CORES" --cpu host \
+  --net0 "virtio,bridge=$BRIDGE" --scsihw virtio-scsi-single \
+  --ostype l26 --agent enabled=1 --serial0 socket --vga std
+
+# PVE 8+: import the customized build copy straight into scsi0 in one step.
+run qm set "$TEMPLATE_ID" --scsi0 "$STORAGE:0,import-from=$BUILD,discard=on,ssd=1"
+run qm set "$TEMPLATE_ID" --ide2 "$STORAGE:cloudinit"
+run qm set "$TEMPLATE_ID" --boot order=scsi0
+run qm set "$TEMPLATE_ID" --ipconfig0 ip=dhcp
+run qm resize "$TEMPLATE_ID" scsi0 "${DISK_SIZE}G"
+run qm template "$TEMPLATE_ID"
+
+log "done. Template $TEMPLATE_ID ($TEMPLATE_NAME) is ready."
+cat >&2 <<EOF
+
+Next, in .devcontainer/mcp.env (in the devcontainer):
+  VM_TEMPLATE_ID=$TEMPLATE_ID
+  VM_SSH_USER=$SSH_USER
+Then: bin/vm-create  →  bin/vm-wait-ssh  →  hola bootstrap --host hola-vm-<id>
+EOF

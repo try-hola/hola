@@ -36,6 +36,12 @@ logs/
 # Per-host CLI credentials written by `hola bootstrap` / `hola credentials`
 hola-*.env
 
+# MCP / disposable-VM testing secrets + local state (template is committed)
+.devcontainer/mcp.env
+.devcontainer/hola.env
+.devcontainer/.vm-state
+.devcontainer/.vm-keys/
+
 # Monorepo packages
 packages/*/dist
 packages/*/.vite
