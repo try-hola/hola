@@ -474,6 +474,49 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });
   });
 
+  test('forward-auth reuse resends mode on the PATCH (Authentik rejects a mode-less partial update with 400)', async () => {
+    // Authentik's ProxyProviderSerializer validates against attrs.get("mode",
+    // ProxyMode.PROXY): a partial update that omits `mode` is validated as PROXY,
+    // which then rejects the (empty) internal_host of a forward-auth provider with
+    // HTTP 400 — the bug that left every restart of a forward-auth app stuck in
+    // `error` before its container was recreated. Fail the PATCH if mode is absent.
+    installFetch((call) => {
+      if (call.method === 'PATCH' && call.path === '/api/v3/providers/proxy/55/') {
+        const mode = (call.body as Record<string, unknown>).mode;
+        if (mode !== 'forward_single') {
+          return json({ internal_host: ['Internal host cannot be empty when forward auth is disabled.'] }, 400);
+        }
+        return json({ pk: 55 });
+      }
+      // Group reconcile on reuse: resolve the existing application, no prior bindings.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/applications/grafana-dep-abcd/')) {
+        return json({ pk: 7 });
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/policies/bindings/?target=')) {
+        return json({ results: [] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+      existingRef: { mode: 'forward-auth', providerPk: 55, applicationSlug: 'grafana-dep-abcd', outpostPk: 1 },
+    });
+
+    // Reuse PATCHed the existing provider with mode + refreshed host (no recreate).
+    const patch = calls.find(c => c.method === 'PATCH' && c.path === '/api/v3/providers/proxy/55/')!;
+    expect(patch).toBeDefined();
+    expect((patch.body as Record<string, unknown>).mode).toBe('forward_single');
+    expect((patch.body as Record<string, unknown>).external_host).toBe('https://grafana.example.com');
+    // No new provider was created on the reuse path.
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/providers/proxy/')).toBe(false);
+    expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55 });
+  });
+
   test('forward-auth provision binds the declared groups to the application (access restriction)', async () => {
     const bindings: Array<{ target: unknown; group: unknown }> = [];
     installFetch((call) => {

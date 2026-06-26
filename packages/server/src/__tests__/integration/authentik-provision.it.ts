@@ -71,21 +71,42 @@ async function akGet(path: string): Promise<{ status: number; body: unknown }> {
   return { status: res.status, body: text ? JSON.parse(text) : undefined };
 }
 
+// Authentik's default flows/providers are created by a worker blueprint task that
+// lags the API coming up: `/api/v3/admin/version/` answers OK well before
+// `default-provider-authorization-implicit-consent` exists. Every provisioning mode
+// resolves that authorization flow, so gate readiness on its existence too —
+// otherwise a fast first test races the blueprint and 404s. Keeps the suite
+// deterministic regardless of how quickly the API socket opens.
+const AUTHZ_FLOW_SLUG = 'default-provider-authorization-implicit-consent';
+
 async function waitForApi(timeoutMs = 300_000): Promise<void> {
   const start = Date.now();
+  let apiReady = false;
   for (;;) {
     try {
-      const res = await fetch(`${BASE_URL}/api/v3/admin/version/`, {
-        headers: { Authorization: `Bearer ${BOOTSTRAP_TOKEN}` },
-        signal: AbortSignal.timeout(5_000),
-      });
-      if (res.ok) return;
+      if (!apiReady) {
+        const res = await fetch(`${BASE_URL}/api/v3/admin/version/`, {
+          headers: { Authorization: `Bearer ${BOOTSTRAP_TOKEN}` },
+          signal: AbortSignal.timeout(5_000),
+        });
+        apiReady = res.ok;
+      }
+      if (apiReady) {
+        // Default authorization flow blueprint applied yet?
+        const flow = await fetch(`${BASE_URL}/api/v3/flows/instances/${AUTHZ_FLOW_SLUG}/`, {
+          headers: { Authorization: `Bearer ${BOOTSTRAP_TOKEN}` },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (flow.ok) return;
+      }
     } catch {
       // not up yet
     }
     if (Date.now() - start > timeoutMs) {
       const logs = await sh(`docker logs --tail 40 ${SERVER}`, 15_000);
-      throw new Error(`Authentik API not ready in ${timeoutMs}ms. Last server logs:\n${logs.stdout}\n${logs.stderr}`);
+      throw new Error(
+        `Authentik not ready in ${timeoutMs}ms (api=${apiReady}, default flows pending). Last server logs:\n${logs.stdout}\n${logs.stderr}`,
+      );
     }
     await new Promise(r => setTimeout(r, 3_000));
   }
@@ -196,6 +217,56 @@ describe.skipIf(!dockerOk)('Authentik provisioner (real daemon)', () => {
       body: { providers: number[] };
     };
     expect(after.body.providers).not.toContain(result.ref.providerPk!);
+  }, 120_000);
+
+  // Regression for #267: `hola restart`/redeploy of a forward-auth app re-runs
+  // provisioning with the persisted ref (the idempotent reuse path), which PATCHes
+  // the existing proxy provider. Authentik's ProxyProvider serializer validates the
+  // payload against `attrs.get("mode", ProxyMode.PROXY)`, so a PATCH that omits
+  // `mode` is validated as PROXY — which rejects a forward-auth provider's
+  // (correctly empty) internal_host with HTTP 400. The reuse PATCH must resend
+  // `mode: forward_single`. This drives the real reuse path end-to-end: without the
+  // fix the second provision throws 400; with it, the provider is updated in place.
+  test('forward-auth reuse (restart/redeploy): re-provisioning with the saved ref succeeds and refreshes the host', async () => {
+    const svc = new RealAuthentikProvisionerService(config);
+    const deploymentId = 'dep-fwd-reuse-0003';
+
+    // First install.
+    const first = await svc.provision({
+      deploymentId,
+      appName: 'uptimekuma',
+      mode: 'forward-auth',
+      host: 'uptimekuma.example.com',
+    });
+    expect(first.ref.providerPk).toBeDefined();
+    expect(first.ref.mode).toBe('forward-auth');
+
+    // Restart/redeploy: same deployment, now carrying the persisted ref, and a new
+    // external host (proves the PATCH actually applied). This is the exact call
+    // `runLifecycleJob`'s restart branch makes via `provisionAuth`.
+    const second = await svc.provision({
+      deploymentId,
+      appName: 'uptimekuma',
+      mode: 'forward-auth',
+      host: 'uptimekuma-2.example.com',
+      existingRef: first.ref,
+    });
+
+    // Same provider reused (not a new one), host refreshed, middleware still emitted.
+    expect(second.ref.providerPk).toBe(first.ref.providerPk);
+    expect(second.middleware?.outpostUrl).toBe(BASE_URL);
+
+    const provider = (await akGet(`/api/v3/providers/proxy/${first.ref.providerPk}/`)) as {
+      status: number;
+      body: { external_host: string; internal_host: string; mode: string };
+    };
+    expect(provider.status).toBe(200);
+    expect(provider.body.external_host).toBe('https://uptimekuma-2.example.com');
+    // Still a forward-auth provider (empty internal_host), not silently flipped to proxy.
+    expect(provider.body.internal_host).toBe('');
+
+    await svc.deprovision({ deploymentId, ref: second.ref });
+    expect((await akGet(`/api/v3/providers/proxy/${first.ref.providerPk}/`)).status).toBe(404);
   }, 120_000);
 
   test('scoped-token bootstrap: self-mints a non-superuser token and provisions with it', async () => {
