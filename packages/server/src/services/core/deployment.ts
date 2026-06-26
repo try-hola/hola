@@ -264,6 +264,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   protected async removeStorage(deploymentId: string): Promise<void> {
     void deploymentId;
   }
+  /**
+   * Tear down a deployment's running containers (`docker compose down`).
+   * Base is a no-op; the real service overrides it. Called synchronously during
+   * delete BEFORE {@link removeStorage} so the compose file still exists on disk.
+   * A failure here is non-fatal — deletion must always proceed — and, crucially,
+   * it must NOT re-persist the deployment, so it never leaves an `error` tombstone
+   * for a record that is being removed.
+   */
+  protected async teardownContainers(deploymentId: string): Promise<void> {
+    void deploymentId;
+  }
 
   /** Rehydrate persisted deployments/releases from storage exactly once. */
   protected async ensureLoaded(): Promise<void> {
@@ -583,8 +594,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     this.logger.info('Deleting deployment', { deploymentId });
 
     try {
-      // Stop any running containers first
-      await this.executeAction(deploymentId, { action: 'stop' });
+      // Tear down running containers synchronously, in-line, BEFORE we remove the
+      // runtime directory below. Previously this enqueued a fire-and-forget `stop`
+      // job and returned immediately; the job's `docker compose down` then raced
+      // `removeStorage` and frequently ran after the compose file was already
+      // deleted. That failure path re-persisted the (already removed) deployment
+      // with status `error`, leaving a stuck tombstone after a "successful"
+      // uninstall. Running the teardown here guarantees compose-down sees the file
+      // and that no late job can resurrect the record.
+      await this.teardownContainers(deploymentId);
     } catch (error) {
       this.logger.warn('Failed to stop deployment before deletion', {
         deploymentId,
@@ -1411,6 +1429,23 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await this.routingService.deactivateRoute(deploymentId);
     // The removed app drops out of the registry feed for remaining consumers.
     await this.reconcileAppRegistry();
+  }
+
+  /**
+   * Run `docker compose down` for a deployment in-line during delete. Tolerates a
+   * compose-down failure (e.g. nothing running, or no compose file): deletion must
+   * proceed regardless. Unlike the lifecycle job, it never touches/persists the
+   * deployment record, so it cannot leave an `error` tombstone for a record that is
+   * being removed.
+   */
+  protected override async teardownContainers(deploymentId: string): Promise<void> {
+    const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), this.projectName(deploymentId));
+    if (!res.success) {
+      this.logger.warn('compose down reported a failure during delete; continuing with teardown', {
+        deploymentId,
+        output: res.output,
+      });
+    }
   }
 
   protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {
