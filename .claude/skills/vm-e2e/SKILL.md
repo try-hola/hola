@@ -70,10 +70,12 @@ browser). Background: `docs/MCP_VM_TESTING.md`.
      ```bash
      hola bootstrap --host "$ALIAS" --env-file .devcontainer/hola.env
      ```
-   - **Local working tree (`--local`):** run the working-tree CLI directly:
+   - **Local working tree (`--local`):** run the working-tree CLI directly. Pass an
+     ABSOLUTE `--env-file` path — with `--cwd packages/cli`, a relative path resolves
+     against `packages/cli`, not the repo root:
      ```bash
      bun --cwd packages/cli src/index.ts bootstrap \
-       --host "$ALIAS" --env-file .devcontainer/hola.env
+       --host "$ALIAS" --env-file "$PWD/.devcontainer/hola.env"
      ```
    If the working tree's version is ahead of the latest GitHub release, the
    release bundle/images for it won't exist — pin an existing one with
