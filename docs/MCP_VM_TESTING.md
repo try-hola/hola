@@ -135,6 +135,43 @@ bin/vm-test --ssh -- 'cd /opt/hola && docker compose ps'   # run on the VM
 bin/vm-test -- bin/vm-web-check                # run the web check in the container
 ```
 
+### Deterministic e2e suite (the repeatable regression test)
+
+`bin/vm-test` runs *one* command; `bin/vm-e2e-suite` runs the whole **product
+flow** and asserts every step. It's the cheap, repeatable end-to-end test: a
+fresh VM with `HOLA_AUTH_MODE=none` (no Authentik — saves ~2 GB RAM and several
+minutes) and a single light app. It renders a creds-free Hola `.env` (sslip.io +
+self-signed TLS) with a deterministic per-run admin key, then:
+
+```
+create VM → wait-ssh → render .env → hola bootstrap → verify stack →
+browse catalog → install app → assert reachable at its subdomain →
+deployments list → restart → stop → uninstall → tear down
+```
+
+```bash
+bin/vm-e2e-suite --dry-run        # rehearse every step, touch no infrastructure
+bin/vm-e2e-suite                  # real run: create → assert each step → destroy
+bin/vm-e2e-suite --keep-on-fail   # snapshot + keep the VM if something fails
+bin/vm-e2e-suite --app vaultwarden  # default app (override with --app)
+```
+
+Each step prints `PASS`/`FAIL`; the run exits non-zero on any failure and prints
+a summary. Per-step output (bootstrap, install, lifecycle, `compose ps`, plus
+server/app logs on a failed deploy) lands in `logs/vm-e2e-suite/`.
+
+**App choice matters under `HOLA_AUTH_MODE=none`.** The deploy job runs
+`provisionAuth` *before* `composeUp`, and `provisionAuth` is only a no-op for apps
+whose manifest declares `auth.mode: none`. For `forward-auth` apps (uptime-kuma,
+homepage, webtop, backrest) or `native-oidc` apps (actual-budget, immich), there
+is no Authentik to provision against under mode=none, so `provisionAuth` throws
+and `composeUp` never runs — the deploy fails. The suite therefore defaults to
+**vaultwarden** (`auth.mode: none`, light, serves directly). `--app uptime-kuma`
+will fail under mode=none on servers without the #267 fix; the suite detects that
+exact signature and prints the root cause. Robustness: before installing it waits
+until the server can spawn `docker compose` (and retries the first deploy with
+backoff) to defeat the docker-spawn `ENOENT` race.
+
 ---
 
 ## Helper command reference
@@ -151,6 +188,7 @@ bin/vm-test -- bin/vm-web-check                # run the web check in the contai
 | `bin/vm-destroy`  | Stop + purge the VM and its key (confirmation required)   | **yes**     |
 | `bin/vm-reap`     | Find + destroy LEAKED `hola-test*` clones (confirms once) | **yes**     |
 | `bin/vm-test`     | Full create→test→teardown lifecycle (`--dry-run`, `--ssh`) | yes (teardown) |
+| `bin/vm-e2e-suite`| Deterministic product e2e: bootstrap→install→lifecycle→uninstall, asserted | yes (teardown) |
 
 ¹ `bin/proxmox-build-template` runs on the **Proxmox host** (not the container);
 `--force` replaces an existing template VMID, `--destroy --id N` removes one.

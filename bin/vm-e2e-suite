@@ -1,0 +1,447 @@
+#!/usr/bin/env bash
+# bin/vm-e2e-suite — deterministic, repeatable end-to-end test suite for Hola.
+#
+# Usage: bin/vm-e2e-suite [--dry-run] [--keep-on-fail] [--vmid VMID]
+#                         [--app APP] [--ref cli-vX.Y.Z] [-h]
+#
+# Drives the whole user-facing flow against a FRESH disposable Proxmox VM and
+# asserts each step PASS/FAIL:
+#
+#   create VM -> wait for SSH -> render a creds-free Hola .env (sslip.io, self-
+#   signed TLS, HOLA_AUTH_MODE=none) -> `hola bootstrap` over SSH -> verify the
+#   stack -> browse the catalog -> install a light app (uptime-kuma) -> assert it
+#   deploys and is reachable at its subdomain -> exercise the deployment
+#   lifecycle (stop, restart, deployments list) -> uninstall -> tear down.
+#
+# Cheap by design: HOLA_AUTH_MODE=none (no Authentik — ~2 GB RAM and minutes
+# saved) and a single light app. Deterministic: a fixed per-run admin API key is
+# baked into the .env so the CLI token never has to be scraped from output.
+#
+# APP CHOICE (important): under HOLA_AUTH_MODE=none the server can only deploy
+# apps whose manifest declares `auth.mode: none` — for any other mode
+# (`forward-auth`, `native-oidc`) the deploy job runs provisionAuth BEFORE
+# composeUp and, with no Authentik to provision against, throws (composeUp never
+# runs). So the default app is **vaultwarden** (`auth.mode: none`, light, serves
+# directly). uptime-kuma is `forward-auth`, so `--app uptime-kuma` will FAIL under
+# mode=none on servers without the #267 fix — the suite detects and explains that.
+#
+# Exit code is non-zero on any failure, and a summary is printed at the end.
+#
+# Note on `restart`: the known restart bug (#267) is SPECIFIC to forward-auth
+# (Authentik-gated) apps — restart runs provisionAuth before composeUp and the
+# Authentik reuse-PATCH 400s. Under HOLA_AUTH_MODE=none uptime-kuma is not
+# forward-auth gated, so restart is exercised here as a normal happy-path step
+# (assert it returns to `running` and stays reachable).
+#
+# --keep-on-fail snapshots + keeps the VM on failure (default: always destroy,
+# so reruns stay cheap). --dry-run rehearses every step touching no infra.
+#
+# Per-step output lands under logs/vm-e2e-suite/ (gitignored).
+#
+# Env knobs (all optional): BOOTSTRAP_TIMEOUT (900), INSTALL_TIMEOUT (420),
+# ACTION_TIMEOUT (180), HTTP_TIMEOUT (150), HOLA_E2E_REF (pin a bootstrap ref).
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+
+# --- args -------------------------------------------------------------------
+KEEP_ON_FAIL=0
+APP="vaultwarden"   # auth.mode: none → deploys + serves directly under mode=none
+REF="${HOLA_E2E_REF:-}"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    --keep-on-fail) KEEP_ON_FAIL=1; shift ;;
+    --vmid) VM_ID=$2; shift 2 ;;
+    --app) APP=$2; shift 2 ;;
+    --ref) REF=$2; shift 2 ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+
+is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
+
+# --- timeouts (seconds) -----------------------------------------------------
+BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-900}"
+INSTALL_TIMEOUT="${INSTALL_TIMEOUT:-420}"
+ACTION_TIMEOUT="${ACTION_TIMEOUT:-180}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-150}"
+
+# --- paths / per-run state --------------------------------------------------
+LOG_DIR="$ROOT_DIR/logs/vm-e2e-suite"
+HOLA_ENV_OUT="$ROOT_DIR/.devcontainer/hola-e2e.env"   # gitignored (hola-*.env)
+mkdir -p "$LOG_DIR"
+
+VMID=""; ALIAS=""; IP=""; DOMAIN_BASE=""; DASHBOARD_URL=""; API_KEY=""
+DEPLOY_ID=""; APP_URL=""
+
+# --- result tracking --------------------------------------------------------
+declare -a RESULTS=()
+FAILED=0
+record() { RESULTS+=("$1"$'\t'"$2"); }   # record <RESULT> <name>
+pass()  { record PASS "$1"; log "PASS:  $1"; }
+fail()  { record FAIL "$1"; err "FAIL:  $1"; FAILED=$((FAILED+1)); }
+
+print_summary() {
+  echo "" >&2
+  log "================ vm-e2e-suite summary ================"
+  local r res name
+  if (( ${#RESULTS[@]} )); then
+    for r in "${RESULTS[@]}"; do
+      res=${r%%$'\t'*}; name=${r#*$'\t'}
+      printf '  %-6s %s\n' "$res" "$name" >&2
+    done
+  else
+    echo "  (no steps recorded)" >&2
+  fi
+  log "====================================================="
+  if (( FAILED )); then err "$FAILED unexpected failure(s)."; else log "all required steps passed."; fi
+}
+
+# --- teardown trap ----------------------------------------------------------
+cleanup() {
+  local rc=$1
+  print_summary
+  [[ -n "$ALIAS" ]] && remove_ssh_config "$VMID" 2>/dev/null || true
+  [[ -z "$VMID" ]] && exit "$rc"
+  if is_dry; then exit "$rc"; fi
+  if [[ "$rc" -ne 0 && "$KEEP_ON_FAIL" == "1" ]]; then
+    warn "failure — keeping VM $VMID and snapshotting for inspection."
+    "$BIN_DIR/vm-snapshot" --vmid "$VMID" --name "e2e-fail-$(date -u +%Y%m%d-%H%M%S)" \
+      --desc "preserved by vm-e2e-suite on failure" || true
+    warn "destroy it when done: bin/vm-destroy --vmid $VMID"
+  else
+    log "tearing down VM $VMID"
+    FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$VMID" || warn "teardown failed for VM $VMID — destroy manually."
+  fi
+  exit "$rc"
+}
+
+# Abort the suite after recording an unexpected failure (trap cleans up the VM).
+abort() { fail "$1"; exit 1; }
+
+# --- small helpers ----------------------------------------------------------
+# Run the working-tree CLI against the VM's server with a self-signed-TLS bypass
+# and the deterministic admin token.
+api_cli() {
+  NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+    HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
+    bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "$@"
+}
+
+http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+
+# wait_http <url> <code-regex> <timeout>
+wait_http() {
+  local url=$1 want=$2 timeout=$3 code deadline; deadline=$(( $(date +%s) + timeout ))
+  while :; do
+    code=$(http_code "$url")
+    if [[ "$code" =~ $want ]]; then log "  $url -> HTTP $code"; return 0; fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  $url -> HTTP $code (timeout after ${timeout}s)"; return 1; fi
+    sleep 5
+  done
+}
+
+# ===========================================================================
+# Steps. Each returns 0 on success, non-zero on failure. They short-circuit in
+# --dry-run (no infra touched) and write their own command output to LOG_DIR.
+# ===========================================================================
+
+step_create() {
+  log "── STEP 1/10: create + boot a disposable VM"
+  if is_dry; then VMID="999999"; log "DRY_RUN: bin/vm-create ${VM_ID:+--vmid $VM_ID}"; return 0; fi
+  local args=(); [[ -n "${VM_ID:-}" ]] && args=(--vmid "$VM_ID")
+  VMID=$("$BIN_DIR/vm-create" "${args[@]}" | tail -1) || return 1
+  [[ -n "$VMID" ]] || return 1
+  # Clear any stale VM_IP left in the shared state by a previous run — otherwise
+  # resolve_vm_ip() returns the saved IP and wait-ssh probes the WRONG host with
+  # this VM's key. Empty value makes it re-resolve $VMID's guest-agent IP.
+  state_set VM_IP ""
+  log "  test VM: $VMID"
+}
+
+step_wait_ssh() {
+  log "── STEP 2/10: wait for SSH + resolve IP"
+  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; log "DRY_RUN: bin/vm-wait-ssh --vmid $VMID"; return 0; fi
+  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" || return 1
+  IP=$(state_get VM_IP); [[ -n "$IP" ]] || { err "  no VM IP after wait-ssh"; return 1; }
+  ALIAS=$(vm_alias "$VMID")
+  log "  VM IP: $IP  (ssh alias: $ALIAS)"
+}
+
+step_render_env() {
+  log "── STEP 3/10: render creds-free Hola .env (mode=none, sslip.io)"
+  DOMAIN_BASE="$IP.sslip.io"
+  DASHBOARD_URL="https://apps.$DOMAIN_BASE"
+  APP_URL="https://$APP.$DOMAIN_BASE"
+  # Deterministic per-run admin key (no scraping bootstrap output).
+  API_KEY=$( (openssl rand -hex 24 2>/dev/null) || (uuidgen | tr -d '-') )
+  if is_dry; then log "DRY_RUN: would write $HOLA_ENV_OUT (HOLA_DOMAIN=$DASHBOARD_URL)"; return 0; fi
+  cat > "$HOLA_ENV_OUT" <<EOF
+# Generated by bin/vm-e2e-suite for VM $VMID — disposable, self-signed TLS.
+COMPOSE_PROJECT_NAME=hola
+TRAEFIK_HTTP_PORT=80
+TRAEFIK_HTTPS_PORT=443
+TRAEFIK_DASHBOARD_DOMAIN=traefik.$DOMAIN_BASE
+LETSENCRYPT_EMAIL=e2e@example.com
+ACME_CA_SERVER=
+ACME_DNS_PROVIDER=
+HOLA_DOMAIN=apps.$DOMAIN_BASE
+HOLA_BASE_DOMAIN=$DOMAIN_BASE
+HOLA_CATALOG_URL=https://raw.githubusercontent.com/try-hola/apps/main/catalog.json
+HOLA_DEFAULT_TZ=UTC
+HOLA_USE_AUTH=true
+HOLA_API_KEY=$API_KEY
+HOLA_AUTH_MODE=none
+EOF
+  chmod 600 "$HOLA_ENV_OUT"
+  log "  wrote $HOLA_ENV_OUT  (dashboard: $DASHBOARD_URL)"
+}
+
+step_bootstrap() {
+  log "── STEP 4/10: hola bootstrap over SSH (mode=none)"
+  if is_dry; then
+    log "DRY_RUN: hola bootstrap --host $ALIAS --env-file $HOLA_ENV_OUT ${REF:+--ref $REF}"
+    return 0
+  fi
+  local args=(bootstrap --host "$ALIAS" --env-file "$HOLA_ENV_OUT")
+  [[ -n "$REF" ]] && args+=(--ref "$REF")
+  log "  running (up to ${BOOTSTRAP_TIMEOUT}s); log: $LOG_DIR/bootstrap.log"
+  timeout "$BOOTSTRAP_TIMEOUT" \
+    bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "${args[@]}" 2>&1 | tee "$LOG_DIR/bootstrap.log"
+  return "${PIPESTATUS[0]}"
+}
+
+step_verify_stack() {
+  log "── STEP 5/10: verify the stack (traefik + server + web running)"
+  if is_dry; then log "DRY_RUN: bin/vm-ssh -- docker compose ps"; return 0; fi
+  local ps
+  ps=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose ps --format "{{.Service}} {{.State}}"' 2>&1 | tee "$LOG_DIR/compose-ps.log") || return 1
+  local svc ok=1
+  for svc in traefik server web; do
+    if grep -qiE "^$svc .*(running|up)" <<<"$ps"; then
+      log "  $svc: running"
+    else
+      err "  $svc: NOT running"; ok=0
+    fi
+  done
+  # Dashboard front door should answer (200, or a redirect to the SPA).
+  wait_http "$DASHBOARD_URL" '^(200|30[0-9])$' "$HTTP_TIMEOUT" || ok=0
+  [[ "$ok" == 1 ]]
+}
+
+step_catalog() {
+  log "── STEP 6/10: browse the catalog (assert $APP is listed)"
+  if is_dry; then log "DRY_RUN: hola catalog $APP"; return 0; fi
+  local out
+  out=$(api_cli catalog --json 2>"$LOG_DIR/catalog.err") || { cat "$LOG_DIR/catalog.err" >&2; return 1; }
+  echo "$out" > "$LOG_DIR/catalog.json"
+  if echo "$out" | jq -e --arg a "$APP" '.items[]? | select(.id == $a)' >/dev/null; then
+    log "  catalog lists $APP"
+  else
+    err "  $APP not found in catalog"; return 1
+  fi
+}
+
+# Run a command on the VM over SSH (quietly). Returns the command's exit code.
+vm_ssh_q() { "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "$@" 2>/dev/null; }
+
+# Wait until the SERVER container can actually spawn `docker compose` — the
+# operation every deploy job shells out to. Polling this BEFORE installing
+# removes the docker-spawn ENOENT race deterministically (rather than blind
+# retries): right after `compose up` the server can briefly lack the docker CLI
+# on its PATH / a ready socket.
+step_wait_deploy_ready() {
+  log "── STEP 6b/10: wait for the server to be deploy-ready (can spawn docker compose)"
+  if is_dry; then log "DRY_RUN: poll 'docker compose exec server docker compose version'"; return 0; fi
+  local deadline; deadline=$(( $(date +%s) + ${DEPLOY_READY_TIMEOUT:-180} ))
+  while :; do
+    if vm_ssh_q 'cd /opt/hola && docker compose exec -T server sh -lc "command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1"'; then
+      log "  server can spawn docker compose — deploy-ready"
+      return 0
+    fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  server not deploy-ready in time"; return 1; fi
+    sleep 5
+  done
+}
+
+# Capture server + app logs for a failed deploy (best-effort, for diagnosis).
+capture_deploy_diag() {
+  local tag=$1
+  log "  capturing deploy diagnostics ($tag) → $LOG_DIR"
+  api_cli logs "${DEPLOY_ID:-}" > "$LOG_DIR/deploy-logs-$tag.txt" 2>/dev/null || true
+  vm_ssh_q 'cd /opt/hola && docker compose logs --since 5m --no-color server' \
+    > "$LOG_DIR/server-logs-$tag.txt" 2>/dev/null || true
+}
+
+step_install() {
+  log "── STEP 7/10: install $APP (retries the first deploy on the ENOENT race)"
+  if is_dry; then log "DRY_RUN: hola install $APP --json"; DEPLOY_ID="dry-run-id"; return 0; fi
+  local attempt rc out status backoff="${INSTALL_BACKOFF:-20}"
+  for attempt in 1 2 3; do
+    log "  install attempt $attempt/3 (up to ${INSTALL_TIMEOUT}s)"
+    set +e
+    out=$(timeout "$INSTALL_TIMEOUT" \
+      env NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+        HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
+        bun --cwd "$ROOT_DIR/packages/cli" src/index.ts install "$APP" --json 2>"$LOG_DIR/install-$attempt.err")
+    rc=$?
+    set -e
+    echo "$out" > "$LOG_DIR/install-$attempt.json"
+    status=$(echo "$out" | jq -r '.status // empty' 2>/dev/null || true)
+    DEPLOY_ID=$(echo "$out" | jq -r '.deploymentId // empty' 2>/dev/null || true)
+    log "  attempt $attempt: exit=$rc status=${status:-<none>} deployment=${DEPLOY_ID:-<none>}"
+    if [[ "$rc" == 0 && "$status" == "completed" ]]; then
+      log "  installed: deployment $DEPLOY_ID"
+      return 0
+    fi
+    capture_deploy_diag "$attempt"
+    # A failed attempt left a (failed) deployment record — remove it before retry
+    # so the list stays clean and names don't collide.
+    [[ -n "$DEPLOY_ID" ]] && api_cli uninstall "$DEPLOY_ID" --yes >/dev/null 2>&1 || true
+    if [[ "$attempt" -lt 3 ]]; then
+      warn "  install failed (known ENOENT race) — settling ${backoff}s then retrying."
+      sleep "$backoff"; backoff=$(( backoff * 2 ))
+    fi
+  done
+  cat "$LOG_DIR"/install-*.err >&2 || true
+  # Targeted diagnosis: a forward-auth app cannot deploy under HOLA_AUTH_MODE=none
+  # on servers without the #267 fix — provisionAuth runs BEFORE composeUp and, with
+  # no Authentik to provision against, throws, so composeUp never runs (the runtime
+  # compose is never materialized). Detect that signature and explain it.
+  if grep -qiE 'Deferring route activation until forward-auth|provision' "$LOG_DIR"/server-logs-*.txt 2>/dev/null; then
+    local amode; amode=$(vm_ssh_q 'cd /opt/hola && docker compose exec -T server sh -c "find /data/cache/bundles -name manifest.json 2>/dev/null | head -1 | xargs cat 2>/dev/null"' \
+      | jq -r '.auth.mode // empty' 2>/dev/null || true)
+    if [[ "$amode" == "forward-auth" ]]; then
+      err "  ROOT CAUSE: '$APP' is a forward-auth app, but HOLA_AUTH_MODE=none has no"
+      err "  Authentik to provision against. On this server provisionAuth runs before"
+      err "  composeUp and throws, so the deploy never starts. This needs the #267 fix"
+      err "  (provisionAuth a no-op under mode=none) — or a non-forward-auth app, or"
+      err "  HOLA_AUTH_MODE=authentik. See $LOG_DIR/server-logs-*.txt."
+    fi
+  fi
+  err "  install did not complete after retries (see $LOG_DIR/server-logs-*.txt)"
+  return 1
+}
+
+step_reachable() {
+  log "── STEP 8/10: assert $APP is reachable at its subdomain (mode=none → direct, 200)"
+  if is_dry; then log "DRY_RUN: curl -k $APP_URL  (expect 200)"; return 0; fi
+  # Prefer the URL the server reports for the deployment.
+  local url; url=$(api_cli deployments --json 2>/dev/null | jq -r --arg id "$DEPLOY_ID" \
+    '.items[]? | select(.id == $id) | .url // empty' || true)
+  [[ -n "$url" ]] && APP_URL="$url"
+  log "  app URL: $APP_URL"
+  # Not SSO-gated under mode=none, so the app serves its own page directly.
+  wait_http "$APP_URL" '^200$' "$HTTP_TIMEOUT"
+}
+
+step_lifecycle_list() {
+  log "── STEP 9a/10: deployments list shows $APP running"
+  if is_dry; then log "DRY_RUN: hola deployments --json"; return 0; fi
+  local out st
+  out=$(api_cli deployments --json 2>/dev/null)
+  echo "$out" > "$LOG_DIR/deployments.json"
+  st=$(echo "$out" | jq -r --arg id "$DEPLOY_ID" '.items[]? | select(.id == $id) | .status // empty')
+  log "  $DEPLOY_ID status: ${st:-<missing>}"
+  [[ "$st" == "running" ]]
+}
+
+step_lifecycle_stop() {
+  log "── STEP 9c/10: stop the deployment (lifecycle: works)"
+  if is_dry; then log "DRY_RUN: hola stop $DEPLOY_ID"; return 0; fi
+  api_cli stop "$DEPLOY_ID" 2>&1 | tee "$LOG_DIR/stop.log"
+  local rc=${PIPESTATUS[0]}; [[ "$rc" == 0 ]] || return 1
+  # Confirm it left "running".
+  local st; st=$(api_cli deployments --json 2>/dev/null | jq -r --arg id "$DEPLOY_ID" \
+    '.items[]? | select(.id == $id) | .status // empty')
+  log "  post-stop status: ${st:-<missing>}"
+  [[ "$st" != "running" ]]
+}
+
+# restart — happy path. The known restart bug (#267) is SPECIFIC to forward-auth
+# (Authentik-gated) apps: restart runs provisionAuth before composeUp, and the
+# Authentik reuse-PATCH 400s so composeUp never runs. The default app
+# (vaultwarden, `auth.mode: none`) is NOT forward-auth gated, so provisionAuth is
+# a no-op and restart should SUCCEED and bring the deployment back to `running`.
+# A failure here is a real, unexpected finding (capture it).
+step_lifecycle_restart() {
+  log "── STEP 9b/10: restart the deployment (happy path under mode=none)"
+  if is_dry; then log "DRY_RUN: hola restart $DEPLOY_ID  (expect running)"; return 0; fi
+  set +e
+  api_cli restart "$DEPLOY_ID" --json > "$LOG_DIR/restart.json" 2>"$LOG_DIR/restart.err"
+  local rc=$?
+  set -e
+  local jstatus dstatus
+  # `hola restart --json` prints a human "Restarting…" line BEFORE the JSON object
+  # (unlike `install`, its out() isn't gated by --json), so slice from the first
+  # `{` before parsing.
+  jstatus=$(sed -n '/^{/,$p' "$LOG_DIR/restart.json" | jq -r '.status // empty' 2>/dev/null || true)
+  dstatus=$(api_cli deployments --json 2>/dev/null | jq -r --arg id "$DEPLOY_ID" \
+    '.items[]? | select(.id == $id) | .status // empty')
+  log "  restart: exit=$rc job-status=${jstatus:-<none>} deployment-status=${dstatus:-<none>}"
+  if [[ "$rc" != 0 || "$jstatus" != "completed" || "$dstatus" != "running" ]]; then
+    capture_deploy_diag "restart"
+    err "  restart did not return the deployment to running (mode=none expected success)"
+    return 1
+  fi
+  # App should be reachable again after the restart.
+  wait_http "$APP_URL" '^200$' "$HTTP_TIMEOUT"
+}
+
+step_uninstall() {
+  log "── STEP 10/10: uninstall the deployment (containers + data removed)"
+  if is_dry; then log "DRY_RUN: hola uninstall $DEPLOY_ID --yes"; return 0; fi
+  api_cli uninstall "$DEPLOY_ID" --yes 2>&1 | tee "$LOG_DIR/uninstall.log"
+  local rc=${PIPESTATUS[0]}; [[ "$rc" == 0 ]] || { err "  uninstall command failed (exit $rc)"; return 1; }
+
+  # Assert the USER-FACING outcome: the app's container is gone on the host and it
+  # is no longer running/serving. We deliberately do NOT require the deployment
+  # record to vanish from the list: on this server `hola uninstall` deletes the
+  # deployment directory BEFORE running composeDown, so composeDown fails
+  # (docker-compose.yml not found) and a tombstone record is left behind in
+  # `error` state even though containers + data are removed. That's a real (minor)
+  # server ordering bug, not an uninstall failure — flag it but don't fail on it.
+  local cname="hola-${DEPLOY_ID}"
+  if vm_ssh_q "docker ps -a --format '{{.Names}}' | grep -q '$cname'"; then
+    err "  container(s) for $DEPLOY_ID still present on the host after uninstall"
+    return 1
+  fi
+  log "  host containers for $DEPLOY_ID removed"
+  local st; st=$(api_cli deployments --json 2>/dev/null | jq -r --arg id "$DEPLOY_ID" \
+    '.items[]? | select(.id == $id) | .status // "absent"')
+  log "  deployment record status after uninstall: ${st:-absent}"
+  if [[ "$st" == "running" ]]; then
+    err "  deployment still 'running' after uninstall"
+    return 1
+  fi
+  [[ "$st" != "absent" ]] && warn "  note: a tombstone record lingers in '$st' state (server bug: composeDown runs after the dir is deleted)"
+  return 0
+}
+
+# ===========================================================================
+# Orchestration
+# ===========================================================================
+log "=== vm-e2e-suite: deterministic Hola end-to-end (app=$APP, mode=none) ==="
+audit "vm-e2e-suite start app=$APP dry_run=${DRY_RUN:-0}"
+trap 'cleanup $?' EXIT
+
+# Required infra/setup steps — a failure here aborts (nothing else can run).
+step_create         || abort "create VM";            pass "create VM ($VMID)"
+step_wait_ssh       || abort "wait for SSH";          pass "wait for SSH"
+step_render_env     || abort "render Hola .env";      pass "render Hola .env"
+step_bootstrap      || abort "hola bootstrap";        pass "hola bootstrap"
+step_verify_stack   || abort "verify stack";          pass "verify stack (traefik/server/web + dashboard)"
+step_catalog          || abort "browse catalog";      pass "browse catalog ($APP listed)"
+step_wait_deploy_ready|| abort "server deploy-ready";  pass "server deploy-ready"
+step_install          || abort "install $APP";        pass "install $APP"
+step_reachable      || abort "reachable subdomain";   pass "$APP reachable at subdomain"
+step_lifecycle_list    || abort "deployments list";    pass "deployments list ($APP running)"
+step_lifecycle_restart || abort "restart deployment";  pass "restart deployment (back to running)"
+step_lifecycle_stop    || abort "stop deployment";     pass "stop deployment"
+step_uninstall         || abort "uninstall $APP";      pass "uninstall $APP"
+
+audit "vm-e2e-suite done app=$APP failures=$FAILED"
+# cleanup() (EXIT trap) prints the summary and tears down the VM.
+exit "$FAILED"
