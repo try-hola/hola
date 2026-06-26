@@ -11,6 +11,7 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { parse } from 'yaml';
 import { mkdtemp, rm } from 'fs/promises';
+import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -182,6 +183,65 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     expect(upCalled).toBe(false);
     expect((await deployments.getDeployment(created.deploymentId)).status).toBe('error');
     expect(lines.some(m => m.includes('Image pull failed') && m.includes('denied'))).toBe(true);
+  });
+
+  test('delete runs compose-down before removing the runtime dir, leaving no error tombstone', async () => {
+    // Regression for the uninstall teardown-order race: delete used to enqueue a
+    // fire-and-forget `stop` job and then immediately delete the runtime dir. The
+    // late job's `compose down` then ran against a missing compose file, failed,
+    // and re-persisted the (already removed) deployment with status `error`.
+    const downCalls: Array<{ projectPath: string; composeFileExisted: boolean }> = [];
+    const docker = new MockDockerService();
+    // Mirror real `docker compose down`: it FAILS when the compose file is gone
+    // ("no configuration file provided"). The small delay makes the race
+    // deterministic — under the buggy fire-and-forget ordering, `removeStorage`
+    // always lands before this resolves, so the file is gone and down fails,
+    // reproducing the persisted `error` tombstone. Under the fix, down is awaited
+    // in-line before storage removal, so the file is always present here.
+    docker.composeDown = async (projectPath: string) => {
+      await new Promise(r => setTimeout(r, 50));
+      const composeFileExisted = existsSync(join(projectPath, 'docker-compose.yml'));
+      downCalls.push({ projectPath, composeFileExisted });
+      return composeFileExisted
+        ? { success: true, output: '[mock] stopped and removed' }
+        : { success: false, output: 'no configuration file provided: not found' };
+    };
+
+    const { jobs, drafts, deployments } = makeSystem(docker);
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea' });
+    await waitForJob(jobs, created.jobId!);
+
+    const runtimeCompose = join(dataRoot, 'deployments', created.deploymentId, 'runtime', 'docker-compose.yml');
+    expect(existsSync(runtimeCompose)).toBe(true);
+
+    await deployments.deleteDeployment(created.deploymentId);
+
+    // compose down ran exactly once, and the compose file still existed when it did
+    // (i.e. teardown happened BEFORE storage removal, not racing after it).
+    expect(downCalls.length).toBe(1);
+    expect(downCalls[0].composeFileExisted).toBe(true);
+
+    // Storage is gone now and the deployment is fully removed (404).
+    expect(existsSync(runtimeCompose)).toBe(false);
+    await expect(deployments.getDeployment(created.deploymentId)).rejects.toThrow();
+
+    // Let any (incorrectly) enqueued late teardown job run to completion, then assert
+    // nothing resurrected the record: no in-memory listing, no persisted error
+    // tombstone, and no failed teardown job lingering for this deployment.
+    await new Promise(r => setTimeout(r, 200));
+
+    const listed = await deployments.listDeployments({});
+    expect(listed.items.some(d => d.id === created.deploymentId)).toBe(false);
+    expect(listed.items.some(d => d.status === 'error')).toBe(false);
+
+    // A fresh service rehydrating from the same data root must not see a tombstone.
+    const rehydrated = makeSystem(new MockDockerService()).deployments;
+    const reListed = await rehydrated.listDeployments({});
+    expect(reListed.items.some(d => d.id === created.deploymentId)).toBe(false);
+    expect(reListed.items.some(d => d.status === 'error')).toBe(false);
+
+    const failedJobs = (await jobs.listJobs({ deploymentId: created.deploymentId, status: 'failed' }));
+    expect(failedJobs.length).toBe(0);
   });
 
   test('lifecycle logs are streamed to the deployment log target', async () => {
