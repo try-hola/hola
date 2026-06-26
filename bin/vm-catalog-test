@@ -28,7 +28,9 @@
 # further: restart + stop + uninstall, covering all three lifecycle fixes
 # (#267 restart, stop, #271 uninstall) per app.
 # --apps limits the sweep to a comma list; --skip excludes one; --memory MB sizes
-# the VM (heavy apps like immich/postiz want headroom).
+# the VM (heavy apps like immich/postiz want headroom). Between apps the sweep
+# prunes unused images/volumes so a long run doesn't fill the disk (which would trip
+# the preflight disk check and degrade later apps) — pass --no-prune to disable.
 #
 # Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
 # and keeps the VM if any app failed (default: always destroy so reruns stay cheap).
@@ -38,7 +40,7 @@ source "$(dirname "$0")/lib/app-test.sh"
 load_env
 
 # --- args -------------------------------------------------------------------
-KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""
+KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
@@ -48,6 +50,7 @@ while [[ $# -gt 0 ]]; do
     --skip) SKIP_APPS=$2; shift 2 ;;
     --restart) AT_TEST_RESTART=1; shift ;;
     --lifecycle) AT_TEST_RESTART=1; AT_TEST_STOP=1; shift ;;
+    --no-prune) PRUNE=0; shift ;;
     --memory) VM_MEMORY=$2; shift 2 ;;
     --ref) REF=$2; shift 2 ;;
     -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -61,7 +64,7 @@ is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
 # --- timeouts (seconds) -----------------------------------------------------
 BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-1200}"   # authentik bootstrap is slower
 AUTHENTIK_TIMEOUT="${AUTHENTIK_TIMEOUT:-420}"
-HTTP_TIMEOUT="${HTTP_TIMEOUT:-180}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-240}"              # slow first boots (n8n, immich) need headroom
 DEPLOY_READY_TIMEOUT="${DEPLOY_READY_TIMEOUT:-180}"
 
 # --- paths / per-run state --------------------------------------------------
@@ -312,6 +315,15 @@ for app in "${APP_ARR[@]}"; do
     2) emit SKIP "$app" "${AT_SKIP_REASON:-needs config}" "$secs" ;;
     *) emit FAIL "$app" "${AT_LAST_STAGE:-?}" "$secs" ;;
   esac
+  # Reclaim disk between apps: the just-uninstalled app's images are now unused, and
+  # without this a long sweep fills the VM disk — which trips the preflight disk
+  # check to `warn` and silently degrades every later app. Images still referenced by
+  # running containers (core stack, Authentik, a kept-on-fail app) are preserved.
+  if [[ "$PRUNE" == 1 ]]; then
+    "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'docker image prune -af >/dev/null 2>&1; docker volume prune -f >/dev/null 2>&1' 2>/dev/null || true
+    df_free=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- "df -BG --output=avail / | tail -1 | tr -d ' G'" 2>/dev/null || echo '?')
+    log "  pruned unused images/volumes — ${df_free}G free on / "
+  fi
 done
 
 audit "vm-catalog-test done apps=${#APP_ARR[@]} failed=$FAILED"

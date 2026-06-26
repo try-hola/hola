@@ -118,19 +118,22 @@ at_install() {
   # app's manifest demands (generated tokens — safe for secrets; we never invent
   # values for non-secret required config, which would need real meaning).
   local -a set_args=()
-  local attempt=0 cfg_tries=0 rc out status backoff="$INSTALL_BACKOFF"
+  local attempt=0 cfg_tries=0 logn=0 rc out status backoff="$INSTALL_BACKOFF"
   # Budget: INSTALL_ATTEMPTS race-retries PLUS up to 5 config-fills (each fill is a
   # separate immediate retry, not a race-retry, so a multi-secret app converges).
   while (( attempt < INSTALL_ATTEMPTS )); do
     attempt=$(( attempt + 1 ))
-    local errf="$logdir/install-$attempt.err"
+    # `logn` is a monotonic per-exec counter so config-fill retries (which reuse the
+    # `attempt` number) don't clobber the previous exec's install-N.err/.json.
+    logn=$(( logn + 1 ))
+    local errf="$logdir/install-$logn.err"
     # errexit-safe capture: NEVER toggle global `set -e` here — this is a sourced
     # library and a leaked errexit state would abort the caller's loop.
     if out=$(_at_install_exec "$app" "$errf" "${set_args[@]}"); then rc=0; else rc=$?; fi
-    echo "$out" > "$logdir/install-$attempt.json"
+    echo "$out" > "$logdir/install-$logn.json"
     status=$(echo "$out" | jq -r '.status // empty' 2>/dev/null || true)
     AT_DEPLOY_ID=$(echo "$out" | jq -r '.deploymentId // empty' 2>/dev/null || true)
-    log "    install attempt $attempt: exit=$rc status=${status:-<none>} deployment=${AT_DEPLOY_ID:-<none>} set=${#set_args[@]}"
+    log "    install try $logn (attempt $attempt/$INSTALL_ATTEMPTS): exit=$rc status=${status:-<none>} deployment=${AT_DEPLOY_ID:-<none>} set=${#set_args[@]}"
     if [[ "$rc" == 0 && "$status" == "completed" ]]; then
       AT_APP_URL=$(at_cli deployments --json 2>/dev/null | jq -r --arg id "$AT_DEPLOY_ID" \
         '.items[]? | select(.id == $id) | .url // empty' || true)
@@ -169,7 +172,7 @@ at_install() {
       return 2
     fi
 
-    at_capture_diag "$logdir" "install-$attempt"
+    at_capture_diag "$logdir" "install-$logn"
     # A failed attempt may have left a record — remove it so a retry starts clean.
     [[ -n "$AT_DEPLOY_ID" ]] && at_cli uninstall "$AT_DEPLOY_ID" --yes >/dev/null 2>&1 || true
     AT_DEPLOY_ID=""
@@ -246,9 +249,17 @@ at_uninstall() {
   local app=$1 logdir=$2 rc=0
   at_cli uninstall "$AT_DEPLOY_ID" --yes > "$logdir/uninstall.log" 2>&1 || rc=$?
   [[ "$rc" == 0 ]] || { err "    uninstall command failed (exit $rc)"; return 1; }
-  if at_ssh "docker ps -a --format '{{.Names}}' | grep -q 'hola-${AT_DEPLOY_ID}'"; then
-    err "    container(s) for $AT_DEPLOY_ID still present after uninstall"; return 1
-  fi
+  # `compose down` of a multi-container stack can lag the API response, so poll for
+  # the containers to actually disappear rather than asserting immediately (avoids a
+  # false "still present" on a slow teardown).
+  local deadline; deadline=$(( $(date +%s) + ${UNINSTALL_TIMEOUT:-45} ))
+  while at_ssh "docker ps -a --format '{{.Names}}' | grep -q 'hola-${AT_DEPLOY_ID}'"; do
+    if [[ $(date +%s) -ge $deadline ]]; then
+      at_ssh "docker ps -a --filter 'name=hola-${AT_DEPLOY_ID}' --format '{{.Names}}\t{{.Status}}'" > "$logdir/uninstall-leftover.txt" 2>/dev/null || true
+      err "    container(s) for $AT_DEPLOY_ID still present ${UNINSTALL_TIMEOUT:-45}s after uninstall"; return 1
+    fi
+    sleep 3
+  done
   log "    host containers for $AT_DEPLOY_ID removed"
   local st; st=$(at_deploy_status "$AT_DEPLOY_ID")
   [[ -n "$st" && "$st" != "absent" ]] && warn "    note: a tombstone record lingers in '$st' state"
