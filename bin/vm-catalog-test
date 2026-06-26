@@ -4,6 +4,7 @@
 #
 # Usage: bin/vm-catalog-test [--dry-run] [--keep-on-fail] [--vmid VMID]
 #                            [--apps a,b,c] [--skip x,y] [--restart] [--lifecycle]
+#                            [--server-image released|local] [--no-prune]
 #                            [--memory MB] [--ref cli-vX.Y.Z] [-h]
 #
 # Brings up ONE Authentik-mode VM (so apps of every auth mode — none, forward-auth,
@@ -37,8 +38,9 @@
 # exercises the LAST RELEASE, not `main`. Server fixes merged-but-unreleased won't
 # be present — e.g. an uninstall that leaves containers is the already-fixed #271,
 # and a forward-auth `--restart` failure is the already-fixed #267, both pending a
-# release. To test current `main`, build a server image and load it onto the VM
-# (the "Advanced — local server/web image" path in the vm-e2e skill), then re-run.
+# release. To test current `main` (and any uncommitted server changes) instead,
+# pass `--server-image local`: the sweep builds the server image from the working
+# tree, loads it onto the VM, and runs the catalog against it.
 #
 # Some catalog apps legitimately can't install unattended: a missing required
 # secret that is a real external token (e.g. gitea's runner registration token —
@@ -56,7 +58,7 @@ load_env
 # only apply when a knob is otherwise unset).
 
 # --- args -------------------------------------------------------------------
-KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1
+KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1; SERVER_IMAGE="released"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
@@ -66,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --skip) SKIP_APPS=$2; shift 2 ;;
     --restart) AT_TEST_RESTART=1; shift ;;
     --lifecycle) AT_TEST_RESTART=1; AT_TEST_STOP=1; shift ;;
+    --server-image) SERVER_IMAGE=$2; shift 2 ;;   # released (default) | local
     --no-prune) PRUNE=0; shift ;;
     --memory) VM_MEMORY=$2; shift 2 ;;
     --ref) REF=$2; shift 2 ;;
@@ -254,6 +257,34 @@ setup_verify_stack() {
   [[ "$ok" == 1 ]]
 }
 
+# --server-image local: replace the bootstrapped RELEASED server image with one
+# built from the current working tree, so the sweep tests `main` (+ uncommitted
+# server changes) instead of the last release. Build → save → load onto the VM
+# (overwriting the pulled tag) → force-recreate just the server → wait healthy.
+# This turns already-fixed-but-unreleased failures (e.g. #271 uninstall) green.
+setup_local_server_image() {
+  [[ "$SERVER_IMAGE" == "local" ]] || return 0
+  log "── building + loading a LOCAL server image (testing main, not the release)"
+  if is_dry; then log "DRY_RUN: docker build server → save → vm load → recreate server"; return 0; fi
+  # The compose ref is ghcr.io/try-hola/server:$HOLA_VERSION; match it so the
+  # loaded image is the one compose already references (no .env/version juggling).
+  local ver; ver=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && (cat VERSION 2>/dev/null || grep -E "^HOLA_VERSION=" .env | cut -d= -f2-)' 2>/dev/null | tr -d ' \t\r\n')
+  [[ -n "$ver" ]] || { err "  could not read HOLA_VERSION on the VM"; return 1; }
+  local tag="ghcr.io/try-hola/server:$ver"
+  log "  building $tag from $ROOT_DIR (a few minutes)…"
+  docker build -f "$ROOT_DIR/packages/server/Dockerfile" -t "$tag" "$ROOT_DIR" > "$LOG_DIR/server-build.log" 2>&1 \
+    || { err "  server image build failed (see $LOG_DIR/server-build.log)"; return 1; }
+  log "  transferring image to the VM (docker save | docker load)…"
+  docker save "$tag" | "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'docker load' > "$LOG_DIR/server-load.log" 2>&1 \
+    || { err "  docker save|load failed (see $LOG_DIR/server-load.log)"; return 1; }
+  log "  recreating the server container with the local image…"
+  "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose up -d --no-deps --force-recreate server' > "$LOG_DIR/server-recreate.log" 2>&1 \
+    || { err "  server recreate failed (see $LOG_DIR/server-recreate.log)"; return 1; }
+  # Dashboard front door should answer again once the new server is healthy.
+  wait_http "$DASHBOARD_URL" '^(200|30[0-9])$' "$HTTP_TIMEOUT" || { err "  server not healthy after swap"; return 1; }
+  log "  local server image is live (built from the working tree)"
+}
+
 # Authentik must be migrated + serving before forward-auth/native-oidc apps can
 # provision. Wait for its login UI to answer.
 setup_wait_authentik() {
@@ -308,6 +339,7 @@ setup_wait_ssh          || abort "wait for SSH"
 setup_render_env        || abort "render Hola .env"
 setup_bootstrap         || abort "hola bootstrap"
 setup_verify_stack      || abort "verify core stack"
+setup_local_server_image || abort "load local server image"
 setup_wait_authentik    || abort "Authentik not ready"
 setup_wait_deploy_ready || abort "server not deploy-ready"
 
