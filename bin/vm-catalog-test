@@ -1,0 +1,318 @@
+#!/usr/bin/env bash
+# bin/vm-catalog-test — install EVERY catalog app on one disposable VM and verify
+# each comes up, using the deterministic per-app test (bin/lib/app-test.sh).
+#
+# Usage: bin/vm-catalog-test [--dry-run] [--keep-on-fail] [--vmid VMID]
+#                            [--apps a,b,c] [--skip x,y] [--restart] [--lifecycle]
+#                            [--memory MB] [--ref cli-vX.Y.Z] [-h]
+#
+# Brings up ONE Authentik-mode VM (so apps of every auth mode — none, forward-auth,
+# native-oidc — can provision), then walks the catalog installing each app one at a
+# time: install -> verify it converges to `running` with its containers up and its
+# front door answering -> uninstall -> next. One app is live at a time, so peak RAM
+# stays bounded (core stack + Authentik + the single heaviest app).
+#
+# OUTPUT CONTRACT (the point of this script):
+#   * STDOUT  = terse, one line per app: `PASS <app> (1m12s)` / `FAIL <app> (verify,
+#               3m04s)  logs: logs/vm-catalog-test/<app>/`, then a final summary.
+#               Watch this to monitor a long sweep at a glance.
+#   * STDERR  = the live verbose [vm] trace of setup (create/bootstrap/verify).
+#               Each app's verbose per-step trace is redirected into its own
+#               logs/vm-catalog-test/<app>/run.log (not the terminal).
+#   * FILES   = logs/vm-catalog-test/<app>/* hold the install JSON, server logs,
+#               container states, deploy logs — drill in here when a line says FAIL.
+#   For a pure terse view:  bin/vm-catalog-test 2>logs/vm-catalog-test/setup.log
+#
+# --restart additionally exercises the restart lifecycle on every app (proves the
+# forward-auth restart path, #267, end-to-end across the catalog). --lifecycle goes
+# further: restart + stop + uninstall, covering all three lifecycle fixes
+# (#267 restart, stop, #271 uninstall) per app.
+# --apps limits the sweep to a comma list; --skip excludes one; --memory MB sizes
+# the VM (heavy apps like immich/postiz want headroom).
+#
+# Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
+# and keeps the VM if any app failed (default: always destroy so reruns stay cheap).
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+source "$(dirname "$0")/lib/app-test.sh"
+load_env
+
+# --- args -------------------------------------------------------------------
+KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    --keep-on-fail) KEEP_ON_FAIL=1; shift ;;
+    --vmid) VM_ID=$2; shift 2 ;;
+    --apps) ONLY_APPS=$2; shift 2 ;;
+    --skip) SKIP_APPS=$2; shift 2 ;;
+    --restart) AT_TEST_RESTART=1; shift ;;
+    --lifecycle) AT_TEST_RESTART=1; AT_TEST_STOP=1; shift ;;
+    --memory) VM_MEMORY=$2; shift 2 ;;
+    --ref) REF=$2; shift 2 ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+export AT_TEST_RESTART="${AT_TEST_RESTART:-0}"
+export AT_TEST_STOP="${AT_TEST_STOP:-0}"
+is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
+
+# --- timeouts (seconds) -----------------------------------------------------
+BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-1200}"   # authentik bootstrap is slower
+AUTHENTIK_TIMEOUT="${AUTHENTIK_TIMEOUT:-420}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-180}"
+DEPLOY_READY_TIMEOUT="${DEPLOY_READY_TIMEOUT:-180}"
+
+# --- paths / per-run state --------------------------------------------------
+LOG_DIR="$ROOT_DIR/logs/vm-catalog-test"
+HOLA_ENV_OUT="$ROOT_DIR/.devcontainer/hola-catalog.env"   # gitignored (hola-*.env)
+mkdir -p "$LOG_DIR"
+
+VMID=""; ALIAS=""; IP=""; DOMAIN_BASE=""; DASHBOARD_URL=""; AUTH_URL=""; API_KEY=""
+
+# --- result tracking --------------------------------------------------------
+declare -a RESULTS=()   # "RESULT<TAB>app<TAB>stage<TAB>seconds"
+FAILED=0
+fmt_dur() { local s=$1; printf '%dm%02ds' $(( s/60 )) $(( s%60 )); }
+
+# Terse one-line-per-app result on STDOUT (what the user watches).
+SKIPPED=0
+emit() {  # emit <PASS|FAIL|SKIP> <app> <stage|reason> <seconds>
+  local res=$1 app=$2 stage=$3 secs=$4 dur; dur=$(fmt_dur "$secs")
+  RESULTS+=("$res"$'\t'"$app"$'\t'"$stage"$'\t'"$secs")
+  case "$res" in
+    PASS) printf 'PASS %-16s (%s)\n' "$app" "$dur" ;;
+    SKIP) printf 'SKIP %-16s (%s) — %s\n' "$app" "$dur" "$stage"; SKIPPED=$((SKIPPED+1)) ;;
+    *)    printf 'FAIL %-16s (%s, %s)  logs: %s\n' "$app" "$stage" "$dur" "logs/vm-catalog-test/$app/"; FAILED=$((FAILED+1)) ;;
+  esac
+}
+
+print_summary() {
+  echo ""
+  echo "================ vm-catalog-test summary ================"
+  local r res app stage secs
+  if (( ${#RESULTS[@]} )); then
+    for r in "${RESULTS[@]}"; do
+      IFS=$'\t' read -r res app stage secs <<<"$r"
+      case "$res" in
+        PASS) printf '  PASS  %-16s %s\n' "$app" "$(fmt_dur "$secs")" ;;
+        SKIP) printf '  SKIP  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
+        *)    printf '  FAIL  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
+      esac
+    done
+  else
+    echo "  (no apps tested)"
+  fi
+  echo "  ----"
+  printf '  %d app(s): %d passed, %d failed, %d skipped\n' \
+    "${#RESULTS[@]}" "$(( ${#RESULTS[@]} - FAILED - SKIPPED ))" "$FAILED" "$SKIPPED"
+  echo "  detailed logs: logs/vm-catalog-test/<app>/"
+  echo "========================================================"
+}
+
+# --- teardown trap ----------------------------------------------------------
+cleanup() {
+  local rc=$1
+  print_summary
+  [[ -n "$ALIAS" ]] && remove_ssh_config "$VMID" 2>/dev/null || true
+  [[ -z "$VMID" ]] && exit "$rc"
+  if is_dry; then exit "$rc"; fi
+  if [[ "$FAILED" -ne 0 && "$KEEP_ON_FAIL" == "1" ]]; then
+    warn "failures — keeping VM $VMID and snapshotting for inspection."
+    "$BIN_DIR/vm-snapshot" --vmid "$VMID" --name "catalog-fail-$(date -u +%Y%m%d-%H%M%S)" \
+      --desc "preserved by vm-catalog-test on failure" || true
+    warn "destroy it when done: bin/vm-destroy --vmid $VMID"
+  else
+    log "tearing down VM $VMID"
+    FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$VMID" || warn "teardown failed for VM $VMID — destroy manually."
+  fi
+  exit "$rc"
+}
+abort() { err "$1"; exit 1; }
+
+http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+wait_http() {
+  local url=$1 want=$2 timeout=$3 code deadline; deadline=$(( $(date +%s) + timeout ))
+  while :; do
+    code=$(http_code "$url")
+    if [[ "$code" =~ $want ]]; then log "  $url -> HTTP $code"; return 0; fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  $url -> HTTP $code (timeout after ${timeout}s)"; return 1; fi
+    sleep 5
+  done
+}
+
+# ===========================================================================
+# Setup (one-time): bring up an Authentik-mode VM ready to install apps.
+# ===========================================================================
+setup_create() {
+  log "── creating + booting a disposable VM (Authentik mode)"
+  if is_dry; then VMID="999999"; log "DRY_RUN: bin/vm-create ${VM_MEMORY:+--memory $VM_MEMORY}"; return 0; fi
+  if [[ -n "$VM_MEMORY" ]]; then
+    # main's vm-create has no --memory flag, so size the VM ourselves: clone
+    # without starting, set memory via the Proxmox API, then start.
+    local args=(--no-start); [[ -n "${VM_ID:-}" ]] && args+=(--vmid "$VM_ID")
+    VMID=$("$BIN_DIR/vm-create" "${args[@]}" | tail -1) || return 1
+    [[ -n "$VMID" ]] || return 1
+    local node; node=$(node)
+    log "  setting VM $VMID memory=${VM_MEMORY}MB"
+    proxmox_curl PUT "/nodes/$node/qemu/$VMID/config" --data-urlencode "memory=$VM_MEMORY" >/dev/null || return 1
+    proxmox_curl POST "/nodes/$node/qemu/$VMID/status/start" >/dev/null || return 1
+  else
+    local args=(); [[ -n "${VM_ID:-}" ]] && args=(--vmid "$VM_ID")
+    VMID=$("$BIN_DIR/vm-create" "${args[@]}" | tail -1) || return 1
+    [[ -n "$VMID" ]] || return 1
+  fi
+  # Clear any stale shared-state IP so wait-ssh re-resolves THIS VM's guest-agent IP.
+  state_set VM_IP ""
+  log "  test VM: $VMID"
+}
+
+setup_wait_ssh() {
+  log "── waiting for SSH + resolving IP"
+  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; return 0; fi
+  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" || return 1
+  IP=$(state_get VM_IP); [[ -n "$IP" ]] || { err "  no VM IP after wait-ssh"; return 1; }
+  ALIAS=$(vm_alias "$VMID")
+  log "  VM IP: $IP  (ssh alias: $ALIAS)"
+}
+
+setup_render_env() {
+  log "── rendering Hola .env (HOLA_AUTH_MODE=authentik, sslip.io, self-signed TLS)"
+  DOMAIN_BASE="$IP.sslip.io"
+  DASHBOARD_URL="https://apps.$DOMAIN_BASE"
+  AUTH_URL="https://auth.$DOMAIN_BASE"
+  API_KEY=$( (openssl rand -hex 24 2>/dev/null) || (uuidgen | tr -d '-') )
+  if is_dry; then log "DRY_RUN: would write $HOLA_ENV_OUT (dashboard $DASHBOARD_URL, auth $AUTH_URL)"; return 0; fi
+  # install.sh generates the AUTHENTIK_* secrets idempotently when HOLA_AUTH_MODE=
+  # authentik, so we only set the mode + the auth login domain here.
+  cat > "$HOLA_ENV_OUT" <<EOF
+# Generated by bin/vm-catalog-test for VM $VMID — disposable, self-signed TLS.
+COMPOSE_PROJECT_NAME=hola
+TRAEFIK_HTTP_PORT=80
+TRAEFIK_HTTPS_PORT=443
+TRAEFIK_DASHBOARD_DOMAIN=traefik.$DOMAIN_BASE
+LETSENCRYPT_EMAIL=e2e@example.com
+ACME_CA_SERVER=
+ACME_DNS_PROVIDER=
+HOLA_DOMAIN=apps.$DOMAIN_BASE
+HOLA_BASE_DOMAIN=$DOMAIN_BASE
+HOLA_CATALOG_URL=https://raw.githubusercontent.com/try-hola/apps/main/catalog.json
+HOLA_DEFAULT_TZ=UTC
+HOLA_USE_AUTH=true
+HOLA_API_KEY=$API_KEY
+HOLA_AUTH_MODE=authentik
+HOLA_AUTHENTIK_DOMAIN=auth.$DOMAIN_BASE
+EOF
+  chmod 600 "$HOLA_ENV_OUT"
+  log "  wrote $HOLA_ENV_OUT"
+}
+
+setup_bootstrap() {
+  log "── hola bootstrap over SSH (up to ${BOOTSTRAP_TIMEOUT}s; log: $LOG_DIR/bootstrap.log)"
+  if is_dry; then log "DRY_RUN: hola bootstrap --host $ALIAS --env-file $HOLA_ENV_OUT ${REF:+--ref $REF}"; return 0; fi
+  local args=(bootstrap --host "$ALIAS" --env-file "$HOLA_ENV_OUT")
+  [[ -n "$REF" ]] && args+=(--ref "$REF")
+  timeout "$BOOTSTRAP_TIMEOUT" \
+    bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "${args[@]}" 2>&1 | tee "$LOG_DIR/bootstrap.log"
+  return "${PIPESTATUS[0]}"
+}
+
+setup_verify_stack() {
+  log "── verifying core stack (traefik + server + web + authentik)"
+  if is_dry; then return 0; fi
+  local ps; ps=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose ps --format "{{.Service}} {{.State}}"' 2>&1 | tee "$LOG_DIR/compose-ps.log") || return 1
+  local svc ok=1
+  for svc in traefik server web; do
+    if grep -qiE "^$svc .*(running|up)" <<<"$ps"; then log "  $svc: running"; else err "  $svc: NOT running"; ok=0; fi
+  done
+  wait_http "$DASHBOARD_URL" '^(200|30[0-9])$' "$HTTP_TIMEOUT" || ok=0
+  [[ "$ok" == 1 ]]
+}
+
+# Authentik must be migrated + serving before forward-auth/native-oidc apps can
+# provision. Wait for its login UI to answer.
+setup_wait_authentik() {
+  log "── waiting for Authentik login UI ($AUTH_URL) — first boot runs migrations"
+  if is_dry; then return 0; fi
+  wait_http "$AUTH_URL" '^(200|30[0-9])$' "$AUTHENTIK_TIMEOUT"
+}
+
+# Wait until the SERVER container can spawn `docker compose` (defeats the
+# first-deploy ENOENT race deterministically).
+setup_wait_deploy_ready() {
+  log "── waiting for the server to be deploy-ready (can spawn docker compose)"
+  if is_dry; then return 0; fi
+  local deadline; deadline=$(( $(date +%s) + DEPLOY_READY_TIMEOUT ))
+  while :; do
+    if "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose exec -T server sh -lc "command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1"' >/dev/null 2>&1; then
+      log "  server can spawn docker compose — deploy-ready"; return 0
+    fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  server not deploy-ready in time"; return 1; fi
+    sleep 5
+  done
+}
+
+# Enumerate the apps to test from the SERVER's catalog (the catalog the server
+# actually sees), honoring --apps / --skip. Echoes a space list of ids.
+resolve_apps() {
+  if is_dry; then
+    local list="${ONLY_APPS:-vaultwarden uptime-kuma gitea}"; echo "${list//,/ }"; return 0
+  fi
+  local ids
+  ids=$(at_cli catalog --json 2>"$LOG_DIR/catalog.err" | jq -r '.items[]?.id' 2>/dev/null || true)
+  [[ -n "$ids" ]] || { err "could not read catalog from the server (see $LOG_DIR/catalog.err)"; return 1; }
+  echo "$ids" | tr '\n' ' ' > "$LOG_DIR/catalog-apps.txt"
+  local app out=()
+  for app in $ids; do
+    if [[ -n "$ONLY_APPS" ]] && [[ ",$ONLY_APPS," != *",$app,"* ]]; then continue; fi
+    if [[ -n "$SKIP_APPS" ]] && [[ ",$SKIP_APPS," == *",$app,"* ]]; then continue; fi
+    out+=("$app")
+  done
+  echo "${out[*]}"
+}
+
+# ===========================================================================
+# Orchestration
+# ===========================================================================
+log "=== vm-catalog-test: install every catalog app, verify it comes up (mode=authentik) ==="
+audit "vm-catalog-test start restart=${AT_TEST_RESTART} dry_run=${DRY_RUN:-0}"
+trap 'cleanup $?' EXIT
+
+setup_create            || abort "create VM"
+setup_wait_ssh          || abort "wait for SSH"
+setup_render_env        || abort "render Hola .env"
+setup_bootstrap         || abort "hola bootstrap"
+setup_verify_stack      || abort "verify core stack"
+setup_wait_authentik    || abort "Authentik not ready"
+setup_wait_deploy_ready || abort "server not deploy-ready"
+
+APPS=$(resolve_apps) || abort "resolve catalog apps"
+[[ -n "$APPS" ]] || abort "no apps to test after filters"
+read -r -a APP_ARR <<<"$APPS"
+log "── testing ${#APP_ARR[@]} app(s): ${APPS}"
+echo "# catalog sweep: ${#APP_ARR[@]} app(s) on VM $VMID (mode=authentik, restart=${AT_TEST_RESTART})"
+
+# Export globals the per-app library reads.
+export ROOT_DIR BIN_DIR VMID DASHBOARD_URL API_KEY DOMAIN_BASE HTTP_TIMEOUT AT_TEST_RESTART AT_TEST_STOP
+
+for app in "${APP_ARR[@]}"; do
+  app_log="$LOG_DIR/$app"; mkdir -p "$app_log"
+  start=$(date +%s)
+  if is_dry; then
+    log "DRY_RUN: at_run_app $app"; emit PASS "$app" "-" 0; continue
+  fi
+  # Verbose per-step trace for THIS app → its own run.log (keeps stdout terse).
+  # errexit-safe call (|| rc=$?) so one app's failure never aborts the sweep.
+  rc=0
+  at_run_app "$app" "$app_log" 2>"$app_log/run.log" || rc=$?
+  secs=$(( $(date +%s) - start ))
+  case "$rc" in
+    0) emit PASS "$app" "-" "$secs" ;;
+    2) emit SKIP "$app" "${AT_SKIP_REASON:-needs config}" "$secs" ;;
+    *) emit FAIL "$app" "${AT_LAST_STAGE:-?}" "$secs" ;;
+  esac
+done
+
+audit "vm-catalog-test done apps=${#APP_ARR[@]} failed=$FAILED"
+exit "$FAILED"

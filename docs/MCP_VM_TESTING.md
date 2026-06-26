@@ -172,6 +172,61 @@ exact signature and prints the root cause. Robustness: before installing it wait
 until the server can spawn `docker compose` (and retries the first deploy with
 backoff) to defeat the docker-spawn `ENOENT` race.
 
+### Catalog sweep — install EVERY app and verify it comes up
+
+`bin/vm-catalog-test` is the catalog-wide generalization of the single-app suite.
+It brings up **one** `HOLA_AUTH_MODE=authentik` VM (so apps of *every* auth mode —
+`none`, `forward-auth`, `native-oidc` — can provision), then walks the catalog
+running the **deterministic per-app test** (`bin/lib/app-test.sh`) against each
+app, one at a time:
+
+```
+(setup once) create VM → wait-ssh → render authentik .env → bootstrap →
+              verify core stack → wait for Authentik → wait deploy-ready
+(per app)     install → verify it converges to `running` with its containers up
+              and its front door answering → uninstall → next
+```
+
+Only one app is live at a time, so peak RAM stays bounded (core + Authentik + the
+single heaviest app). `bin/lib/app-test.sh` is the **single source of truth** for
+the per-app checks — the sweep is just that test in a loop over `hola catalog`.
+
+The output is built for monitoring a long run, then drilling into failures:
+
+- **STDOUT** = one terse line per app: `PASS uptime-kuma (1m12s)` /
+  `FAIL gitea (verify, 3m04s)  logs: logs/vm-catalog-test/gitea/`, then a summary.
+- **STDERR** = the live verbose setup trace (create/bootstrap/verify).
+- **Files** = `logs/vm-catalog-test/<app>/` holds the install JSON, server logs,
+  container states, and deploy logs — open these when a line says `FAIL`.
+
+```bash
+bin/vm-catalog-test --dry-run               # rehearse the whole sweep, no infra
+bin/vm-catalog-test                         # install + verify EVERY catalog app
+bin/vm-catalog-test 2>logs/vm-catalog-test/setup.log   # pure terse stdout view
+bin/vm-catalog-test --apps gitea,immich     # just these
+bin/vm-catalog-test --skip webtop           # everything except one
+bin/vm-catalog-test --memory 8192           # size the VM for heavy apps
+bin/vm-catalog-test --restart               # also restart each app (exercises #267)
+bin/vm-catalog-test --lifecycle             # restart + stop + uninstall each app
+```
+
+The auth mode is read off the *front door*, not hard-coded per app: the verify
+step accepts any healthy response — `200` (a `none`/`native-oidc` app serving
+directly) **or** a `30x`/`401` redirect to Authentik (a `forward-auth` app gated at
+the Traefik edge). The hard "came up correctly" gate is the deployment converging
+to `running` with its containers healthy on the host; one-shot init/migration
+containers that exit `0` are tolerated.
+
+Exit code = number of apps that failed. `--keep-on-fail` snapshots and keeps the
+VM if any app failed (default: always destroy so reruns stay cheap).
+
+> Note on `--restart`/`--lifecycle`: `hola bootstrap` installs the **published**
+> server image, and the forward-auth restart fix (#267) ships in a later release —
+> so restarting a `forward-auth` app on a released image will (correctly) FAIL
+> until that release is out. The default sweep (install + verify + uninstall) works
+> for every app on the released image; reach for the lifecycle flags against a
+> server image that already carries the fix (see *Advanced* in the vm-e2e skill).
+
 ---
 
 ## Helper command reference
@@ -189,6 +244,7 @@ backoff) to defeat the docker-spawn `ENOENT` race.
 | `bin/vm-reap`     | Find + destroy LEAKED `hola-test*` clones (confirms once) | **yes**     |
 | `bin/vm-test`     | Full create→test→teardown lifecycle (`--dry-run`, `--ssh`) | yes (teardown) |
 | `bin/vm-e2e-suite`| Deterministic product e2e: bootstrap→install→lifecycle→uninstall, asserted | yes (teardown) |
+| `bin/vm-catalog-test`| Install EVERY catalog app on one Authentik VM, verify each comes up (terse stdout, per-app logs) | yes (teardown) |
 
 ¹ `bin/proxmox-build-template` runs on the **Proxmox host** (not the container);
 `--force` replaces an existing template VMID, `--destroy --id N` removes one.
