@@ -2,7 +2,7 @@
 # bin/vm-create — clone a disposable test VM from a template and boot it.
 #
 # Usage: bin/vm-create [--name NAME] [--template VMID] [--vmid VMID]
-#                      [--no-start] [--full] [--no-ssh] [--dry-run]
+#                      [--memory MiB] [--no-start] [--full] [--no-ssh] [--dry-run]
 #
 # Records the new VMID as the "current" test VM (.devcontainer/.vm-state) so the
 # other vm-* helpers default to it. Talks to the Proxmox REST API with a
@@ -26,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --full) VM_FULL_CLONE=1; shift ;;
     --no-start) START=0; shift ;;
     --no-ssh) PROVISION_SSH=0; shift ;;
+    --memory) VM_MEMORY=$2; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown arg: $1" ;;
@@ -57,6 +58,12 @@ log "clone submitted."
 state_set VM_ID "$VM_ID"
 state_set VM_NAME "$NAME"
 state_set VM_NODE "$NODE"
+
+# Override RAM on the clone (e.g. heavier stacks like Authentik need >2GB).
+if [[ -n "${VM_MEMORY:-}" ]]; then
+  log "setting VM $VM_ID memory to ${VM_MEMORY} MiB"
+  proxmox_curl PUT "/nodes/$NODE/qemu/$VM_ID/config" --data-urlencode "memory=$VM_MEMORY" > /dev/null
+fi
 
 # Inject an ephemeral SSH key via cloud-init BEFORE first boot, so the guest
 # picks it up on the initial cloud-init run (no reboot needed).
