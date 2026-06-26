@@ -213,6 +213,17 @@ function applyActionStatus(deployment: EnhancedDeploymentDetail, action: Deploym
   deployment.lastUpdated = new Date().toISOString();
 }
 
+/**
+ * Render a value for a Compose `.env` line (`KEY=VALUE`). Double-quote and escape
+ * so spaces, `#`, and `$` are preserved literally rather than treated as a comment
+ * or interpolation; collapse newlines (these are single-line values — passwords,
+ * URLs, ids, client secrets). Compose strips the surrounding quotes when loading.
+ */
+function dotenvValue(v: string): string {
+  const s = v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$').replace(/\r?\n/g, ' ');
+  return `"${s}"`;
+}
+
 /** Map a deployment action to the job type that performs it. */
 function mapActionToJobType(action: DeploymentAction): Job['type'] {
   switch (action) {
@@ -970,6 +981,22 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       content,
       hasSecret ? 0o600 : undefined
     );
+
+    // Materialize interpolation variables into a sibling `.env` so Compose can
+    // resolve `${VAR}` references the app's compose makes — both the app's own env
+    // (user/default values from the manifest's `defaultEnv`, e.g. an internal DB
+    // password) and the provisioned auth env (an app that DERIVES a value, e.g.
+    // mealie's `OIDC_CONFIGURATION_URL: "${OIDC_ISSUER_URL}.well-known/..."`).
+    // Without this those `${VAR}` resolve to blank. `docker compose` auto-loads
+    // `.env` from the project directory (the runtime dir we run it in). Auth env
+    // wins on a key clash; written 0600 since it can hold secrets.
+    const appEnv = await this.readActiveAppEnv(deployment);
+    const interp: Record<string, string> = { ...appEnv, ...injectedEnv };
+    const interpKeys = Object.keys(interp);
+    if (interpKeys.length > 0) {
+      const dotenv = interpKeys.map(k => `${k}=${dotenvValue(interp[k])}`).join('\n') + '\n';
+      await this.storageService.writeFile(`deployments/${deployment.id}/runtime/.env`, dotenv, 0o600);
+    }
     return this.runtimeDir(deployment.id);
   }
 
@@ -998,6 +1025,23 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       return manifest.consumes ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** The active release's app env (manifest `defaultEnv` + any user overrides), as
+   *  a flat map — the source for the runtime `.env` Compose interpolates from. */
+  private async readActiveAppEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return {};
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return {};
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      const out: Record<string, string> = {};
+      for (const e of manifest.appEnv ?? []) out[e.key] = e.value ?? '';
+      return out;
+    } catch {
+      return {};
     }
   }
 
