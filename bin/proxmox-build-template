@@ -217,11 +217,22 @@ log "customizing image (desktop=$DESKTOP, user=$SSH_USER)"
 run virt-customize -a "$BUILD" --memsize "$MEMSIZE" --smp 2 --run "$PROV"
 
 # --- 3. create the VM, attach the disk + cloud-init drive, templatize --------
+# Firmware: the --desktop build runs virt-resize, which can invalidate GRUB's
+# core embedding in the BIOS-boot partition of a GPT cloud image — leaving it
+# unbootable under SeaBIOS (blank console, no kernel). Boot desktop templates
+# under UEFI (OVMF) instead: UEFI loads GRUB from the EFI system partition by
+# path, unaffected by the partition expansion. Headless (no virt-resize) keeps
+# the known-good default SeaBIOS.
+fw=()
+if [[ "$DESKTOP" == "1" ]]; then
+  fw=(--bios ovmf --machine q35 --efidisk0 "$STORAGE:0,efitype=4m,pre-enrolled-keys=0")
+fi
+
 log "creating VM $TEMPLATE_ID ($TEMPLATE_NAME) on $STORAGE / $BRIDGE"
 run qm create "$TEMPLATE_ID" \
   --name "$TEMPLATE_NAME" --memory "$MEMORY" --cores "$CORES" --cpu host \
   --net0 "virtio,bridge=$BRIDGE" --scsihw virtio-scsi-single \
-  --ostype l26 --agent enabled=1 --serial0 socket --vga std
+  --ostype l26 --agent enabled=1 --serial0 socket --vga std "${fw[@]}"
 
 # PVE 8+: import the customized build copy straight into scsi0 in one step.
 run qm set "$TEMPLATE_ID" --scsi0 "$STORAGE:0,import-from=$BUILD,discard=on,ssd=1"
