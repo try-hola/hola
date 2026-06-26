@@ -32,12 +32,28 @@
 # prunes unused images/volumes so a long run doesn't fill the disk (which would trip
 # the preflight disk check and degrade later apps) — pass --no-prune to disable.
 #
+# CAVEAT — this tests the RELEASED server image. `hola bootstrap` installs the
+# published `ghcr.io/try-hola/server` pinned to the CLI version, so the sweep
+# exercises the LAST RELEASE, not `main`. Server fixes merged-but-unreleased won't
+# be present — e.g. an uninstall that leaves containers is the already-fixed #271,
+# and a forward-auth `--restart` failure is the already-fixed #267, both pending a
+# release. To test current `main`, build a server image and load it onto the VM
+# (the "Advanced — local server/web image" path in the vm-e2e skill), then re-run.
+#
+# Some catalog apps legitimately can't install unattended: a missing required
+# secret that is a real external token (e.g. gitea's runner registration token —
+# a random value is rejected) or a manifest that leaves a needed value blank (an
+# upstream try-hola/apps issue). Those surface as FAIL with the deploy error in the
+# per-app logs — read them to tell a real regression from an app-config gap.
+#
 # Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
 # and keeps the VM if any app failed (default: always destroy so reruns stay cheap).
 set -euo pipefail
 source "$(dirname "$0")/_common.sh"
-source "$(dirname "$0")/lib/app-test.sh"
 load_env
+# NOTE: bin/lib/app-test.sh is sourced AFTER the timeout defaults below, so the
+# driver's values win over the library's own `:=` fallbacks (the library defaults
+# only apply when a knob is otherwise unset).
 
 # --- args -------------------------------------------------------------------
 KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1
@@ -66,6 +82,11 @@ BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-1200}"   # authentik bootstrap is slower
 AUTHENTIK_TIMEOUT="${AUTHENTIK_TIMEOUT:-420}"
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-240}"              # slow first boots (n8n, immich) need headroom
 DEPLOY_READY_TIMEOUT="${DEPLOY_READY_TIMEOUT:-180}"
+export HTTP_TIMEOUT
+
+# Per-app test library — sourced here (not at the top) so the timeout defaults set
+# above take precedence over the library's own fallback defaults.
+source "$(dirname "$0")/lib/app-test.sh"
 
 # --- paths / per-run state --------------------------------------------------
 LOG_DIR="$ROOT_DIR/logs/vm-catalog-test"

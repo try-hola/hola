@@ -220,12 +220,24 @@ containers that exit `0` are tolerated.
 Exit code = number of apps that failed. `--keep-on-fail` snapshots and keeps the
 VM if any app failed (default: always destroy so reruns stay cheap).
 
-> Note on `--restart`/`--lifecycle`: `hola bootstrap` installs the **published**
-> server image, and the forward-auth restart fix (#267) ships in a later release —
-> so restarting a `forward-auth` app on a released image will (correctly) FAIL
-> until that release is out. The default sweep (install + verify + uninstall) works
-> for every app on the released image; reach for the lifecycle flags against a
-> server image that already carries the fix (see *Advanced* in the vm-e2e skill).
+> **Caveat — the sweep tests the RELEASED server image.** `hola bootstrap` installs
+> the published `ghcr.io/try-hola/server` pinned to the CLI version, so the sweep
+> exercises the **last release**, not `main`. Server fixes that are merged but
+> unreleased won't be present — notably an **uninstall that leaves containers** is
+> the already-fixed #271, and a **forward-auth `--restart` failure** is the
+> already-fixed #267, both pending a release. To validate current `main`, build a
+> server image and load it onto the VM (the *Advanced — local server/web image*
+> path in the vm-e2e skill), then re-run.
+>
+> Some catalog apps also can't install fully unattended and will FAIL with the
+> deploy error in their per-app log — read it to separate a real regression from an
+> app-config gap. Two patterns seen in practice: a required secret that must be a
+> **real external token** (e.g. gitea's runner registration token — a generated
+> value is rejected), and a manifest that leaves a needed value **blank** (e.g. a
+> Postgres password not wired, an upstream `try-hola/apps` issue → the app's init
+> container exits non-zero). The harness auto-fills required *secret* env vars with
+> generated tokens and SKIPs apps that need non-secret manual config, but it can't
+> invent a valid external token.
 
 ---
 
