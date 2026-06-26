@@ -62,6 +62,52 @@ describe('install', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('proceeds past preflight WARNINGS (non-strict): warnings are advisory, not fatal', async () => {
+    // e.g. disk under the 2 GB soft threshold, or an unconventional env-var name.
+    const sdk = makeSdk({
+      drafts: {
+        preflight: vi.fn(async () => ({
+          ok: false,
+          checks: [
+            { name: 'disk', status: 'warn', detail: '1.9GB free' },
+            { name: 'env', status: 'warn', detail: "name 'GITEA__server__DOMAIN' should use uppercase" },
+          ],
+        })),
+      },
+    });
+    const res = await runInstall('gitea', { noStream: true, json: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.calls).toContain('deploy');
+    expect(res?.deploymentId).toBe('dep1');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('aborts (exit 1, no deploy) on a hard preflight FAIL check even without --strict', async () => {
+    const sdk = makeSdk({
+      drafts: {
+        preflight: vi.fn(async () => ({
+          ok: false,
+          checks: [{ name: 'routing', status: 'fail', detail: "Host 'x' already in use" }],
+        })),
+      },
+    });
+    const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res).toBeUndefined();
+    expect(sdk.deployments.create).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('aborts on preflight warnings under --strict (spotless preflight required)', async () => {
+    const sdk = makeSdk({
+      drafts: {
+        preflight: vi.fn(async () => ({ ok: false, checks: [{ name: 'disk', status: 'warn', detail: '1.9GB free' }] })),
+      },
+    });
+    const res = await runInstall('gitea', { strict: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res).toBeUndefined();
+    expect(sdk.deployments.create).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
   it('rejects a malformed --set', async () => {
     const sdk = makeSdk();
     const res = await runInstall('gitea', { set: 'NOEQUALS', noStream: true }, { sdk: sdk as unknown as HolaSdk });

@@ -43,7 +43,16 @@ export async function finalizeAndDeploy(
   for (const c of preflight.checks ?? []) {
     if (c.status !== 'pass') out(`  ${c.status}: ${c.name}${c.detail ? ` — ${c.detail}` : ''}`);
   }
-  if (preflight.ok === false) throw new DeployAbort('Preflight failed.');
+  // `preflight.ok` is the server's "everything perfect" flag — it is false on ANY
+  // non-pass check, including advisory WARNINGS (disk under the 2 GB soft threshold,
+  // an image not yet pulled locally, an unconventional env-var name). Those must not
+  // block a normal install — only a hard `fail` check does (Docker down, a port or
+  // routing conflict, an env ERROR). `--strict` still gates on the full `ok` flag
+  // for callers (e.g. CI) that want a spotless preflight.
+  const hardFail = (preflight.checks ?? []).some(c => c.status === 'fail');
+  if (opts.strict ? preflight.ok === false : hardFail) {
+    throw new DeployAbort('Preflight failed.');
+  }
 
   out('Finalizing…');
   await sdk.drafts.finalize(draftId);
