@@ -48,16 +48,22 @@ ssh SSH_USER@PVE_HOST 'qm status 9000; qm status 9001'        # "does not exist"
 ```
 
 ### Step 1 — Grant privileges to the token + verify:
+TWO grants are needed — `PVEVMAdmin` does NOT include any Datastore privileges
+(verified on PVE 9), and cloning must allocate the clone's disk + cloud-init drive
+on storage. So also grant `PVEDatastoreUser` on the storage from Step 0 (`STORAGE`).
 ```
 ssh SSH_USER@PVE_HOST "sudo pveum acl modify / --roles PVEVMAdmin --users 'TOKEN_USER'"
+ssh SSH_USER@PVE_HOST "sudo pveum acl modify /storage/STORAGE --roles PVEDatastoreUser --users 'TOKEN_USER'"
 ssh SSH_USER@PVE_HOST "sudo pveum user token modify TOKEN_USER TOKEN_NAME --privsep 0"
-ssh SSH_USER@PVE_HOST 'sudo pveum acl list'                  # expect: path /, role PVEVMAdmin, user TOKEN_USER
+ssh SSH_USER@PVE_HOST 'sudo pveum acl list'                  # expect: / -> PVEVMAdmin and /storage/STORAGE -> PVEDatastoreUser, user TOKEN_USER
 ssh SSH_USER@PVE_HOST 'sudo pveum user token list TOKEN_USER' # expect: token TOKEN_NAME with privsep = 0
 ```
-(`PVEVMAdmin` is a built-in role covering VM.Clone/Allocate/Config.Cloudinit/
-PowerMgmt/Snapshot/Console/Monitor + Datastore.AllocateSpace. Disabling privsep
-lets the token inherit the user's role; alternatively keep privsep and grant the
-token directly with `--tokens 'TOKEN_ID'`.)
+(`PVEVMAdmin` covers the VM privileges — VM.Clone/Allocate/Config.*/PowerMgmt/
+Snapshot/Console and, on PVE 9, `VM.GuestAgent.Audit` for the guest-agent IP
+lookup that replaced the old `VM.Monitor`. `PVEDatastoreUser` adds
+`Datastore.AllocateSpace`/`Datastore.Audit`. Disabling privsep lets the token
+inherit the user's roles; alternatively keep privsep and grant the token directly
+with `--tokens 'TOKEN_ID'` on both paths.)
 
 ### Step 2 — Install the build dependency + verify:
 ```
