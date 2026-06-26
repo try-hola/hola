@@ -507,7 +507,18 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     // Idempotent re-provision: reuse the existing proxy provider, refresh its host.
     const existing = input.existingRef;
     if (existing && existing.mode === 'forward-auth' && existing.providerPk != null) {
-      await this.api('PATCH', `/api/v3/providers/proxy/${existing.providerPk}/`, { external_host: externalHost });
+      // Always resend `mode`: Authentik's ProxyProvider serializer validates the
+      // payload against `attrs.get("mode", ProxyMode.PROXY)`, so a partial update
+      // that omits `mode` is validated as PROXY mode — which then rejects the
+      // (correctly empty) `internal_host` of a forward-auth provider with HTTP 400.
+      // Sending `forward_single` (matching the create call) makes the update
+      // validate in forward-auth mode. Without this, every restart of a
+      // forward-auth app fails in provisionAuth before the container is recreated,
+      // leaving the deployment stuck in `error`.
+      await this.api('PATCH', `/api/v3/providers/proxy/${existing.providerPk}/`, {
+        mode: 'forward_single',
+        external_host: externalHost,
+      });
       const reuseSlug = existing.applicationSlug ?? slug;
       // Re-reconcile the group restriction so it tracks manifest changes across redeploys.
       await this.reconcileForwardAuthGroups(reuseSlug, input.forwardAuth?.allowedGroups ?? []);
