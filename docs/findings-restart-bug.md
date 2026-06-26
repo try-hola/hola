@@ -90,6 +90,36 @@ Regression test added in `authentik-contract.test.ts`: the forward-auth reuse pa
 PATCHes with `mode: 'forward_single'` and the mock fetch returns 400 if `mode` is
 absent, locking in the contract.
 
+## Deterministic validation (real Authentik, local Docker)
+
+The unit contract test mocks `fetch`, so it can't prove the real Authentik
+serializer accepts the payload. An integration test in
+`authentik-provision.it.ts` (`forward-auth reuse (restart/redeploy)`) drives the
+exact reuse path against a **real** Authentik booted in Docker: provision a
+forward-auth provider, then re-provision with the saved ref (the call
+`runLifecycleJob`'s restart branch makes via `provisionAuth`) and a changed host.
+
+Red/green, ~65s per run (`bun test:integration`, gated on Docker):
+
+- **Without the fix** the reuse re-provision fails on
+  `PATCH /api/v3/providers/proxy/<pk>/ failed: 400` — the live bug.
+- **With the fix** it reuses the provider in place, the provider keeps
+  `internal_host: ""` (still forward-auth, not silently flipped to proxy), and the
+  `external_host` is refreshed.
+
+This confirms the fix is complete at the provisioner layer: the reuse PATCH was the
+only failing step. `completeAuthWiring` (the step after `composeUp`) does no
+Authentik work for a forward-auth app — `runPostDeploySetup` is a no-op without an
+`oidc.setup` block, and `activateRoute` only re-emits the Traefik file config — so
+there is no further provisioning failure on the restart path. (A real-VM e2e of the
+full `install → restart → running` loop for a forward-auth app is covered by the
+catalog/lifecycle test harness.)
+
+The integration harness's `waitForApi` was also hardened to wait for the default
+`default-provider-authorization-implicit-consent` flow blueprint (not just the API
+socket), removing a cold-boot race where a fast first test 404'd before Authentik
+finished applying its default flows.
+
 ## Secondary observation (benign)
 
 Uninstalling a *failed* deployment logged `docker-compose.yml not found at
