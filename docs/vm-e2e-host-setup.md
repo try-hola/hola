@@ -48,22 +48,26 @@ ssh SSH_USER@PVE_HOST 'qm status 9000; qm status 9001'        # "does not exist"
 ```
 
 ### Step 1 — Grant privileges to the token + verify:
-TWO grants are needed — `PVEVMAdmin` does NOT include any Datastore privileges
-(verified on PVE 9), and cloning must allocate the clone's disk + cloud-init drive
-on storage. So also grant `PVEDatastoreUser` on the storage from Step 0 (`STORAGE`).
+THREE grants are needed — on PVE 9 `PVEVMAdmin` includes neither Datastore nor
+SDN privileges, and cloning must (a) allocate the clone's disk + cloud-init drive
+on storage and (b) attach the NIC to the bridge. So also grant `PVEDatastoreUser`
+on the storage from Step 0 (`STORAGE`) and `PVESDNUser` on the bridge (`BRIDGE`)
+in its SDN zone — for a plain Linux bridge the zone is `localnetwork`.
 ```
 ssh SSH_USER@PVE_HOST "sudo pveum acl modify / --roles PVEVMAdmin --users 'TOKEN_USER'"
 ssh SSH_USER@PVE_HOST "sudo pveum acl modify /storage/STORAGE --roles PVEDatastoreUser --users 'TOKEN_USER'"
+ssh SSH_USER@PVE_HOST "sudo pveum acl modify /sdn/zones/localnetwork/BRIDGE --roles PVESDNUser --users 'TOKEN_USER'"
 ssh SSH_USER@PVE_HOST "sudo pveum user token modify TOKEN_USER TOKEN_NAME --privsep 0"
-ssh SSH_USER@PVE_HOST 'sudo pveum acl list'                  # expect: / -> PVEVMAdmin and /storage/STORAGE -> PVEDatastoreUser, user TOKEN_USER
+ssh SSH_USER@PVE_HOST 'sudo pveum acl list'                  # expect 3 entries for TOKEN_USER: / PVEVMAdmin, /storage/STORAGE PVEDatastoreUser, /sdn/zones/localnetwork/BRIDGE PVESDNUser
 ssh SSH_USER@PVE_HOST 'sudo pveum user token list TOKEN_USER' # expect: token TOKEN_NAME with privsep = 0
 ```
 (`PVEVMAdmin` covers the VM privileges — VM.Clone/Allocate/Config.*/PowerMgmt/
 Snapshot/Console and, on PVE 9, `VM.GuestAgent.Audit` for the guest-agent IP
 lookup that replaced the old `VM.Monitor`. `PVEDatastoreUser` adds
-`Datastore.AllocateSpace`/`Datastore.Audit`. Disabling privsep lets the token
-inherit the user's roles; alternatively keep privsep and grant the token directly
-with `--tokens 'TOKEN_ID'` on both paths.)
+`Datastore.AllocateSpace`/`Datastore.Audit`; `PVESDNUser` adds `SDN.Use` for the
+bridge. Disabling privsep lets the token inherit the user's roles; alternatively
+keep privsep and grant the token directly with `--tokens 'TOKEN_ID'` on all three
+paths.)
 
 ### Step 2 — Install the build dependency + verify:
 ```
