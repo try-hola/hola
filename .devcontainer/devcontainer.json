@@ -44,5 +44,5 @@
       ]
     }
   },
-  "postCreateCommand": "node --version && tsc --version && chmod +x bin/mcp-setup bin/vm-create bin/vm-wait-ssh bin/vm-ssh bin/vm-snapshot bin/vm-destroy bin/vm-reap bin/vm-test bin/vm-web-check && bin/mcp-setup --check || true"
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
 }
