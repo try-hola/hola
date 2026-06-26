@@ -23,6 +23,7 @@ import { RealLoggingService } from '../../services/core/logging';
 import { RealJobService } from '../../services/core/jobs';
 import { MockDockerService, type DockerService } from '../../services/core/docker';
 import { ProvisioningError } from '../../middleware/error-mapping';
+import { NoneProvisionerService } from '../../services/core/provisioner';
 import type {
   ProvisionerService,
   ProvisionInput,
@@ -79,6 +80,10 @@ class SpyProvisioner implements ProvisionerService {
 
   async healthCheck() {
     return { healthy: true, lastCheck: new Date() };
+  }
+
+  assertCanProvisionAuthMode(): void {
+    // Spy backs every mode (it has a real provider in these tests).
   }
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
@@ -433,6 +438,35 @@ describe('Auth provisioning lifecycle', () => {
     expect((await sys.deployments.getDeployment(created.deploymentId)).status).toBe('error');
     // No compose was materialized (provisioning threw first).
     expect(await sys.storage.fileExists(`deployments/${created.deploymentId}/runtime/docker-compose.yml`)).toBe(false);
+  });
+
+  test('forward-auth under HOLA_AUTH_MODE=none is rejected up front, creating no error-state deployment', async () => {
+    // The None backend (production with no Authentik) cannot gate a forward-auth
+    // route. Installing such an app must fail at create time with the clear,
+    // actionable error — NOT enqueue a deploy job that tombstones the deployment
+    // in `error` state (regression for the uptime-kuma-under-none install bug).
+    const FORWARD_AUTH: AppAuthConfig = { mode: 'forward-auth', forwardAuth: {} };
+    const sys = makeSystem({ auth: FORWARD_AUTH, provisioner: new NoneProvisionerService() });
+    const draftId = await finalizedDraft(sys.drafts);
+
+    await expect(sys.deployments.createFromDraft({ draftId, name: 'gitea' })).rejects.toThrow(
+      'which needs an auth backend. Set HOLA_AUTH_MODE=authentik to install it.',
+    );
+
+    // No deployment record was created at all — nothing left in `error` state, and
+    // no deploy job to run.
+    const list = await sys.deployments.listDeployments({});
+    expect(list.total).toBe(0);
+    expect(list.items).toHaveLength(0);
+    expect(await sys.jobs.listJobs()).toHaveLength(0);
+  });
+
+  test('native-oidc under HOLA_AUTH_MODE=none installs fine (app keeps its own login)', async () => {
+    // Contrast with forward-auth: native-oidc runs without a backend (the app has
+    // its own login), so the None backend must NOT reject it up front.
+    const sys = makeSystem({ auth: OIDC_AUTH, provisioner: new NoneProvisionerService() });
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
   });
 
   test('delete tolerates a deprovision failure (orphan logged, delete proceeds)', async () => {

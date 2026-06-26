@@ -105,6 +105,17 @@ export interface ProvisionerService extends HealthCheckable {
   provision(input: ProvisionInput): Promise<ProvisionResult>;
   deprovision(input: DeprovisionInput): Promise<void>;
   /**
+   * Synchronously assert this backend CAN provision `mode` for `appName`, with no
+   * side effects. Lets the deploy path preflight an app's declared auth requirement
+   * BEFORE any deployment record/job is created, so a mode that needs a backend
+   * which isn't configured (e.g. `forward-auth` under `HOLA_AUTH_MODE=none`) is
+   * rejected up front with a clear, actionable error — instead of tombstoning a
+   * deployment in `error` state when provisioning throws inside the deploy job.
+   * Backends with a real auth provider support every mode (no-op); the None
+   * backend throws for the modes that need a backend.
+   */
+  assertCanProvisionAuthMode(mode: AuthMode, appName: string): void;
+  /**
    * Idempotently ensure a PUBLIC (PKCE) OIDC client for the dashboard itself and
    * return its issuer/clientId. Stable across restarts (keyed on a fixed slug), so
    * re-running reuses the same client. The dashboard is a public SPA client, so no
@@ -238,6 +249,12 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     } catch (error) {
       return { healthy: false, lastCheck: new Date(), error: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  assertCanProvisionAuthMode(mode: AuthMode, appName: string): void {
+    // Authentik backs every supported mode.
+    void mode;
+    void appName;
   }
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
@@ -1361,6 +1378,12 @@ export class MockProvisionerService implements ProvisionerService {
     return { healthy: true, lastCheck: new Date() };
   }
 
+  assertCanProvisionAuthMode(mode: AuthMode, appName: string): void {
+    // Mock backend (test/dev) accepts every mode.
+    void mode;
+    void appName;
+  }
+
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     if (input.mode === 'native-oidc' && input.oidc) {
       const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
@@ -1438,6 +1461,27 @@ export class MockProvisionerService implements ProvisionerService {
 // ---------------------------------------------------------------------------
 
 /**
+ * Auth modes that cannot run without a real auth backend: a `forward-auth` route
+ * would be gated by a non-existent outpost and a `native-ldap` app would have no
+ * bind account. The None backend refuses these.
+ */
+const MODES_REQUIRING_BACKEND: ReadonlySet<AuthMode> = new Set(['forward-auth', 'native-ldap']);
+
+/**
+ * Single source of truth for the None backend's "this mode needs a backend"
+ * rejection, used both as an up-front preflight (`assertCanProvisionAuthMode`,
+ * before any deployment state exists) and at provision time (defense in depth).
+ * Throws the same actionable error so the wording never diverges.
+ */
+function assertModeRunnableWithoutBackend(mode: AuthMode, appName: string): void {
+  if (MODES_REQUIRING_BACKEND.has(mode)) {
+    throw new ProvisioningError(
+      `App "${appName}" requires auth mode "${mode}", which needs an auth backend. Set HOLA_AUTH_MODE=authentik to install it.`
+    );
+  }
+}
+
+/**
  * No-op provisioner for production deployments without an auth backend
  * (`HOLA_AUTH_MODE != authentik`). Issue #110: the Mock provisioner is for
  * test/dev and injects *fake* OIDC creds / a dead forward-auth middleware, which
@@ -1459,12 +1503,14 @@ export class NoneProvisionerService implements ProvisionerService {
     return { healthy: true, lastCheck: new Date() };
   }
 
+  assertCanProvisionAuthMode(mode: AuthMode, appName: string): void {
+    assertModeRunnableWithoutBackend(mode, appName);
+  }
+
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
-    if (input.mode === 'forward-auth' || input.mode === 'native-ldap') {
-      throw new ProvisioningError(
-        `App "${input.appName}" requires auth mode "${input.mode}", which needs an auth backend. Set HOLA_AUTH_MODE=authentik to install it.`
-      );
-    }
+    // Defense in depth: callers should preflight via assertCanProvisionAuthMode,
+    // but never start a stack we can't actually gate.
+    assertModeRunnableWithoutBackend(input.mode, input.appName);
     if (input.mode === 'native-oidc') {
       this.logger.info('No auth backend; skipping native-oidc provisioning — app keeps its own login', {
         deploymentId: input.deploymentId,
