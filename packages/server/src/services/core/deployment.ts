@@ -334,6 +334,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void app;
   }
 
+  /**
+   * Preflight the app's declared auth requirement against the active auth backend
+   * before any deployment state is created (RealDeploymentService overrides this
+   * to consult the provisioner). Default no-op — the in-memory/mock service has no
+   * real backend to gate against.
+   */
+  protected assertAuthProvisionable(auth: FinalizedManifest['auth'], appName: string): void {
+    void auth;
+    void appName;
+  }
+
   /** Public URL the app is reachable at; the real service derives it from routing. */
   protected appUrl(deploymentId: string, app: string): string | undefined {
     void deploymentId;
@@ -445,6 +456,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       });
       const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
 
+      // Reject an app whose declared auth needs a backend the active provisioner
+      // can't satisfy (e.g. forward-auth under HOLA_AUTH_MODE=none) BEFORE creating
+      // any deployment state — the same check the deploy job's provisionAuth would
+      // hit, but up front so the user gets the clear error instead of a tombstone.
+      this.assertAuthProvisionable(artifacts?.manifest.auth, app);
+
       // Reject a routing (host) conflict before creating any deployment state.
       await this.onBeforeCreate(deploymentId, app);
 
@@ -511,7 +528,13 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     this.logger.info('Promoting new release onto deployment', { deploymentId, releaseId, draftId: request.draftId });
 
     const artifacts = await this.loadFinalizedArtifacts(request.draftId);
-    const { release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+    const { app, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+
+    // Reject an unsatisfiable auth requirement before staging the new release, so
+    // a promote that switches to a backend-only mode (e.g. forward-auth under
+    // HOLA_AUTH_MODE=none) fails up front instead of in the deploy job.
+    this.assertAuthProvisionable(artifacts?.manifest.auth, app);
+
     this.releases.set(releaseId, release);
 
     await this.ensureLayout(deploymentId);
@@ -1021,6 +1044,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       this.logger.warn('App registry reconcile failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Preflight an app's declared auth requirement against the active auth backend,
+   * BEFORE any deployment record/job is created. Mirrors the modes `provisionAuth`
+   * will actually provision — the declared mode plus a forward-auth fallback when
+   * `auth.fallback` requests one — and delegates the can-we-provision decision to
+   * the provisioner, so an app needing a backend that isn't configured (e.g.
+   * forward-auth under `HOLA_AUTH_MODE=none`) is rejected up front with the
+   * backend's own clear, actionable error instead of tombstoning a deployment in
+   * `error` state. No-op when the app declares no auth block.
+   */
+  protected override assertAuthProvisionable(auth: FinalizedManifest['auth'], appName: string): void {
+    if (!auth) return;
+    this.provisioner.assertCanProvisionAuthMode(auth.mode, appName);
+    const wantsFallback = auth.fallback === 'forward-auth' && auth.mode !== 'forward-auth';
+    if (wantsFallback) {
+      this.provisioner.assertCanProvisionAuthMode('forward-auth', appName);
     }
   }
 
