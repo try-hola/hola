@@ -122,11 +122,40 @@ else
   run curl -fSL --retry 3 -o "$IMG" "$IMAGE_URL"
 fi
 
+# --- 1b. per-build working copy (keep the cached download pristine) ----------
+# Never customize the shared cache in place — re-customizing would stack changes
+# across builds/flavors (a later --desktop build inheriting an earlier headless
+# build's edits). Each build gets its own copy. For --desktop, expand the root
+# filesystem UP FRONT: the heavy XFCE/Firefox apt step runs inside virt-customize,
+# before the disk is imported, so the later `qm resize` is too late to give it room
+# (the stock cloud image has a ~2.5G root; the desktop install needs ~1.7G more).
+BUILD="$WORK/build-$TEMPLATE_ID.qcow2"
+cleanup() { rm -f "${BUILD:-}" "${PROV:-}"; }
+trap cleanup EXIT
+if [[ "$DESKTOP" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "  + qemu-img create -f qcow2 $BUILD ${DISK_SIZE}G" >&2
+    echo "  + virt-resize --expand <root-part> $IMG $BUILD" >&2
+  else
+    # Largest partition = the root to expand (sizes in bytes, no -h).
+    ROOTPART=$(virt-filesystems --parts --long -a "$IMG" \
+      | awk '$2=="partition"{print $4"\t"$1}' | sort -rn | head -1 | cut -f2)
+    [[ -n "$ROOTPART" ]] || die "could not detect root partition in $IMG"
+    log "expanding image to ${DISK_SIZE}G for build (root $ROOTPART)"
+    qemu-img create -f qcow2 "$BUILD" "${DISK_SIZE}G" > /dev/null
+    virt-resize --expand "$ROOTPART" "$IMG" "$BUILD"
+  fi
+else
+  log "copying cached image to per-build working copy"
+  run cp --sparse=always "$IMG" "$BUILD"
+fi
+
 # --- 2. customize the image (guest agent, docker, user, optional desktop) ----
 # The provisioning script is generated here so SSH_USER / VNC_PASSWORD are baked
 # in (virt-customize doesn't forward env to --run). It is chmod 600 and removed
-# on exit; the VNC password lands only in the image's vncpasswd file (expected).
-PROV="$(mktemp)"; trap 'rm -f "$PROV"' EXIT
+# on exit (with the build copy) by cleanup(); the VNC password lands only in the
+# image's vncpasswd file (expected).
+PROV="$(mktemp)"
 {
   echo '#!/bin/bash'
   echo 'set -eux'
@@ -185,7 +214,7 @@ chmod 600 "$PROV"
 
 MEMSIZE=$([[ "$DESKTOP" == "1" ]] && echo 4096 || echo 2048)
 log "customizing image (desktop=$DESKTOP, user=$SSH_USER)"
-run virt-customize -a "$IMG" --memsize "$MEMSIZE" --smp 2 --run "$PROV"
+run virt-customize -a "$BUILD" --memsize "$MEMSIZE" --smp 2 --run "$PROV"
 
 # --- 3. create the VM, attach the disk + cloud-init drive, templatize --------
 log "creating VM $TEMPLATE_ID ($TEMPLATE_NAME) on $STORAGE / $BRIDGE"
@@ -194,8 +223,8 @@ run qm create "$TEMPLATE_ID" \
   --net0 "virtio,bridge=$BRIDGE" --scsihw virtio-scsi-single \
   --ostype l26 --agent enabled=1 --serial0 socket --vga std
 
-# PVE 8+: import the disk straight into scsi0 in one step.
-run qm set "$TEMPLATE_ID" --scsi0 "$STORAGE:0,import-from=$IMG,discard=on,ssd=1"
+# PVE 8+: import the customized build copy straight into scsi0 in one step.
+run qm set "$TEMPLATE_ID" --scsi0 "$STORAGE:0,import-from=$BUILD,discard=on,ssd=1"
 run qm set "$TEMPLATE_ID" --ide2 "$STORAGE:cloudinit"
 run qm set "$TEMPLATE_ID" --boot order=scsi0
 run qm set "$TEMPLATE_ID" --ipconfig0 ip=dhcp
