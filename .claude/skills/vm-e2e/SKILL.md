@@ -106,9 +106,24 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
 
 ## Shortcuts
 
+- **Deterministic, repeatable e2e suite**: `bin/vm-e2e-suite` runs the whole
+  product flow against a fresh VM and asserts each step — create → bootstrap
+  (`HOLA_AUTH_MODE=none`) → verify stack → browse catalog → install app → assert
+  it's reachable at its subdomain → deployments list → restart → stop → uninstall
+  → tear down. Cheap (no Authentik, one light app), `--dry-run`-able,
+  `--keep-on-fail` to snapshot a failure. This is the go-to regression test;
+  prefer it over hand-driving the steps above. It defaults to **vaultwarden**
+  (`auth.mode: none`) because under `HOLA_AUTH_MODE=none` only `auth.mode: none`
+  apps deploy — `provisionAuth` runs before `composeUp`, and forward-auth /
+  native-oidc apps have no Authentik to provision against (so e.g.
+  `--app uptime-kuma` fails under mode=none until the #267 fix ships; the suite
+  detects and explains that). Before installing it waits until the server can
+  spawn `docker compose` (defeats the docker-spawn `ENOENT` race). Output →
+  `logs/vm-e2e-suite/`.
 - **CLI/integration on the VM**: `bin/vm-test --ssh -- <cmd>` runs create →
   wait-ssh → `<cmd>` on the VM → teardown in one shot.
-- **Just rehearse the whole flow**: `bin/vm-test --dry-run`.
+- **Just rehearse the whole flow**: `bin/vm-test --dry-run` or
+  `bin/vm-e2e-suite --dry-run`.
 
 ## Advanced — testing local server/web *image* changes
 
