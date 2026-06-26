@@ -132,7 +132,9 @@ PROV="$(mktemp)"; trap 'rm -f "$PROV"' EXIT
   echo 'set -eux'
   echo 'export DEBIAN_FRONTEND=noninteractive'
   echo 'apt-get update'
-  echo 'apt-get install -y qemu-guest-agent docker.io ca-certificates curl sudo'
+  # docker.io = engine + CLI; docker-compose-v2 = the `docker compose` plugin that
+  # `hola bootstrap`'s preflight requires (docker.io alone does NOT include it).
+  echo 'apt-get install -y qemu-guest-agent docker.io docker-compose-v2 ca-certificates curl sudo'
   echo 'systemctl enable qemu-guest-agent docker'
   echo "id -u $SSH_USER >/dev/null 2>&1 || useradd -m -s /bin/bash $SSH_USER"
   echo "usermod -aG sudo,docker $SSH_USER"

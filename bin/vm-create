@@ -69,9 +69,14 @@ if [[ "$PROVISION_SSH" == "1" ]]; then
     mkdir -p "$KEYS_DIR"; chmod 700 "$KEYS_DIR"
     rm -f "$KEY" "$KEY.pub"
     ssh-keygen -q -t ed25519 -N '' -f "$KEY" -C "hola-test-$VM_ID"
-    # cloud-init wants the public key URL-encoded; --data-urlencode handles it.
+    # Proxmox's `sshkeys` param must arrive URL-encoded: the form-POST decodes the
+    # body once, and Proxmox then validates the *result* is still URL-encoded. So
+    # pre-encode the pubkey (@uri), then --data-urlencode encodes it again — one
+    # decode in transit leaves the encoded value Proxmox expects. Passing the raw
+    # key instead yields "invalid format - invalid urlencoded string".
+    sshkeys_enc=$(printf '%s' "$(cat "$KEY.pub")" | jq -sRr @uri)
     ci_args=(--data-urlencode "ciuser=$VM_SSH_USER"
-             --data-urlencode "sshkeys=$(cat "$KEY.pub")")
+             --data-urlencode "sshkeys=$sshkeys_enc")
     [[ -n "${VM_IPCONFIG0:-}" ]] && ci_args+=(--data-urlencode "ipconfig0=$VM_IPCONFIG0")
     proxmox_curl PUT "/nodes/$NODE/qemu/$VM_ID/config" "${ci_args[@]}" > /dev/null
   fi
