@@ -865,7 +865,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       this.projectName(deploymentId),
       options
     );
-    return { items: entries };
+    if (entries.length > 0) return { items: entries };
+
+    // No container logs — the app's containers never started (a deploy that failed
+    // BEFORE `compose up`, e.g. an error in provisionAuth/materializeCompose, or a
+    // stopped/torn-down deployment). composeLogs returns an honest empty snapshot in
+    // that case, which used to hide *why* the deploy failed. Fall back to the
+    // deployment's lifecycle event log (the "Starting action…/Pulling…/action 'X'
+    // failed: <error>" trail logged via logDeployment), so the failure reason is
+    // visible at the endpoint users actually check (`hola logs <id>`).
+    const events = this.loggingService
+      .recentLogs({ kind: 'deployment', id: deploymentId }, options?.tail)
+      .map((e) => ({ timestamp: e.timestamp, service: e.service, level: e.level, message: e.message }));
+    return { items: events };
   }
 
   /** Live stream of the deployment's compose-project container stdout. */
