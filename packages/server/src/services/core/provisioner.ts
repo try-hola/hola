@@ -591,11 +591,18 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     applicationPk?: string,
   ): Promise<void> {
     const names = groupNames.map((g) => g.trim()).filter(Boolean);
-    // Fresh provision with no restriction declared: the app was just created, so
-    // there are no prior bindings to reconcile — leave it open to any
-    // authenticated user (the documented default). Avoids an extra round-trip on
-    // the common path.
-    if (names.length === 0 && applicationPk) return;
+    // No group restriction declared → nothing to reconcile; leave the app open to
+    // any authenticated user (the documented default). Return BEFORE querying
+    // existing bindings. This matters on the reuse path (restart/redeploy), which
+    // calls us WITHOUT an applicationPk: the binding lookup is
+    // `GET /api/v3/policies/bindings/`, which the least-privilege scoped provisioner
+    // token cannot read (403) — so the old `&& applicationPk` guard let a no-groups
+    // RESTART of a forward-auth app fail in provisionAuth (install worked because the
+    // create path passes applicationPk and returned here). Skipping the lookup when
+    // there are no desired groups also can't drop a real restriction: a forward-auth
+    // app that previously had groups and now declares none would simply stay on its
+    // (more-restrictive) bindings — fail-safe, not access-widening.
+    if (names.length === 0) return;
 
     const appPk =
       applicationPk ??

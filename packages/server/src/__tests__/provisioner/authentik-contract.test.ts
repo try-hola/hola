@@ -517,6 +517,34 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55 });
   });
 
+  test('forward-auth reuse with NO declared groups skips the policy-bindings lookup (scoped token can 403 it)', async () => {
+    // The reuse/restart path calls reconcileForwardAuthGroups WITHOUT an
+    // applicationPk. `GET /api/v3/policies/bindings/` is forbidden for the
+    // least-privilege scoped provisioner token (403). With no groups declared there
+    // is nothing to reconcile, so the lookup must be skipped — otherwise a no-groups
+    // forward-auth RESTART fails in provisionAuth (the real bug surfaced on a VM).
+    installFetch((call) => {
+      if (call.method === 'PATCH' && call.path === '/api/v3/providers/proxy/55/') return json({ pk: 55 });
+      // Stand in for the scoped token: any binding read/list is forbidden.
+      if (call.path.startsWith('/api/v3/policies/bindings/')) return json({ detail: 'permission denied' }, 403);
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    // No forwardAuth.allowedGroups → nothing to reconcile.
+    const result = await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana-2.example.com',
+      existingRef: { mode: 'forward-auth', providerPk: 55, applicationSlug: 'grafana-dep-abcd', outpostPk: 1 },
+    });
+
+    // The bindings lookup must never be attempted (it would 403 and fail the deploy).
+    expect(calls.some(c => c.path.startsWith('/api/v3/policies/bindings/'))).toBe(false);
+    expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55 });
+  });
+
   test('forward-auth provision binds the declared groups to the application (access restriction)', async () => {
     const bindings: Array<{ target: unknown; group: unknown }> = [];
     installFetch((call) => {
