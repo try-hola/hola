@@ -278,16 +278,20 @@ setup_local_server_image() {
   docker save "$tag" | "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'docker load' > "$LOG_DIR/server-load.log" 2>&1 \
     || { err "  docker save|load failed (see $LOG_DIR/server-load.log)"; return 1; }
   log "  recreating the server container with the local image…"
-  # CRITICAL: --pull never. Without it, `compose up` re-pulls the published tag from
-  # GHCR and overwrites the image we just loaded — silently testing the RELEASED
-  # server instead of the local build. --pull never forces the loaded local image.
-  "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose up -d --no-deps --force-recreate --pull never server' > "$LOG_DIR/server-recreate.log" 2>&1 \
+  # Two musts here:
+  #  * HOLA_VERSION=$ver — the compose ref is `…/server:${HOLA_VERSION:-latest}`, and
+  #    bootstrap exports HOLA_VERSION via up.sh (it is NOT in .env), so a bare
+  #    `docker compose up` would resolve to `:latest` (the wrong/absent tag). Set it
+  #    explicitly so the ref matches the `:$ver` image we built and loaded.
+  #  * --pull never — otherwise `up` re-pulls the published tag from GHCR and
+  #    overwrites the loaded build, silently testing the RELEASED server instead.
+  "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "cd /opt/hola && HOLA_VERSION='$ver' docker compose up -d --no-deps --force-recreate --pull never server" > "$LOG_DIR/server-recreate.log" 2>&1 \
     || { err "  server recreate failed (see $LOG_DIR/server-recreate.log)"; return 1; }
   # Confirm the running server is actually our freshly-loaded image (guard against a
   # silent re-pull): compare the container's image id to the loaded image's id.
   local want got
   want=$(docker image inspect "$tag" --format '{{.Id}}' 2>/dev/null || true)
-  got=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- "docker inspect --format '{{.Image}}' \$(cd /opt/hola && docker compose ps -q server)" 2>/dev/null | tr -d '\r\n ')
+  got=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- "docker inspect --format '{{.Image}}' \$(cd /opt/hola && HOLA_VERSION='$ver' docker compose ps -q server)" 2>/dev/null | tr -d '\r\n ')
   if [[ -n "$want" && -n "$got" && "$want" != "$got" ]]; then
     err "  server is NOT running the local image (id mismatch: want ${want:7:12} got ${got:7:12}) — a re-pull slipped through"; return 1
   fi
