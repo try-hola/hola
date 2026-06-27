@@ -120,6 +120,15 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
   detects and explains that). Before installing it waits until the server can
   spawn `docker compose` (defeats the docker-spawn `ENOENT` race). Output →
   `logs/vm-e2e-suite/`.
+- **Whole-catalog sweep**: `bin/vm-catalog-test` brings up one
+  `HOLA_AUTH_MODE=authentik` VM and installs **every** catalog app in turn (one at
+  a time), asserting each converges to `running` with its containers up and its
+  front door answering — then uninstalls it. Auth-mode-agnostic (accepts a 200 or a
+  30x/401 redirect to Authentik). Terse one-line-per-app PASS/FAIL on stdout; full
+  per-app logs under `logs/vm-catalog-test/<app>/`. `--apps a,b` / `--skip x` to
+  scope, `--memory MB` for heavy apps, `--restart`/`--lifecycle` to also exercise
+  the lifecycle (needs a server image carrying the #267 fix — see *Advanced*). The
+  per-app checks live in `bin/lib/app-test.sh`, shared with `bin/vm-e2e-suite`.
 - **CLI/integration on the VM**: `bin/vm-test --ssh -- <cmd>` runs create →
   wait-ssh → `<cmd>` on the VM → teardown in one shot.
 - **Just rehearse the whole flow**: `bin/vm-test --dry-run` or

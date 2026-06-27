@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# bin/vm-catalog-test — install EVERY catalog app on one disposable VM and verify
+# each comes up, using the deterministic per-app test (bin/lib/app-test.sh).
+#
+# Usage: bin/vm-catalog-test [--dry-run] [--keep-on-fail] [--vmid VMID]
+#                            [--apps a,b,c] [--skip x,y] [--restart] [--lifecycle]
+#                            [--server-image released|local] [--no-prune]
+#                            [--memory MB] [--ref cli-vX.Y.Z] [-h]
+#
+# Brings up ONE Authentik-mode VM (so apps of every auth mode — none, forward-auth,
+# native-oidc — can provision), then walks the catalog installing each app one at a
+# time: install -> verify it converges to `running` with its containers up and its
+# front door answering -> uninstall -> next. One app is live at a time, so peak RAM
+# stays bounded (core stack + Authentik + the single heaviest app).
+#
+# OUTPUT CONTRACT (the point of this script):
+#   * STDOUT  = terse, one line per app: `PASS <app> (1m12s)` / `FAIL <app> (verify,
+#               3m04s)  logs: logs/vm-catalog-test/<app>/`, then a final summary.
+#               Watch this to monitor a long sweep at a glance.
+#   * STDERR  = the live verbose [vm] trace of setup (create/bootstrap/verify).
+#               Each app's verbose per-step trace is redirected into its own
+#               logs/vm-catalog-test/<app>/run.log (not the terminal).
+#   * FILES   = logs/vm-catalog-test/<app>/* hold the install JSON, server logs,
+#               container states, deploy logs — drill in here when a line says FAIL.
+#   For a pure terse view:  bin/vm-catalog-test 2>logs/vm-catalog-test/setup.log
+#
+# --restart additionally exercises the restart lifecycle on every app (proves the
+# forward-auth restart path, #267, end-to-end across the catalog). --lifecycle goes
+# further: restart + stop + uninstall, covering all three lifecycle fixes
+# (#267 restart, stop, #271 uninstall) per app.
+# --apps limits the sweep to a comma list; --skip excludes one; --memory MB sizes
+# the VM (heavy apps like immich/postiz want headroom). Between apps the sweep
+# prunes unused images/volumes so a long run doesn't fill the disk (which would trip
+# the preflight disk check and degrade later apps) — pass --no-prune to disable.
+#
+# CAVEAT — this tests the RELEASED server image. `hola bootstrap` installs the
+# published `ghcr.io/try-hola/server` pinned to the CLI version, so the sweep
+# exercises the LAST RELEASE, not `main`. Server fixes merged-but-unreleased won't
+# be present — e.g. an uninstall that leaves containers is the already-fixed #271,
+# and a forward-auth `--restart` failure is the already-fixed #267, both pending a
+# release. To test current `main` (and any uncommitted server changes) instead,
+# pass `--server-image local`: the sweep builds the server image from the working
+# tree, loads it onto the VM, and runs the catalog against it.
+#
+# Some catalog apps legitimately can't install unattended: a missing required
+# secret that is a real external token (e.g. gitea's runner registration token —
+# a random value is rejected) or a manifest that leaves a needed value blank (an
+# upstream try-hola/apps issue). Those surface as FAIL with the deploy error in the
+# per-app logs — read them to tell a real regression from an app-config gap.
+#
+# Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
+# and keeps the VM if any app failed (default: always destroy so reruns stay cheap).
+set -euo pipefail
+source "$(dirname "$0")/_common.sh"
+load_env
+# NOTE: bin/lib/app-test.sh is sourced AFTER the timeout defaults below, so the
+# driver's values win over the library's own `:=` fallbacks (the library defaults
+# only apply when a knob is otherwise unset).
+
+# --- args -------------------------------------------------------------------
+KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1; SERVER_IMAGE="released"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    --keep-on-fail) KEEP_ON_FAIL=1; shift ;;
+    --vmid) VM_ID=$2; shift 2 ;;
+    --apps) ONLY_APPS=$2; shift 2 ;;
+    --skip) SKIP_APPS=$2; shift 2 ;;
+    --restart) AT_TEST_RESTART=1; shift ;;
+    --lifecycle) AT_TEST_RESTART=1; AT_TEST_STOP=1; shift ;;
+    --server-image) SERVER_IMAGE=$2; shift 2 ;;   # released (default) | local
+    --no-prune) PRUNE=0; shift ;;
+    --memory) VM_MEMORY=$2; shift 2 ;;
+    --ref) REF=$2; shift 2 ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+export AT_TEST_RESTART="${AT_TEST_RESTART:-0}"
+export AT_TEST_STOP="${AT_TEST_STOP:-0}"
+is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
+
+# --- timeouts (seconds) -----------------------------------------------------
+BOOTSTRAP_TIMEOUT="${BOOTSTRAP_TIMEOUT:-1200}"   # authentik bootstrap is slower
+AUTHENTIK_TIMEOUT="${AUTHENTIK_TIMEOUT:-420}"
+HTTP_TIMEOUT="${HTTP_TIMEOUT:-240}"              # slow first boots (n8n, immich) need headroom
+DEPLOY_READY_TIMEOUT="${DEPLOY_READY_TIMEOUT:-180}"
+export HTTP_TIMEOUT
+
+# Per-app test library — sourced here (not at the top) so the timeout defaults set
+# above take precedence over the library's own fallback defaults.
+source "$(dirname "$0")/lib/app-test.sh"
+
+# --- paths / per-run state --------------------------------------------------
+LOG_DIR="$ROOT_DIR/logs/vm-catalog-test"
+HOLA_ENV_OUT="$ROOT_DIR/.devcontainer/hola-catalog.env"   # gitignored (hola-*.env)
+mkdir -p "$LOG_DIR"
+
+VMID=""; ALIAS=""; IP=""; DOMAIN_BASE=""; DASHBOARD_URL=""; AUTH_URL=""; API_KEY=""
+
+# --- result tracking --------------------------------------------------------
+declare -a RESULTS=()   # "RESULT<TAB>app<TAB>stage<TAB>seconds"
+FAILED=0
+fmt_dur() { local s=$1; printf '%dm%02ds' $(( s/60 )) $(( s%60 )); }
+
+# Terse one-line-per-app result on STDOUT (what the user watches).
+SKIPPED=0
+emit() {  # emit <PASS|FAIL|SKIP> <app> <stage|reason> <seconds>
+  local res=$1 app=$2 stage=$3 secs=$4 dur; dur=$(fmt_dur "$secs")
+  RESULTS+=("$res"$'\t'"$app"$'\t'"$stage"$'\t'"$secs")
+  case "$res" in
+    PASS) printf 'PASS %-16s (%s)\n' "$app" "$dur" ;;
+    SKIP) printf 'SKIP %-16s (%s) — %s\n' "$app" "$dur" "$stage"; SKIPPED=$((SKIPPED+1)) ;;
+    *)    printf 'FAIL %-16s (%s, %s)  logs: %s\n' "$app" "$stage" "$dur" "logs/vm-catalog-test/$app/"; FAILED=$((FAILED+1)) ;;
+  esac
+}
+
+print_summary() {
+  echo ""
+  echo "================ vm-catalog-test summary ================"
+  local r res app stage secs
+  if (( ${#RESULTS[@]} )); then
+    for r in "${RESULTS[@]}"; do
+      IFS=$'\t' read -r res app stage secs <<<"$r"
+      case "$res" in
+        PASS) printf '  PASS  %-16s %s\n' "$app" "$(fmt_dur "$secs")" ;;
+        SKIP) printf '  SKIP  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
+        *)    printf '  FAIL  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
+      esac
+    done
+  else
+    echo "  (no apps tested)"
+  fi
+  echo "  ----"
+  printf '  %d app(s): %d passed, %d failed, %d skipped\n' \
+    "${#RESULTS[@]}" "$(( ${#RESULTS[@]} - FAILED - SKIPPED ))" "$FAILED" "$SKIPPED"
+  echo "  detailed logs: logs/vm-catalog-test/<app>/"
+  echo "========================================================"
+}
+
+# --- teardown trap ----------------------------------------------------------
+cleanup() {
+  local rc=$1
+  print_summary
+  [[ -n "$ALIAS" ]] && remove_ssh_config "$VMID" 2>/dev/null || true
+  [[ -z "$VMID" ]] && exit "$rc"
+  if is_dry; then exit "$rc"; fi
+  if [[ "$FAILED" -ne 0 && "$KEEP_ON_FAIL" == "1" ]]; then
+    warn "failures — keeping VM $VMID and snapshotting for inspection."
+    "$BIN_DIR/vm-snapshot" --vmid "$VMID" --name "catalog-fail-$(date -u +%Y%m%d-%H%M%S)" \
+      --desc "preserved by vm-catalog-test on failure" || true
+    warn "destroy it when done: bin/vm-destroy --vmid $VMID"
+  else
+    log "tearing down VM $VMID"
+    FORCE=1 "$BIN_DIR/vm-destroy" --vmid "$VMID" || warn "teardown failed for VM $VMID — destroy manually."
+  fi
+  exit "$rc"
+}
+abort() { err "$1"; exit 1; }
+
+http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+wait_http() {
+  local url=$1 want=$2 timeout=$3 code deadline; deadline=$(( $(date +%s) + timeout ))
+  while :; do
+    code=$(http_code "$url")
+    if [[ "$code" =~ $want ]]; then log "  $url -> HTTP $code"; return 0; fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  $url -> HTTP $code (timeout after ${timeout}s)"; return 1; fi
+    sleep 5
+  done
+}
+
+# ===========================================================================
+# Setup (one-time): bring up an Authentik-mode VM ready to install apps.
+# ===========================================================================
+setup_create() {
+  log "── creating + booting a disposable VM (Authentik mode)"
+  if is_dry; then VMID="999999"; log "DRY_RUN: bin/vm-create ${VM_MEMORY:+--memory $VM_MEMORY}"; return 0; fi
+  if [[ -n "$VM_MEMORY" ]]; then
+    # main's vm-create has no --memory flag, so size the VM ourselves: clone
+    # without starting, set memory via the Proxmox API, then start.
+    local args=(--no-start); [[ -n "${VM_ID:-}" ]] && args+=(--vmid "$VM_ID")
+    VMID=$("$BIN_DIR/vm-create" "${args[@]}" | tail -1) || return 1
+    [[ -n "$VMID" ]] || return 1
+    local node; node=$(node)
+    log "  setting VM $VMID memory=${VM_MEMORY}MB"
+    proxmox_curl PUT "/nodes/$node/qemu/$VMID/config" --data-urlencode "memory=$VM_MEMORY" >/dev/null || return 1
+    proxmox_curl POST "/nodes/$node/qemu/$VMID/status/start" >/dev/null || return 1
+  else
+    local args=(); [[ -n "${VM_ID:-}" ]] && args=(--vmid "$VM_ID")
+    VMID=$("$BIN_DIR/vm-create" "${args[@]}" | tail -1) || return 1
+    [[ -n "$VMID" ]] || return 1
+  fi
+  # Clear any stale shared-state IP so wait-ssh re-resolves THIS VM's guest-agent IP.
+  state_set VM_IP ""
+  log "  test VM: $VMID"
+}
+
+setup_wait_ssh() {
+  log "── waiting for SSH + resolving IP"
+  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; return 0; fi
+  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" || return 1
+  IP=$(state_get VM_IP); [[ -n "$IP" ]] || { err "  no VM IP after wait-ssh"; return 1; }
+  ALIAS=$(vm_alias "$VMID")
+  log "  VM IP: $IP  (ssh alias: $ALIAS)"
+}
+
+setup_render_env() {
+  log "── rendering Hola .env (HOLA_AUTH_MODE=authentik, sslip.io, self-signed TLS)"
+  DOMAIN_BASE="$IP.sslip.io"
+  DASHBOARD_URL="https://apps.$DOMAIN_BASE"
+  AUTH_URL="https://auth.$DOMAIN_BASE"
+  API_KEY=$( (openssl rand -hex 24 2>/dev/null) || (uuidgen | tr -d '-') )
+  if is_dry; then log "DRY_RUN: would write $HOLA_ENV_OUT (dashboard $DASHBOARD_URL, auth $AUTH_URL)"; return 0; fi
+  # install.sh generates the AUTHENTIK_* secrets idempotently when HOLA_AUTH_MODE=
+  # authentik, so we only set the mode + the auth login domain here.
+  cat > "$HOLA_ENV_OUT" <<EOF
+# Generated by bin/vm-catalog-test for VM $VMID — disposable, self-signed TLS.
+COMPOSE_PROJECT_NAME=hola
+TRAEFIK_HTTP_PORT=80
+TRAEFIK_HTTPS_PORT=443
+TRAEFIK_DASHBOARD_DOMAIN=traefik.$DOMAIN_BASE
+LETSENCRYPT_EMAIL=e2e@example.com
+ACME_CA_SERVER=
+ACME_DNS_PROVIDER=
+HOLA_DOMAIN=apps.$DOMAIN_BASE
+HOLA_BASE_DOMAIN=$DOMAIN_BASE
+HOLA_CATALOG_URL=https://raw.githubusercontent.com/try-hola/apps/main/catalog.json
+HOLA_DEFAULT_TZ=UTC
+HOLA_USE_AUTH=true
+HOLA_API_KEY=$API_KEY
+HOLA_AUTH_MODE=authentik
+HOLA_AUTHENTIK_DOMAIN=auth.$DOMAIN_BASE
+EOF
+  chmod 600 "$HOLA_ENV_OUT"
+  log "  wrote $HOLA_ENV_OUT"
+}
+
+setup_bootstrap() {
+  log "── hola bootstrap over SSH (up to ${BOOTSTRAP_TIMEOUT}s; log: $LOG_DIR/bootstrap.log)"
+  if is_dry; then log "DRY_RUN: hola bootstrap --host $ALIAS --env-file $HOLA_ENV_OUT ${REF:+--ref $REF}"; return 0; fi
+  local args=(bootstrap --host "$ALIAS" --env-file "$HOLA_ENV_OUT")
+  [[ -n "$REF" ]] && args+=(--ref "$REF")
+  timeout "$BOOTSTRAP_TIMEOUT" \
+    bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "${args[@]}" 2>&1 | tee "$LOG_DIR/bootstrap.log"
+  return "${PIPESTATUS[0]}"
+}
+
+setup_verify_stack() {
+  log "── verifying core stack (traefik + server + web + authentik)"
+  if is_dry; then return 0; fi
+  local ps; ps=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose ps --format "{{.Service}} {{.State}}"' 2>&1 | tee "$LOG_DIR/compose-ps.log") || return 1
+  local svc ok=1
+  for svc in traefik server web; do
+    if grep -qiE "^$svc .*(running|up)" <<<"$ps"; then log "  $svc: running"; else err "  $svc: NOT running"; ok=0; fi
+  done
+  wait_http "$DASHBOARD_URL" '^(200|30[0-9])$' "$HTTP_TIMEOUT" || ok=0
+  [[ "$ok" == 1 ]]
+}
+
+# --server-image local: replace the bootstrapped RELEASED server image with one
+# built from the current working tree, so the sweep tests `main` (+ uncommitted
+# server changes) instead of the last release. Build → save → load onto the VM
+# (overwriting the pulled tag) → force-recreate just the server → wait healthy.
+# This turns already-fixed-but-unreleased failures (e.g. #271 uninstall) green.
+setup_local_server_image() {
+  [[ "$SERVER_IMAGE" == "local" ]] || return 0
+  log "── building + loading a LOCAL server image (testing main, not the release)"
+  if is_dry; then log "DRY_RUN: docker build server → save → vm load → recreate server"; return 0; fi
+  # The compose ref is ghcr.io/try-hola/server:$HOLA_VERSION; match it so the
+  # loaded image is the one compose already references (no .env/version juggling).
+  local ver; ver=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && (cat VERSION 2>/dev/null || grep -E "^HOLA_VERSION=" .env | cut -d= -f2-)' 2>/dev/null | tr -d ' \t\r\n')
+  [[ -n "$ver" ]] || { err "  could not read HOLA_VERSION on the VM"; return 1; }
+  local tag="ghcr.io/try-hola/server:$ver"
+  log "  building $tag from $ROOT_DIR (a few minutes)…"
+  docker build -f "$ROOT_DIR/packages/server/Dockerfile" -t "$tag" "$ROOT_DIR" > "$LOG_DIR/server-build.log" 2>&1 \
+    || { err "  server image build failed (see $LOG_DIR/server-build.log)"; return 1; }
+  log "  transferring image to the VM (docker save | docker load)…"
+  docker save "$tag" | "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'docker load' > "$LOG_DIR/server-load.log" 2>&1 \
+    || { err "  docker save|load failed (see $LOG_DIR/server-load.log)"; return 1; }
+  log "  recreating the server container with the local image…"
+  # Two musts here:
+  #  * HOLA_VERSION=$ver — the compose ref is `…/server:${HOLA_VERSION:-latest}`, and
+  #    bootstrap exports HOLA_VERSION via up.sh (it is NOT in .env), so a bare
+  #    `docker compose up` would resolve to `:latest` (the wrong/absent tag). Set it
+  #    explicitly so the ref matches the `:$ver` image we built and loaded.
+  #  * --pull never — otherwise `up` re-pulls the published tag from GHCR and
+  #    overwrites the loaded build, silently testing the RELEASED server instead.
+  "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "cd /opt/hola && HOLA_VERSION='$ver' docker compose up -d --no-deps --force-recreate --pull never server" > "$LOG_DIR/server-recreate.log" 2>&1 \
+    || { err "  server recreate failed (see $LOG_DIR/server-recreate.log)"; return 1; }
+  # Confirm the running server is actually our freshly-loaded image (guard against a
+  # silent re-pull): compare the container's image id to the loaded image's id.
+  local want got
+  want=$(docker image inspect "$tag" --format '{{.Id}}' 2>/dev/null || true)
+  got=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- "docker inspect --format '{{.Image}}' \$(cd /opt/hola && HOLA_VERSION='$ver' docker compose ps -q server)" 2>/dev/null | tr -d '\r\n ')
+  if [[ -n "$want" && -n "$got" && "$want" != "$got" ]]; then
+    err "  server is NOT running the local image (id mismatch: want ${want:7:12} got ${got:7:12}) — a re-pull slipped through"; return 1
+  fi
+  # Dashboard front door should answer again once the new server is healthy.
+  wait_http "$DASHBOARD_URL" '^(200|30[0-9])$' "$HTTP_TIMEOUT" || { err "  server not healthy after swap"; return 1; }
+  log "  local server image is live (built from the working tree; image id verified)"
+}
+
+# Authentik must be migrated + serving before forward-auth/native-oidc apps can
+# provision. Wait for its login UI to answer.
+setup_wait_authentik() {
+  log "── waiting for Authentik login UI ($AUTH_URL) — first boot runs migrations"
+  if is_dry; then return 0; fi
+  wait_http "$AUTH_URL" '^(200|30[0-9])$' "$AUTHENTIK_TIMEOUT"
+}
+
+# Wait until the SERVER container can spawn `docker compose` (defeats the
+# first-deploy ENOENT race deterministically).
+setup_wait_deploy_ready() {
+  log "── waiting for the server to be deploy-ready (can spawn docker compose)"
+  if is_dry; then return 0; fi
+  local deadline; deadline=$(( $(date +%s) + DEPLOY_READY_TIMEOUT ))
+  while :; do
+    if "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose exec -T server sh -lc "command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1"' >/dev/null 2>&1; then
+      log "  server can spawn docker compose — deploy-ready"; return 0
+    fi
+    if [[ $(date +%s) -ge $deadline ]]; then err "  server not deploy-ready in time"; return 1; fi
+    sleep 5
+  done
+}
+
+# Enumerate the apps to test from the SERVER's catalog (the catalog the server
+# actually sees), honoring --apps / --skip. Echoes a space list of ids.
+resolve_apps() {
+  if is_dry; then
+    local list="${ONLY_APPS:-vaultwarden uptime-kuma gitea}"; echo "${list//,/ }"; return 0
+  fi
+  local ids
+  ids=$(at_cli catalog --json 2>"$LOG_DIR/catalog.err" | jq -r '.items[]?.id' 2>/dev/null || true)
+  [[ -n "$ids" ]] || { err "could not read catalog from the server (see $LOG_DIR/catalog.err)"; return 1; }
+  echo "$ids" | tr '\n' ' ' > "$LOG_DIR/catalog-apps.txt"
+  local app out=()
+  for app in $ids; do
+    if [[ -n "$ONLY_APPS" ]] && [[ ",$ONLY_APPS," != *",$app,"* ]]; then continue; fi
+    if [[ -n "$SKIP_APPS" ]] && [[ ",$SKIP_APPS," == *",$app,"* ]]; then continue; fi
+    out+=("$app")
+  done
+  echo "${out[*]}"
+}
+
+# ===========================================================================
+# Orchestration
+# ===========================================================================
+log "=== vm-catalog-test: install every catalog app, verify it comes up (mode=authentik) ==="
+audit "vm-catalog-test start restart=${AT_TEST_RESTART} dry_run=${DRY_RUN:-0}"
+trap 'cleanup $?' EXIT
+
+setup_create            || abort "create VM"
+setup_wait_ssh          || abort "wait for SSH"
+setup_render_env        || abort "render Hola .env"
+setup_bootstrap         || abort "hola bootstrap"
+setup_verify_stack      || abort "verify core stack"
+setup_local_server_image || abort "load local server image"
+setup_wait_authentik    || abort "Authentik not ready"
+setup_wait_deploy_ready || abort "server not deploy-ready"
+
+APPS=$(resolve_apps) || abort "resolve catalog apps"
+[[ -n "$APPS" ]] || abort "no apps to test after filters"
+read -r -a APP_ARR <<<"$APPS"
+log "── testing ${#APP_ARR[@]} app(s): ${APPS}"
+echo "# catalog sweep: ${#APP_ARR[@]} app(s) on VM $VMID (mode=authentik, restart=${AT_TEST_RESTART})"
+
+# Export globals the per-app library reads.
+export ROOT_DIR BIN_DIR VMID DASHBOARD_URL API_KEY DOMAIN_BASE HTTP_TIMEOUT AT_TEST_RESTART AT_TEST_STOP
+
+for app in "${APP_ARR[@]}"; do
+  app_log="$LOG_DIR/$app"; mkdir -p "$app_log"
+  start=$(date +%s)
+  if is_dry; then
+    log "DRY_RUN: at_run_app $app"; emit PASS "$app" "-" 0; continue
+  fi
+  # Verbose per-step trace for THIS app → its own run.log (keeps stdout terse).
+  # errexit-safe call (|| rc=$?) so one app's failure never aborts the sweep.
+  rc=0
+  at_run_app "$app" "$app_log" 2>"$app_log/run.log" || rc=$?
+  secs=$(( $(date +%s) - start ))
+  case "$rc" in
+    0) emit PASS "$app" "-" "$secs" ;;
+    2) emit SKIP "$app" "${AT_SKIP_REASON:-needs config}" "$secs" ;;
+    *) emit FAIL "$app" "${AT_LAST_STAGE:-?}" "$secs" ;;
+  esac
+  # Reclaim disk between apps: the just-uninstalled app's images are now unused, and
+  # without this a long sweep fills the VM disk — which trips the preflight disk
+  # check to `warn` and silently degrades every later app. Images still referenced by
+  # running containers (core stack, Authentik, a kept-on-fail app) are preserved.
+  if [[ "$PRUNE" == 1 ]]; then
+    "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'docker image prune -af >/dev/null 2>&1; docker volume prune -f >/dev/null 2>&1' 2>/dev/null || true
+    df_free=$("$BIN_DIR/vm-ssh" --vmid "$VMID" -- "df -BG --output=avail / | tail -1 | tr -d ' G'" 2>/dev/null || echo '?')
+    log "  pruned unused images/volumes — ${df_free}G free on / "
+  fi
+done
+
+audit "vm-catalog-test done apps=${#APP_ARR[@]} failed=$FAILED"
+exit "$FAILED"
