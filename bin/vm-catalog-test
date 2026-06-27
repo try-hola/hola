@@ -311,15 +311,25 @@ setup_wait_authentik() {
 # Wait until the SERVER container can spawn `docker compose` (defeats the
 # first-deploy ENOENT race deterministically).
 setup_wait_deploy_ready() {
-  log "── waiting for the server to be deploy-ready (can spawn docker compose)"
+  log "── waiting for the server to be deploy-ready (bun can spawn docker compose)"
   if is_dry; then return 0; fi
-  local deadline; deadline=$(( $(date +%s) + DEPLOY_READY_TIMEOUT ))
+  # Probe the EXACT mechanism a deploy uses: the server's bun runtime spawning
+  # `docker` (child_process), not a login shell. A login shell warms up its PATH
+  # before bun's posix_spawn can find `docker`, so the old `command -v docker` probe
+  # passed too early and the first deploys still hit `ENOENT posix_spawn 'docker'`
+  # (notably after a server recreate via --server-image local). Require N consecutive
+  # successes so a flapping warmup race is fully past before we start installing.
+  local deadline streak=0 need=3
+  deadline=$(( $(date +%s) + DEPLOY_READY_TIMEOUT ))
   while :; do
-    if "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose exec -T server sh -lc "command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1"' >/dev/null 2>&1; then
-      log "  server can spawn docker compose — deploy-ready"; return 0
+    if "$BIN_DIR/vm-ssh" --vmid "$VMID" -- 'cd /opt/hola && docker compose exec -T server bun -e "process.exit(Bun.spawnSync([\"docker\",\"compose\",\"version\"]).success?0:1)"' >/dev/null 2>&1; then
+      streak=$(( streak + 1 ))
+      if (( streak >= need )); then log "  server bun-spawns docker compose (${streak}x) — deploy-ready"; return 0; fi
+    else
+      streak=0
     fi
     if [[ $(date +%s) -ge $deadline ]]; then err "  server not deploy-ready in time"; return 1; fi
-    sleep 5
+    sleep 3
   done
 }
 
