@@ -225,6 +225,35 @@ describe('Auth provisioning lifecycle', () => {
     expect(meta.metadata.auth.ref.providerPk).toBe(42);
   });
 
+  test('materializes appEnv + provisioned env into a runtime .env so Compose ${VAR} interpolation resolves', async () => {
+    const sys = makeSystem({ auth: OIDC_AUTH });
+
+    // A draft whose compose DERIVES values via `${VAR}` interpolation: an internal
+    // DB password from the app's own env, and an OIDC discovery URL from the
+    // provisioned issuer (the exact pattern mealie uses). Without a runtime .env
+    // these resolve to blank.
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      DB_PASSWORD: "${POSTGRES_PASSWORD}"\n' +
+        '      OIDC_CONFIG_URL: "${GITEA_OIDC_ISSUER}.well-known/openid-configuration"\n',
+      appEnv: [{ key: 'POSTGRES_PASSWORD', value: 's3cr3t #1', isSecret: true }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    const job = await waitForJob(sys.jobs, created.jobId!);
+    expect(job.status).toBe('completed');
+
+    // The runtime .env carries BOTH the app env and the provisioned auth env, quoted
+    // so a value with a space/`#` survives.
+    const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+    expect(dotenv).toContain('POSTGRES_PASSWORD="s3cr3t #1"');
+    expect(dotenv).toContain('GITEA_OIDC_ISSUER="https://auth.example.com/application/o/gitea-x/"');
+  });
+
   test('native-oidc credentialsFile: writes the provisioned OIDC creds JSON into the data root before start (for a bundle sidecar to render)', async () => {
     const prev = process.env.HOLA_APPS_BIND_ROOT;
     process.env.HOLA_APPS_BIND_ROOT = join(dataRoot, 'apps');

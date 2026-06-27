@@ -105,6 +105,12 @@ cover everything. Use them like this:
   runs the whole loop: create VM → `hola bootstrap --host hola-vm-<id>` (the CLI's
   own SSH installer) → verify the stack → `bin/vm-web-check` →
   snapshot-on-fail / destroy-on-pass. Prefer it over hand-stitching the steps.
+- **Deterministic regression suites** — `bin/vm-e2e-suite` asserts the whole
+  single-app product flow on a `mode=none` VM. `bin/vm-catalog-test` installs
+  **every** catalog app on one Authentik VM and verifies each comes up, using the
+  shared per-app test in `bin/lib/app-test.sh` (the single source of truth for
+  install→verify→[restart→stop]→uninstall). Both emit terse PASS/FAIL to stdout and
+  capture per-app detail under `logs/` for drill-down.
 - **Snapshot, don't lose a failure** — `bin/vm-snapshot` (or `bin/vm-test
   --keep-on-fail`) before destroying when a run fails and you want to inspect it.
 - **Destroy is confirmed** — `bin/vm-destroy` requires interactive `yes` (or
