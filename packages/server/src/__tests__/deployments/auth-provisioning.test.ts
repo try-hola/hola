@@ -408,6 +408,25 @@ describe('Auth provisioning lifecycle', () => {
     expect(spy.provisions[1].existingRef?.providerPk).toBe(42);
   });
 
+  test('forward-auth re-deploy (restart) reuses the provider ref and completes', async () => {
+    const FA: AppAuthConfig = { mode: 'forward-auth', forwardAuth: {} };
+    const sys = makeSystem({ auth: FA });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const restart = await sys.deployments.executeAction(created.deploymentId, { action: 'restart' });
+    const restartJob = await waitForJob(sys.jobs, restart.jobId!);
+
+    // Reproduce the VM finding: does a forward-auth restart complete, reusing the ref?
+    expect(restartJob.status).toBe('completed');
+    expect((await sys.deployments.getDeployment(created.deploymentId)).status).toBe('running');
+    expect(spy.provisions).toHaveLength(2);
+    expect(spy.provisions[1].mode).toBe('forward-auth');
+    expect(spy.provisions[1].existingRef?.providerPk).toBe(7);
+  });
+
   test('deprovision runs on delete but not on stop', async () => {
     const sys = makeSystem({ auth: OIDC_AUTH });
     const spy = sys.provisioner as SpyProvisioner;
@@ -438,6 +457,14 @@ describe('Auth provisioning lifecycle', () => {
     expect((await sys.deployments.getDeployment(created.deploymentId)).status).toBe('error');
     // No compose was materialized (provisioning threw first).
     expect(await sys.storage.fileExists(`deployments/${created.deploymentId}/runtime/docker-compose.yml`)).toBe(false);
+
+    // The deployment logs endpoint must SURFACE the failure reason. A deploy that
+    // dies before any container starts has no container logs (composeLogs is empty),
+    // so the endpoint falls back to the lifecycle event log — otherwise the user
+    // sees an empty result and can't tell why the install failed.
+    const logs = await sys.deployments.getDeploymentLogs(created.deploymentId);
+    const text = logs.items.map(i => i.message).join('\n');
+    expect(text).toMatch(/action '\w+' failed: simulated provisioning failure/i);
   });
 
   test('forward-auth under HOLA_AUTH_MODE=none is rejected up front, creating no error-state deployment', async () => {
