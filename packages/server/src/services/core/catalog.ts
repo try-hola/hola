@@ -191,12 +191,22 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // defaultEnv with no extra ports/volumes), so only reject it when present
       // but malformed — `typeof undefined !== 'object'` must not fail a valid
       // manifest. Downstream reads already use `manifest.defaults?.…`.
-      if (!manifest || !Array.isArray(manifest.defaultEnv) || (manifest.defaults !== undefined && typeof manifest.defaults !== 'object')) {
+      // `defaultEnv` is OPTIONAL (the package README documents it as such): an app
+      // with no user-facing env — e.g. one whose only secret is a self-contained
+      // internal DB password — legitimately omits it. Treat a missing value as an
+      // empty list rather than rejecting the whole manifest (which silently dropped
+      // the bundle's compose and made the app undeployable). Only a PRESENT-but-not-
+      // -an-array `defaultEnv`, or a malformed `defaults`, is a real error.
+      if (
+        !manifest ||
+        (manifest.defaultEnv !== undefined && !Array.isArray(manifest.defaultEnv)) ||
+        (manifest.defaults !== undefined && typeof manifest.defaults !== 'object')
+      ) {
         throw new Error('MANIFEST_MISSING_FIELDS');
       }
 
       // Coerce manifest shapes
-      const manifestEnv = manifest.defaultEnv.map((e) => ({
+      const manifestEnv = (manifest.defaultEnv ?? []).map((e) => ({
         key: String((e as { key?: unknown }).key ?? ''),
         value: String((e as { value?: unknown }).value ?? ''),
         isSecret: Boolean((e as { isSecret?: unknown }).isSecret),
