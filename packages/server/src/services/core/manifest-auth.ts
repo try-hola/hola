@@ -38,14 +38,38 @@ function coerceEnvMap<K extends string>(v: unknown, keys: readonly K[]): Record<
  * Coerce the native-oidc env-var name map. issuer/clientId/clientSecret are
  * required; redirectUri is optional (apps that derive their own redirect URI
  * from their base URL — e.g. Actual Budget — have no env var for it).
+ *
+ * authUrl/tokenUrl/userinfoUrl are optional explicit-endpoint mappings for apps
+ * that DON'T discover the IdP endpoints from the issuer and instead want each
+ * authorize/token/userinfo URL injected as its own env var (e.g. Postiz's
+ * generic OAuth, which throws on boot if POSTIZ_OAUTH_AUTH_URL/TOKEN_URL/
+ * USERINFO_URL are unset). These MUST be carried through here — the provisioner
+ * only injects them when their names survive into the finalized manifest;
+ * dropping them silently left such apps with a half-wired OIDC env (issuer +
+ * client creds but no endpoints), so their login-link endpoint 500'd.
  */
 function coerceOidcEnv(
   v: unknown
-): { issuer: string; clientId: string; clientSecret: string; redirectUri?: string } | undefined {
+):
+  | {
+      issuer: string;
+      clientId: string;
+      clientSecret: string;
+      redirectUri?: string;
+      authUrl?: string;
+      tokenUrl?: string;
+      userinfoUrl?: string;
+    }
+  | undefined {
   const required = coerceEnvMap(v, ['issuer', 'clientId', 'clientSecret'] as const);
   if (!required) return undefined;
-  const redirectUri = asString(asRecord(v)?.redirectUri);
-  return { ...required, ...(redirectUri ? { redirectUri } : {}) };
+  const rec = asRecord(v);
+  const optional: Record<string, string> = {};
+  for (const k of ['redirectUri', 'authUrl', 'tokenUrl', 'userinfoUrl'] as const) {
+    const val = asString(rec?.[k]);
+    if (val) optional[k] = val;
+  }
+  return { ...required, ...optional };
 }
 
 /** Coerce a flat string→string record (e.g. oidc.staticEnv); undefined unless it
