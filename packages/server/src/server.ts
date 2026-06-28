@@ -1701,6 +1701,15 @@ if (shouldAutoStart) {
     port: PORT,
     fetch: handleRequest,
     development: true,
+    // Bun's default idleTimeout is 10s — it closes any connection that sends no
+    // bytes for that long. Our SSE log streams keep themselves alive with a
+    // heartbeat every 15s (createSSEStream), so with the default Bun would close
+    // each stream at ~10s, BEFORE the first heartbeat lands: the client then sees
+    // the body end ("Stream closed"), shows a connection error, reconnects, and
+    // the indicator flaps Live↔Error on a ~10s loop during a deploy. Set the idle
+    // timeout to Bun's max (255s); the 15s heartbeat resets it long before then, so
+    // a live stream survives indefinitely while a genuinely stuck socket still times out.
+    idleTimeout: 255,
   });
 
   console.log(`✅ Hola Server listening on port ${server.port}`);
