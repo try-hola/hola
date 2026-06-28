@@ -47,6 +47,36 @@ describe('coerceManifestAuth', () => {
     });
   });
 
+  test('native-oidc env carries the explicit IdP endpoint names (authUrl/tokenUrl/userinfoUrl)', () => {
+    // Regression: these optional names were silently dropped here, so the provisioner
+    // never injected POSTIZ_OAUTH_AUTH_URL/TOKEN_URL/USERINFO_URL and apps that don't
+    // discover endpoints from the issuer (e.g. Postiz) got a half-wired OIDC env and
+    // 500'd on their login-link endpoint.
+    const result = coerceManifestAuth({
+      mode: 'native-oidc',
+      oidc: {
+        redirectPath: '/settings',
+        scopes: ['openid', 'profile', 'email'],
+        env: {
+          issuer: 'POSTIZ_OAUTH_URL',
+          clientId: 'POSTIZ_OAUTH_CLIENT_ID',
+          clientSecret: 'POSTIZ_OAUTH_CLIENT_SECRET',
+          authUrl: 'POSTIZ_OAUTH_AUTH_URL',
+          tokenUrl: 'POSTIZ_OAUTH_TOKEN_URL',
+          userinfoUrl: 'POSTIZ_OAUTH_USERINFO_URL',
+        },
+      },
+    });
+    expect(result?.oidc?.env).toEqual({
+      issuer: 'POSTIZ_OAUTH_URL',
+      clientId: 'POSTIZ_OAUTH_CLIENT_ID',
+      clientSecret: 'POSTIZ_OAUTH_CLIENT_SECRET',
+      authUrl: 'POSTIZ_OAUTH_AUTH_URL',
+      tokenUrl: 'POSTIZ_OAUTH_TOKEN_URL',
+      userinfoUrl: 'POSTIZ_OAUTH_USERINFO_URL',
+    });
+  });
+
   test('native-oidc env without redirectUri is valid (app derives its own redirect URI)', () => {
     const result = coerceManifestAuth({
       mode: 'native-oidc',
