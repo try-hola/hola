@@ -61,3 +61,6 @@ packages/*/coverage
 # Core dumps (e.g. from a crashed test worker)
 core
 core.*
+# …but the bare `core` pattern also shadows the server's `services/core/` source
+# directory (same name), silently ignoring NEW files added there. Re-include it.
+!packages/server/src/services/core/

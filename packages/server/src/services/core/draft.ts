@@ -20,7 +20,8 @@ import type {
   FinalizeDraftResponse,
   AppEnvVar,
   DraftDefaults,
-  AppAuthConfig
+  AppAuthConfig,
+  AppUpgradeMeta
 } from '@hola/shared';
 
 import { createHash } from 'crypto';
@@ -67,6 +68,9 @@ export interface FinalizedManifest {
   // The compose service to route to / inject auth env into; carried so
   // materializeCompose targets the right service for multi-service apps.
   ingressService?: string;
+  // Upgrade-safety metadata (#284 Phase 0) carried from the bundle manifest so
+  // `promote` can enforce the skip-guard against this (target) version.
+  upgrade?: AppUpgradeMeta;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -333,6 +337,7 @@ export class RealDraftService implements DraftService {
         auth: defaults.auth,
         consumes: defaults.consumes,
         ingressService: defaults.ingressService,
+        upgrade: defaults.upgrade,
         files: [],
       };
 
@@ -586,6 +591,7 @@ export class RealDraftService implements DraftService {
         auth: draft.auth,
         consumes: draft.consumes,
         ingressService: draft.ingressService,
+        upgrade: draft.upgrade,
         files: specFiles,
       };
 
@@ -666,7 +672,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
@@ -676,6 +682,7 @@ export class RealDraftService implements DraftService {
         auth: versionDetail.auth,
         consumes: versionDetail.consumes,
         ingressService: versionDetail.ingressService,
+        upgrade: versionDetail.upgrade,
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
@@ -837,6 +844,7 @@ export class MockDraftService implements DraftService {
       ports: draft.ports,
       composeOverride: draft.composeOverride ?? '',
       ingressService: draft.ingressService,
+      upgrade: draft.upgrade,
       files: [],
       checksum: 'mock-checksum',
       finalizedAt: new Date().toISOString(),
