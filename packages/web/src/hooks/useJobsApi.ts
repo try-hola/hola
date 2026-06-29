@@ -1,6 +1,7 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
+import { onLive } from '../utils/live-bus';
 import type { GetJobsResponse, JobStatus } from '@hola/shared';
 
 interface UseJobsApiParams {
@@ -85,6 +86,10 @@ export function useJobsApi(params: UseJobsApiParams = {}) {
   React.useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Live updates (#291): refetch when the global event stream reports a job
+  // transition — the primary freshness path. The poll below is the fallback.
+  React.useEffect(() => onLive('jobs', () => { void fetchData(true); }), [fetchData]);
 
   // Auto-refresh for live updates — force past the short cache so each tick
   // reflects status transitions rather than re-serving the cached page.

@@ -10,6 +10,7 @@ import type { HealthCheckable, ServiceHealth } from './types';
 import type { DatabaseService } from './database';
 import { DatabaseJobRepository, type JobRepository, type JobEntity } from './repositories';
 import type { LoggingService } from './logging';
+import type { EventBus } from './event-bus';
 import type { Job as SharedJob, JobStatus as SharedJobStatus, JobType as SharedJobType } from '@hola/shared';
 
 // Simple in-process pub-sub for job updates
@@ -94,7 +95,7 @@ export class RealJobService implements JobService {
   private baseBackoffMs = Number(process.env.HOLA_JOBS_BACKOFF_MS || 500);
   private executor?: JobExecutor;
 
-  constructor(db: DatabaseService, logging: LoggingService) {
+  constructor(db: DatabaseService, logging: LoggingService, private eventBus?: EventBus) {
     this.db = db;
     this.repo = new DatabaseJobRepository(this.db);
     this.logging = logging;
@@ -102,6 +103,20 @@ export class RealJobService implements JobService {
 
   setExecutor(executor: JobExecutor): void {
     this.executor = executor;
+  }
+
+  /**
+   * Emit a job state change to the per-job bus (existing per-id subscribers, e.g.
+   * the job log stream) AND, when wired, to the global event bus that backs the
+   * dashboard-wide `/api/events` stream (#291) — so list views see the transition
+   * without polling.
+   */
+  private notify(id: string, update: JobUpdate): void {
+    this.bus.emit(id, update);
+    this.eventBus?.emit({
+      type: 'job_update',
+      data: { jobId: id, status: update.status, progress: update.progress, finishedAt: update.finishedAt },
+    });
   }
 
   private enqueue(id: string) {
@@ -125,13 +140,13 @@ export class RealJobService implements JobService {
         // If cancelled before start, mark and exit
         await this.repo.updateStatus(id, 'cancelled');
         this.cancelled.delete(id);
-        this.bus.emit(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
+        this.notify(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
         await this.logging.logJob(id, 'warn', 'Job cancelled before start');
         return;
       }
       // Transition to running
       await this.repo.updateStatus(id, 'running');
-      this.bus.emit(id, { id, status: 'running' });
+      this.notify(id, { id, status: 'running' });
       await this.logging.logJob(id, 'info', 'Job started');
 
       // Prefer the registered executor (real work, e.g. Compose lifecycle).
@@ -144,7 +159,7 @@ export class RealJobService implements JobService {
           setProgress: async (percent) => {
             const p = Math.max(0, Math.min(100, Math.round(percent)));
             await this.repo.updateProgress(id, p);
-            this.bus.emit(id, { id, status: 'running', progress: p });
+            this.notify(id, { id, status: 'running', progress: p });
           },
           isCancelled: () => this.cancelled.has(id),
         };
@@ -153,7 +168,7 @@ export class RealJobService implements JobService {
           await this.repo.updateStatus(id, 'completed');
           this.cancelled.delete(id);
           const finishedAt = new Date().toISOString();
-          this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt });
+          this.notify(id, { id, status: 'completed', progress: 100, finishedAt });
           await this.logging.logJob(id, 'info', 'Job completed');
           return;
         }
@@ -173,7 +188,7 @@ export class RealJobService implements JobService {
           await this.repo.updateStatus(id, 'cancelled');
           this.cancelled.delete(id);
           const finishedAt = new Date().toISOString();
-          this.bus.emit(id, { id, status: 'failed', finishedAt });
+          this.notify(id, { id, status: 'failed', finishedAt });
           await this.logging.logJob(id, 'warn', 'Job cancelled', { step: i });
           return;
         }
@@ -197,24 +212,24 @@ export class RealJobService implements JobService {
 
         const progress = Math.min(100, Math.floor(((i + 1) / steps.length) * 100));
         await this.repo.updateProgress(id, progress);
-        this.bus.emit(id, { id, status: 'running', progress });
+        this.notify(id, { id, status: 'running', progress });
         await this.logging.logJob(id, 'info', steps[i]);
       }
 
       await this.repo.updateStatus(id, 'completed');
       const finishedAt = new Date().toISOString();
-      this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt });
+      this.notify(id, { id, status: 'completed', progress: 100, finishedAt });
       await this.logging.logJob(id, 'info', 'Job completed');
     } catch (error) {
       const finishedAt = new Date().toISOString();
       if (error instanceof JobCancelledError) {
         await this.repo.updateStatus(id, 'cancelled');
         this.cancelled.delete(id);
-        this.bus.emit(id, { id, status: 'failed', finishedAt });
+        this.notify(id, { id, status: 'failed', finishedAt });
         await this.logging.logJob(id, 'warn', 'Job cancelled');
       } else {
         await this.repo.update(id, { status: 'failed', error: error instanceof Error ? error.message : String(error) });
-        this.bus.emit(id, { id, status: 'failed', finishedAt });
+        this.notify(id, { id, status: 'failed', finishedAt });
         await this.logging.logJob(id, 'error', 'Job failed', { error: error instanceof Error ? error.message : String(error) });
       }
     } finally {
@@ -242,7 +257,7 @@ export class RealJobService implements JobService {
       const orphaned = await this.repo.findByStatus('running');
       for (const j of orphaned) {
         await this.repo.update(j.id, { status: 'failed', error: 'Interrupted by server restart' });
-        this.bus.emit(j.id, { id: j.id, status: 'failed', finishedAt: new Date().toISOString() });
+        this.notify(j.id, { id: j.id, status: 'failed', finishedAt: new Date().toISOString() });
         await this.logging.logJob(j.id, 'error', 'Job failed: interrupted by server restart');
       }
     } catch (e) {
@@ -285,7 +300,7 @@ export class RealJobService implements JobService {
     // Not yet running: finalize now so a dequeued job doesn't sit pending forever.
     await this.repo.updateStatus(id, 'cancelled');
     this.cancelled.delete(id);
-    this.bus.emit(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
+    this.notify(id, { id, status: 'failed', finishedAt: new Date().toISOString() });
   }
 
   async getJob(id: string): Promise<SharedJob | null> {
@@ -334,6 +349,17 @@ export class MockJobService implements JobService {
   private jobs = new Map<string, SharedJob>();
   private timers = new Map<string, NodeJS.Timeout>();
 
+  constructor(private eventBus?: EventBus) {}
+
+  /** Mirror of RealJobService.notify: per-job bus + the global event bus (#291). */
+  private notify(id: string, update: JobUpdate): void {
+    this.bus.emit(id, update);
+    this.eventBus?.emit({
+      type: 'job_update',
+      data: { jobId: id, status: update.status, progress: update.progress, finishedAt: update.finishedAt },
+    });
+  }
+
   async createJob(params: CreateJobParams): Promise<SharedJob> {
     const id = crypto.randomUUID();
     const job: SharedJob = {
@@ -358,11 +384,11 @@ export class MockJobService implements JobService {
       j.status = 'running';
       p = Math.min(100, p + 20);
       j.progress = p;
-      this.bus.emit(id, { id, status: 'running', progress: p });
+      this.notify(id, { id, status: 'running', progress: p });
       if (p >= 100) {
         j.status = 'completed';
         j.finishedAt = new Date().toISOString();
-        this.bus.emit(id, { id, status: 'completed', progress: 100, finishedAt: j.finishedAt });
+        this.notify(id, { id, status: 'completed', progress: 100, finishedAt: j.finishedAt });
         clearInterval(timer);
         this.timers.delete(id);
       }
@@ -376,7 +402,7 @@ export class MockJobService implements JobService {
     if (j) {
       j.status = 'failed';
       j.finishedAt = new Date().toISOString();
-      this.bus.emit(id, { id, status: 'failed', finishedAt: j.finishedAt });
+      this.notify(id, { id, status: 'failed', finishedAt: j.finishedAt });
     }
     const timer = this.timers.get(id);
     if (timer) {
@@ -420,7 +446,7 @@ export class MockJobService implements JobService {
         job.finishedAt = update.finishedAt;
       }
     }
-    this.bus.emit(jobId, update);
+    this.notify(jobId, update);
   }
 
   clearTimers(): void {

@@ -215,12 +215,11 @@ export function useLiveDeploymentStatus(deploymentId?: string) {
     }
   }, [deploymentId]);
 
-  // SSE URL for deployment updates
-  const sseUrl = React.useMemo(() => {
-    if (!deploymentId) return null;
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
-    return `${baseUrl}/api/deployments/${deploymentId}/status/stream`;
-  }, [deploymentId]);
+  // Subscribe to the global event stream (#291) and filter for this deployment in
+  // handleSSEEvent — the old per-deployment `/api/deployments/<id>/status/stream`
+  // route never existed server-side (this always fell back to polling). A relative
+  // URL resolves against the page origin (prod) / Vite proxy (dev).
+  const sseUrl = React.useMemo(() => (deploymentId ? '/api/events' : null), [deploymentId]);
 
   const sseState = useSSE(sseUrl, handleSSEEvent, {
     eventTypes: ['deployment_update'],

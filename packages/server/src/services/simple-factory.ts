@@ -19,6 +19,7 @@ import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMo
 import { RealUpdateCheckService, MockUpdateCheckService, type UpdateCheckService } from './core/update-check';
 import { RealLoggingService, MockLoggingService, type LoggingService } from './core/logging';
 import { RealJobService, MockJobService, type JobService } from './core/jobs';
+import { InProcessEventBus, type EventBus } from './core/event-bus';
 import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
 import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
 import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
@@ -42,6 +43,7 @@ export interface Services {
   updateCheck: UpdateCheckService;
   logging: LoggingService;
   jobs: JobService;
+  eventBus: EventBus;
   catalog: CatalogService;
   bundles: BundleService;
   drafts: DraftService;
@@ -69,7 +71,8 @@ export function createServices(env: ServiceEnvironment): Services {
     const database = new MockDatabaseService();
     // Share the jobs service so deployment history reflects jobs created by
     // create/action/rollback (the deployment service is the single owner).
-    const jobs = new MockJobService();
+    const eventBus = new InProcessEventBus();
+    const jobs = new MockJobService(eventBus);
 
     return {
       storage,
@@ -82,6 +85,7 @@ export function createServices(env: ServiceEnvironment): Services {
       updateCheck: new MockUpdateCheckService(),
       logging: new MockLoggingService(),
       jobs,
+      eventBus,
       catalog: new MockCatalogService(),
       bundles: new MockBundleService(),
       drafts: new MockDraftService(),
@@ -103,11 +107,14 @@ export function createServices(env: ServiceEnvironment): Services {
     // Create logging service with storage dependency
     const logging = new RealLoggingService(storage);
     
+    // Global event bus backing the dashboard-wide /api/events stream (#291).
+    const eventBus = new InProcessEventBus();
+
     // Create jobs service with database and logging dependencies
-    const jobs = new RealJobService(database, logging);
-    
+    const jobs = new RealJobService(database, logging, eventBus);
+
     const catalog = new RealCatalogService();
-    
+
     // Shared routing service owns Traefik rule generation/validation/emission.
     const routing = new RealRoutingService(storage);
 
@@ -131,13 +138,14 @@ export function createServices(env: ServiceEnvironment): Services {
       updateCheck: new MockUpdateCheckService(),
       logging,
       jobs,
+      eventBus,
       catalog,
       bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
       drafts,
       validation,
       routing,
       provisioner,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog),
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus),
     };
   }
 
@@ -150,10 +158,13 @@ export function createServices(env: ServiceEnvironment): Services {
   
   // Create logging service with storage dependency
   const logging = new RealLoggingService(storage);
-  
+
+  // Global event bus backing the dashboard-wide /api/events stream (#291).
+  const eventBus = new InProcessEventBus();
+
   // Create jobs service with database and logging dependencies
-  const jobs = new RealJobService(database, logging);
-  
+  const jobs = new RealJobService(database, logging, eventBus);
+
   const catalog = new RealCatalogService();
   
   // Set up auth providers for real auth service. Order matters: the api-key
@@ -192,13 +203,14 @@ export function createServices(env: ServiceEnvironment): Services {
     updateCheck: new RealUpdateCheckService(),
     logging,
     jobs,
+    eventBus,
     catalog,
     bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
     drafts,
     validation,
     routing,
     provisioner,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus),
   };
 }
 

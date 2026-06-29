@@ -65,6 +65,10 @@ export const API = {
     backup: '/api/settings/backup',
   },
 
+  // Global SSE event stream (#291): job_update + deployment_update transitions,
+  // multiplexed so list views stay live from one connection.
+  events: '/api/events',
+
   system: {
     status: '/api/system/status',
     health: '/api/system/health',

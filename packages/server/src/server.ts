@@ -1342,6 +1342,25 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   // System Status SSE Stream - Phase 4: Real-time system updates with monitoring service
+  // Global event stream (#291): one authenticated SSE connection per dashboard
+  // that multiplexes job_update + deployment_update events from the in-process
+  // event bus, so list views (Deployments, JobTracker) stay live without polling.
+  // Authenticated by authMiddleware like every other route. Logs keep their own
+  // per-entity streams (they're high-volume and id-scoped); this carries state
+  // transitions only.
+  if (pathname === '/api/events' && req.method === 'GET') {
+    const services = getServices();
+    const stream = createSSEStream({
+      logger,
+      onSubscribe(controller) {
+        controller.heartbeat();
+        const sub = services.eventBus.subscribe((event) => controller.send(event));
+        return () => { sub.unsubscribe(); };
+      },
+    });
+    return new Response(stream, { headers: createSSEHeaders() });
+  }
+
   if (pathname === '/api/system/status/stream' && req.method === 'GET') {
     const stream = createSSEStream({
       logger,

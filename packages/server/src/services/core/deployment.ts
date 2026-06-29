@@ -48,6 +48,7 @@ import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
 import type { CatalogService } from './catalog';
+import type { EventBus } from './event-bus';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
@@ -933,6 +934,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Optional so existing constructions (and tests) need no change; when present,
     // deployment responses are annotated with catalog update availability (#284).
     private catalogService?: CatalogService,
+    // Optional global event bus; when wired, status changes emit `deployment_update`
+    // for the dashboard-wide `/api/events` stream (#291).
+    private eventBus?: EventBus,
   ) {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
@@ -1930,6 +1934,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       `deployments/${deployment.id}/metadata.json`,
       JSON.stringify(deployment, null, 2)
     );
+    // Every durable status change lands here, so this is the single chokepoint to
+    // emit a `deployment_update` onto the global event bus (#291) — driving the
+    // dashboard's live list/detail without polling.
+    this.eventBus?.emit({
+      type: 'deployment_update',
+      data: { deploymentId: deployment.id, status: deployment.status, uptime: deployment.uptime, lastUpdated: deployment.lastUpdated },
+    });
   }
 
   protected override async persistRelease(release: Release): Promise<void> {

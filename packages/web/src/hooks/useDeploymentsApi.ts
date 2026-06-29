@@ -1,6 +1,7 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
+import { onLive } from '../utils/live-bus';
 import type { GetDeploymentsRequest, GetDeploymentsResponse } from '@hola/shared';
 
 // Working StrictMode-compatible hook for deployments using the same pattern as useWorkingApi
@@ -64,6 +65,11 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
   React.useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Live updates (#291): refetch (cache-bypassing) when the global event stream
+  // reports a deployment change. This is the primary freshness path; the poll
+  // below is a fallback for when SSE isn't connected.
+  React.useEffect(() => onLive('deployments', () => { void fetchData(true); }), [fetchData]);
 
   // While any deployment is mid-transition (installing/updating), poll so the
   // list reflects the terminal state without a manual reload.
