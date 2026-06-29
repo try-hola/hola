@@ -36,7 +36,7 @@ import type {
   GetLogsResponse,
   LogEntry
 } from '@hola/shared';
-import { checkUpgradePath } from '@hola/shared';
+import { checkUpgradePath, isNewerVersion } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
@@ -47,6 +47,7 @@ import type { JobService, JobContext } from './jobs';
 import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
+import type { CatalogService } from './catalog';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
@@ -664,13 +665,28 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse> {
     await this.ensureLoaded();
     this.logger.info('Listing deployments', { request });
-    return filterAndPaginateDeployments(Array.from(this.deployments.values()), request);
+    const page = filterAndPaginateDeployments(Array.from(this.deployments.values()), request);
+    await this.enrichUpdateInfo(page.items);
+    return page;
   }
 
   async getDeployment(deploymentId: string): Promise<GetDeploymentResponse> {
     await this.ensureLoaded();
     this.logger.info('Getting deployment', { deploymentId });
-    return toDetailResponse(this.requireDeployment(deploymentId));
+    const detail = toDetailResponse(this.requireDeployment(deploymentId));
+    await this.enrichUpdateInfo([detail]);
+    return detail;
+  }
+
+  /**
+   * Annotate deployment responses with catalog update availability (#284):
+   * `latestVersion` + `updateAvailable` from the catalog. Default no-op (the
+   * in-memory/mock service has no catalog); RealDeploymentService overrides it.
+   */
+  protected async enrichUpdateInfo(
+    items: Array<{ app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+  ): Promise<void> {
+    void items;
   }
 
   async updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse> {
@@ -913,7 +929,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     private draftService: DraftService,
     private routingService: RoutingService,
     private loggingService: LoggingService,
-    private provisioner: ProvisionerService
+    private provisioner: ProvisionerService,
+    // Optional so existing constructions (and tests) need no change; when present,
+    // deployment responses are annotated with catalog update availability (#284).
+    private catalogService?: CatalogService,
   ) {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
@@ -1298,6 +1317,42 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await log('info', `Restoring app data from pre-upgrade snapshot ${snap.snapshotId}…`);
     await restoreTarGzInto(tarPath, this.appRootFor(deploymentId));
     return true;
+  }
+
+  /**
+   * Annotate deployment responses with catalog update availability (#284): for
+   * each distinct app, look up the newest catalog version and compare it to the
+   * installed `version`. Cheap (the catalog version list is served from the
+   * in-memory cache, no bundle pull). Fail-safe — any catalog error leaves the
+   * fields unset rather than failing the list/detail request.
+   */
+  protected override async enrichUpdateInfo(
+    items: Array<{ app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+  ): Promise<void> {
+    if (!this.catalogService || items.length === 0) return;
+    const latestByApp = new Map<string, string | undefined>();
+    for (const app of new Set(items.map((i) => i.app))) {
+      try {
+        const { items: versions } = await this.catalogService.getVersions(app);
+        const newest = versions
+          .map((v) => v.version)
+          .reduce<string | undefined>((best, v) => (!best || isNewerVersion(v, best) ? v : best), undefined);
+        latestByApp.set(app, newest);
+      } catch {
+        latestByApp.set(app, undefined); // app not in catalog / catalog down — skip
+      }
+    }
+    for (const item of items) {
+      const latest = latestByApp.get(item.app);
+      if (!latest) continue;
+      item.latestVersion = latest;
+      // Only flag an update when the installed version is a concrete, comparable
+      // one. A deployment pinned to the literal "latest" has no known concrete
+      // version to compare against — treating it as 0.0.0 would mark *every*
+      // latest-install as out-of-date — so report "no update available" instead.
+      const installed = item.version;
+      item.updateAvailable = !!installed && installed !== 'latest' && isNewerVersion(latest, installed);
+    }
   }
 
   /**
