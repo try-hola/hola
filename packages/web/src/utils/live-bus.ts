@@ -30,3 +30,20 @@ export function signalLive(resource: LiveResource): void {
     }
   });
 }
+
+// --- Connection state -------------------------------------------------------
+// The global /api/events subscription publishes whether it's connected, so list
+// hooks can PAUSE their polling while the backplane is live (events drive
+// freshness) and resume it only as a fallback when SSE drops.
+
+let connected = false;
+
+/** Whether the global event stream is currently connected. */
+export function isLiveConnected(): boolean {
+  return connected;
+}
+
+/** Called by the global subscription when its connection state changes. */
+export function setLiveConnected(value: boolean): void {
+  connected = value;
+}

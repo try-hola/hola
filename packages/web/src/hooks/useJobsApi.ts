@@ -1,7 +1,7 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
-import { onLive } from '../utils/live-bus';
+import { onLive, isLiveConnected } from '../utils/live-bus';
 import type { GetJobsResponse, JobStatus } from '@hola/shared';
 
 interface UseJobsApiParams {
@@ -91,12 +91,16 @@ export function useJobsApi(params: UseJobsApiParams = {}) {
   // transition — the primary freshness path. The poll below is the fallback.
   React.useEffect(() => onLive('jobs', () => { void fetchData(true); }), [fetchData]);
 
-  // Auto-refresh for live updates — force past the short cache so each tick
-  // reflects status transitions rather than re-serving the cached page.
+  // Polling fallback (#291): only runs when the global event stream ISN'T
+  // connected. While the backplane is live, job_update events drive freshness and
+  // this timer no-ops — so we don't poll redundantly.
   React.useEffect(() => {
     if (!autoRefresh) return;
 
-    const interval = setInterval(() => { void fetchData(true); }, refreshInterval);
+    const interval = setInterval(() => {
+      if (isLiveConnected()) return; // events are driving updates; skip the poll
+      void fetchData(true);
+    }, refreshInterval);
     return () => clearInterval(interval);
   }, [fetchData, autoRefresh, refreshInterval]);
 
