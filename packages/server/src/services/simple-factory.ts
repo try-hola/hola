@@ -137,7 +137,7 @@ export function createServices(env: ServiceEnvironment): Services {
       validation,
       routing,
       provisioner,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner),
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog),
     };
   }
 
@@ -198,7 +198,7 @@ export function createServices(env: ServiceEnvironment): Services {
     validation,
     routing,
     provisioner,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog),
   };
 }
 

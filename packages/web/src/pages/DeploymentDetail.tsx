@@ -290,6 +290,9 @@ export const DeploymentDetail: React.FC = () => {
     { label: 'Deployment ID', value: deployment.id, mono: true },
     { label: 'Status', value: deployment.status },
     ...(deployment.version ? [{ label: 'Version', value: deployment.version, mono: true }] : []),
+    ...(deployment.updateAvailable && deployment.latestVersion
+      ? [{ label: 'Latest', value: `${deployment.latestVersion} (update available)`, mono: true }]
+      : []),
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
     { label: 'Last updated', value: deployment.lastUpdated },
     ...(deployment.url ? [{ label: 'URL', value: deployment.url, mono: true }] : []),

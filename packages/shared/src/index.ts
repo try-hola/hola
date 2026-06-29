@@ -640,6 +640,11 @@ export type DeploymentListItem = {
   status: DeploymentStatus;
   uptime?: string;
   version?: string;
+  // Newest catalog version for this app, and whether it's newer than the
+  // installed `version` (per-app update notifications, #284). Derived server-side
+  // from the catalog; absent when the catalog is unavailable.
+  latestVersion?: string;
+  updateAvailable?: boolean;
   resources?: { cpu: string; memory: string };
   ports: string[];
   lastUpdated: string;
@@ -659,6 +664,11 @@ export type DeploymentDetail = {
   status: DeploymentStatus;
   uptime?: string;
   version?: string;
+  // Newest catalog version + whether an update is available (per-app update
+  // notifications, #284). Derived server-side; absent when the catalog is
+  // unavailable.
+  latestVersion?: string;
+  updateAvailable?: boolean;
   url?: string;
   resources: { cpu: string; memory: string; disk?: string };
   ports: string[];

@@ -9,7 +9,8 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  ArrowUp
 } from 'lucide-react';
 import type {
   DeploymentStatus,
@@ -304,8 +305,17 @@ export const Deployments: React.FC = () => {
               <div>
                 <StatusBadge status={deployment.status} />
               </div>
-              <div className="font-mono text-[12.5px] text-text-muted truncate">
-                {deployment.version || '—'}
+              <div className="font-mono text-[12.5px] text-text-muted truncate flex items-center gap-1.5">
+                <span className="truncate">{deployment.version || '—'}</span>
+                {deployment.updateAvailable && deployment.latestVersion && (
+                  <span
+                    title={`Update available: ${deployment.latestVersion}`}
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-weak text-primary text-[10.5px] font-semibold whitespace-nowrap"
+                  >
+                    <ArrowUp className="w-3 h-3" />
+                    {deployment.latestVersion}
+                  </span>
+                )}
               </div>
               <div className="font-mono text-[12px] text-text-muted truncate">
                 {deployment.url || '—'}
