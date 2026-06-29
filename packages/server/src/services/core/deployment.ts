@@ -1185,25 +1185,69 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       this.logger.info('No app data to snapshot (fresh deployment)', { deploymentId });
       return;
     }
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const snapshotId = `${stamp}-${fromReleaseId.slice(0, 8)}`;
-    const relDir = `${this.snapshotsDir(deploymentId)}/${snapshotId}`;
-    await this.storageService.ensureDir(relDir);
 
-    const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
-    await tarGzipDir(appRoot, tarPath);
+    // #121 backup hooks: a file-level tar of a live DB is only crash-consistent,
+    // so an app can declare a `preHook` (quiesce / `pg_dump` into a path the tar
+    // captures) and a `postHook` (clean up). The server runs them in the app's own
+    // containers around the capture (ADR 0002 post-deploy command mechanism). Read
+    // from the OUTGOING release's manifest — that's the app currently running.
+    const backup = await this.readReleaseBackupConfig(deploymentId, fromReleaseId);
+    const dir = this.runtimeDir(deploymentId);
+    const projectName = this.projectName(deploymentId);
 
-    const meta: SnapshotMeta = {
-      snapshotId,
-      deploymentId,
-      fromReleaseId,
-      fromVersion,
-      createdAt: new Date().toISOString(),
-      sizeBytes: await fileSize(tarPath),
-    };
-    await this.storageService.writeFile(`${relDir}/meta.json`, JSON.stringify(meta, null, 2));
-    this.logger.info('Captured pre-upgrade snapshot', { deploymentId, snapshotId, sizeBytes: meta.sizeBytes });
-    await this.pruneSnapshots(deploymentId);
+    // preHook failure propagates — `promote` decides fail-closed (when the target
+    // declares `preUpgradeBackup: required`) vs. best-effort. A consistent dump is
+    // worthless if we snapshot anyway.
+    if (backup?.preHook) {
+      this.logger.info('Running backup preHook before snapshot', { deploymentId, service: backup.preHook.service });
+      const res = await this.dockerService.composeExec(dir, projectName, backup.preHook.service, backup.preHook.command);
+      if (!res.success) throw new Error(`backup preHook failed: ${res.output}`);
+    }
+
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const snapshotId = `${stamp}-${fromReleaseId.slice(0, 8)}`;
+      const relDir = `${this.snapshotsDir(deploymentId)}/${snapshotId}`;
+      await this.storageService.ensureDir(relDir);
+
+      const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
+      await tarGzipDir(appRoot, tarPath);
+
+      const meta: SnapshotMeta = {
+        snapshotId,
+        deploymentId,
+        fromReleaseId,
+        fromVersion,
+        createdAt: new Date().toISOString(),
+        sizeBytes: await fileSize(tarPath),
+      };
+      await this.storageService.writeFile(`${relDir}/meta.json`, JSON.stringify(meta, null, 2));
+      this.logger.info('Captured pre-upgrade snapshot', { deploymentId, snapshotId, sizeBytes: meta.sizeBytes });
+      await this.pruneSnapshots(deploymentId);
+    } finally {
+      // postHook always runs (clean up the dump), even if the capture threw.
+      // Best-effort — a cleanup failure must not fail the upgrade.
+      if (backup?.postHook) {
+        try {
+          const res = await this.dockerService.composeExec(dir, projectName, backup.postHook.service, backup.postHook.command);
+          if (!res.success) this.logger.warn('backup postHook failed', { deploymentId, output: res.output });
+        } catch (err) {
+          this.logger.warn('backup postHook errored', { deploymentId, error: err instanceof Error ? err.message : String(err) });
+        }
+      }
+    }
+  }
+
+  /** Read the per-app backup hooks (#121) from a release's finalized manifest. */
+  private async readReleaseBackupConfig(deploymentId: string, releaseId: string): Promise<FinalizedManifest['backup']> {
+    const path = `deployments/${deploymentId}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(path))) return undefined;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(path)) as FinalizedManifest;
+      return manifest.backup;
+    } catch {
+      return undefined;
+    }
   }
 
   /** Snapshot metadata for a deployment, newest first. */

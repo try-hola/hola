@@ -132,6 +132,29 @@ export type AppUpgradeMeta = {
   preUpgradeBackup?: 'required' | 'recommended' | 'none';
 };
 
+/**
+ * A backup hook command run inside one of the app's own compose services (#121).
+ * `command` is exec-form (argv), run via `docker compose exec <service> …`.
+ */
+export type AppBackupHook = {
+  service: string;
+  command: string[];
+};
+
+/**
+ * Per-app pre/post-backup hooks (#121), declared in the bundle manifest's
+ * `backup` block. A file-level snapshot of a running DB-backed app is only
+ * crash-consistent; the `preHook` quiesces/dumps (e.g. `pg_dump` into a path the
+ * snapshot captures) before the file capture, and the `postHook` cleans up after.
+ * The Hola server runs them around the snapshot (it owns the deploy lifecycle and
+ * the post-deploy command mechanism — ADR 0002). Shared by the pre-upgrade
+ * snapshot (#284) and, later, scheduled Backrest backups.
+ */
+export type AppBackupConfig = {
+  preHook?: AppBackupHook;
+  postHook?: AppBackupHook;
+};
+
 /** Result of {@link checkUpgradePath}: ok, or a rejection with an actionable next step. */
 export type UpgradePathResult =
   | { ok: true }
@@ -419,6 +442,10 @@ export type GetCatalogAppVersionDetailResponse = {
   // dashboard's pre-upgrade warning. Optional: apps that don't declare it have
   // no upgrade restrictions.
   upgrade?: AppUpgradeMeta;
+  // Per-app pre/post-backup hooks (#121) for transaction-consistent snapshots
+  // (e.g. pg_dump before a file-level capture). Optional: most apps (and SQLite)
+  // are fine with crash-consistent file snapshots and omit it.
+  backup?: AppBackupConfig;
 };
 
 // ------------------------------------------------------
@@ -565,6 +592,10 @@ export type Draft = {
   // carried through finalize so `promote` can enforce the skip-guard against the
   // target version (read-only; not user-editable).
   upgrade?: AppUpgradeMeta;
+  // Per-app pre/post-backup hooks (#121) seeded from the bundle manifest and
+  // carried through finalize so the snapshot path can quiesce/dump around the
+  // file capture (read-only; not user-editable).
+  backup?: AppBackupConfig;
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 
