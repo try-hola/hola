@@ -60,6 +60,8 @@ prog
   .option('--dir', 'Install directory on the host', '/opt/hola')
   .option('--enable-sso', 'For a HOLA_AUTH_MODE=none host: enable Authentik SSO (the new standard)', false)
   .option('--keep-auth-mode', 'For a HOLA_AUTH_MODE=none host: keep SSO off (no prompt)', false)
+  .option('--no-backup', 'Skip the pre-upgrade snapshot (.env + traefik/acme + hola-data volume)')
+  .option('--backup-app-data', 'Also include the (large) app-data bind root in the pre-upgrade snapshot', false)
   .option('--check', 'Report CLI / installed / latest versions without changing anything', false)
   .option('--dry-run', 'Print the plan without connecting', false)
   .option('--json', 'Print the result as JSON', false)
