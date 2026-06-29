@@ -1047,6 +1047,19 @@ async function route(url: URL, req: Request): Promise<Response> {
       const services = getServices();
       const status = statusParam && statusParam !== 'all' ? statusParam as JobStatus : undefined;
       jobs = await services.jobs.listJobs({ deploymentId: deploymentId ?? undefined, status });
+      // Join each job to its owning deployment's name/app so the UI can label a
+      // job by what it acts on (not just "Starting"). One in-memory list + a map
+      // lookup; fail-safe — a join error leaves jobs unenriched.
+      try {
+        const deps = await services.deployments.listDeployments({ page: 1, limit: 1000 });
+        const byId = new Map(deps.items.map(d => [d.id, d]));
+        jobs = jobs.map(j => {
+          const d = j.deploymentId ? byId.get(j.deploymentId) : undefined;
+          return d ? { ...j, deploymentName: d.name, app: d.app } : j;
+        });
+      } catch (joinErr) {
+        logger.warn('Failed to enrich jobs with deployment names', { error: String(joinErr) });
+      }
     } catch (error) {
       logger.error('Failed to list jobs', error as Error);
       jobs = [];

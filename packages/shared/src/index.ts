@@ -665,6 +665,11 @@ export type Job = {
   finishedAt?: string;
   progress?: number;
   deploymentId?: string;
+  // The owning deployment's display name + app id, joined server-side when jobs
+  // are listed so the UI can label a job by what it's acting on (not just its
+  // type). Absent for jobs with no/deleted deployment.
+  deploymentName?: string;
+  app?: string;
 };
 
 export type GetJobsRequest = PageRequest & {

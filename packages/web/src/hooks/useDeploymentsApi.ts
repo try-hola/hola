@@ -78,6 +78,8 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
 
   return {
     ...state,
-    refetch: fetchData,
+    // Manual refresh bypasses the 30s cache so the button reflects current state
+    // (e.g. after an action) instead of re-serving a recently-cached list.
+    refetch: () => fetchData(true),
   };
 }

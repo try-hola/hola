@@ -123,13 +123,16 @@ export const JobStatus: React.FC<JobStatusProps> = ({
         <div className="flex items-center space-x-3">
           {getJobStatusIcon(job.status, size)}
           <div className="min-w-0 flex-1">
-            <div className="flex items-center space-x-2">
-              <span className={`font-medium ${textSizeClasses}`}>
-                {getJobTypeLabel(job.type)}
+            <div className="flex items-center space-x-2 min-w-0">
+              {/* Label by WHAT the job acts on (the app/deployment), with the
+                  action as secondary — so a finished install doesn't keep reading
+                  "Starting". Falls back to the action label when unjoined. */}
+              <span className={`font-medium truncate ${textSizeClasses}`}>
+                {job.deploymentName || job.app || getJobTypeLabel(job.type)}
               </span>
-              {job.deploymentId && size !== 'sm' && (
-                <span className={`text-text-muted ${size === 'lg' ? 'text-sm' : 'text-xs'}`}>
-                  #{job.deploymentId}
+              {(job.deploymentName || job.app) && (
+                <span className={`text-text-muted whitespace-nowrap ${size === 'lg' ? 'text-sm' : 'text-xs'}`}>
+                  {getJobTypeLabel(job.type)}
                 </span>
               )}
             </div>
