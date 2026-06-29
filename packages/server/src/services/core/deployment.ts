@@ -40,6 +40,7 @@ import { checkUpgradePath } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
+import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto } from './snapshot-fs';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService, JobContext } from './jobs';
@@ -79,7 +80,29 @@ export interface PromoteRequest {
   draftId: string;
   reason?: string;
   options?: { autoStart?: boolean };
+  /**
+   * Take a pre-upgrade app-data snapshot before switching the release (#284
+   * Phase 1). Always taken when the target version declares
+   * `upgrade.preUpgradeBackup: "required"`; this opts in otherwise.
+   */
+  snapshot?: boolean;
 }
+
+/** Per-deployment pre-upgrade snapshot record (#284 Phase 1), stored under
+ *  `deployments/<id>/snapshots/<snapshotId>/meta.json` alongside `data.tar.gz`. */
+interface SnapshotMeta {
+  snapshotId: string;
+  deploymentId: string;
+  /** The release that was active when the snapshot was taken — i.e. the release a
+   *  data-aware rollback to it should restore this snapshot for. */
+  fromReleaseId: string;
+  fromVersion?: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
+/** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
+const SNAPSHOT_RETENTION = 5;
 
 export interface DeploymentService extends HealthCheckable {
   // Deployment lifecycle
@@ -358,6 +381,22 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   /**
+   * Capture a pre-upgrade app-data snapshot before a promote switches releases
+   * (#284 Phase 1). Default no-op — the in-memory/mock service has no app data on
+   * disk; RealDeploymentService tars the data root. May throw (the caller decides
+   * fail-closed vs. best-effort based on the target's `preUpgradeBackup`).
+   */
+  protected async capturePreUpgradeSnapshot(
+    deploymentId: string,
+    fromReleaseId: string,
+    fromVersion: string | undefined,
+  ): Promise<void> {
+    void deploymentId;
+    void fromReleaseId;
+    void fromVersion;
+  }
+
+  /**
    * Preflight the app's declared auth requirement against the active auth backend
    * before any deployment state is created (RealDeploymentService overrides this
    * to consult the provisioner). Default no-op — the in-memory/mock service has no
@@ -580,6 +619,26 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     await this.stageReleaseArtifacts(artifacts, deploymentId, release);
     await this.persistRelease(release);
 
+    // Pre-upgrade snapshot (#284 Phase 1): capture the app data BEFORE switching
+    // the release, keyed by the outgoing release so a later data-aware rollback to
+    // it restores this exact state. Always for `preUpgradeBackup: "required"`,
+    // opt-in otherwise. Fail-closed only when required (don't silently upgrade a
+    // stack the operator asked to be snapshotted); best-effort otherwise.
+    const backupRequired = artifacts?.manifest.upgrade?.preUpgradeBackup === 'required';
+    if ((backupRequired || request.snapshot === true) && deployment.currentReleaseId) {
+      try {
+        await this.capturePreUpgradeSnapshot(deploymentId, deployment.currentReleaseId, deployment.version);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (backupRequired) {
+          throw new ValidationError(
+            `Pre-upgrade snapshot failed and this upgrade requires one (preUpgradeBackup: required): ${msg}`,
+          );
+        }
+        this.logger.warn('Pre-upgrade snapshot failed (continuing — not required)', { deploymentId, error: msg });
+      }
+    }
+
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
 
@@ -750,6 +809,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         action: 'rollback',
         targetReleaseId,
         reason: request.reason,
+        // Data-aware rollback (#284 Phase 1): also restore the pre-upgrade app-data
+        // snapshot taken when this target was last active, so the old image isn't
+        // booted against a forward-migrated schema. Handled in runLifecycleJob.
+        restoreData: request.restoreData === true,
       },
     });
 
@@ -1098,6 +1161,101 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return `${this.appsBindRoot()}/${deploymentId}`;
   }
 
+  // ---- Pre-upgrade snapshots (#284 Phase 1) --------------------------------
+
+  private snapshotsDir(deploymentId: string): string {
+    return `deployments/${deploymentId}/snapshots`;
+  }
+
+  /**
+   * Snapshot a deployment's app data (file-level tar) keyed by the release that
+   * is active right now (`fromReleaseId`) — the rollback target a later
+   * data-aware rollback restores it for. No-ops when there's no app data yet (a
+   * fresh app has nothing to snapshot). Prunes to the retention bound. The capture
+   * is a live read (crash-consistent); transaction-consistent dumps are the
+   * per-app hooks in #121. Overrides the base hook called from `promote`.
+   */
+  protected override async capturePreUpgradeSnapshot(
+    deploymentId: string,
+    fromReleaseId: string,
+    fromVersion: string | undefined,
+  ): Promise<void> {
+    const appRoot = this.appRootFor(deploymentId);
+    if (!(await dirHasContents(appRoot))) {
+      this.logger.info('No app data to snapshot (fresh deployment)', { deploymentId });
+      return;
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const snapshotId = `${stamp}-${fromReleaseId.slice(0, 8)}`;
+    const relDir = `${this.snapshotsDir(deploymentId)}/${snapshotId}`;
+    await this.storageService.ensureDir(relDir);
+
+    const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
+    await tarGzipDir(appRoot, tarPath);
+
+    const meta: SnapshotMeta = {
+      snapshotId,
+      deploymentId,
+      fromReleaseId,
+      fromVersion,
+      createdAt: new Date().toISOString(),
+      sizeBytes: await fileSize(tarPath),
+    };
+    await this.storageService.writeFile(`${relDir}/meta.json`, JSON.stringify(meta, null, 2));
+    this.logger.info('Captured pre-upgrade snapshot', { deploymentId, snapshotId, sizeBytes: meta.sizeBytes });
+    await this.pruneSnapshots(deploymentId);
+  }
+
+  /** Snapshot metadata for a deployment, newest first. */
+  private async listSnapshots(deploymentId: string): Promise<SnapshotMeta[]> {
+    let ids: string[];
+    try {
+      ids = await this.storageService.listDir(this.snapshotsDir(deploymentId));
+    } catch {
+      return [];
+    }
+    const metas: SnapshotMeta[] = [];
+    for (const id of ids) {
+      try {
+        const raw = await this.storageService.readFileAsString(`${this.snapshotsDir(deploymentId)}/${id}/meta.json`);
+        metas.push(JSON.parse(raw) as SnapshotMeta);
+      } catch {
+        // Skip an incomplete/half-written snapshot dir.
+      }
+    }
+    return metas.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  /** Drop the oldest snapshots beyond the retention bound. */
+  private async pruneSnapshots(deploymentId: string): Promise<void> {
+    const excess = (await this.listSnapshots(deploymentId)).slice(SNAPSHOT_RETENTION);
+    for (const m of excess) {
+      await this.storageService.deleteDir(`${this.snapshotsDir(deploymentId)}/${m.snapshotId}`, true);
+    }
+  }
+
+  /**
+   * Restore the most recent snapshot taken when `targetReleaseId` was active,
+   * replacing the app-data dir. Returns false (with a warning) when none exists —
+   * the caller then proceeds with a containers-only rollback. Callers MUST stop
+   * the app's containers first (the data dir is wiped and replaced).
+   */
+  private async restoreAppDataSnapshot(
+    deploymentId: string,
+    targetReleaseId: string,
+    log: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>,
+  ): Promise<boolean> {
+    const snap = (await this.listSnapshots(deploymentId)).find((m) => m.fromReleaseId === targetReleaseId);
+    if (!snap) {
+      await log('warn', 'No pre-upgrade snapshot for this release — rolling back containers only (app data not restored).');
+      return false;
+    }
+    const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snap.snapshotId, 'data.tar.gz');
+    await log('info', `Restoring app data from pre-upgrade snapshot ${snap.snapshotId}…`);
+    await restoreTarGzInto(tarPath, this.appRootFor(deploymentId));
+    return true;
+  }
+
   /**
    * Publish the app registry feed (ADR 0002): build the canonical list of
    * installed apps and write `registry.json` into the data root of every
@@ -1383,6 +1541,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextLifecycle = 'active';
       } else {
         // deploy / start / rollback -> pull images, then compose up
+
+        // Data-aware rollback (#284 Phase 1): before bringing the target release
+        // up, stop the current containers and restore the app-data snapshot taken
+        // when the target was last active. Stopping first is essential — we wipe
+        // and replace the data dir, which must not happen under live containers.
+        // No matching snapshot ⇒ a warning + a containers-only rollback (the data
+        // is left as-is rather than failing the rollback outright).
+        if (action === 'rollback' && ctx.payload.restoreData === true) {
+          const targetReleaseId = (ctx.payload.targetReleaseId as string | undefined) ?? deployment.currentReleaseId ?? '';
+          await logBoth('info', 'Data-aware rollback: stopping containers before restoring app data…');
+          await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName);
+          await this.restoreAppDataSnapshot(deploymentId, targetReleaseId, logBoth);
+        }
+
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
         // Drop the provisioned OIDC creds file into the data root before `up` so a
