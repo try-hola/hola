@@ -36,9 +36,10 @@ import type {
   GetLogsResponse,
   LogEntry
 } from '@hola/shared';
+import { checkUpgradePath } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService, JobContext } from './jobs';
@@ -544,12 +545,28 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
   async promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
-    this.requireDeployment(deploymentId);
+    const deployment = this.requireDeployment(deploymentId);
     const releaseId = crypto.randomUUID();
 
     this.logger.info('Promoting new release onto deployment', { deploymentId, releaseId, draftId: request.draftId });
 
     const artifacts = await this.loadFinalizedArtifacts(request.draftId);
+
+    // Upgrade skip-guard (#284 Phase 0): reject an illegal version jump — below a
+    // `minFromVersion` floor or past a required `waypoint` — BEFORE building or
+    // staging the new release, so an unsafe promote fails up front with an
+    // actionable next version rather than booting a half-migrated app. Same-version
+    // re-promotes, downgrades, and apps with no upgrade metadata pass through.
+    const fromVersion = deployment.version;
+    const toVersion = artifacts?.manifest.version;
+    const guard = checkUpgradePath(fromVersion, toVersion, artifacts?.manifest.upgrade);
+    if (!guard.ok) {
+      this.logger.warn('Blocked unsafe promote (upgrade skip-guard)', {
+        deploymentId, fromVersion, toVersion, code: guard.code, suggestedVersion: guard.suggestedVersion,
+      });
+      throw new ValidationError(guard.message, { code: guard.code, fromVersion, toVersion, suggestedVersion: guard.suggestedVersion });
+    }
+
     const { app, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
 
     // Reject an unsatisfiable auth requirement before staging the new release, so

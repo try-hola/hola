@@ -13,6 +13,7 @@ import type {
 } from '@hola/shared';
 import { coerceManifestAuth } from './manifest-auth';
 import { coerceConsumes } from './app-registry';
+import { coerceManifestUpgrade } from './manifest-upgrade';
 
 // Shape of remote catalog JSON (minimal for now)
 type RemoteCatalog = {
@@ -188,6 +189,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         };
         auth?: unknown;
         consumes?: unknown;
+        upgrade?: unknown;
         ingress?: { service?: unknown; port?: unknown };
       };
 
@@ -256,6 +258,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
 
+      // Upgrade-safety metadata (#284 Phase 0): drives the server-side skip-guard
+      // on promote and the dashboard's pre-upgrade warning. Coerced narrowly like
+      // `auth`, so unknown fields don't survive into the deploy lifecycle.
+      const upgrade = coerceManifestUpgrade(manifest.upgrade);
+
       // Which compose service is the web/ingress one — the app's bundle manifest
       // declares it as `ingress.service`. Lets the server route to / inject auth
       // env into the right service for a multi-service app whose ingress isn't
@@ -265,7 +272,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, composeOverride, auth, consumes, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, composeOverride, auth, consumes, upgrade, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

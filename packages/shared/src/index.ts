@@ -112,6 +112,86 @@ export function isNewerVersion(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0;
 }
 
+/**
+ * Upgrade-safety metadata for a catalog app version (#284 Phase 0), declared in
+ * the bundle manifest's `upgrade` block. Lets the server enforce a safe upgrade
+ * path on `promote` and lets the dashboard warn before a breaking upgrade. Our
+ * semver describes impact on the Hola user, so a breaking/migrating release
+ * carries `breaking: true` plus any version-skip guard rails.
+ */
+export type AppUpgradeMeta = {
+  /** This release migrates/breaks — the UI should force an explicit acknowledgement before promoting. */
+  breaking?: boolean;
+  /** Floor: a deployment must already be at/above this version to promote to this one (H2). */
+  minFromVersion?: string;
+  /** Versions a deployment MUST be promoted through one-at-a-time to reach this one (H2). */
+  waypoints?: string[];
+  /** Link to upgrade notes, shown in the promote dialog. */
+  upgradeNotesUrl?: string;
+  /** Whether a pre-upgrade backup is required/recommended before promoting (H7). */
+  preUpgradeBackup?: 'required' | 'recommended' | 'none';
+};
+
+/** Result of {@link checkUpgradePath}: ok, or a rejection with an actionable next step. */
+export type UpgradePathResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code: 'min-from-version' | 'waypoint-required';
+      message: string;
+      /** The version the caller should promote to first, before retrying the target. */
+      suggestedVersion: string;
+    };
+
+/**
+ * Validate a catalog-app upgrade against the target version's upgrade metadata
+ * (#284 Phase 0). Rejects an illegal jump — below the `minFromVersion` floor, or
+ * skipping past a required `waypoint` — with an actionable next version.
+ *
+ * Only enforced for an actual forward upgrade (`toVersion` newer than
+ * `fromVersion`) with both versions and metadata known. Same-version re-promotes,
+ * downgrades/rollbacks, and unknown versions pass through — those paths are the
+ * caller's concern, not a skip-guard's.
+ */
+export function checkUpgradePath(
+  fromVersion: string | undefined,
+  toVersion: string | undefined,
+  meta?: AppUpgradeMeta,
+): UpgradePathResult {
+  if (!meta || !fromVersion || !toVersion) return { ok: true };
+  if (!isNewerVersion(toVersion, fromVersion)) return { ok: true };
+
+  // Floor (H2): the deployment must already be at/above minFromVersion.
+  if (meta.minFromVersion && isNewerVersion(meta.minFromVersion, fromVersion)) {
+    return {
+      ok: false,
+      code: 'min-from-version',
+      message:
+        `This version requires upgrading from at least ${meta.minFromVersion}, but the deployment ` +
+        `is on ${fromVersion}. Upgrade to ${meta.minFromVersion} first, then continue.`,
+      suggestedVersion: meta.minFromVersion,
+    };
+  }
+
+  // Waypoints (H2): can't skip past one. The next required stop is the lowest
+  // waypoint strictly between the current and target versions.
+  const next = (meta.waypoints ?? [])
+    .filter((w) => isNewerVersion(w, fromVersion) && isNewerVersion(toVersion, w))
+    .sort(compareVersions)[0];
+  if (next) {
+    return {
+      ok: false,
+      code: 'waypoint-required',
+      message:
+        `Upgrading ${fromVersion} → ${toVersion} must pass through ${next} first. ` +
+        `Promote to ${next}, let it settle, then continue.`,
+      suggestedVersion: next,
+    };
+  }
+
+  return { ok: true };
+}
+
 // ------------------------------------------------------
 // Common helpers
 // ------------------------------------------------------
@@ -334,6 +414,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // app id (the default heuristic). Sourced from the bundle manifest's
   // `ingress.service`.
   ingressService?: string;
+  // Upgrade-safety metadata declared in the bundle manifest's `upgrade` block
+  // (#284 Phase 0). Drives the server-side skip-guard on `promote` and the
+  // dashboard's pre-upgrade warning. Optional: apps that don't declare it have
+  // no upgrade restrictions.
+  upgrade?: AppUpgradeMeta;
 };
 
 // ------------------------------------------------------
@@ -476,6 +561,10 @@ export type Draft = {
   // apps whose ingress service isn't named after the app id. Seeded from the
   // bundle manifest and carried through finalize (read-only; not user-editable).
   ingressService?: string;
+  // Upgrade-safety metadata seeded from the bundle manifest (#284 Phase 0) and
+  // carried through finalize so `promote` can enforce the skip-guard against the
+  // target version (read-only; not user-editable).
+  upgrade?: AppUpgradeMeta;
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 
