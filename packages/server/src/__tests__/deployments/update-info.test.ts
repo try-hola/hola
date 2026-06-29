@@ -87,6 +87,16 @@ describe('Per-app update notifications (#284)', () => {
     expect(list.items[0].updateAvailable).toBe(false);
   });
 
+  test('a deployment pinned to "latest" is never flagged as out-of-date', async () => {
+    const { drafts, deployments } = makeSystem(['1.0.0', '2.0.0']);
+    await deploy(drafts, deployments, 'latest');
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    // latestVersion is still surfaced, but there's no spurious "update available"
+    // (we don't know the concrete installed version behind "latest").
+    expect(list.items[0].latestVersion).toBe('2.0.0');
+    expect(list.items[0].updateAvailable).toBe(false);
+  });
+
   test('no catalog wired → fields left unset (no enrichment)', async () => {
     const { drafts, deployments } = makeSystem(null);
     await deploy(drafts, deployments, '1.0.0');

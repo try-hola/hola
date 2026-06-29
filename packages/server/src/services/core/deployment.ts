@@ -1346,7 +1346,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       const latest = latestByApp.get(item.app);
       if (!latest) continue;
       item.latestVersion = latest;
-      item.updateAvailable = !!item.version && isNewerVersion(latest, item.version);
+      // Only flag an update when the installed version is a concrete, comparable
+      // one. A deployment pinned to the literal "latest" has no known concrete
+      // version to compare against — treating it as 0.0.0 would mark *every*
+      // latest-install as out-of-date — so report "no update available" instead.
+      const installed = item.version;
+      item.updateAvailable = !!installed && installed !== 'latest' && isNewerVersion(latest, installed);
     }
   }
 
