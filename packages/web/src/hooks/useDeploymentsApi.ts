@@ -1,6 +1,7 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
+import { onLive, isLiveConnected } from '../utils/live-bus';
 import type { GetDeploymentsRequest, GetDeploymentsResponse } from '@hola/shared';
 
 // Working StrictMode-compatible hook for deployments using the same pattern as useWorkingApi
@@ -65,14 +66,24 @@ export function useDeploymentsApi(params: GetDeploymentsRequest) {
     fetchData();
   }, [fetchData]);
 
-  // While any deployment is mid-transition (installing/updating), poll so the
-  // list reflects the terminal state without a manual reload.
+  // Live updates (#291): refetch (cache-bypassing) when the global event stream
+  // reports a deployment change. This is the primary freshness path; the poll
+  // below is a fallback for when SSE isn't connected.
+  React.useEffect(() => onLive('deployments', () => { void fetchData(true); }), [fetchData]);
+
+  // Fallback poll (#291): while a deployment is mid-transition
+  // (installing/updating), poll so the list converges to the terminal state — but
+  // only when the global event stream isn't connected. With the backplane live,
+  // deployment_update events drive convergence and this timer no-ops.
   const hasTransitional = state.data?.items?.some(
     d => d.status === 'installing' || d.status === 'updating'
   ) ?? false;
   React.useEffect(() => {
     if (!hasTransitional) return;
-    const interval = setInterval(() => { void fetchData(true); }, 4000);
+    const interval = setInterval(() => {
+      if (isLiveConnected()) return; // events are driving convergence; skip the poll
+      void fetchData(true);
+    }, 4000);
     return () => clearInterval(interval);
   }, [hasTransitional, fetchData]);
 

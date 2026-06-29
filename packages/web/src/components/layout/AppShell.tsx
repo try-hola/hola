@@ -2,6 +2,7 @@ import React, { ReactNode, useState } from 'react';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { UpdateAvailableBanner } from '../UpdateAvailableBanner';
+import { useGlobalEvents } from '../../hooks/useGlobalEvents';
 
 interface AppShellProps {
   children: ReactNode;
@@ -9,6 +10,9 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  // One global SSE subscription for the whole authenticated app (#291) — drives
+  // live list/detail updates so the views don't depend on polling.
+  useGlobalEvents();
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-surface-0 text-text-strong font-sans">
