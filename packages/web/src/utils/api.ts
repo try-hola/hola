@@ -247,9 +247,18 @@ export class ApiClient {
     globalCache.delete(`api:${url}`);
     
     // Remove related cache entries based on path patterns
-    if (path.includes('/deployments/')) {
+    if (path.includes('/deployments')) {
+      // Match both item ops (/deployments/:id — remove, lifecycle actions) and
+      // create (POST /api/deployments), so installing an app or removing one both
+      // refresh every page that lists deployments.
       globalCache.deleteByPattern(/^api:.*\/deployments/);
       globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on deployments
+      // useDeploymentsApi caches the list under its own `deployments-<params>` keys
+      // (a separate namespace from the `api:` keys above) with a 30s TTL. Without
+      // clearing it here, a mutation on one page (e.g. removing an app on the
+      // Deployments page) leaves another page that lists deployments (e.g. Apps)
+      // serving the stale cached rows until the TTL lapses or a full reload.
+      globalCache.deleteByPattern(/^deployments-/);
     } else if (path.includes('/jobs/')) {
       globalCache.deleteByPattern(/^api:.*\/jobs/);
       globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on jobs
