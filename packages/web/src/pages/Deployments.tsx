@@ -98,8 +98,17 @@ export const Deployments: React.FC = () => {
       setPendingDelete(null);
       await refetch();
     } catch (error) {
-      console.error('Error deleting deployment:', error);
-      setDeleteError(error instanceof Error ? error.message : 'Failed to remove deployment');
+      // A 404 means the deployment is already gone — which is exactly the goal of
+      // remove. The DELETE is idempotent and the client retries it during the slow
+      // teardown, so a retry can land after the record was removed; treat that as
+      // success rather than showing a spurious "deployment not found" in the dialog.
+      if ((error as { statusCode?: number })?.statusCode === 404) {
+        setPendingDelete(null);
+        await refetch();
+      } else {
+        console.error('Error deleting deployment:', error);
+        setDeleteError(error instanceof Error ? error.message : 'Failed to remove deployment');
+      }
     } finally {
       setDeleting(false);
     }

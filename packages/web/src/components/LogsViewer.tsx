@@ -34,6 +34,11 @@ interface LogsViewerProps {
   showJobStatus?: boolean;
 }
 
+// Log levels in ascending severity. The level filter is a THRESHOLD ("X and above"),
+// not an exact match — picking "warn" shows warn + error, so you can drop lower-level
+// noise without losing anything more severe.
+const LEVEL_RANK: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
 const getLevelColor = (level: LogLevel) => {
   switch (level) {
     case 'error':
@@ -220,14 +225,16 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   };
 
   const services = Array.from(new Set(allLogs.map(log => log.service)));
-  const levels: LogLevel[] = ['info', 'warn', 'error', 'debug'];
+  const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
 
   const filteredLogs = allLogs.filter(log => {
     const matchesSearch = searchTerm === '' || 
       log.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
       log.service.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesService = selectedService === 'all' || log.service === selectedService;
-    const matchesLevel = selectedLevel === 'all' || log.level === selectedLevel;
+    // Threshold filter: show the selected level and everything more severe.
+    const matchesLevel = selectedLevel === 'all' ||
+      (LEVEL_RANK[log.level] ?? 0) >= (LEVEL_RANK[selectedLevel] ?? 0);
     
     return matchesSearch && matchesService && matchesLevel;
   });
@@ -408,7 +415,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
             <option value="all">All Levels</option>
             {levels.map(level => (
               <option key={level} value={level} className={getLevelColor(level)}>
-                {level.toUpperCase()}
+                {level.toUpperCase()}{level === 'error' ? '' : ' & up'}
               </option>
             ))}
           </select>
