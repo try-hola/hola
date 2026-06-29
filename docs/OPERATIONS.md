@@ -193,11 +193,22 @@ hola update --host user@vm          # upgrade to this CLI's version
 hola update --host user@vm --check  # just report CLI / installed / latest versions
 ```
 
-It preflights the host, downloads the version-pinned compose bundle (pinning the
-new `ghcr.io/try-hola` image tags), extracts it over the install dir, and re-runs
-the idempotent installer — which pulls the new images, backfills any newly-required
-`.env` keys, and recreates only the changed services. Use the same `--ref`,
-`--tarball-url`, `--dir`, and `--dry-run` overrides as `hola bootstrap`.
+It preflights the host, takes a **pre-upgrade snapshot** (see below), downloads the
+version-pinned compose bundle (pinning the new `ghcr.io/try-hola` image tags),
+extracts it over the install dir, and re-runs the idempotent installer — which
+pulls the new images, backfills any newly-required `.env` keys, and recreates only
+the changed services. Use the same `--ref`, `--tarball-url`, `--dir`, and
+`--dry-run` overrides as `hola bootstrap`.
+
+**Pre-upgrade snapshot.** Before any change, `update` archives a timestamped
+snapshot of the platform-tier rollback surface — `.env`, the `traefik/acme` cert
+store, and the `hola-data` volume (drafts/deployments/platform state) — to
+`<dir>/backups/pre-update-<version>-<timestamp>.tar.gz` on the host. It's a
+synchronous local archive with no external dependency (it does **not** rely on the
+Backrest app), and it's fail-closed: if the snapshot can't be written the upgrade
+halts. App data lives under app-owned bind mounts and is **not** captured by default
+(it's large and `update` doesn't recreate app stacks); pass `--backup-app-data` to
+include the app-data bind root, or `--no-backup` to skip the snapshot entirely.
 
 Keep the **same install dir** (`--dir`) across upgrades. The Let's Encrypt cert
 store is a dir-relative bind mount (`traefik/acme/acme.json`), so relocating the

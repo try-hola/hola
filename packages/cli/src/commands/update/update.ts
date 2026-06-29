@@ -25,6 +25,15 @@ export interface UpdateOptions {
   enableSso?: boolean;
   /** For an explicit HOLA_AUTH_MODE=none host: keep it off (suppress the prompt/warning). */
   keepAuthMode?: boolean;
+  /**
+   * Take a pre-upgrade local snapshot on the host before re-running install.sh.
+   * Default (enabled); set to `false` by `--no-backup` (via mri negation) to skip
+   * it. The platform stack has no rollback, so this synchronous local archive of
+   * `.env` + `traefik/acme` + the `hola-data` volume is the platform-tier safety net.
+   */
+  backup?: boolean;
+  /** Also include the (potentially large) app-data bind root in the pre-upgrade snapshot. */
+  backupAppData?: boolean;
   /** Report versions (CLI / installed / latest release) without changing anything. */
   check?: boolean;
   /**
@@ -47,6 +56,11 @@ export interface UpdateResult {
   toVersion: string;
   /** What was decided about SSO reconciliation (for an explicit `none` host). */
   ssoAction?: 'enabled' | 'kept-none' | 'already-on' | 'backfilled';
+  /**
+   * Path on the host of the pre-upgrade snapshot archive, or null when no backup
+   * was taken (`--no-backup`, `--dry-run`, or `--check`).
+   */
+  backupPath?: string | null;
   steps: string[];
 }
 
@@ -71,6 +85,11 @@ const DEFAULT_DIR = '/opt/hola';
 const VERSION_MARKER = '__HOLA_VERSION__=';
 const EXAMPLE_MARKER = '__HOLA_EXAMPLE__';
 const ENV_MARKER = '__HOLA_ENV__';
+
+/** Stdout marker the pre-upgrade backup prints so its archive path can be parsed back out. */
+const BACKUP_PATH_MARKER = 'HOLA_BACKUP_PATH=';
+/** Default app-data bind root (mirrors the server's DEFAULT_APPS_BIND_ROOT); overridable via HOLA_APPS_BIND_ROOT. */
+const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
 
 /** Keys install.sh / compose generate or derive on their own — never "missing" config. */
 const AUTO_MANAGED = /^(AUTHENTIK_|COMPOSE_)/;
@@ -162,8 +181,9 @@ function realSelfUpdate(args: SelfUpdateArgs): Promise<SelfUpdateOutcome> {
  * then brought up to that same version. Over SSH it preflights the host, reads the
  * current `.env`/VERSION,
  * reconciles the auth mode to the Authentik-default baseline (prompting/flag-gated
- * for an explicit `none`), downloads the version-pinned bundle and extracts it over
- * the install dir WITHOUT touching `.env` or the ACME store, re-runs the idempotent
+ * for an explicit `none`), takes a pre-upgrade local snapshot on the host (unless
+ * `--no-backup`), downloads the version-pinned bundle and extracts it over the
+ * install dir WITHOUT touching `.env` or the ACME store, re-runs the idempotent
  * installer (which backfills newly-required keys and recreates changed services),
  * and reports old → new. Returns the result, or undefined on failure.
  */
@@ -328,6 +348,35 @@ export async function runUpdate(
       out(`  found install ${fromVersion ? colors.bold(`v${fromVersion}`) : colors.dim('(version unknown)')} at ${composeDir}`);
     }
 
+    // 2.5) Pre-upgrade snapshot (#284). The platform stack has no rollback — VERSION
+    //    is a single marker, with no release history. Before any mutation, archive a
+    //    timestamped local snapshot of the platform-tier rollback surface: `.env`,
+    //    the `traefik/acme` cert store, and the `hola-data` volume (drafts/deploys/
+    //    platform state). Synchronous, on-host, no external dependency (NOT Backrest,
+    //    which is operator-configured/optional/async). App-data binds are large and
+    //    opt-in (`--backup-app-data`). `--no-backup` skips it. A failure here is
+    //    fail-closed: we don't upgrade a stack we couldn't snapshot.
+    let backupPath: string | null = null;
+    if (opts.backup !== false) {
+      const appDataRoot = (config.HOLA_APPS_BIND_ROOT?.trim() || DEFAULT_APPS_BIND_ROOT).replace(/\/+$/, '');
+      const res = await ssh(
+        'Snapshot current install (.env, traefik/acme, hola-data)',
+        backupCmd(composeDir, fromVersion, { appData: !!opts.backupAppData, appDataRoot }),
+        { stream: true },
+      );
+      if (!opts.dryRun) {
+        if (res.code !== 0) {
+          throw new UpdateAbort(
+            `Pre-upgrade snapshot failed (exit ${res.code}). The platform has no rollback, so the ` +
+              `upgrade is halted. Fix the host (disk space / docker access) and retry, or re-run with ` +
+              `--no-backup to upgrade without a snapshot.`,
+          );
+        }
+        backupPath = parseBackupPath(res.stdout);
+        if (backupPath) out(`  ${colors.dim(`snapshot saved to ${backupPath}`)}`);
+      }
+    }
+
     // 3) Reconcile auth mode to the Authentik-default baseline (issue #149). An
     //    unset/blank mode is backfilled automatically by install.sh (no-op here);
     //    an EXPLICIT `none` is surfaced and gated on a choice (flag or prompt).
@@ -420,7 +469,7 @@ export async function runUpdate(
       }
     }
 
-    const result: UpdateResult = { host, dir, ref, fromVersion, toVersion: version, ssoAction, steps };
+    const result: UpdateResult = { host, dir, ref, fromVersion, toVersion: version, ssoAction, backupPath, steps };
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (opts.dryRun) {
@@ -428,6 +477,7 @@ export async function runUpdate(
     } else {
       const span = fromVersion && fromVersion !== version ? `${colors.bold(`v${fromVersion}`)} → ${colors.bold(`v${version}`)}` : colors.bold(`v${version}`);
       out(`\n${colors.green('✔ Done.')} ${colors.bold(host)} is now on ${span}.`);
+      if (backupPath) out(`  ${colors.dim(`Pre-upgrade snapshot: ${backupPath}`)}`);
       if (ssoAction === 'enabled') out(`  SSO provisioning runs on first boot; retrieve sign-in with ${colors.cyan(`hola credentials --host ${host}`)}.`);
     }
     return result;
@@ -464,6 +514,58 @@ async function decideSso(opts: UpdateOptions, prompter: Prompter): Promise<'enab
     default: 'false',
   });
   return ans === 'true' ? 'enable' : 'keep';
+}
+
+/**
+ * Remote command for the pre-upgrade snapshot: tar `.env`, the `traefik/acme` cert
+ * store, and the `hola-data` volume (captured via `docker cp` from the running
+ * `hola-server` — no extra image pull) into a single timestamped archive under
+ * `<dir>/backups/`, optionally including the app-data bind root. Prints the archive
+ * path behind BACKUP_PATH_MARKER. The `hola-data` capture is best-effort (warns if
+ * the server container isn't running) so operator config is still snapshotted; the
+ * large app-data tree is added straight from its path (no double-copy).
+ */
+function backupCmd(
+  dir: string,
+  fromVersion: string | null,
+  opts: { appData: boolean; appDataRoot: string },
+): string {
+  const safeFrom = (fromVersion ?? 'unknown').replace(/[^A-Za-z0-9._-]/g, '_');
+  const lines = [
+    'set -e',
+    `ts=$(date -u +%Y%m%dT%H%M%SZ)`,
+    `bdir="${dir}/backups"`,
+    `mkdir -p "$bdir"`,
+    `stage=$(mktemp -d)`,
+    `trap 'rm -rf "$stage"' EXIT`,
+    `if [ -f "${dir}/.env" ]; then cp -p "${dir}/.env" "$stage/.env"; fi`,
+    `if [ -d "${dir}/traefik/acme" ]; then cp -a "${dir}/traefik/acme" "$stage/acme"; fi`,
+    `if docker cp hola-server:/data "$stage/hola-data" >/dev/null 2>&1; then :; else echo "WARN: hola-data volume not captured (is hola-server running?)" >&2; fi`,
+    `archive="$bdir/pre-update-${safeFrom}-$ts.tar.gz"`,
+  ];
+  if (opts.appData) {
+    const root = opts.appDataRoot.replace(/\/+$/, '');
+    const parent = root.replace(/\/[^/]+$/, '') || '/';
+    const base = root.slice(root.lastIndexOf('/') + 1);
+    // App data is tarred straight from its path (no staging copy of a large tree).
+    lines.push(
+      `if [ -d "${root}" ]; then tar czf "$archive" -C "$stage" . -C "${parent}" "${base}"; else tar czf "$archive" -C "$stage" .; fi`,
+    );
+  } else {
+    lines.push(`tar czf "$archive" -C "$stage" .`);
+  }
+  lines.push(`echo "${BACKUP_PATH_MARKER}$archive"`);
+  return lines.join('; ');
+}
+
+/** Pull the archive path back out of the backup command's stdout (last marker line wins). */
+function parseBackupPath(stdout: string): string | null {
+  let path: string | null = null;
+  for (const line of stdout.split('\n')) {
+    const t = line.trim();
+    if (t.startsWith(BACKUP_PATH_MARKER)) path = t.slice(BACKUP_PATH_MARKER.length).trim() || null;
+  }
+  return path;
 }
 
 /** Remote command that prints the install's VERSION, old .env.example, and .env behind markers, in one read. */

@@ -32,6 +32,10 @@ function makeRunner(opts?: {
     ssh: vi.fn(async (_host: string, cmd: string, o?: { input?: string }) => {
       calls.push({ cmd, input: o?.input });
       if (cmd.includes('command -v')) return { code: 0, stdout: preflight, stderr: '' };
+      // Pre-upgrade snapshot: echo back the archive path behind its marker.
+      if (cmd.includes('HOLA_BACKUP_PATH=')) {
+        return { code: 0, stdout: 'HOLA_BACKUP_PATH=/opt/hola/backups/pre-update-0.6.20-20260101T000000Z.tar.gz\n', stderr: '' };
+      }
       // The combined state read (version + old .env.example + .env) is matched first.
       if (cmd.includes('__HOLA_ENV__')) {
         return { code: 0, stdout: `__HOLA_VERSION__=${version}\n__HOLA_EXAMPLE__\n${oldExample}\n__HOLA_ENV__\n${env}`, stderr: '' };
@@ -59,6 +63,7 @@ describe('hola update', () => {
     expect(res.steps).toEqual([
       'Preflight host',
       'Read current install',
+      'Snapshot current install (.env, traefik/acme, hola-data)',
       'Download Hola 0.6.23 stack into /opt/hola',
       'Check config drift (.env.example vs .env)',
       'Run install.sh',
@@ -68,6 +73,7 @@ describe('hola update', () => {
     expect(res.fromVersion).toBe('0.6.20');
     expect(res.toVersion).toBe('0.6.23');
     expect(res.ssoAction).toBe('already-on');
+    expect(res.backupPath).toBe('/opt/hola/backups/pre-update-0.6.20-20260101T000000Z.tar.gz');
     expect(process.exitCode).toBe(0);
   });
 
@@ -169,6 +175,81 @@ describe('hola update', () => {
     );
     expect(res).toBeUndefined();
     expect(process.exitCode).toBe(1);
+  });
+
+  // --- Pre-upgrade snapshot (#284) ------------------------------------------
+
+  it('snapshots .env + traefik/acme + the hola-data volume before downloading the new bundle', async () => {
+    const runner = makeRunner();
+    await runUpdate({ host: 'me@vm', json: true }, { prompter: scriptedPrompter({}), runner });
+    const backup = runner.calls.find((c) => c.cmd.includes('HOLA_BACKUP_PATH='))!;
+    expect(backup).toBeDefined();
+    // Captures the platform-tier rollback surface: operator config, the ACME cert
+    // store, and the hola-data volume (via docker cp from the running server).
+    expect(backup.cmd).toContain('/opt/hola/.env');
+    expect(backup.cmd).toContain('/opt/hola/traefik/acme');
+    expect(backup.cmd).toContain('docker cp hola-server:/data');
+    expect(backup.cmd).toContain('/opt/hola/backups');
+    // App-data binds are NOT included unless asked.
+    expect(backup.cmd).not.toContain('/srv/hola/apps');
+    // The snapshot precedes the bundle download (the rollback point is the pre-upgrade state).
+    const order = runner.calls.map((c) => c.cmd);
+    expect(order.findIndex((c) => c.includes('HOLA_BACKUP_PATH='))).toBeLessThan(
+      order.findIndex((c) => c.includes('tar xz -C /opt/hola')),
+    );
+  });
+
+  it('--no-backup (backup=false) skips the snapshot entirely', async () => {
+    const runner = makeRunner();
+    const res = (await runUpdate(
+      { host: 'me@vm', backup: false, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    )) as UpdateResult;
+    expect(runner.calls.some((c) => c.cmd.includes('HOLA_BACKUP_PATH='))).toBe(false);
+    expect(res.steps).not.toContain('Snapshot current install (.env, traefik/acme, hola-data)');
+    expect(res.backupPath).toBeNull();
+    // The upgrade still proceeds.
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
+  });
+
+  it('--backup-app-data also tars the app-data bind root', async () => {
+    const runner = makeRunner();
+    await runUpdate(
+      { host: 'me@vm', backupAppData: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    const backup = runner.calls.find((c) => c.cmd.includes('HOLA_BACKUP_PATH='))!;
+    expect(backup.cmd).toContain('/srv/hola/apps');
+    expect(backup.cmd).toContain('-C "/srv/hola" "apps"');
+  });
+
+  it('honors HOLA_APPS_BIND_ROOT from the host .env for --backup-app-data', async () => {
+    const runner = makeRunner({ env: `${ENV_AUTHENTIK}HOLA_APPS_BIND_ROOT=/data/hola/apps\n` });
+    await runUpdate(
+      { host: 'me@vm', backupAppData: true, json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    const backup = runner.calls.find((c) => c.cmd.includes('HOLA_BACKUP_PATH='))!;
+    expect(backup.cmd).toContain('-C "/data/hola" "apps"');
+  });
+
+  it('fail-closed: a snapshot failure aborts before downloading the new bundle', async () => {
+    const runner = makeRunner();
+    // Make the snapshot command fail.
+    const origSsh = runner.ssh;
+    runner.ssh = vi.fn(async (host: string, cmd: string, o?: { input?: string }) => {
+      if (cmd.includes('HOLA_BACKUP_PATH=')) {
+        runner.calls.push({ cmd, input: o?.input });
+        return { code: 1, stdout: '', stderr: 'no space left on device' };
+      }
+      return origSsh(host, cmd, o);
+    }) as typeof runner.ssh;
+    const res = await runUpdate({ host: 'me@vm', json: true }, { prompter: scriptedPrompter({}), runner });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    // No bundle download and no install.sh after a failed snapshot.
+    expect(runner.calls.some((c) => c.cmd.includes('tar xz -C /opt/hola'))).toBe(false);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
   });
 
   // --- Config drift ---------------------------------------------------------
