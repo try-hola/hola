@@ -64,4 +64,19 @@ describe('JobStatus', () => {
     render(<JobStatus job={deployJob} size="md" />);
     expect(screen.getAllByText(/install/i)).toHaveLength(1);
   });
+
+  it('labels the job by the deployment name when joined (even at sm size)', () => {
+    const job = createJob({ type: 'start', status: 'completed', deploymentName: 'gitea', app: 'gitea' });
+    render(<JobStatus job={job} size="sm" />);
+    // The app/deployment name is the primary label — not a bare "Starting".
+    expect(screen.getByText('gitea')).toBeInTheDocument();
+    // The terminal status is still shown.
+    expect(screen.getByText(/completed/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the action label when there is no deployment name', () => {
+    const job = createJob({ type: 'start', deploymentName: undefined, app: undefined });
+    render(<JobStatus job={job} size="sm" />);
+    expect(screen.getAllByText(/starting/i).length).toBeGreaterThan(0);
+  });
 });

@@ -39,13 +39,15 @@ export function useJobsApi(params: UseJobsApiParams = {}) {
     return key;
   }, [deploymentId, status, page, limit]);
 
-  // Fetch data with caching and error handling
-  const fetchData = React.useCallback(async () => {
+  // Fetch data with caching and error handling. `force` bypasses the cache read
+  // so a manual refresh (and the live poll) always re-fetches instead of
+  // re-serving a recently-cached list — otherwise the refresh button looks dead.
+  const fetchData = React.useCallback(async (force = false) => {
     const cached = globalCache.get(cacheKey);
     const now = Date.now();
-    
-    // Check cache (2 second TTL for live updates)
-    if (cached && (now - cached.timestamp) < 2000) {
+
+    // Check cache (2 second TTL for live updates) unless forced
+    if (!force && cached && (now - cached.timestamp) < 2000) {
       setState({
         data: cached.data as GetJobsResponse,
         loading: false,
@@ -84,17 +86,19 @@ export function useJobsApi(params: UseJobsApiParams = {}) {
     fetchData();
   }, [fetchData]);
 
-  // Auto-refresh for live updates
+  // Auto-refresh for live updates — force past the short cache so each tick
+  // reflects status transitions rather than re-serving the cached page.
   React.useEffect(() => {
     if (!autoRefresh) return;
 
-    const interval = setInterval(fetchData, refreshInterval);
+    const interval = setInterval(() => { void fetchData(true); }, refreshInterval);
     return () => clearInterval(interval);
   }, [fetchData, autoRefresh, refreshInterval]);
 
   return {
     ...state,
-    refetch: fetchData,
+    // Manual refresh always bypasses the cache.
+    refetch: () => fetchData(true),
   };
 }
 
