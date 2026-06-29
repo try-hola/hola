@@ -1133,6 +1133,13 @@ export type DeploymentDirectoryLayout = {
 export type RollbackRequest = {
   targetReleaseId?: string; // If not specified, rolls back to previous
   reason?: string;
+  /**
+   * Data-aware rollback (#284 Phase 1): also restore the pre-upgrade app-data
+   * snapshot taken when the target release was last active, reverting data + image
+   * together (TrueNAS-style). Off by default (compose/image-only rollback). No
+   * snapshot for the target ⇒ a warning + a containers-only rollback.
+   */
+  restoreData?: boolean;
 };
 
 export type RollbackResponse = {
