@@ -158,8 +158,14 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const { getServices } = await import('../simple-factory');
     const bundles = getServices().bundles;
 
-    // Pull and validate bundle
-    const info = await bundles.ensurePulled({ appId, version, ociRef: ref });
+    // Pull and validate bundle. Key the cache by the RESOLVED concrete version
+    // (`v.version`), NOT the meta-version `version` ("latest"). ensurePulled skips
+    // the OCI pull when a cached bundle's compose.yaml+manifest.json already exist,
+    // so caching under `<app>/latest` means a server that installed an app before a
+    // fix was published keeps serving that stale `latest` bundle forever — the new
+    // concrete version never gets pulled. Keying by the concrete version makes every
+    // new release a cache miss, so published fixes actually reach existing servers.
+    const info = await bundles.ensurePulled({ appId, version: v.version, ociRef: ref });
     const validation = await bundles.validateLayout(info.localPath);
     if (!validation.ok) {
       this.logger.warn('Bundle layout invalid; deferring to mocks', { appId, version, errors: validation.errors });

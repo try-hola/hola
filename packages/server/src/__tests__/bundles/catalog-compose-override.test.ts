@@ -97,4 +97,16 @@ describe('RealCatalogService composeOverride (#82)', () => {
     // route to / inject auth env into the right service.
     expect(detail.ingressService).toBe('fixtureapp');
   });
+
+  test('resolves "latest" to the concrete version before pulling (cache keyed by resolved version)', async () => {
+    // The bundle is staged only at mock-bundles/<app>/1.0.0/. Installing "latest"
+    // must resolve to 1.0.0 and pull THAT — the bundle cache must be keyed by the
+    // resolved concrete version, not the literal "latest". Otherwise a server that
+    // cached <app>/latest from an earlier install keeps serving that stale bundle
+    // forever and never picks up a newly published version. (Here, keying by
+    // "latest" would look in the unstaged mock-bundles/<app>/latest/ and fail.)
+    const svc = new RealCatalogService();
+    const detail = await svc.getVersionDetail(APP_ID, 'latest');
+    expect(detail.composeOverride).toBe(COMPOSE);
+  });
 });
