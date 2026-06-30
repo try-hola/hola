@@ -111,8 +111,8 @@ export interface DeploymentService extends HealthCheckable {
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
   /** Stage a new release from a finalized draft onto an existing deployment and activate it. */
   promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse>;
-  /** The active release's resolved app env (key→value), for carrying secrets/config forward across an upgrade. */
-  getActiveAppEnv(deploymentId: string): Promise<Record<string, string>>;
+  /** The active release's carry-forward config (app env incl. secrets + system overrides), for an upgrade. */
+  getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -289,7 +289,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   constructor(protected jobService: JobService) {}
 
   abstract healthCheck(): Promise<ServiceHealth>;
-  abstract getActiveAppEnv(deploymentId: string): Promise<Record<string, string>>;
+  abstract getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
 
   // --- persistence hooks (no-ops here; overridden by the real service) ---
   protected async ensureLayout(deploymentId: string): Promise<void> {
@@ -1176,10 +1176,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
-  /** Public accessor for the active release's app env — used by the upgrade flow to
-   *  carry the operator's existing config/secrets forward onto the new release. */
-  async getActiveAppEnv(deploymentId: string): Promise<Record<string, string>> {
-    return this.readActiveAppEnv(this.requireDeployment(deploymentId));
+  /** Public accessor for the active release's carry-forward config — its app env
+   *  (incl. secret values) and system overrides — used by the upgrade flow to carry
+   *  the operator's existing config forward onto the new release. (Ports are NOT
+   *  carried: the new version's compose defines its own container ports.) */
+  async getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }> {
+    const deployment = this.requireDeployment(deploymentId);
+    const releaseId = deployment.currentReleaseId;
+    const empty = { appEnv: {} as Record<string, string>, systemOverrides: {} as Record<string, string> };
+    if (!releaseId) return empty;
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return empty;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      const appEnv: Record<string, string> = {};
+      for (const e of manifest.appEnv ?? []) appEnv[e.key] = e.value ?? '';
+      return { appEnv, systemOverrides: manifest.systemOverrides ?? {} };
+    } catch {
+      return empty;
+    }
   }
 
   /** The active release's declared ingress/web compose service, if any. */
@@ -1992,9 +2007,9 @@ export class MockDeploymentService extends InMemoryDeploymentService {
     return { healthy: true, lastCheck: new Date() };
   }
 
-  /** Mock has no persisted release manifests; the upgrade flow carries no env in tests. */
-  async getActiveAppEnv(): Promise<Record<string, string>> {
-    return {};
+  /** Mock has no persisted release manifests; the upgrade flow carries no config in tests. */
+  async getActiveConfig(): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }> {
+    return { appEnv: {}, systemOverrides: {} };
   }
 
   /** Seed a couple of sample deployments so list views are non-empty out of the box. */

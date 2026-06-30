@@ -105,6 +105,8 @@ export const DeploymentDetail: React.FC = () => {
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false);
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
 
   const {
     data: historyData,
@@ -245,22 +247,18 @@ export const DeploymentDetail: React.FC = () => {
     }
   };
 
-  // Upgrade to the latest catalog version. The server carries env/secrets forward
-  // and snapshots first when the target requires it; a breaking target is confirmed.
-  const handleUpgrade = async () => {
+  // Confirmed upgrade to the latest catalog version. The server carries env/secrets +
+  // system overrides forward and snapshots first when the target requires it.
+  const confirmUpgrade = async () => {
     if (!deployment || !deployment.updateAvailable) return;
-    const confirmed = window.confirm(
-      `Upgrade ${deployment.name} to ${deployment.latestVersion}?\n\n` +
-        `Your settings and secrets carry forward. If this release is marked breaking or ` +
-        `requires a backup, Hola takes a pre-upgrade snapshot first (you can roll back to it).`,
-    );
-    if (!confirmed) return;
+    setUpgradeError(null);
     setOperationLoading(prev => ({ ...prev, upgrade: true }));
     try {
       await upgradeDeployment();
+      setShowUpgradeConfirm(false);
     } catch (error) {
       console.error('Error upgrading deployment:', error);
-      window.alert(error instanceof Error ? error.message : 'Upgrade failed');
+      setUpgradeError(error instanceof Error ? error.message : 'Upgrade failed');
     } finally {
       setOperationLoading(prev => ({ ...prev, upgrade: false }));
     }
@@ -831,6 +829,63 @@ export const DeploymentDetail: React.FC = () => {
   return (
     <div className="animate-fadein">
       {/* Removal confirmation dialog */}
+      {showUpgradeConfirm && (
+        <div
+          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => { if (!operationLoading.upgrade) setShowUpgradeConfirm(false); }}
+        >
+          <div
+            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="upgrade-dialog-title"
+          >
+            <div className="p-6">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-primary-weak text-primary">
+                  <ArrowUpCircle className="w-[18px] h-[18px]" />
+                </div>
+                <div className="min-w-0">
+                  <h2 id="upgrade-dialog-title" className="text-lg font-semibold m-0">
+                    Upgrade {deployment.name} to {deployment.latestVersion}?
+                  </h2>
+                  <p className="mt-1.5 text-sm text-text-muted">
+                    Your settings and secrets carry forward. If this release is marked breaking or
+                    requires a backup, Hola takes a pre-upgrade snapshot first — you can roll back to it.
+                  </p>
+                </div>
+              </div>
+
+              {upgradeError && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{upgradeError}</span>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-2.5">
+                <button
+                  onClick={() => setShowUpgradeConfirm(false)}
+                  disabled={operationLoading.upgrade}
+                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmUpgrade}
+                  disabled={operationLoading.upgrade}
+                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {operationLoading.upgrade ? <RotateCw className="w-4 h-4 animate-spin" /> : <ArrowUpCircle className="w-4 h-4" />}
+                  {operationLoading.upgrade ? 'Upgrading…' : `Upgrade to ${deployment.latestVersion}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showRemoveConfirm && (
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
@@ -915,7 +970,7 @@ export const DeploymentDetail: React.FC = () => {
           <div className="flex gap-2 flex-wrap">
             {deployment.updateAvailable && deployment.latestVersion && (
               <button
-                onClick={handleUpgrade}
+                onClick={() => { setUpgradeError(null); setShowUpgradeConfirm(true); }}
                 disabled={operationLoading.upgrade}
                 title={`Upgrade to ${deployment.latestVersion}`}
                 className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-primary rounded-[9px] text-[13.5px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-60"

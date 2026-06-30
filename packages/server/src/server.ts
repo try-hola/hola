@@ -969,30 +969,39 @@ async function route(url: URL, req: Request): Promise<Response> {
         );
       }
       // Build the target release from the catalog, then carry the operator's current
-      // env/secrets forward onto the new version's env schema (new keys keep their
-      // catalog defaults; existing keys keep the deployed values).
+      // config forward onto the new version: env values/secrets (merged by key — a key
+      // absent from the deployment keeps the new version's catalog default) and system
+      // overrides. Ports are NOT carried — the new version's compose defines its own.
       const draft = await services.drafts.createDraft({ appId, version: targetVersion });
-      const carried = await services.deployments.getActiveAppEnv(deploymentId);
-      const draftDetail = await services.drafts.getDraft(draft.draftId);
-      const mergedAppEnv = (draftDetail.appEnv ?? []).map(e =>
-        Object.prototype.hasOwnProperty.call(carried, e.key) ? { ...e, value: carried[e.key] } : e,
-      );
-      if (mergedAppEnv.length > 0) {
-        await services.drafts.updateDraft(draft.draftId, { appEnv: mergedAppEnv });
+      try {
+        const carried = await services.deployments.getActiveConfig(deploymentId);
+        const draftDetail = await services.drafts.getDraft(draft.draftId);
+        const mergedAppEnv = (draftDetail.appEnv ?? []).map(e =>
+          Object.prototype.hasOwnProperty.call(carried.appEnv, e.key) ? { ...e, value: carried.appEnv[e.key] } : e,
+        );
+        const patch: PatchDraftRequest = {};
+        if (mergedAppEnv.length > 0) patch.appEnv = mergedAppEnv;
+        if (Object.keys(carried.systemOverrides).length > 0) patch.systemOverrides = carried.systemOverrides;
+        if (Object.keys(patch).length > 0) await services.drafts.updateDraft(draft.draftId, patch);
+        await services.drafts.finalizeDraft(draft.draftId);
+        logger.info('Promoting deployment to new release', {
+          requestId: context?.requestId,
+          deploymentId,
+          appId,
+          targetVersion,
+          draftId: draft.draftId,
+        });
+        const payload: PromoteDeploymentResponse = await services.deployments.promote(deploymentId, {
+          draftId: draft.draftId,
+          snapshot: body.snapshot,
+        });
+        return json(payload);
+      } catch (err) {
+        // The draft for this attempt is orphaned if the upgrade can't proceed
+        // (skip-guard rejection, snapshot failure, …) — delete it so it doesn't linger.
+        await services.drafts.deleteDraft(draft.draftId).catch(() => {});
+        throw err;
       }
-      await services.drafts.finalizeDraft(draft.draftId);
-      logger.info('Promoting deployment to new release', {
-        requestId: context?.requestId,
-        deploymentId,
-        appId,
-        targetVersion,
-        draftId: draft.draftId,
-      });
-      const payload: PromoteDeploymentResponse = await services.deployments.promote(deploymentId, {
-        draftId: draft.draftId,
-        snapshot: body.snapshot,
-      });
-      return json(payload);
     } catch (err) {
       return errorResponse(req, err);
     }
