@@ -611,7 +611,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       throw new ValidationError(guard.message, { code: guard.code, fromVersion, toVersion, suggestedVersion: guard.suggestedVersion });
     }
 
-    const { app, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+    const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
 
     // Reject an unsatisfiable auth requirement before staging the new release, so
     // a promote that switches to a backend-only mode (e.g. forward-auth under
@@ -646,6 +646,19 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
+
+    // Sync the deployment's displayed version to the promoted release. promoteRelease
+    // only moves the release pointers (it's shared with rollback and the Release type
+    // carries no version); without this the record (and the UI's "update available")
+    // would still report the pre-upgrade version after a successful promote.
+    if (version) {
+      const promoted = this.requireDeployment(deploymentId);
+      if (promoted.version !== version) {
+        promoted.version = version;
+        this.deployments.set(deploymentId, promoted);
+        await this.persistDeployment(promoted);
+      }
+    }
 
     const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
