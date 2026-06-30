@@ -46,6 +46,7 @@ describe('API contract: shared error envelope', () => {
       { method: 'PATCH', path: `/api/deployments/${unknownId}`, body: { env: [] } },
       { method: 'POST', path: `/api/deployments/${unknownId}/actions`, body: { action: 'stop' } },
       { method: 'POST', path: `/api/deployments/${unknownId}/rollback`, body: {} },
+      { method: 'POST', path: `/api/deployments/${unknownId}/promote`, body: {} },
       { method: 'GET', path: `/api/deployments/${unknownId}/history` },
       { method: 'DELETE', path: `/api/deployments/${unknownId}` },
     ];

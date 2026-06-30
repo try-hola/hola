@@ -39,6 +39,7 @@ export const API = {
     logsStream: (deploymentId: string) => `/api/deployments/${deploymentId}/logs/stream`,
     actions: (deploymentId: string) => `/api/deployments/${deploymentId}/actions`,
     rollback: (deploymentId: string) => `/api/deployments/${deploymentId}/rollback`,
+    promote: (deploymentId: string) => `/api/deployments/${deploymentId}/promote`,
   },
 
   jobs: {
@@ -1114,6 +1115,25 @@ export type CreateDeploymentFromDraftResponse = {
   releaseId: string;
   jobId?: string; // If deployment started immediately
 };
+
+/**
+ * Promote (upgrade) an existing deployment to a newer catalog version (#284
+ * Phase 2). The server resolves the target, builds a draft from the catalog
+ * bundle, carries the deployment's current env/secrets forward, finalizes it,
+ * and runs the upgrade skip-guard + pre-upgrade snapshot before switching the
+ * active release. Response is the standard create-from-draft result.
+ */
+export type PromoteDeploymentRequest = {
+  /** Target catalog version. Defaults to the deployment's latest available version. */
+  version?: string;
+  /**
+   * Force a pre-upgrade app-data snapshot even when the target doesn't declare
+   * `upgrade.preUpgradeBackup: "required"` (which always snapshots).
+   */
+  snapshot?: boolean;
+};
+
+export type PromoteDeploymentResponse = CreateDeploymentFromDraftResponse;
 
 // Network and resource types
 export type NetworkMode = 'bridge' | 'host' | 'traefik' | 'none';

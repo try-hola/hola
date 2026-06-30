@@ -111,6 +111,8 @@ export interface DeploymentService extends HealthCheckable {
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
   /** Stage a new release from a finalized draft onto an existing deployment and activate it. */
   promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse>;
+  /** The active release's resolved app env (key→value), for carrying secrets/config forward across an upgrade. */
+  getActiveAppEnv(deploymentId: string): Promise<Record<string, string>>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -287,6 +289,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   constructor(protected jobService: JobService) {}
 
   abstract healthCheck(): Promise<ServiceHealth>;
+  abstract getActiveAppEnv(deploymentId: string): Promise<Record<string, string>>;
 
   // --- persistence hooks (no-ops here; overridden by the real service) ---
   protected async ensureLayout(deploymentId: string): Promise<void> {
@@ -1160,6 +1163,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
+  /** Public accessor for the active release's app env — used by the upgrade flow to
+   *  carry the operator's existing config/secrets forward onto the new release. */
+  async getActiveAppEnv(deploymentId: string): Promise<Record<string, string>> {
+    return this.readActiveAppEnv(this.requireDeployment(deploymentId));
+  }
+
   /** The active release's declared ingress/web compose service, if any. */
   private async readActiveIngressService(deployment: EnhancedDeploymentDetail): Promise<string | undefined> {
     const releaseId = deployment.currentReleaseId;
@@ -1968,6 +1977,11 @@ export class MockDeploymentService extends InMemoryDeploymentService {
 
   async healthCheck(): Promise<ServiceHealth> {
     return { healthy: true, lastCheck: new Date() };
+  }
+
+  /** Mock has no persisted release manifests; the upgrade flow carries no env in tests. */
+  async getActiveAppEnv(): Promise<Record<string, string>> {
+    return {};
   }
 
   /** Seed a couple of sample deployments so list views are non-empty out of the box. */

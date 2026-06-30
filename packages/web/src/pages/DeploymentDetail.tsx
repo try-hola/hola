@@ -23,7 +23,8 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Copy
+  Copy,
+  ArrowUpCircle
 } from 'lucide-react';
 import type {
   AppEnvVar,
@@ -92,6 +93,7 @@ export const DeploymentDetail: React.FC = () => {
     refetch: refetchDeployment,
     updateConfiguration,
     executeAction,
+    upgradeDeployment,
     removeDeployment
   } = useDeploymentDetailApi(deploymentId);
 
@@ -240,6 +242,27 @@ export const DeploymentDetail: React.FC = () => {
       // TODO: Show error message to user
     } finally {
       setOperationLoading(prev => ({ ...prev, [operationKey]: false }));
+    }
+  };
+
+  // Upgrade to the latest catalog version. The server carries env/secrets forward
+  // and snapshots first when the target requires it; a breaking target is confirmed.
+  const handleUpgrade = async () => {
+    if (!deployment || !deployment.updateAvailable) return;
+    const confirmed = window.confirm(
+      `Upgrade ${deployment.name} to ${deployment.latestVersion}?\n\n` +
+        `Your settings and secrets carry forward. If this release is marked breaking or ` +
+        `requires a backup, Hola takes a pre-upgrade snapshot first (you can roll back to it).`,
+    );
+    if (!confirmed) return;
+    setOperationLoading(prev => ({ ...prev, upgrade: true }));
+    try {
+      await upgradeDeployment();
+    } catch (error) {
+      console.error('Error upgrading deployment:', error);
+      window.alert(error instanceof Error ? error.message : 'Upgrade failed');
+    } finally {
+      setOperationLoading(prev => ({ ...prev, upgrade: false }));
     }
   };
 
@@ -890,6 +913,17 @@ export const DeploymentDetail: React.FC = () => {
 
           {/* Actions */}
           <div className="flex gap-2 flex-wrap">
+            {deployment.updateAvailable && deployment.latestVersion && (
+              <button
+                onClick={handleUpgrade}
+                disabled={operationLoading.upgrade}
+                title={`Upgrade to ${deployment.latestVersion}`}
+                className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-primary rounded-[9px] text-[13.5px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-60"
+              >
+                <ArrowUpCircle className="w-4 h-4" />
+                {operationLoading.upgrade ? 'Upgrading…' : `Upgrade to ${deployment.latestVersion}`}
+              </button>
+            )}
             <button
               onClick={() => handleAction('restart')}
               className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors"

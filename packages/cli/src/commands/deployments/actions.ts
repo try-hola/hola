@@ -1,5 +1,5 @@
 import { HolaSdk } from '@hola/sdk';
-import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse } from '@hola/shared';
+import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse, PromoteDeploymentResponse } from '@hola/shared';
 
 import { watchJob, reportDeployError } from '../../lib/deploy-flow';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
@@ -47,6 +47,51 @@ export async function runDeploymentAction(
 export interface RollbackOptions extends ActionOptions {
   to?: string;
   reason?: string;
+}
+
+export interface UpgradeOptions extends ActionOptions {
+  /** Target catalog version (default: the deployment's latest available version). */
+  appVersion?: string;
+  /** Force a pre-upgrade snapshot even when the target doesn't require one. */
+  snapshot?: boolean;
+}
+
+/** Upgrade a deployment to a newer catalog version via POST /api/deployments/:id/promote.
+ *  The server carries the current env/secrets forward and runs the upgrade skip-guard +
+ *  pre-upgrade snapshot before switching the active release. */
+export async function runUpgrade(
+  deploymentId: string,
+  opts: UpgradeOptions,
+  injected?: { sdk?: HolaSdk }
+): Promise<PromoteDeploymentResponse | undefined> {
+  const sdk = injected?.sdk ?? new HolaSdk();
+  const out = (m: string) => console.log(m);
+  try {
+    out(`Upgrading ${deploymentId}${opts.appVersion ? ` to ${opts.appVersion}` : ' to the latest version'}…`);
+    const res = (await sdk.deployments.promote(deploymentId, {
+      ...(opts.appVersion ? { version: opts.appVersion } : {}),
+      ...(opts.snapshot ? { snapshot: true } : {}),
+    })) as PromoteDeploymentResponse;
+
+    let status: string | undefined;
+    if (res.jobId && !opts.noStream) {
+      status = await watchJob(sdk, res.jobId, (m) => out(m));
+    } else if (res.jobId) {
+      const job = (await sdk.jobs.byId(res.jobId)) as { status?: string };
+      status = job.status ?? 'queued';
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({ ...res, status }, null, 2));
+    } else {
+      out(status ? `Done (${status}).` : 'Done.');
+    }
+    if (status === 'failed') process.exitCode = 1;
+    await maybeNotifyUpdate(sdk, opts);
+    return res;
+  } catch (err) {
+    return reportDeployError(err);
+  }
 }
 
 /** Roll a deployment back via POST /api/deployments/:id/rollback, watching the job. */
