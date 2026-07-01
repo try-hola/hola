@@ -313,9 +313,21 @@ export const api = {
     appById: (appId: string) => apiClient.get(API.catalog.appById(appId)),
     
     versions: (appId: string) => apiClient.get(API.catalog.versions(appId)),
-    
-    versionDetail: (appId: string, version: string) => 
+
+    versionDetail: (appId: string, version: string) =>
       apiClient.get(API.catalog.versionDetail(appId, version)),
+
+    // Force an immediate catalog re-fetch (bypasses the server's refresh-interval
+    // TTL) so newly-published versions surface as available updates right away.
+    // A refresh can change which apps have updates, so drop the cached deployment
+    // lists (they carry `updateAvailable`), catalog, and dashboard summary.
+    refresh: async (force = true) => {
+      const res = await apiClient.post(`${API.catalog.refresh}${apiClient.buildQuery({ force })}`);
+      globalCache.deleteByPattern(/^api:.*\/deployments/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      globalCache.deleteByPattern(/^api:.*\/summary/);
+      return res;
+    },
   },
 
   // Drafts (Install Wizard) with cache invalidation
@@ -390,10 +402,19 @@ export const api = {
     },
     
     byId: (jobId: string) => apiClient.get(API.jobs.byId(jobId), false), // Don't cache job details
-    
+
     logs: (jobId: string, params?: { since?: string; lines?: number }) => {
       const query = apiClient.buildQuery(params || {});
       return apiClient.get(`${API.jobs.logs(jobId)}${query}`, false); // Don't cache logs
+    },
+
+    // Clear finished (completed/failed/cancelled) jobs, optionally scoped by
+    // deployment and/or terminal status. Never removes running/queued jobs.
+    clear: async (params?: { deploymentId?: string; status?: string }) => {
+      const res = await apiClient.delete(`${API.jobs.base}${apiClient.buildQuery(params || {})}`);
+      globalCache.deleteByPattern(/^api:.*\/jobs/);
+      globalCache.deleteByPattern(/^api:.*\/summary/);
+      return res;
     },
   },
 

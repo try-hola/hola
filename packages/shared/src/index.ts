@@ -727,6 +727,17 @@ export type GetJobsResponse = PageResponse<Job>;
 
 export type GetJobResponse = Job;
 
+// Bulk-clear finished jobs (DELETE /api/jobs). Only terminal jobs (completed,
+// failed, cancelled) are ever removed — running/queued jobs are never touched.
+// `deploymentId` scopes the clear to one deployment's jobs; `status` narrows it
+// to a specific terminal status (default: all terminal jobs).
+export type DeleteJobsRequest = {
+  deploymentId?: string;
+  status?: JobStatus;
+};
+
+export type DeleteJobsResponse = { cleared: number };
+
 // ------------------------------------------------------
 // Logs (SSE or polling fallback)
 // ------------------------------------------------------

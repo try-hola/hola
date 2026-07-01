@@ -115,6 +115,27 @@ export const Deployments: React.FC = () => {
     }
   }, [pendingDelete, refetch]);
 
+  // Force an immediate catalog re-check so newly-published app versions surface as
+  // available updates without waiting out the server's refresh-interval TTL. After
+  // the refresh we refetch the (cache-bypassing) deployments list so the server
+  // re-computes each app's `updateAvailable` against the freshly-pulled catalog.
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [checkResult, setCheckResult] = useState<string | null>(null);
+  const handleCheckUpdates = useCallback(async () => {
+    setCheckingUpdates(true);
+    setCheckResult(null);
+    try {
+      await api.catalog.refresh(true);
+      await refetch();
+      setCheckResult('Catalog up to date');
+    } catch {
+      setCheckResult('Check failed');
+    } finally {
+      setCheckingUpdates(false);
+      setTimeout(() => setCheckResult(null), 4000);
+    }
+  }, [refetch]);
+
   // Calculate pagination info
   const totalPages = Math.ceil(totalDeployments / limit);
   const hasNextPage = page < totalPages;
@@ -189,6 +210,18 @@ export const Deployments: React.FC = () => {
           </p>
         </div>
         <div className="flex-1" />
+        {checkResult && (
+          <span className="self-center text-[12.5px] text-text-muted mr-1">{checkResult}</span>
+        )}
+        <button
+          onClick={handleCheckUpdates}
+          disabled={checkingUpdates}
+          title="Re-check the catalog for newer versions of your installed apps"
+          className="flex items-center gap-2 h-10 px-3.5 bg-surface-1 text-text-strong border border-border rounded-[10px] text-sm font-semibold hover:border-primary transition disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          <RefreshCw className={`w-[16px] h-[16px] ${checkingUpdates ? 'animate-spin' : ''}`} />
+          <span>{checkingUpdates ? 'Checking…' : 'Check for updates'}</span>
+        </button>
         <Link
           to="/catalog"
           className="flex items-center gap-2 h-10 px-4 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 transition"

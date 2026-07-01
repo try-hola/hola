@@ -63,10 +63,17 @@ export interface JobService extends HealthCheckable {
   cancelJob(id: string): Promise<void>;
   getJob(id: string): Promise<SharedJob | null>;
   listJobs(filter?: { deploymentId?: string; status?: SharedJobStatus }): Promise<SharedJob[]>;
+  /** Remove finished (completed/failed/cancelled) jobs, optionally scoped to one
+   *  deployment and/or a single terminal status. Never removes running/queued
+   *  jobs. Returns the number of jobs removed. */
+  clearJobs(filter?: { deploymentId?: string; status?: SharedJobStatus }): Promise<number>;
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void };
   /** Register the executor that performs real work for jobs (e.g. Compose lifecycle). */
   setExecutor(executor: JobExecutor): void;
 }
+
+// Job states that are safe to clear — never a queued/running job.
+const TERMINAL_JOB_STATUSES: JobEntity['status'][] = ['completed', 'failed', 'cancelled'];
 
 function toShared(job: JobEntity): SharedJob {
   return {
@@ -327,6 +334,35 @@ export class RealJobService implements JobService {
     return filter?.deploymentId ? mapped.filter(j => j.deploymentId === filter.deploymentId) : mapped;
   }
 
+  async clearJobs(filter?: { deploymentId?: string; status?: SharedJobStatus }): Promise<number> {
+    await this.ensureStarted();
+    let statuses = TERMINAL_JOB_STATUSES;
+    if (filter?.status) {
+      const statusMap: Record<SharedJobStatus, JobEntity['status']> = {
+        queued: 'pending',
+        running: 'running',
+        completed: 'completed',
+        failed: 'failed',
+      } as const;
+      const mapped = statusMap[filter.status];
+      // Only terminal statuses are clearable; a queued/running filter clears nothing.
+      statuses = TERMINAL_JOB_STATUSES.includes(mapped) ? [mapped] : [];
+    }
+    let removed = 0;
+    for (const status of statuses) {
+      const jobs = await this.repo.findByStatus(status);
+      for (const job of jobs) {
+        if (filter?.deploymentId && (job.payload?.deploymentId as string | undefined) !== filter.deploymentId) {
+          continue;
+        }
+        await this.repo.delete(job.id);
+        removed++;
+      }
+    }
+    if (removed > 0) this.logger.info('Cleared finished jobs', { removed, ...filter });
+    return removed;
+  }
+
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void } {
     return this.bus.on(jobId, listener);
   }
@@ -421,6 +457,21 @@ export class MockJobService implements JobService {
     if (filter?.deploymentId) items = items.filter(j => j.deploymentId === filter.deploymentId);
     // Sort newest first
     return items.sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+  }
+
+  async clearJobs(filter?: { deploymentId?: string; status?: SharedJobStatus }): Promise<number> {
+    let removed = 0;
+    for (const [id, j] of this.jobs) {
+      // Only finished jobs are clearable (the mock models completed/failed).
+      if (j.status !== 'completed' && j.status !== 'failed') continue;
+      if (filter?.status && j.status !== filter.status) continue;
+      if (filter?.deploymentId && j.deploymentId !== filter.deploymentId) continue;
+      const timer = this.timers.get(id);
+      if (timer) { clearInterval(timer); this.timers.delete(id); }
+      this.jobs.delete(id);
+      removed++;
+    }
+    return removed;
   }
 
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void } {

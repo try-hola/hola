@@ -20,6 +20,7 @@ import {
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
   type GetJobsResponse,
+  type DeleteJobsResponse,
   type GetBackupsResponse,
   type CreateBackupRequest,
   type CreateBackupResponse,
@@ -1102,6 +1103,23 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   // Jobs + logs SSE
+  // Clear finished jobs (completed/failed/cancelled). Optional ?deploymentId= and
+  // ?status= narrow the scope; running/queued jobs are never removed.
+  if (pathname === API.jobs.base && req.method === 'DELETE') {
+    const url = new URL(req.url);
+    const deploymentId = url.searchParams.get('deploymentId') ?? undefined;
+    const statusParam = url.searchParams.get('status');
+    const status = statusParam && statusParam !== 'all' ? (statusParam as JobStatus) : undefined;
+    try {
+      const cleared = await getServices().jobs.clearJobs({ deploymentId, status });
+      const payload: DeleteJobsResponse = { cleared };
+      return json(payload);
+    } catch (error) {
+      logger.error('Failed to clear jobs', error as Error);
+      return errorResponse(req, error);
+    }
+  }
+
   // List jobs
   if (pathname === API.jobs.base && req.method === 'GET') {
     const url = new URL(req.url);
