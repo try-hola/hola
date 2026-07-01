@@ -278,7 +278,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, composeOverride, auth, consumes, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version: v.version, composeOverride, auth, consumes, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

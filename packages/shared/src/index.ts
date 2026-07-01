@@ -423,6 +423,12 @@ export type DraftDefaults = {
 };
 
 export type GetCatalogAppVersionDetailResponse = {
+  // The concrete catalog version this detail resolves to. When the caller asks
+  // for "latest" (the CLI/web default), the server resolves it to the newest
+  // pinned release (e.g. "1.4.1") and reports it here so a draft/deployment can
+  // persist a real version rather than an unknown one — which is what drives the
+  // installed-version display and per-app update detection.
+  version: string;
   defaultEnv: AppEnvVar[];
   defaults: DraftDefaults;
   // The bundle's compose.yaml, used to seed a catalog-created draft's

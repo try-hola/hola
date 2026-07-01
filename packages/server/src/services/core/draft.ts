@@ -331,7 +331,12 @@ export class RealDraftService implements DraftService {
       const draft: Draft = {
         draftId,
         appId: request.appId,
-        version: request.version,
+        // Persist the concrete resolved version (catalog turned "latest"/unset into
+        // a pinned release) so the finalized manifest and the deployment record
+        // carry a real version — that's what the deployments list shows and what
+        // update detection compares against. Fall back to the raw request only if
+        // the catalog couldn't resolve one.
+        version: defaults.resolvedVersion ?? request.version,
         icon: app.icon,
         displayName: app.name,
         systemOverrides: {},
@@ -678,7 +683,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig }> {
+  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
       return {
@@ -690,6 +695,9 @@ export class RealDraftService implements DraftService {
         ingressService: versionDetail.ingressService,
         upgrade: versionDetail.upgrade,
         backup: versionDetail.backup,
+        // The concrete version the catalog resolved (e.g. "latest" → "1.4.1"), so
+        // the draft persists a real version for display + update detection.
+        resolvedVersion: versionDetail.version,
       };
     } catch (error) {
       this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { runUpdate, type UpdateResult, type UpdateCheckReport } from '../commands/update/update';
+import { runUpdate, fetchReleaseNotes, type UpdateResult, type UpdateCheckReport } from '../commands/update/update';
 import { scriptedPrompter } from '../install/prompter';
 import type { Runner } from '../lib/runner';
 
@@ -347,5 +347,44 @@ describe('hola update', () => {
     expect(res.releaseUrl).toBe('https://example.com/r');
     // No install/extract happened.
     expect(runner.calls.some((c) => c.cmd.includes('install.sh') || c.cmd.includes('tar xz'))).toBe(false);
+  });
+
+  // --- post-update changelog ------------------------------------------------
+
+  const notesResponse = (body: unknown) =>
+    ({ ok: true, json: async () => ({ body, html_url: 'https://example.com/rel' }) }) as unknown as Response;
+
+  it('fetchReleaseNotes returns only the changelog portion before the install sentinel', async () => {
+    const body = "## What's Changed\n- feat: a (#1)\n- fix: b (#2)\n\n<!-- hola:changelog-end -->\nInstall with: ...";
+    const fetchImpl = (async () => notesResponse(body)) as unknown as typeof fetch;
+    const r = await fetchReleaseNotes('https://github.com/try-hola/hola.git', '0.6.36', fetchImpl);
+    expect(r).toEqual({ notes: "## What's Changed\n- feat: a (#1)\n- fix: b (#2)", url: 'https://example.com/rel' });
+  });
+
+  it('fetchReleaseNotes returns null for a release with no sentinel (older release)', async () => {
+    const fetchImpl = (async () => notesResponse('Standalone `hola` CLI binaries. Install with: ...')) as unknown as typeof fetch;
+    expect(await fetchReleaseNotes('https://github.com/try-hola/hola.git', '0.6.1', fetchImpl)).toBeNull();
+  });
+
+  it('prints the "What\'s new" changelog at the end of a successful update', async () => {
+    const runner = makeRunner();
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      await runUpdate(
+        { host: 'me@vm', ref: 'cli-v0.6.23' },
+        {
+          prompter: scriptedPrompter({}),
+          runner,
+          fetchNotes: async (_repo, version) => ({ notes: `- feat: shiny (#7)\n- fix: bug (#8)`, url: `https://example.com/cli-v${version}` }),
+        },
+      );
+    } finally {
+      spy.mockRestore();
+    }
+    const out = logs.join('\n');
+    expect(out).toContain("What's new in v0.6.23");
+    expect(out).toContain('- feat: shiny (#7)');
+    expect(out).toContain('Full notes: https://example.com/cli-v0.6.23');
   });
 });
