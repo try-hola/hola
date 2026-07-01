@@ -31,10 +31,14 @@ function makeCatalog(): CatalogArg {
       // A URL icon for one app, to assert the icon flows through unchanged.
       icon: appId === 'with-compose' ? 'https://cdn.example.com/with-compose.png' : '📦',
     }),
-    getVersionDetail: async (appId: string) =>
-      appId === 'with-compose'
-        ? { defaultEnv: [], defaults: { ports: [], volumes: [] }, composeOverride: WITH_COMPOSE }
-        : { defaultEnv: [], defaults: { ports: [], volumes: [] } },
+    // Resolve "latest"/unset to a concrete pinned version (what the real catalog
+    // does), so a draft can persist a real version for display + update detection.
+    getVersionDetail: async (appId: string, version?: string) => {
+      const resolved = !version || version === 'latest' ? '1.4.1' : version;
+      return appId === 'with-compose'
+        ? { version: resolved, defaultEnv: [], defaults: { ports: [], volumes: [] }, composeOverride: WITH_COMPOSE }
+        : { version: resolved, defaultEnv: [], defaults: { ports: [], volumes: [] } };
+    },
   } as unknown as CatalogArg;
 }
 
@@ -67,6 +71,21 @@ describe('Catalog → draft compose (#82)', () => {
 
     expect(draft.composeOverride).toBe(WITH_COMPOSE);
     expect(draft.composeOverride).toContain('nginx:1.27');
+  });
+
+  test('persists the concrete resolved version when the caller omits one', async () => {
+    // No version supplied → the catalog resolves "latest" to a concrete pin, and
+    // the draft stores THAT (not undefined), so the deployment record shows a real
+    // version and update detection can compare against the catalog.
+    const { draftId } = await drafts.createDraft({ appId: 'with-compose' });
+    const draft = await drafts.getDraft(draftId);
+    expect(draft.version).toBe('1.4.1');
+  });
+
+  test('keeps an explicitly requested concrete version', async () => {
+    const { draftId } = await drafts.createDraft({ appId: 'with-compose', version: '1.3.0' });
+    const draft = await drafts.getDraft(draftId);
+    expect(draft.version).toBe('1.3.0');
   });
 
   test('the seeded compose flows through finalize into the manifest', async () => {

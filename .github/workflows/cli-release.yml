@@ -133,12 +133,23 @@ jobs:
         run: |
           # Create the release if it does not exist, then upload (clobbering) the assets.
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # Auto-generate a PR-based changelog (previous tag auto-detected) so the
+            # release notes are a real "what changed" list. The changelog goes FIRST,
+            # followed by a sentinel comment and the install snippet: `hola update`
+            # prints everything up to the sentinel as the post-upgrade changelog.
+            CHANGELOG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$GITHUB_REF_NAME" -q .body 2>/dev/null || true)"
+            {
+              if [ -n "$CHANGELOG" ]; then printf '%s\n\n' "$CHANGELOG"; fi
+              printf '<!-- hola:changelog-end -->\n'
+              printf 'Standalone `hola` CLI binaries. Install with:\n'
+              printf '```\n'
+              printf 'curl -fsSL https://raw.githubusercontent.com/%s/main/cli-install.sh | sh\n' "$GITHUB_REPOSITORY"
+              printf '```\n'
+            } > release-notes.md
             gh release create "$GITHUB_REF_NAME" \
               ${{ steps.ver.outputs.prerelease == 'true' && '--prerelease' || '' }} \
               --title "Hola CLI $GITHUB_REF_NAME" \
-              --notes "Standalone \`hola\` CLI binaries. Install with:
-          \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/cli-install.sh | sh
-          \`\`\`"
+              --notes-file release-notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" dist-bin/hola-* --clobber

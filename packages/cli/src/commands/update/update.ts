@@ -119,6 +119,48 @@ interface GitHubRelease {
   html_url: string;
   draft: boolean;
   prerelease: boolean;
+  body?: string;
+}
+
+// Marker the release workflow writes after the auto-generated changelog and before
+// the install snippet, so we print only the changelog portion. A release without it
+// (older, pre-changelog releases) yields no notes rather than dumping install text.
+const CHANGELOG_SENTINEL = '<!-- hola:changelog-end -->';
+
+/** Build the GitHub API URL for a single release by tag, or null for a non-GitHub remote. */
+function releaseByTagApiUrl(repo: string, tag: string): string | null {
+  const m = repo.replace(/\.git$/, '').match(/github\.com[/:]([^/]+)\/([^/]+)$/);
+  if (!m) return null;
+  return `https://api.github.com/repos/${m[1]}/${m[2]}/releases/tags/${tag}`;
+}
+
+/**
+ * Changelog notes for `cli-v<version>` (the portion of the release body before the
+ * install-snippet sentinel) plus the release URL, or null on any failure / a
+ * release with no changelog. Fail-safe: never blocks or fails the update.
+ */
+export async function fetchReleaseNotes(
+  repo: string,
+  version: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ notes: string; url: string } | null> {
+  const api = releaseByTagApiUrl(repo, `cli-v${version}`);
+  if (!api) return null;
+  try {
+    const res = await fetchImpl(api, {
+      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'hola-cli' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const rel = (await res.json()) as { body?: string; html_url?: string };
+    const body = typeof rel.body === 'string' ? rel.body : '';
+    if (!body.includes(CHANGELOG_SENTINEL)) return null;
+    const notes = body.split(CHANGELOG_SENTINEL)[0].trim();
+    if (!notes) return null;
+    return { notes, url: typeof rel.html_url === 'string' ? rel.html_url : '' };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -194,6 +236,8 @@ export async function runUpdate(
     runner?: Runner;
     /** Injectable release lookup for tests / `--check`. */
     fetchLatest?: (repo: string) => Promise<{ version: string; url: string } | null>;
+    /** Injectable changelog lookup for the post-update "what's new" summary (tests). */
+    fetchNotes?: (repo: string, version: string) => Promise<{ notes: string; url: string } | null>;
     /** Injectable CLI self-update (tests); defaults to the real fs/network/re-exec impl. */
     selfUpdate?: (args: SelfUpdateArgs) => Promise<SelfUpdateOutcome>;
   },
@@ -201,6 +245,7 @@ export async function runUpdate(
   const prompter = injected?.prompter ?? clackPrompter();
   const runner = injected?.runner ?? systemRunner();
   const fetchLatest = injected?.fetchLatest ?? ((repo: string) => fetchLatestRelease(repo));
+  const fetchNotes = injected?.fetchNotes ?? ((repo: string, v: string) => fetchReleaseNotes(repo, v));
   const selfUpdate = injected?.selfUpdate ?? realSelfUpdate;
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
 
@@ -479,6 +524,16 @@ export async function runUpdate(
       out(`\n${colors.green('✔ Done.')} ${colors.bold(host)} is now on ${span}.`);
       if (backupPath) out(`  ${colors.dim(`Pre-upgrade snapshot: ${backupPath}`)}`);
       if (ssoAction === 'enabled') out(`  SSO provisioning runs on first boot; retrieve sign-in with ${colors.cyan(`hola credentials --host ${host}`)}.`);
+
+      // Close with the changelog for the version just installed. Fail-safe: any
+      // lookup error (offline, rate-limited, older release with no changelog) is
+      // swallowed so it never turns a successful upgrade into a noisy tail.
+      const notes = await fetchNotes(repo, version);
+      if (notes) {
+        out(`\n${colors.bold(`What's new in v${version}`)}`);
+        for (const line of notes.notes.split('\n')) out(`  ${line}`);
+        if (notes.url) out(`  ${colors.dim(`Full notes: ${notes.url}`)}`);
+      }
     }
     return result;
   } catch (err) {

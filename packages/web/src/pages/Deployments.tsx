@@ -10,7 +10,8 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
-  ArrowUp
+  ArrowUp,
+  Check
 } from 'lucide-react';
 import type {
   DeploymentStatus,
@@ -119,20 +120,20 @@ export const Deployments: React.FC = () => {
   // available updates without waiting out the server's refresh-interval TTL. After
   // the refresh we refetch the (cache-bypassing) deployments list so the server
   // re-computes each app's `updateAvailable` against the freshly-pulled catalog.
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
-  const [checkResult, setCheckResult] = useState<string | null>(null);
+  // 'idle' | 'checking' | 'done' | 'error'. The transient result is reflected in
+  // the button's own label/icon (fixed width) rather than a separate element, so
+  // nothing is added to the header row and no sibling (e.g. "Install app") reflows.
+  const [checkState, setCheckState] = useState<'idle' | 'checking' | 'done' | 'error'>('idle');
   const handleCheckUpdates = useCallback(async () => {
-    setCheckingUpdates(true);
-    setCheckResult(null);
+    setCheckState('checking');
     try {
       await api.catalog.refresh(true);
       await refetch();
-      setCheckResult('Catalog up to date');
+      setCheckState('done');
     } catch {
-      setCheckResult('Check failed');
+      setCheckState('error');
     } finally {
-      setCheckingUpdates(false);
-      setTimeout(() => setCheckResult(null), 4000);
+      setTimeout(() => setCheckState('idle'), 3000);
     }
   }, [refetch]);
 
@@ -210,17 +211,30 @@ export const Deployments: React.FC = () => {
           </p>
         </div>
         <div className="flex-1" />
-        {checkResult && (
-          <span className="self-center text-[12.5px] text-text-muted mr-1">{checkResult}</span>
-        )}
         <button
           onClick={handleCheckUpdates}
-          disabled={checkingUpdates}
+          disabled={checkState === 'checking'}
           title="Re-check the catalog for newer versions of your installed apps"
-          className="flex items-center gap-2 h-10 px-3.5 bg-surface-1 text-text-strong border border-border rounded-[10px] text-sm font-semibold hover:border-primary transition disabled:opacity-60 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 h-10 min-w-[186px] px-3.5 bg-surface-1 text-text-strong border border-border rounded-[10px] text-sm font-semibold hover:border-primary transition disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <RefreshCw className={`w-[16px] h-[16px] ${checkingUpdates ? 'animate-spin' : ''}`} />
-          <span>{checkingUpdates ? 'Checking…' : 'Check for updates'}</span>
+          {checkState === 'checking' ? (
+            <RefreshCw className="w-[16px] h-[16px] animate-spin" />
+          ) : checkState === 'done' ? (
+            <Check className="w-[16px] h-[16px] text-success" />
+          ) : checkState === 'error' ? (
+            <AlertTriangle className="w-[16px] h-[16px] text-danger" />
+          ) : (
+            <RefreshCw className="w-[16px] h-[16px]" />
+          )}
+          <span>
+            {checkState === 'checking'
+              ? 'Checking…'
+              : checkState === 'done'
+                ? (deployments.some(d => d.updateAvailable) ? 'Updates available' : 'Up to date')
+                : checkState === 'error'
+                  ? 'Check failed'
+                  : 'Check for updates'}
+          </span>
         </button>
         <Link
           to="/catalog"
