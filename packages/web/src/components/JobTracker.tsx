@@ -1,7 +1,8 @@
 import React from 'react';
-import { Activity, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, Clock, AlertTriangle, RefreshCw, Trash2 } from 'lucide-react';
 import { JobStatus } from './JobStatus';
 import { useJobsApi } from '../hooks/useJobsApi';
+import { api } from '../utils/api-hybrid';
 import type { Job, SummaryJob } from '@hola/shared';
 
 interface JobTrackerProps {
@@ -54,6 +55,21 @@ export const JobTracker: React.FC<JobTrackerProps> = ({
 
   const summary = getJobSummary();
 
+  // Clear finished (completed/failed) jobs — scoped to this deployment when the
+  // tracker is rendered on a deployment detail, global otherwise. Running/queued
+  // jobs are never removed by the server, so this only declutters the list.
+  const [clearing, setClearing] = React.useState(false);
+  const finishedCount = summary.completed + summary.failed;
+  const handleClearFinished = async () => {
+    setClearing(true);
+    try {
+      await api.jobs.clear(deploymentId ? { deploymentId } : undefined);
+      await refetch();
+    } finally {
+      setClearing(false);
+    }
+  };
+
   if (loading && jobs.length === 0) {
     return (
       <div className={`bg-surface-1 rounded-lg border border-border ${className}`}>
@@ -99,14 +115,27 @@ export const JobTracker: React.FC<JobTrackerProps> = ({
             </div>
           </div>
           
-          <button
-            onClick={refetch}
-            disabled={loading}
-            className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors disabled:opacity-50"
-            title="Refresh jobs"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center space-x-2">
+            {finishedCount > 0 && (
+              <button
+                onClick={handleClearFinished}
+                disabled={clearing}
+                className="flex items-center gap-1.5 px-2.5 h-9 bg-surface-2 hover:bg-surface-0 rounded text-sm text-text-muted hover:text-text-strong transition-colors disabled:opacity-50"
+                title={`Clear ${finishedCount} finished ${finishedCount === 1 ? 'job' : 'jobs'}`}
+              >
+                {clearing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                <span>Clear finished</span>
+              </button>
+            )}
+            <button
+              onClick={refetch}
+              disabled={loading}
+              className="p-2 bg-surface-2 hover:bg-surface-0 rounded transition-colors disabled:opacity-50"
+              title="Refresh jobs"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
       </div>
 

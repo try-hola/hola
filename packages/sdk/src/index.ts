@@ -15,6 +15,8 @@ import {
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
   GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  // Job types
+  DeleteJobsRequest, DeleteJobsResponse,
   // System types
   GetUpdateCheckResponse
 } from '@hola/shared';
@@ -91,6 +93,9 @@ export class HolaSdk {
     app: (appId: string) => this.get<GetCatalogAppResponse>(API.catalog.appById(appId)),
     versions: (appId: string) => this.get<GetCatalogAppVersionsResponse>(API.catalog.versions(appId)),
     versionDetail: (appId: string, version: string) => this.get<GetCatalogAppVersionDetailResponse>(API.catalog.versionDetail(appId, version)),
+    // Force an immediate re-fetch of the remote catalog (bypasses the refresh-interval
+    // TTL) so newly-published app versions surface as available updates right away.
+    refresh: (force = true) => this.post<{ success: boolean; timestamp: string }>(`${API.catalog.refresh}${buildQuery({ force })}`),
   };
 
   drafts = {
@@ -123,6 +128,9 @@ export class HolaSdk {
   jobs = {
     byId: (jobId: string) => this.get(API.jobs.byId(jobId)),
     logs: (jobId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.jobs.logs(jobId)}${buildQuery(qs)}`),
+    // Clear finished (completed/failed/cancelled) jobs, optionally scoped by
+    // deployment and/or a single terminal status. Never removes running/queued jobs.
+    clear: (qs?: DeleteJobsRequest) => this.delete<DeleteJobsResponse>(`${API.jobs.base}${buildQuery(qs as Record<string, string | number | boolean | undefined>)}`),
   };
 
   // --- Core deployment functionality ---

@@ -18,7 +18,7 @@ import type {
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   GetDeploymentHistoryResponse,
   // Job types
-  GetJobsResponse, GetJobResponse, GetLogsResponse,
+  GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
   // Backup types  
   GetBackupsResponse, GetBackupResponse, CreateBackupResponse, RestoreBackupResponse, DeleteBackupResponse,
   // Notification types
@@ -313,6 +313,18 @@ export class SdkAdapter {
       const path = `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`;
       return this.getWithCache(path, () => this.sdk.get<GetCatalogAppVersionDetailResponse>(path));
     },
+
+    // Force an immediate catalog re-fetch (bypasses the server's refresh-interval
+    // TTL) so newly-published versions surface as available updates right away.
+    // A refresh can change which apps have updates, so drop the cached deployment
+    // lists (they carry `updateAvailable`), catalog, and dashboard summary.
+    refresh: async (force = true): Promise<{ success: boolean; timestamp: string }> => {
+      const res = await this.sdk.catalog.refresh(force);
+      globalCache.deleteByPattern(/^api:.*\/deployments/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      globalCache.deleteByPattern(/^api:.*\/summary/);
+      return res;
+    },
   };
 
   // Drafts (Install Wizard) with cache invalidation
@@ -440,8 +452,17 @@ export class SdkAdapter {
       const query = this.buildQuery(params || {});
       const path = `/api/jobs/${jobId}/logs${query}`;
       // Don't cache logs
-      return this.enhancedRequest('GET', path, () => 
+      return this.enhancedRequest('GET', path, () =>
         this.sdk.jobs.logs(jobId, params), undefined, false);
+    },
+
+    // Clear finished (completed/failed/cancelled) jobs, optionally scoped by
+    // deployment and/or terminal status. Never removes running/queued jobs.
+    clear: async (params?: DeleteJobsRequest): Promise<DeleteJobsResponse> => {
+      const res = await this.sdk.jobs.clear(params);
+      globalCache.deleteByPattern(/^api:.*\/jobs/);
+      globalCache.deleteByPattern(/^api:.*\/summary/);
+      return res;
     },
   };
 
