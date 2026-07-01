@@ -9,7 +9,7 @@ COPY . .
 RUN bun install --frozen-lockfile
 RUN bun run --cwd packages/web build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.31-alpine
 COPY packages/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/packages/web/dist /usr/share/nginx/html
 EXPOSE 80
