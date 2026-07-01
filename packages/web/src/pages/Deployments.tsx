@@ -34,7 +34,7 @@ const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
 ];
 
 const GRID_COLS =
-  'grid grid-cols-[1.6fr_1fr_1.5fr_1.7fr_0.9fr_130px] gap-[14px] px-[18px]';
+  'grid grid-cols-[1.8fr_1fr_1.4fr_1.1fr_130px] gap-[14px] px-[18px]';
 
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
@@ -328,7 +328,6 @@ export const Deployments: React.FC = () => {
             <div>App</div>
             <div>Status</div>
             <div>Version</div>
-            <div>URL</div>
             <div>Updated</div>
             <div className="text-right">Actions</div>
           </div>
@@ -363,9 +362,6 @@ export const Deployments: React.FC = () => {
                     {deployment.latestVersion}
                   </span>
                 )}
-              </div>
-              <div className="font-mono text-[12px] text-text-muted truncate">
-                {deployment.url || '—'}
               </div>
               <div className="text-[12.5px] text-text-faint truncate">
                 {deployment.lastUpdated}
