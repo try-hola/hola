@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { api } from '../../utils/api-hybrid';
+import { api as originalApi } from '../../utils/api';
 
 // Test that the hybrid API works and health endpoint is migrated
 describe('Hybrid API - Health Migration', () => {
@@ -24,6 +25,23 @@ describe('Hybrid API - Health Migration', () => {
     expect(api.notifications).toBeDefined();
     expect(api.settings).toBeDefined();
     expect(api.cache).toBeDefined();
+  });
+
+  it('exposes every deployment operation as a function, including promote', () => {
+    // Regression: `promote` was added to the original api client but not the SDK
+    // adapter, and the hybrid api routes deployments to the adapter — so the
+    // dashboard's Upgrade button hit `api.deployments.promote is not a function`.
+    for (const m of ['create', 'list', 'byId', 'update', 'history', 'action', 'promote', 'remove', 'logs']) {
+      expect(typeof (api.deployments as Record<string, unknown>)[m]).toBe('function');
+    }
+  });
+
+  it('hybrid deployments surface has parity with the original api client', () => {
+    // Whichever backend the hybrid routes to must implement everything the
+    // original client does — this catches an adapter that lags behind api.ts.
+    for (const key of Object.keys(originalApi.deployments)) {
+      expect(typeof (api.deployments as Record<string, unknown>)[key]).toBe('function');
+    }
   });
 
   it('should have working cache methods', () => {

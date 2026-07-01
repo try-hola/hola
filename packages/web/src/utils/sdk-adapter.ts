@@ -16,6 +16,7 @@ import type {
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
+  PromoteDeploymentRequest, PromoteDeploymentResponse,
   GetDeploymentHistoryResponse,
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
@@ -421,8 +422,19 @@ export class SdkAdapter {
     
     action: (deploymentId: string, action: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse> => {
       const path = `/api/deployments/${deploymentId}/actions`;
-      return this.enhancedRequest('POST', path, () => 
+      return this.enhancedRequest('POST', path, () =>
         this.sdk.deployments.action(deploymentId, action), action, false);
+    },
+
+    // Upgrade to a newer catalog version (#284 Phase 2). Carries the current
+    // env/secrets forward, runs the skip-guard + pre-upgrade snapshot, then
+    // switches the active release. Missing here previously meant the hybrid
+    // `api` (which routes deployments to this adapter) had no `promote`, so the
+    // dashboard's Upgrade button threw "deployments.promote is not a function".
+    promote: (deploymentId: string, body: PromoteDeploymentRequest = {}): Promise<PromoteDeploymentResponse> => {
+      const path = `/api/deployments/${deploymentId}/promote`;
+      return this.enhancedRequest('POST', path, () =>
+        this.sdk.deployments.promote(deploymentId, body), body, false);
     },
     
     logs: (deploymentId: string, params?: { since?: string; lines?: number }): Promise<GetLogsResponse> => {
