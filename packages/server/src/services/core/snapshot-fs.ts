@@ -44,7 +44,32 @@ function run(cmd: string, args: string[]): Promise<void> {
 
 /** Gzip-tar the CONTENTS of `srcDir` into `destFile` (whose parent dir must exist). */
 export async function tarGzipDir(srcDir: string, destFile: string): Promise<void> {
-  await run('tar', ['-czf', destFile, '-C', srcDir, '.']);
+  // Snapshotting a *live* data dir races with the app's own writes: a file (e.g. a
+  // postgres WAL segment) can change or vanish between tar's stat and read. GNU tar
+  // reports that as a soft error (exit 1) but still writes a complete, crash-
+  // consistent archive — which is exactly this snapshot's contract (#284/#121).
+  // So suppress the file-changed warning, ignore a file that disappears mid-read,
+  // and treat exit 1 as success; only a fatal error (exit >= 2) fails the snapshot.
+  await runTar([
+    '-czf', destFile,
+    '--warning=no-file-changed',
+    '--ignore-failed-read',
+    '-C', srcDir, '.',
+  ]);
+}
+
+/** Like `run('tar', …)` but tolerant of tar's exit-1 "file changed as we read it"
+ *  (expected when archiving a live data dir); only exit >= 2 is a real failure. */
+function runTar(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('tar', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr?.on('data', (d) => { stderr += String(d); });
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0 || code === 1 ? resolve() : reject(new Error(`tar exited ${code}: ${stderr.trim()}`)),
+    );
+  });
 }
 
 /**

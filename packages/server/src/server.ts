@@ -43,6 +43,8 @@ import {
   type JobStatus,
   type RollbackRequest,
   type RollbackResponse,
+  type PromoteDeploymentRequest,
+  type PromoteDeploymentResponse,
 } from '@hola/shared';
 
 // Error interface for proper typing
@@ -934,6 +936,72 @@ async function route(url: URL, req: Request): Promise<Response> {
       const services = getServices();
       const payload: RollbackResponse = await services.deployments.rollback(deploymentId, body);
       return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  // Deployment promote (upgrade to a newer catalog version) — #284 Phase 2.
+  // One endpoint orchestrates the whole upgrade: resolve the target version, build
+  // a draft from the catalog bundle, carry the deployment's current env/secrets
+  // forward onto the new release, finalize, then promote (which runs the upgrade
+  // skip-guard + pre-upgrade snapshot before switching the active release).
+  const deploymentPromoteMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/promote$/);
+  if (deploymentPromoteMatch && req.method === 'POST') {
+    const deploymentId = deploymentPromoteMatch[1];
+    try {
+      const body = (await req.json().catch(() => ({}))) as PromoteDeploymentRequest;
+      const context = getRequestContext(req);
+      const services = getServices();
+      const detail = await services.deployments.getDeployment(deploymentId);
+      const appId = detail.app;
+      const targetVersion = body.version ?? detail.latestVersion;
+      if (!targetVersion) {
+        return json(
+          {
+            error: {
+              code: 'NO_TARGET_VERSION',
+              message:
+                'No version to promote to — the deployment is already at the latest known version (or the catalog is unavailable). Pass an explicit { "version": "x.y.z" }.',
+            },
+          },
+          { status: 400 },
+        );
+      }
+      // Build the target release from the catalog, then carry the operator's current
+      // config forward onto the new version: env values/secrets (merged by key — a key
+      // absent from the deployment keeps the new version's catalog default) and system
+      // overrides. Ports are NOT carried — the new version's compose defines its own.
+      const draft = await services.drafts.createDraft({ appId, version: targetVersion });
+      try {
+        const carried = await services.deployments.getActiveConfig(deploymentId);
+        const draftDetail = await services.drafts.getDraft(draft.draftId);
+        const mergedAppEnv = (draftDetail.appEnv ?? []).map(e =>
+          Object.prototype.hasOwnProperty.call(carried.appEnv, e.key) ? { ...e, value: carried.appEnv[e.key] } : e,
+        );
+        const patch: PatchDraftRequest = {};
+        if (mergedAppEnv.length > 0) patch.appEnv = mergedAppEnv;
+        if (Object.keys(carried.systemOverrides).length > 0) patch.systemOverrides = carried.systemOverrides;
+        if (Object.keys(patch).length > 0) await services.drafts.updateDraft(draft.draftId, patch);
+        await services.drafts.finalizeDraft(draft.draftId);
+        logger.info('Promoting deployment to new release', {
+          requestId: context?.requestId,
+          deploymentId,
+          appId,
+          targetVersion,
+          draftId: draft.draftId,
+        });
+        const payload: PromoteDeploymentResponse = await services.deployments.promote(deploymentId, {
+          draftId: draft.draftId,
+          snapshot: body.snapshot,
+        });
+        return json(payload);
+      } catch (err) {
+        // The draft for this attempt is orphaned if the upgrade can't proceed
+        // (skip-guard rejection, snapshot failure, …) — delete it so it doesn't linger.
+        await services.drafts.deleteDraft(draft.draftId).catch(() => {});
+        throw err;
+      }
     } catch (err) {
       return errorResponse(req, err);
     }

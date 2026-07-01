@@ -110,6 +110,18 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     return result;
   }, [deploymentId, cacheKey, fetchData]);
 
+  // Upgrade to a newer catalog version (#284 Phase 2) via POST
+  // /api/deployments/:id/promote. The server carries env/secrets forward and runs
+  // the upgrade skip-guard + pre-upgrade snapshot before switching the release.
+  const upgradeDeployment = React.useCallback(async (body?: { version?: string; snapshot?: boolean }) => {
+    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
+
+    const result = await api.deployments.promote(deploymentId, body);
+    globalCache.delete(cacheKey);
+    await fetchData();
+    return result;
+  }, [deploymentId, cacheKey, fetchData]);
+
   // Remove the deployment entirely (stop + deprovision auth + release route +
   // delete record + clean storage) via DELETE /api/deployments/:id. The caller
   // navigates away on success since the deployment no longer exists.
@@ -125,6 +137,7 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     refetch: fetchData,
     updateConfiguration,
     executeAction,
+    upgradeDeployment,
     removeDeployment
   };
 }

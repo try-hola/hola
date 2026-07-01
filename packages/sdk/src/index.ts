@@ -11,6 +11,7 @@ import {
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
+  PromoteDeploymentRequest, PromoteDeploymentResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
   GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
@@ -115,6 +116,7 @@ export class HolaSdk {
     history: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetDeploymentHistoryResponse>(`${API.deployments.history(deploymentId)}${buildQuery(qs)}`),
     action: (deploymentId: string, action: PostDeploymentActionRequest) => this.post<PostDeploymentActionResponse>(API.deployments.actions(deploymentId), action),
     rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),
+    promote: (deploymentId: string, promote: PromoteDeploymentRequest = {}) => this.post<PromoteDeploymentResponse>(API.deployments.promote(deploymentId), promote),
     logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
   };
 

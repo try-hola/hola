@@ -198,6 +198,22 @@ prog
     await runRollback(deploymentId, streamOpts(opts));
   });
 
+// upgrade — promote a deployment to a newer catalog version (carries env forward,
+// runs the upgrade skip-guard + pre-upgrade snapshot)
+prog
+  .command('upgrade <deploymentId>')
+  .describe('Upgrade a deployment to a newer catalog version')
+  .example('upgrade guacamole-ab12cd34            # to the latest available version')
+  .example('upgrade guacamole-ab12cd34 --app-version 2.0.0')
+  .option('--app-version', 'Target catalog version (default: the latest available)')
+  .option('--snapshot', 'Force a pre-upgrade data snapshot even if the target does not require one', false)
+  .option('--no-stream', 'Do not watch the upgrade job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runUpgrade } = await load(import('./commands/deployments/actions'));
+    await runUpgrade(deploymentId, streamOpts(opts));
+  });
+
 // Fallback banner when no args
 if (process.argv.length <= 2) {
   // Minimal banner when no args. Lead with setup for first-time users, then the

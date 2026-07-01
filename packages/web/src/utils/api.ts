@@ -364,6 +364,12 @@ export const api = {
     action: (deploymentId: string, action: { action: 'start' | 'stop' | 'restart' | 'delete' }) =>
       apiClient.post(API.deployments.actions(deploymentId), action),
 
+    // Upgrade to a newer catalog version (#284 Phase 2). The server carries the
+    // current env/secrets forward and runs the upgrade skip-guard + pre-upgrade
+    // snapshot before switching the active release.
+    promote: (deploymentId: string, body?: { version?: string; snapshot?: boolean }) =>
+      apiClient.post(API.deployments.promote(deploymentId), body ?? {}),
+
     // Full teardown: stop + deprovision + release the Traefik route + remove the
     // record (DELETE /api/deployments/:id). The `delete` action only stops compose
     // and leaves the route held, which blocks reinstalling the same app.

@@ -111,6 +111,8 @@ export interface DeploymentService extends HealthCheckable {
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
   /** Stage a new release from a finalized draft onto an existing deployment and activate it. */
   promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse>;
+  /** The active release's carry-forward config (app env incl. secrets + system overrides), for an upgrade. */
+  getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -287,6 +289,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   constructor(protected jobService: JobService) {}
 
   abstract healthCheck(): Promise<ServiceHealth>;
+  abstract getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
 
   // --- persistence hooks (no-ops here; overridden by the real service) ---
   protected async ensureLayout(deploymentId: string): Promise<void> {
@@ -608,7 +611,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       throw new ValidationError(guard.message, { code: guard.code, fromVersion, toVersion, suggestedVersion: guard.suggestedVersion });
     }
 
-    const { app, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
+    const { app, version, release } = await this.buildReleaseFromDraft(artifacts, request, deploymentId, releaseId);
 
     // Reject an unsatisfiable auth requirement before staging the new release, so
     // a promote that switches to a backend-only mode (e.g. forward-auth under
@@ -643,6 +646,19 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
+
+    // Sync the deployment's displayed version to the promoted release. promoteRelease
+    // only moves the release pointers (it's shared with rollback and the Release type
+    // carries no version); without this the record (and the UI's "update available")
+    // would still report the pre-upgrade version after a successful promote.
+    if (version) {
+      const promoted = this.requireDeployment(deploymentId);
+      if (promoted.version !== version) {
+        promoted.version = version;
+        this.deployments.set(deploymentId, promoted);
+        await this.persistDeployment(promoted);
+      }
+    }
 
     const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
@@ -1157,6 +1173,27 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       return out;
     } catch {
       return {};
+    }
+  }
+
+  /** Public accessor for the active release's carry-forward config — its app env
+   *  (incl. secret values) and system overrides — used by the upgrade flow to carry
+   *  the operator's existing config forward onto the new release. (Ports are NOT
+   *  carried: the new version's compose defines its own container ports.) */
+  async getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }> {
+    const deployment = this.requireDeployment(deploymentId);
+    const releaseId = deployment.currentReleaseId;
+    const empty = { appEnv: {} as Record<string, string>, systemOverrides: {} as Record<string, string> };
+    if (!releaseId) return empty;
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return empty;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      const appEnv: Record<string, string> = {};
+      for (const e of manifest.appEnv ?? []) appEnv[e.key] = e.value ?? '';
+      return { appEnv, systemOverrides: manifest.systemOverrides ?? {} };
+    } catch {
+      return empty;
     }
   }
 
@@ -1968,6 +2005,11 @@ export class MockDeploymentService extends InMemoryDeploymentService {
 
   async healthCheck(): Promise<ServiceHealth> {
     return { healthy: true, lastCheck: new Date() };
+  }
+
+  /** Mock has no persisted release manifests; the upgrade flow carries no config in tests. */
+  async getActiveConfig(): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }> {
+    return { appEnv: {}, systemOverrides: {} };
   }
 
   /** Seed a couple of sample deployments so list views are non-empty out of the box. */
