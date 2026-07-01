@@ -1,0 +1,60 @@
+# Dependabot keeps this repo's dependencies current. Note the split with the
+# catalog: try-hola/apps uses **Renovate** for upstream app image pins; this repo
+# (the server/web/CLI Bun monorepo) uses **Dependabot** for its npm workspace,
+# GitHub Actions, and container base images. Weekly cadence + grouped minor/patch
+# updates keep PR volume low; majors arrive individually for scrutiny.
+version: 2
+updates:
+  # JS/TS dependencies across the Bun workspace. The root bun.lock covers every
+  # packages/* workspace, so a single "/" entry updates them all.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+      include: "scope"
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Actions used by CI (ci-bun, ci-local) and the release workflow (cli-release).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Base images for the server + web container builds.
+  - package-ecosystem: "docker"
+    directories:
+      - "/packages/server"
+      - "/packages/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(docker)"
