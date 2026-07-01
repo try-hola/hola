@@ -205,7 +205,8 @@ const PROVISIONER_PERMISSIONS = [
   // Read stages (stages/all) so the recovery flow can append the built-in Login
   // stage — setting a password then signs the operator in automatically.
   'authentik_flows.view_stage',
-  // Read certificate-keypairs to pick a signing key for the dashboard OIDC client.
+  // Read certificate-keypairs to pick a signing key for the dashboard and per-app
+  // OIDC clients (RS256 id_tokens + a populated JWKS).
   'authentik_crypto.view_certificatekeypair',
 ];
 
@@ -329,15 +330,22 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       // stay permanently degraded — the dashboard path already self-heals this way.
       // Union with what's already attached so a transient re-failure can't wipe a
       // provider's mappings, and mappings we don't manage aren't dropped.
-      const [scopePks, roleClaimPk] = await Promise.all([
+      const [scopePks, roleClaimPk, signingKey] = await Promise.all([
         this.resolveScopeMappingPks(oidc.scopes),
         this.ensureRoleClaimMapping(oidc.roleClaim, reuseSlug, oidc.scopes),
+        this.resolveSigningKeyPk(),
       ]);
       const desired = new Set<string>([...(provider.property_mappings ?? []), ...scopePks]);
       if (roleClaimPk) desired.add(roleClaimPk);
+      // (Re)attach an asymmetric signing key so ID tokens are RS256-signed and the
+      // provider publishes a populated JWKS — a client first provisioned before this
+      // fix (or during a transient crypto-listing failure) would otherwise stay on
+      // Authentik's HS256 default with an empty JWKS, which breaks JWKS-verifying
+      // OIDC clients (authlib et al.) at id_token validation.
       await this.api('PATCH', `/api/v3/providers/oauth2/${existing.providerPk}/`, {
         redirect_uris: redirectUris,
         property_mappings: [...desired],
+        ...(signingKey ? { signing_key: signingKey } : {}),
       });
       this.logger.info('Reused existing OIDC client', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
       return {
@@ -351,15 +359,20 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const clientId = randomUUID();
     const clientSecret = randomBytes(32).toString('hex');
 
-    const [authFlow, invalidationFlow, propertyMappings, roleClaimPk] = await Promise.all([
+    const [authFlow, invalidationFlow, propertyMappings, roleClaimPk, signingKey] = await Promise.all([
       this.resolveFlowPk(AUTHZ_FLOW_SLUG, 'authorization'),
       this.resolveFlowPk(INVALIDATION_FLOW_SLUG, 'invalidation'),
       this.resolveScopeMappingPks(oidc.scopes),
       this.ensureRoleClaimMapping(oidc.roleClaim, slug, oidc.scopes),
+      this.resolveSigningKeyPk(),
     ]);
     // Attach the admin-by-group role claim alongside the standard scope mappings.
     const allMappings = roleClaimPk ? [...propertyMappings, roleClaimPk] : propertyMappings;
 
+    // Attach an asymmetric signing key so ID tokens are RS256-signed and the provider
+    // publishes a populated JWKS. Without it Authentik defaults to HS256 with an empty
+    // JWKS, and standards-compliant OIDC clients that verify the id_token via JWKS
+    // (e.g. authlib — Hangar) fail with `KeyError: 'keys'`. Mirrors the dashboard path.
     const provider = await this.api<AuthentikOAuth2Provider>('POST', '/api/v3/providers/oauth2/', {
       name: `hola-${input.appName}-${input.deploymentId.slice(0, 8)}`,
       authorization_flow: authFlow,
@@ -370,6 +383,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       redirect_uris: redirectUris,
       property_mappings: allMappings,
       sub_mode: 'hashed_user_id',
+      ...(signingKey ? { signing_key: signingKey } : {}),
     });
 
     // Create the application; roll back the provider if that fails so we never
@@ -487,7 +501,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       );
       return res.results?.[0]?.pk;
     } catch (error) {
-      this.logger.warn('Could not resolve a signing key for the dashboard client; tokens may be opaque', {
+      this.logger.warn('Could not resolve a signing key for the OIDC client; id_tokens may fall back to HS256 with an empty JWKS', {
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;

@@ -72,6 +72,11 @@ function installFetch(handler?: (call: RecordedCall) => Response | undefined) {
     if (method === 'POST' && url.pathname === '/api/v3/propertymappings/provider/scope/') {
       return json({ pk: 'roleclaim-pk' }, 201);
     }
+    // A usable signing keypair exists (Authentik ships a default self-signed one),
+    // so the provisioner attaches it for RS256 id_tokens + a populated JWKS.
+    if (method === 'GET' && url.pathname === '/api/v3/crypto/certificatekeypairs/') {
+      return json({ results: [{ pk: 'signkey-pk', name: 'authentik Self-signed Certificate' }] });
+    }
     if (method === 'POST' && url.pathname === '/api/v3/providers/oauth2/') {
       return json({ pk: 42, client_id: body.client_id, client_secret: body.client_secret }, 201);
     }
@@ -152,6 +157,11 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     ]);
     expect(pbody.authorization_flow).toBeTruthy();
     expect(pbody.invalidation_flow).toBeTruthy();
+
+    // A signing key is attached so id_tokens are RS256-signed (populated JWKS) —
+    // without it Authentik defaults to HS256 with an empty JWKS and JWKS-verifying
+    // OIDC clients (authlib/Hangar) fail id_token validation with KeyError 'keys'.
+    expect(pbody.signing_key).toBe('signkey-pk');
 
     // Scope mappings were resolved from the polymorphic endpoint and attached, so
     // the OIDC client releases openid/profile/email claims (issue #144). The
@@ -278,6 +288,9 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(pm).toContain('scope-openid');
     expect(pm).toContain('scope-profile');
     expect(pm).toContain('scope-email');
+    // Reuse also (re)attaches the signing key, healing a provider first created on
+    // Authentik's HS256 default (empty JWKS) before this fix.
+    expect((patch.body as { signing_key?: string }).signing_key).toBe('signkey-pk');
   });
 
   test('native-oidc resolves scope mappings by managed id when scope_name is absent', async () => {
