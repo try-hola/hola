@@ -34,7 +34,7 @@ const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
 ];
 
 const GRID_COLS =
-  'grid grid-cols-[2.4fr_1.1fr_0.9fr_1.9fr_0.9fr_130px] gap-[14px] px-[18px]';
+  'grid grid-cols-[1.6fr_1fr_1.5fr_1.7fr_0.9fr_130px] gap-[14px] px-[18px]';
 
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
@@ -352,12 +352,12 @@ export const Deployments: React.FC = () => {
               <div>
                 <StatusBadge status={deployment.status} />
               </div>
-              <div className="font-mono text-[12.5px] text-text-muted truncate flex items-center gap-1.5">
-                <span className="truncate">{deployment.version || '—'}</span>
+              <div className="font-mono text-[12.5px] text-text-muted flex items-center gap-1.5 min-w-0">
+                <span className="whitespace-nowrap">{deployment.version || '—'}</span>
                 {deployment.updateAvailable && deployment.latestVersion && (
                   <span
                     title={`Update available: ${deployment.latestVersion}`}
-                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-weak text-primary text-[10.5px] font-semibold whitespace-nowrap"
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-weak text-primary text-[10.5px] font-semibold whitespace-nowrap flex-none"
                   >
                     <ArrowUp className="w-3 h-3" />
                     {deployment.latestVersion}
