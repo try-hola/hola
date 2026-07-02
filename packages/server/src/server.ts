@@ -867,7 +867,16 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const body = await req.json().catch(() => ({}));
       const services = getServices();
-      const payload = await services.deployments.createFromDraft(body);
+      // Capture the installing user from the authenticated principal so the async
+      // deploy job (which has no request context) can resolve `${HOLA_USER_EMAIL}`.
+      // Only OIDC-authenticated dashboard users carry an email; admin-key/CLI
+      // principals don't, and the token then resolves empty. Server-supplied — we
+      // ignore any client-sent installedBy.
+      const principal = getPrincipal(req);
+      const installedBy = principal?.email
+        ? { email: principal.email, name: principal.name }
+        : undefined;
+      const payload = await services.deployments.createFromDraft({ ...body, installedBy });
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);

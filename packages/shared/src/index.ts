@@ -1106,6 +1106,11 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     owner?: string;
     tags?: string[];
     notes?: string;
+    // The dashboard user who created this deployment, captured from the
+    // authenticated principal at create time (the async deploy job has no request
+    // context). `email` seeds the `${HOLA_USER_EMAIL}` compose token. Only present
+    // for OIDC-authenticated dashboard users; absent for admin-key / CLI installs.
+    installedBy?: { email?: string; name?: string };
     // Auth artifacts provisioned for this deployment (if any), so they can be
     // reused on re-deploy and torn down on delete. Keyed on deploymentId.
     // `middleware` is set for forward-auth apps so the route can be re-emitted
@@ -1125,6 +1130,10 @@ export type CreateDeploymentFromDraftRequest = {
     healthCheckTimeoutMs?: number;
     rollbackOnFailure?: boolean;
   };
+  // The installing user, filled in by the server from the authenticated principal
+  // (not sent by clients). Persisted on the deployment so `${HOLA_USER_EMAIL}` can
+  // resolve in the async deploy job, which runs without a request context.
+  installedBy?: { email?: string; name?: string };
 };
 
 export type CreateDeploymentFromDraftResponse = {

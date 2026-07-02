@@ -52,7 +52,7 @@ import type { EventBus } from './event-bus';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
-import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
+import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN, USER_EMAIL_TOKEN } from '@hola/shared/compose-validate';
 import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
@@ -563,6 +563,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
           createdAt: now,
           owner: 'system',
           tags: [],
+          // Captured from the authenticated principal at create time (the deploy
+          // job runs async without a request context). Feeds `${HOLA_USER_EMAIL}`.
+          ...(request.installedBy ? { installedBy: request.installedBy } : {}),
         },
       };
       this.deployments.set(deploymentId, deployment);
@@ -1089,9 +1092,15 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // (`<app>.<base-domain>`) and the install base domain. Each app still names
     // its own env key (e.g. `DOMAIN: https://${HOLA_APP_HOST}`); only the value
     // is a token. (${HOLA_APP_DATA} above is the storage equivalent.)
+    // The installing user's email (captured at create time), so an app can seed
+    // its own admin with the operator's identity (e.g. `ADMIN_EMAIL:
+    // "${HOLA_USER_EMAIL}"`). Empty for admin-key/CLI installs — apps that need a
+    // value regardless carry a compose fallback (`"${ADMIN_EMAIL:-…}"`).
+    const userEmail = deployment.metadata.installedBy?.email ?? '';
     content = content
       .replaceAll(APP_HOST_TOKEN, rule.host)
-      .replaceAll(BASE_DOMAIN_TOKEN, rule.domain);
+      .replaceAll(BASE_DOMAIN_TOKEN, rule.domain)
+      .replaceAll(USER_EMAIL_TOKEN, userEmail);
 
     // Apply install-wide operational defaults (restart, log rotation,
     // no-new-privileges hardening, optional TZ/limits) to every service. The app
@@ -1122,10 +1131,24 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // `.env` from the project directory (the runtime dir we run it in). Auth env
     // wins on a key clash; written 0600 since it can hold secrets.
     const appEnv = await this.readActiveAppEnv(deployment);
-    const interp: Record<string, string> = { ...appEnv, ...injectedEnv };
+    // Expose the installing user's email as a Compose interpolation variable, so an
+    // app can reference it WITH a fallback — `ADMIN_EMAIL: "${HOLA_USER_EMAIL:-…}"` —
+    // and Compose supplies the default when the operator has no email (admin-key/CLI
+    // installs). This is the recommended form: it needs no wizard field and never
+    // dead-ends. (Bare `${HOLA_USER_EMAIL}`, which has no Compose-level fallback, is
+    // additionally text-substituted in the compose/env above.) The `.env` is
+    // interpolation-only — Compose won't inject it into a container that doesn't
+    // reference it — so this doesn't leak the operator's email into every app.
+    const interp: Record<string, string> = { HOLA_USER_EMAIL: userEmail, ...appEnv, ...injectedEnv };
     const interpKeys = Object.keys(interp);
     if (interpKeys.length > 0) {
-      const dotenv = interpKeys.map(k => `${k}=${dotenvValue(interp[k])}`).join('\n') + '\n';
+      // Also resolve `${HOLA_USER_EMAIL}` inside env VALUES, so an app can set it as a
+      // `defaultEnv` default and pair it with a compose fallback. Written verbatim to
+      // `.env`, which Compose reads literally (no recursive interpolation of values),
+      // so the token must be resolved here rather than left for Compose.
+      const dotenv = interpKeys
+        .map(k => `${k}=${dotenvValue(interp[k].replaceAll(USER_EMAIL_TOKEN, userEmail))}`)
+        .join('\n') + '\n';
       await this.storageService.writeFile(`deployments/${deployment.id}/runtime/.env`, dotenv, 0o600);
     }
     return this.runtimeDir(deployment.id);
