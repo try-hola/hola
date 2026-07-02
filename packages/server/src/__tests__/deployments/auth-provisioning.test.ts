@@ -254,6 +254,119 @@ describe('Auth provisioning lifecycle', () => {
     expect(dotenv).toContain('GITEA_OIDC_ISSUER="https://auth.example.com/application/o/gitea-x/"');
   });
 
+  test('resolves ${HOLA_USER_EMAIL} in the materialized compose to the installing user email + persists installedBy', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      ADMIN_EMAIL: "${HOLA_USER_EMAIL}"\n',
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({
+      draftId,
+      name: 'gitea',
+      installedBy: { email: 'operator@example.com', name: 'Operator' },
+    });
+    const job = await waitForJob(sys.jobs, created.jobId!);
+    expect(job.status).toBe('completed');
+
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    expect(env.ADMIN_EMAIL).toBe('operator@example.com');
+
+    // Persisted on metadata so the async deploy job (no request context) resolves it.
+    const meta = JSON.parse(await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`));
+    expect(meta.metadata.installedBy.email).toBe('operator@example.com');
+  });
+
+  test('resolves ${HOLA_USER_EMAIL} to an empty string when the installer has no email (admin-key / CLI install)', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      ADMIN_EMAIL: "${HOLA_USER_EMAIL}"\n',
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    // No installedBy — the token must resolve to empty rather than a literal token.
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    const job = await waitForJob(sys.jobs, created.jobId!);
+    expect(job.status).toBe('completed');
+
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    // Resolves to empty (YAML may render an empty scalar as null) — the key point is
+    // it's NOT the literal token. Apps that need a value use the `:-` fallback form.
+    expect(env.ADMIN_EMAIL ?? '').toBe('');
+  });
+
+  test('resolves ${HOLA_USER_EMAIL} in appEnv VALUES too, so a defaultEnv default paired with a compose `:-` fallback works', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    // The app sets ADMIN_EMAIL's default to the token and reads it back with a
+    // fallback (the Directus pattern) — the token lives in the env VALUE, not the
+    // compose text, so it must be resolved when writing the runtime .env.
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@example.com}"\n',
+      appEnv: [{ key: 'ADMIN_EMAIL', value: '${HOLA_USER_EMAIL}', isSecret: false }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    // With an operator email the .env carries it verbatim (Compose uses it).
+    const withEmail = await sys.deployments.createFromDraft({ draftId, name: 'gitea', installedBy: { email: 'op@example.com' } });
+    expect((await waitForJob(sys.jobs, withEmail.jobId!)).status).toBe('completed');
+    const dotenv = await sys.storage.readFileAsString(`deployments/${withEmail.deploymentId}/runtime/.env`);
+    expect(dotenv).toContain('ADMIN_EMAIL="op@example.com"');
+  });
+
+  test('${HOLA_USER_EMAIL} appEnv default resolves to empty (so the compose `:-` fallback applies) with no installer email', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride: 'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n',
+      appEnv: [{ key: 'ADMIN_EMAIL', value: '${HOLA_USER_EMAIL}', isSecret: false }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+    const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+    // Present but empty → Compose's `${ADMIN_EMAIL:-…}` fallback takes over.
+    expect(dotenv).toContain('ADMIN_EMAIL=""');
+  });
+
+  test('exposes HOLA_USER_EMAIL as a runtime .env interpolation var so `${HOLA_USER_EMAIL:-fallback}` resolves (the Directus form)', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    // The recommended form: no wizard field, the fallback lives in the compose and
+    // Compose (not the server) applies it — so the token expression is left intact
+    // in the materialized compose and resolved from the runtime .env variable.
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      ADMIN_EMAIL: "${HOLA_USER_EMAIL:-admin@example.com}"\n',
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea', installedBy: { email: 'op@example.com' } });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    // The runtime .env supplies the variable Compose interpolates...
+    const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+    expect(dotenv).toContain('HOLA_USER_EMAIL="op@example.com"');
+    // ...and the `:-` expression is preserved verbatim (NOT text-substituted), so
+    // Compose applies the fallback itself.
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    expect(raw).toContain('${HOLA_USER_EMAIL:-admin@example.com}');
+  });
+
   test('native-oidc credentialsFile: writes the provisioned OIDC creds JSON into the data root before start (for a bundle sidecar to render)', async () => {
     const prev = process.env.HOLA_APPS_BIND_ROOT;
     process.env.HOLA_APPS_BIND_ROOT = join(dataRoot, 'apps');

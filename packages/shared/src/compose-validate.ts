@@ -157,11 +157,22 @@ export const APP_DATA_TOKEN = '${HOLA_APP_DATA}';
 export const APP_HOST_TOKEN = '${HOLA_APP_HOST}';
 export const BASE_DOMAIN_TOKEN = '${HOLA_BASE_DOMAIN}';
 
+/**
+ * The email of the dashboard user who installed the app, resolved at deploy time
+ * so an app can seed its own admin account with the operator's identity (e.g.
+ * `ADMIN_EMAIL: "${HOLA_USER_EMAIL}"`). Only populated when the dashboard user
+ * authenticated via OIDC (SSO) — admin-key and CLI installs have no user email,
+ * so it resolves to an empty string. Apps that need a value regardless MUST carry
+ * a compose fallback (e.g. `"${ADMIN_EMAIL:-admin@example.com}"`).
+ */
+export const USER_EMAIL_TOKEN = '${HOLA_USER_EMAIL}';
+
 /** Every `${HOLA_*}` token the server knows how to resolve. */
 export const KNOWN_PLATFORM_TOKENS: readonly string[] = [
   APP_DATA_TOKEN,
   APP_HOST_TOKEN,
   BASE_DOMAIN_TOKEN,
+  USER_EMAIL_TOKEN,
 ];
 
 /**

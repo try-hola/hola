@@ -355,6 +355,7 @@ services:
     environment:
       DOMAIN: https://\${HOLA_APP_HOST}/
       BASE: \${HOLA_BASE_DOMAIN}
+      ADMIN_EMAIL: \${HOLA_USER_EMAIL}
 `;
       expect(validateComposeDocument(yaml)).toEqual([]);
     });
