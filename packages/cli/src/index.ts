@@ -105,11 +105,31 @@ prog
   .command('catalog [query]')
   .describe('Browse the app catalog (optionally filter by query)')
   .option('--category', 'Filter by category')
+  .option('--source', 'Only list apps from this catalog source id')
   .option('--limit', 'Max apps to list', 100)
   .option('--json', 'Print raw JSON output', false)
   .action(async (query, opts) => {
     const { runCatalog } = await load(import('./commands/catalog/catalog'));
     await runCatalog(query, camelKeys(opts));
+  });
+
+// source — manage catalog sources (the Homebrew-tap model)
+prog
+  .command('source <action> [id]')
+  .describe('Manage catalog sources: add | list | rm')
+  .example('source add acme --url https://raw.githubusercontent.com/acme/hola-apps/main/catalog.json')
+  .example('source add acme --url <catalog.json> --registry ghcr.io --cred acme')
+  .example('source list')
+  .example('source rm acme')
+  .option('--id', 'Source id (alternative to the positional id)')
+  .option('--name', 'Human-readable source name')
+  .option('--url', 'URL of the source catalog.json')
+  .option('--registry', 'Registry host for private packages (with --cred)')
+  .option('--cred', 'Stored registry credential id (with --registry)')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (action, id, opts) => {
+    const { runSource } = await load(import('./commands/source/source'));
+    await runSource(action, camelKeys(opts), { args: id ? [id] : [] });
   });
 
 // install — install a catalog app by id (draft from catalog → finalize → deploy)
@@ -124,6 +144,7 @@ prog
   .option('--app-version', 'App version to install (or use <appId>@<version>)', 'latest')
   .option('--name', 'Deployment name (default: the app id)')
   .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
+  .option('--source', 'Catalog source id to install from (default: hola)')
   .option('--registry-cred', 'Stored registry credential id for a private OCI reference install')
   .option('--strict', 'Fail on validation warnings', false)
   .option('--no-stream', 'Do not watch the deployment job', false)

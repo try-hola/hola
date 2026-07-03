@@ -50,6 +50,8 @@ import {
   type ListRegistryCredentialsResponse,
   type InstallFromRefRequest,
   type InstallFromRefResponse,
+  type AddCatalogSourceRequest,
+  type ListCatalogSourcesResponse,
 } from '@hola/shared';
 
 // Error interface for proper typing
@@ -423,10 +425,11 @@ async function route(url: URL, req: Request): Promise<Response> {
     const limit = Number(searchParams.get('limit')) || 12;
     const query = searchParams.get('query') || undefined;
     const category = searchParams.get('category') || undefined;
+    const source = searchParams.get('source') || undefined;
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.listApps({ page, limit, q: query, category });
+      const payload = await catalog.listApps({ page, limit, q: query, category, source });
       return json(payload);
     } catch (error) {
       // No bundled fallback — the only catalog is the remote one (HOLA_CATALOG_URL).
@@ -439,10 +442,11 @@ async function route(url: URL, req: Request): Promise<Response> {
   const catalogAppMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)$/);
   if (catalogAppMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogAppMatch[1]);
+    const source = searchParams.get('source') || undefined;
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.getApp(appId);
+      const payload = await catalog.getApp(appId, source);
       return json(payload);
     } catch {
       return notFound();
@@ -452,10 +456,11 @@ async function route(url: URL, req: Request): Promise<Response> {
   const catalogVersionsMatch = pathname.match(/^\/api\/catalog\/apps\/([^/]+)\/versions$/);
   if (catalogVersionsMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogVersionsMatch[1]);
+    const source = searchParams.get('source') || undefined;
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.getVersions(appId);
+      const payload = await catalog.getVersions(appId, source);
       return json(payload);
     } catch {
       return notFound();
@@ -466,10 +471,11 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (catalogVersionDetailMatch && req.method === 'GET') {
     const appId = decodeURIComponent(catalogVersionDetailMatch[1]);
     const version = decodeURIComponent(catalogVersionDetailMatch[2]);
+    const source = searchParams.get('source') || undefined;
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.getVersionDetail(appId, version);
+      const payload = await catalog.getVersionDetail(appId, version, source);
       return json(payload);
     } catch (error) {
       logger.warn('Catalog version detail failed', { appId, version, error: error instanceof Error ? error.message : String(error) });
@@ -531,6 +537,51 @@ async function route(url: URL, req: Request): Promise<Response> {
       if (message === 'CREDENTIAL_NOT_FOUND') return notFound();
       logger.error('Failed to remove registry credential', error as Error);
       return json({ error: { code: 'CREDENTIAL_REMOVE_FAILED', message: 'Failed to remove registry credential' } }, { status: 500 });
+    }
+  }
+
+  // ===== CATALOG SOURCE ROUTES =====
+  // Managed list of catalog.json sources (Homebrew-tap model). Instance-level,
+  // admin-gated. The built-in `hola` source is synthesized (not stored) and can't
+  // be removed.
+  if (pathname === API.catalogSources.base && req.method === 'GET') {
+    try {
+      const items = await getServices().catalogSources.list();
+      return json({ items } satisfies ListCatalogSourcesResponse);
+    } catch (error) {
+      logger.error('Failed to list catalog sources', error as Error);
+      return json({ error: { code: 'SOURCE_LIST_FAILED', message: 'Failed to list catalog sources' } }, { status: 500 });
+    }
+  }
+
+  if (pathname === API.catalogSources.base && req.method === 'POST') {
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<AddCatalogSourceRequest>;
+      if (!body.id || !body.url) {
+        return json({ error: { code: 'MISSING_FIELDS', message: 'id and url are required' } }, { status: 400 });
+      }
+      const record = await getServices().catalogSources.add(body as AddCatalogSourceRequest);
+      return json(record, { status: 201 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'SOURCE_ID_EXISTS' ? 409 : 400;
+      logger.warn('Failed to add catalog source', { error: message });
+      return json({ error: { code: 'SOURCE_ADD_FAILED', message } }, { status });
+    }
+  }
+
+  const sourceMatch = pathname.match(/^\/api\/catalog-sources\/([^/]+)$/);
+  if (sourceMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(sourceMatch[1]);
+    try {
+      await getServices().catalogSources.remove(id);
+      return json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'SOURCE_NOT_FOUND') return notFound();
+      const status = message === 'SOURCE_ID_RESERVED' ? 400 : 500;
+      logger.warn('Failed to remove catalog source', { error: message });
+      return json({ error: { code: 'SOURCE_REMOVE_FAILED', message } }, { status });
     }
   }
 

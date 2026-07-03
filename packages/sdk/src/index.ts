@@ -18,6 +18,8 @@ import {
   // Registry credentials + install-by-ref (multi-catalog Slice 1)
   RegistryCredentialRecord, AddRegistryCredentialRequest, ListRegistryCredentialsResponse,
   InstallFromRefRequest, InstallFromRefResponse,
+  // Catalog sources (multi-catalog Slice 2)
+  CatalogSourceRecord, AddCatalogSourceRequest, ListCatalogSourcesResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
   // System types
@@ -93,12 +95,20 @@ export class HolaSdk {
 
   catalog = {
     apps: (qs?: GetCatalogAppsRequest) => this.get<GetCatalogAppsResponse>(`${API.catalog.apps}${buildQuery(qs as Record<string, string | number | boolean | undefined>)}`),
-    app: (appId: string) => this.get<GetCatalogAppResponse>(API.catalog.appById(appId)),
-    versions: (appId: string) => this.get<GetCatalogAppVersionsResponse>(API.catalog.versions(appId)),
-    versionDetail: (appId: string, version: string) => this.get<GetCatalogAppVersionDetailResponse>(API.catalog.versionDetail(appId, version)),
+    // `source` selects which catalog source the app comes from (default `hola`).
+    app: (appId: string, source?: string) => this.get<GetCatalogAppResponse>(`${API.catalog.appById(appId)}${buildQuery({ source })}`),
+    versions: (appId: string, source?: string) => this.get<GetCatalogAppVersionsResponse>(`${API.catalog.versions(appId)}${buildQuery({ source })}`),
+    versionDetail: (appId: string, version: string, source?: string) => this.get<GetCatalogAppVersionDetailResponse>(`${API.catalog.versionDetail(appId, version)}${buildQuery({ source })}`),
     // Force an immediate re-fetch of the remote catalog (bypasses the refresh-interval
     // TTL) so newly-published app versions surface as available updates right away.
     refresh: (force = true) => this.post<{ success: boolean; timestamp: string }>(`${API.catalog.refresh}${buildQuery({ force })}`),
+  };
+
+  // Managed catalog sources (Homebrew-tap model). Instance-level, admin-gated.
+  catalogSources = {
+    list: () => this.get<ListCatalogSourcesResponse>(API.catalogSources.base),
+    add: (data: AddCatalogSourceRequest) => this.post<CatalogSourceRecord>(API.catalogSources.base, data),
+    remove: (id: string) => this.delete<{ success: boolean }>(API.catalogSources.byId(id)),
   };
 
   // Registry credentials for private OCI pulls. The token is write-only: `add`

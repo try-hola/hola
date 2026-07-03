@@ -32,6 +32,13 @@ export const API = {
   // and the shared primitive every catalog install builds on).
   installFromRef: '/api/install-from-ref',
 
+  // Managed list of catalog sources (Homebrew-tap model). Instance-level,
+  // admin-gated. The built-in public catalog is the seeded `hola` source.
+  catalogSources: {
+    base: '/api/catalog-sources',
+    byId: (id: string) => `/api/catalog-sources/${id}`,
+  },
+
   drafts: {
     create: '/api/drafts',
     byId: (draftId: string) => `/api/drafts/${draftId}`,
@@ -388,6 +395,8 @@ export type GetSummaryResponse = {
 // ------------------------------------------------------
 // Catalog
 // ------------------------------------------------------
+export type CatalogSourceTrust = 'verified' | 'custom';
+
 export type CatalogApp = {
   id: string;
   name: string;
@@ -398,6 +407,10 @@ export type CatalogApp = {
   downloads: string | number;
   tags: string[];
   featured: boolean;
+  // Which catalog source this app comes from (defaults to `hola`, the built-in
+  // public catalog) and its trust level, so the UI can badge custom sources.
+  source: string;
+  trust: CatalogSourceTrust;
 };
 
 export type GetCatalogAppsRequest = PageRequest & {
@@ -452,6 +465,39 @@ export type InstallFromRefRequest = {
 
 export type InstallFromRefResponse = {
   draftId: string;
+};
+
+// ------------------------------------------------------
+// Catalog sources (managed list of catalog.json indexes)
+// ------------------------------------------------------
+
+/**
+ * A registered catalog source. `type: 'index-url'` points at a catalog.json (the
+ * SAME schema as the public catalog, hosted elsewhere). `auth` names a stored
+ * registry credential used to pull the source's private packages. `trust` badges
+ * the source in the UI; the built-in `hola` source is `verified`, user-added
+ * sources are `custom`.
+ */
+export type CatalogSourceRecord = {
+  id: string;
+  name: string;
+  type: 'index-url';
+  url: string;
+  auth?: { registry: string; credentialRef: string };
+  trust: CatalogSourceTrust;
+  enabled: boolean;
+};
+
+export type AddCatalogSourceRequest = {
+  id: string;
+  name: string;
+  url: string;
+  auth?: { registry: string; credentialRef: string };
+  enabled?: boolean;
+};
+
+export type ListCatalogSourcesResponse = {
+  items: CatalogSourceRecord[];
 };
 
 export type GetCatalogAppsResponse = PageResponse<CatalogApp>;
@@ -1192,6 +1238,9 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     // context). `email` seeds the `${HOLA_USER_EMAIL}` compose token. Only present
     // for OIDC-authenticated dashboard users; absent for admin-key / CLI installs.
     installedBy?: { email?: string; name?: string };
+    // The catalog source this app was installed from (defaults to `hola`). Used to
+    // check the right source for available updates. `(ref)` for install-by-ref.
+    source?: string;
     // Auth artifacts provisioned for this deployment (if any), so they can be
     // reused on re-deploy and torn down on delete. Keyed on deploymentId.
     // `middleware` is set for forward-auth apps so the route can be re-emitted

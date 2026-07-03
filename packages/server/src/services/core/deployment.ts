@@ -568,6 +568,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
           // Captured from the authenticated principal at create time (the deploy
           // job runs async without a request context). Feeds `${HOLA_USER_EMAIL}`.
           ...(request.installedBy ? { installedBy: request.installedBy } : {}),
+          // The catalog source (default `hola`), carried through the finalized
+          // manifest, so update detection checks the right source.
+          ...(artifacts?.manifest.source ? { source: artifacts.manifest.source } : {}),
         },
       };
       this.deployments.set(deploymentId, deployment);
@@ -706,7 +709,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * in-memory/mock service has no catalog); RealDeploymentService overrides it.
    */
   protected async enrichUpdateInfo(
-    items: Array<{ app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
   ): Promise<void> {
     void items;
   }
@@ -1423,23 +1426,32 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * fields unset rather than failing the list/detail request.
    */
   protected override async enrichUpdateInfo(
-    items: Array<{ app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
   ): Promise<void> {
     if (!this.catalogService || items.length === 0) return;
-    const latestByApp = new Map<string, string | undefined>();
-    for (const app of new Set(items.map((i) => i.app))) {
+    // The source an item was installed from (default `hola`), so update detection
+    // queries the right catalog. Keyed per (source, app) since two sources could
+    // publish the same appId. `(ref)` installs have no index to check → skipped.
+    const sourceOf = (item: { id?: string; app: string }) =>
+      (item.id ? this.deployments.get(item.id)?.metadata?.source : undefined) ?? 'hola';
+    const latestByKey = new Map<string, string | undefined>();
+    for (const item of items) {
+      const source = sourceOf(item);
+      const key = `${source}::${item.app}`;
+      if (latestByKey.has(key)) continue;
+      if (source === '(ref)') { latestByKey.set(key, undefined); continue; }
       try {
-        const { items: versions } = await this.catalogService.getVersions(app);
+        const { items: versions } = await this.catalogService.getVersions(item.app, source);
         const newest = versions
           .map((v) => v.version)
           .reduce<string | undefined>((best, v) => (!best || isNewerVersion(v, best) ? v : best), undefined);
-        latestByApp.set(app, newest);
+        latestByKey.set(key, newest);
       } catch {
-        latestByApp.set(app, undefined); // app not in catalog / catalog down — skip
+        latestByKey.set(key, undefined); // app not in catalog / catalog down — skip
       }
     }
     for (const item of items) {
-      const latest = latestByApp.get(item.app);
+      const latest = latestByKey.get(`${sourceOf(item)}::${item.app}`);
       if (!latest) continue;
       item.latestVersion = latest;
       // Only flag an update when the installed version is a concrete, comparable

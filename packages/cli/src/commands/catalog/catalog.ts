@@ -5,6 +5,7 @@ import { maybeNotifyUpdate } from '../../lib/update-notice';
 
 export interface CatalogOptions {
   category?: string;
+  source?: string;
   limit?: number | string;
   json?: boolean;
 }
@@ -21,6 +22,7 @@ export async function runCatalog(
     const res = (await sdk.catalog.apps({
       q: query,
       category: opts.category,
+      source: opts.source,
       page: 1,
       limit: Number.isFinite(limit) ? limit : 100,
     })) as GetCatalogAppsResponse;
@@ -38,9 +40,11 @@ export async function runCatalog(
 
     const idWidth = Math.max(3, ...res.items.map(a => a.id.length));
     for (const app of res.items) {
-      console.log(`${(app.icon || '📦')} ${app.id.padEnd(idWidth)}  ${app.description}`);
+      // Badge apps from a non-default source so their origin/trust is visible.
+      const badge = app.source && app.source !== 'hola' ? `  [${app.source}·${app.trust}]` : '';
+      console.log(`${(app.icon || '📦')} ${app.id.padEnd(idWidth)}  ${app.description}${badge}`);
     }
-    console.log(`\n${res.total} app(s). Install with: hola install <id>`);
+    console.log(`\n${res.total} app(s). Install with: hola install <id> [--source <source>]`);
     await maybeNotifyUpdate(sdk, opts);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

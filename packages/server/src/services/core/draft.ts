@@ -334,11 +334,11 @@ export class RealDraftService implements DraftService {
     this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source });
 
     try {
-      // Get app info from catalog
-      const app = await this.catalogService.getApp(request.appId);
+      // Get app info from catalog (from the requested source, default `hola`)
+      const app = await this.catalogService.getApp(request.appId, source);
 
       // Get default environment and configuration
-      const defaults = await this.getDraftDefaults(request.appId, request.version);
+      const defaults = await this.getDraftDefaults(request.appId, request.version, source);
 
       // Seed the draft's compose from the catalog bundle so it can be deployed
       // without the user pasting compose. Guard it through the same parse check
@@ -781,9 +781,9 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
     try {
-      const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest');
+      const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
       return {
         env: versionDetail.defaultEnv,
         defaults: versionDetail.defaults,

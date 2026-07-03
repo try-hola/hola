@@ -142,6 +142,9 @@ const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose })
             <div>
               <h2 className="text-xl font-semibold">{app.name}</h2>
               <span className="text-sm text-text-muted bg-surface-2 px-2 py-1 rounded">{app.category}</span>
+              {app.source && app.source !== 'hola' && (
+                <span className="ml-2 text-xs text-warning bg-warning/10 px-2 py-1 rounded">{app.source} · {app.trust}</span>
+              )}
             </div>
           </div>
           <button
@@ -239,7 +242,10 @@ const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose })
           </button>
           <div className="flex space-x-3">
             <Link
-              to={`/catalog/${app.id}/install${selectedVersion ? `?version=${selectedVersion}` : ''}`}
+              to={`/catalog/${app.id}/install?${new URLSearchParams({
+                ...(selectedVersion ? { version: selectedVersion } : {}),
+                ...(app.source && app.source !== 'hola' ? { source: app.source } : {}),
+              }).toString()}`}
               className="bg-primary text-primary-contrast px-6 py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors"
               onClick={onClose}
             >
@@ -416,10 +422,11 @@ export const Catalog: React.FC = () => {
         <>
           <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
             {apps.map((app: CatalogApp) => {
-              const installTo = `/catalog/${app.id}/install`;
+              const custom = app.source && app.source !== 'hola';
+              const installTo = `/catalog/${app.id}/install${custom ? `?source=${app.source}` : ''}`;
               return (
                 <div
-                  key={app.id}
+                  key={`${app.source}/${app.id}`}
                   onClick={() => navigate(installTo)}
                   className="bg-surface-1 border border-border rounded-card p-[18px] flex flex-col cursor-pointer transition hover:border-primary hover:-translate-y-[2px]"
                 >
@@ -432,7 +439,10 @@ export const Catalog: React.FC = () => {
                           <Star className="w-3.5 h-3.5 text-warning fill-current flex-none" />
                         )}
                       </div>
-                      <div className="text-xs text-text-faint mt-px">{app.category}</div>
+                      <div className="text-xs text-text-faint mt-px">
+                        {app.category}
+                        {custom && <span className="ml-1.5 text-warning">· {app.source} ({app.trust})</span>}
+                      </div>
                     </div>
                     <span className="font-mono text-[11px] text-text-faint flex items-center gap-1 flex-none">
                       <Download className="w-3 h-3" />
