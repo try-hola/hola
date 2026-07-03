@@ -1,0 +1,68 @@
+{
+	"name": "jq, yq, gojq, xq, jaq",
+	"id": "jq-likes",
+	"version": "2.1.1",
+	"description": "Installs jq and jq like command line tools (yq, gojq, xq, jaq).",
+	"documentationURL": "https://github.com/eitsupi/devcontainer-features/tree/main/src/jq-likes",
+	"options": {
+		"jqVersion": {
+			"type": "string",
+			"proposals": [
+				"latest",
+				"os-provided",
+				"1",
+				"none"
+			],
+			"default": "latest",
+			"description": "Select version of jq."
+		},
+		"yqVersion": {
+			"type": "string",
+			"proposals": [
+				"latest",
+				"4",
+				"none"
+			],
+			"default": "none",
+			"description": "Select version of yq."
+		},
+		"gojqVersion": {
+			"type": "string",
+			"proposals": [
+				"latest",
+				"none"
+			],
+			"default": "none",
+			"description": "Select version of gojq."
+		},
+		"xqVersion": {
+			"type": "string",
+			"proposals": [
+				"latest",
+				"none"
+			],
+			"default": "none",
+			"description": "Select version of xq."
+		},
+		"jaqVersion": {
+			"type": "string",
+			"proposals": [
+				"latest",
+				"1",
+				"none"
+			],
+			"default": "none",
+			"description": "Select version of jaq."
+		},
+		"allowJqRcVersion": {
+			"type": "boolean",
+			"default": false,
+			"description": "Allow jq pre-release RC version to be installed."
+		}
+	},
+	"installsAfter": [
+		"ghcr.io/devcontainers/features/common-utils",
+		"ghcr.io/devcontainers/features/powershell",
+		"ghcr.io/meaningful-ooo/devcontainer-features/fish"
+	]
+}
