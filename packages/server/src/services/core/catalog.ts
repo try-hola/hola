@@ -1,5 +1,8 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { getLogger } from '../../lib/logger';
 import type { ServiceHealth, HealthCheckable } from './types';
+import type { PullCredentials, BundleService } from './bundles';
 import { catalogConfig } from '../../config/catalog';
 import { parseComposeDefaults, mergeDefaults } from './compose-parser';
 import type {
@@ -69,11 +72,39 @@ function pickLatestVersion(versions: CatalogVersionEntry[]): CatalogVersionEntry
   })[0];
 }
 
+/**
+ * Derive an appId slug + version from an OCI package reference. e.g.
+ * `ghcr.io/acme/hola-cms:0.1.0` → `{ appId: 'hola-cms', version: '0.1.0' }`.
+ * A digest-only ref (`…@sha256:…`) yields version `latest`; an untagged ref too.
+ */
+export function parseOciRef(ref: string): { appId: string; version: string } {
+  let s = ref.trim();
+  let version = 'latest';
+  const at = s.indexOf('@');
+  if (at >= 0) s = s.slice(0, at); // ignore digest for the version label
+  const lastSlash = s.lastIndexOf('/');
+  const lastColon = s.lastIndexOf(':');
+  if (lastColon > lastSlash) {
+    version = s.slice(lastColon + 1) || 'latest';
+    s = s.slice(0, lastColon);
+  }
+  const name = s.slice(s.lastIndexOf('/') + 1);
+  const appId = name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'app';
+  return { appId, version };
+}
+
 export interface CatalogService {
   listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse>;
   getApp(appId: string): Promise<GetCatalogAppResponse>;
   getVersions(appId: string): Promise<GetCatalogAppVersionsResponse>;
   getVersionDetail(appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse>;
+  /**
+   * Resolve a version detail directly from an OCI package reference, bypassing
+   * the catalog index (Slice 1 install-by-ref). Pulls + validates + coerces the
+   * bundle exactly like a catalog install so the strict rules apply to one-offs
+   * too. `credentials` authenticate a private-registry pull.
+   */
+  getVersionDetailByRef(ociRef: string, credentials?: PullCredentials): Promise<GetCatalogAppVersionDetailResponse & { appId: string }>;
   refresh(force?: boolean): Promise<void>;
 }
 
@@ -81,6 +112,10 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
   private logger = getLogger().child({ service: 'RealCatalogService' });
   private cache: { data: RemoteCatalog | null; ts: number; etag?: string; lastModified?: string } = { data: null, ts: 0 };
   private inflight?: Promise<void>;
+
+  /** Optional injected bundle service (tests). Production resolves it lazily from
+   *  the service factory to avoid a circular import at module load. */
+  constructor(private bundlesOverride?: BundleService) {}
 
   async healthCheck(): Promise<ServiceHealth> {
     try {
@@ -138,7 +173,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     return { items, total: items.length };
   }
 
-  async getVersionDetail(appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse> {
+  async getVersionDetail(appId: string, version: string, credentials?: PullCredentials, source?: string): Promise<GetCatalogAppVersionDetailResponse> {
     // Locate app/version with OCI ref
     const data = await this.ensureLoaded();
     const app = data.apps.find(a => a.id === appId);
@@ -156,10 +191,6 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const ref = v.refs?.oci;
     if (!ref) throw new Error('NO_OCI_REF');
 
-    // Lazy import to avoid circular deps at module load
-    const { getServices } = await import('../simple-factory');
-    const bundles = getServices().bundles;
-
     // Pull and validate bundle. Key the cache by the RESOLVED concrete version
     // (`v.version`), NOT the meta-version `version` ("latest"). ensurePulled skips
     // the OCI pull when a cached bundle's compose.yaml+manifest.json already exist,
@@ -167,18 +198,42 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     // fix was published keeps serving that stale `latest` bundle forever — the new
     // concrete version never gets pulled. Keying by the concrete version makes every
     // new release a cache miss, so published fixes actually reach existing servers.
-    const info = await bundles.ensurePulled({ appId, version: v.version, ociRef: ref });
+    return this.pullValidateBuild({ appId, source, version: v.version, ociRef: ref, credentials });
+  }
+
+  async getVersionDetailByRef(ociRef: string, credentials?: PullCredentials): Promise<GetCatalogAppVersionDetailResponse & { appId: string }> {
+    const { appId, version } = parseOciRef(ociRef);
+    // A dedicated `(ref)` source namespaces the by-ref bundle cache away from any
+    // catalog source and never collides with the reserved `hola` id.
+    const detail = await this.pullValidateBuild({ appId, source: '(ref)', version, ociRef, credentials });
+    return { ...detail, appId };
+  }
+
+  /**
+   * Shared pull → validate → coerce for both the catalog and by-ref install
+   * paths. Reuses the bundle service (oras pull + allowlist + optional creds) and
+   * the strict layout check, so every source is held to the same rules.
+   */
+  private async pullValidateBuild(opts: { appId: string; source?: string; version: string; ociRef: string; credentials?: PullCredentials }): Promise<GetCatalogAppVersionDetailResponse> {
+    // Injected in tests; otherwise lazy-imported to avoid a circular dep at load.
+    const bundles = this.bundlesOverride ?? (await import('../simple-factory')).getServices().bundles;
+
+    const info = await bundles.ensurePulled({ appId: opts.appId, version: opts.version, ociRef: opts.ociRef, source: opts.source, credentials: opts.credentials });
     const validation = await bundles.validateLayout(info.localPath);
     if (!validation.ok) {
-      this.logger.warn('Bundle layout invalid; deferring to mocks', { appId, version, errors: validation.errors });
+      this.logger.warn('Bundle layout invalid', { appId: opts.appId, version: opts.version, errors: validation.errors });
       throw new Error('INVALID_BUNDLE_LAYOUT');
     }
+    return this.buildDetailFromBundle(info.localPath, opts.version);
+  }
 
-    // Try to read manifest.json for defaults; if missing or invalid, defer to mocks by throwing
+  /**
+   * Read + coerce a pulled bundle's manifest.json/compose.yaml into a version
+   * detail. Throws MANIFEST_UNAVAILABLE if the bundle can't be parsed.
+   */
+  private buildDetailFromBundle(localPath: string, version: string): GetCatalogAppVersionDetailResponse {
     try {
-      const { readFileSync } = await import('fs');
-      const { join } = await import('path');
-      const manifestPath = join(info.localPath, 'manifest.json');
+      const manifestPath = join(localPath, 'manifest.json');
       const raw = readFileSync(manifestPath, 'utf8');
 
       // Define a narrow manifest shape we accept
@@ -240,13 +295,13 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       };
 
       // Parse compose.yaml to get additional defaults
-      const composeDefaults = parseComposeDefaults(info.localPath);
+      const composeDefaults = parseComposeDefaults(localPath);
 
       // Carry the raw compose.yaml through so a catalog-created draft can be
       // deployed without the user pasting compose. Same file the parser reads;
       // a missing/unreadable compose throws here and falls through to the same
       // catch (MANIFEST_UNAVAILABLE) + draft-side fallback — no new failure mode.
-      const composeOverride = readFileSync(join(info.localPath, 'compose.yaml'), 'utf8');
+      const composeOverride = readFileSync(join(localPath, 'compose.yaml'), 'utf8');
 
       // Merge compose and manifest defaults (manifest takes precedence)
       const merged = mergeDefaults(composeDefaults, manifestDefaults, manifestEnv);
@@ -278,9 +333,9 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version: v.version, composeOverride, auth, consumes, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
-      this.logger.warn('Failed to read or parse bundle manifest; deferring to mocks', { appId, version, error: error instanceof Error ? error.message : String(error) });
+      this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });
     }
   }
@@ -397,6 +452,9 @@ export class MockCatalogService implements CatalogService {
     throw new Error('APP_NOT_FOUND');
   }
   async getVersionDetail(): Promise<GetCatalogAppVersionDetailResponse> {
+    throw new Error('VERSION_NOT_FOUND');
+  }
+  async getVersionDetailByRef(): Promise<GetCatalogAppVersionDetailResponse & { appId: string }> {
     throw new Error('VERSION_NOT_FOUND');
   }
   async refresh(): Promise<void> { /* no-op */ }

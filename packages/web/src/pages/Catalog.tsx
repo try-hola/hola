@@ -7,15 +7,98 @@ import {
   Download,
   RefreshCw,
   AlertCircle,
+  Terminal,
+  X,
 } from 'lucide-react';
 import type {
   CatalogApp,
   GetCatalogAppsRequest,
+  RegistryCredentialRecord,
 } from '@hola/shared';
 import { useCatalogAppsApi, useCatalogAppVersionsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
+import { api } from '../utils/api-hybrid';
 
 const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database', 'Infrastructure', 'Networking'];
+
+/**
+ * Modal to install a package straight from an OCI reference (the escape hatch for
+ * one-off private/first-party packages). Picks an optional stored credential for a
+ * private registry, then routes into the same install wizard as a catalog install.
+ */
+const InstallFromRefModal: React.FC<{ isOpen: boolean; onClose: () => void }> = ({ isOpen, onClose }) => {
+  const navigate = useNavigate();
+  const [ref, setRef] = useState('');
+  const [credentialRef, setCredentialRef] = useState('');
+  const [creds, setCreds] = useState<RegistryCredentialRecord[]>([]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setRef(''); setCredentialRef('');
+    api.registryCredentials.list().then(r => setCreds(r.items)).catch(() => setCreds([]));
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const submit = () => {
+    const trimmed = ref.trim();
+    if (!trimmed) return;
+    const params = new URLSearchParams({ ref: trimmed });
+    if (credentialRef) params.set('cred', credentialRef);
+    onClose();
+    navigate(`/install/ref?${params.toString()}`);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-surface-0 rounded-xl border border-border w-full max-w-lg overflow-hidden">
+        <div className="flex items-center justify-between p-6 border-b border-border">
+          <h2 className="text-lg font-semibold">Install from OCI reference</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-text-strong transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Package reference</label>
+            <input
+              autoFocus
+              type="text"
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+              placeholder="ghcr.io/acme/hola-cms:0.1.0"
+              className="w-full h-[38px] bg-surface-1 border border-border rounded-lg px-3 text-[13.5px] text-text-strong outline-none focus:border-primary"
+            />
+            <p className="mt-1.5 text-xs text-text-muted">The loose-OCI package ref (compose.yaml + manifest.json). Validated against the same strict rules as catalog apps.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5">Registry credential (for private registries)</label>
+            <select
+              value={credentialRef}
+              onChange={(e) => setCredentialRef(e.target.value)}
+              className="w-full h-[38px] bg-surface-1 border border-border rounded-lg px-3 text-[13.5px] text-text-strong outline-none focus:border-primary"
+            >
+              <option value="">None (public)</option>
+              {creds.map(c => <option key={c.id} value={c.id}>{c.id} — {c.registry}</option>)}
+            </select>
+            <p className="mt-1.5 text-xs text-text-muted">Manage credentials in Settings → Registry Credentials.</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 p-6 border-t border-border bg-surface-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-text-muted hover:text-text-strong transition-colors">Cancel</button>
+          <button
+            onClick={submit}
+            disabled={!ref.trim()}
+            className="bg-primary text-primary-contrast px-5 py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 type AppDetailModalProps = {
   app: CatalogApp;
@@ -177,6 +260,7 @@ export const Catalog: React.FC = () => {
   const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [appsPerPage] = useState(12);
+  const [showRefModal, setShowRefModal] = useState(false);
 
   // Build API request parameters
   const apiParams = useMemo(() => {
@@ -260,6 +344,13 @@ export const Catalog: React.FC = () => {
           </p>
         </div>
         <div className="flex-1" />
+        <button
+          onClick={() => setShowRefModal(true)}
+          className="h-[38px] px-3.5 flex items-center gap-2 bg-surface-1 border border-border rounded-[9px] text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors"
+        >
+          <Terminal className="w-4 h-4" />
+          Install from reference
+        </button>
         <div className="relative flex items-center">
           <Search className="absolute left-[11px] w-4 h-4 text-text-faint pointer-events-none" />
           <input
@@ -271,6 +362,8 @@ export const Catalog: React.FC = () => {
           />
         </div>
       </div>
+
+      <InstallFromRefModal isOpen={showRefModal} onClose={() => setShowRefModal(false)} />
 
       {/* Category chips */}
       <div className="flex gap-2 flex-wrap mb-5">

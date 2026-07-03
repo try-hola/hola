@@ -12,6 +12,22 @@ export interface InstallOptions {
   noStream?: boolean;
   json?: boolean;
   strict?: boolean;
+  /** From `--registry-cred`: stored credential id for a private OCI ref install. */
+  registryCred?: string;
+}
+
+/**
+ * Heuristic: does this argument look like a full OCI reference (e.g.
+ * `ghcr.io/acme/app:1.0`) rather than a catalog app id? True when it has a path
+ * separator AND the first segment is a registry host (contains a `.` or `:`, or
+ * is `localhost`). A bare `uptime-kuma` or a Slice-2 `sourceId/appId` is not a
+ * ref, so those keep flowing through the catalog install path.
+ */
+export function looksLikeOciRef(arg: string): boolean {
+  const slash = arg.indexOf('/');
+  if (slash <= 0) return false;
+  const host = arg.slice(0, slash);
+  return host === 'localhost' || /[.:]/.test(host);
 }
 
 /**
@@ -54,29 +70,42 @@ export async function runInstall(
   injected?: { sdk?: HolaSdk }
 ): Promise<DeployResult | undefined> {
   const sdk = injected?.sdk ?? new HolaSdk();
-  const { appId, version } = resolveAppAndVersion(rawAppId, opts.appVersion);
-  const name = opts.name ?? appId;
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
+
+  // Install-by-ref: an OCI reference bypasses the catalog index. The server pulls
+  // + validates the bundle (with the named credential for a private registry) and
+  // seeds a draft, which we then finalize + deploy exactly like a catalog install.
+  const isRef = looksLikeOciRef(rawAppId);
+  const { appId, version } = isRef
+    ? { appId: rawAppId, version: 'latest' }
+    : resolveAppAndVersion(rawAppId, opts.appVersion);
+  const name = opts.name ?? (isRef ? undefined : appId);
 
   try {
     const overrides = parseSet(opts.set);
 
-    out(`Creating draft for ${appId}@${version} (from catalog)`);
-    const draft = (await sdk.drafts.create({ appId, version })) as CreateDraftResponse;
+    let draftId: string;
+    if (isRef) {
+      out(`Creating draft from OCI reference ${rawAppId}${opts.registryCred ? ` (credential: ${opts.registryCred})` : ''}`);
+      draftId = (await sdk.installFromRef({ ociRef: rawAppId, credentialRef: opts.registryCred })).draftId;
+    } else {
+      out(`Creating draft for ${appId}@${version} (from catalog)`);
+      draftId = ((await sdk.drafts.create({ appId, version })) as CreateDraftResponse).draftId;
+    }
 
     // Apply env overrides onto the catalog-seeded appEnv (merge by key).
     if (Object.keys(overrides).length) {
-      const current = (await sdk.drafts.byId(draft.draftId)) as GetDraftResponse;
+      const current = (await sdk.drafts.byId(draftId)) as GetDraftResponse;
       const appEnv: AppEnvVar[] = [...(current.appEnv ?? [])];
       for (const [key, value] of Object.entries(overrides)) {
         const existing = appEnv.find(e => e.key === key);
         if (existing) existing.value = value;
         else appEnv.push({ key, value, isSecret: false });
       }
-      await sdk.drafts.update(draft.draftId, { appEnv });
+      await sdk.drafts.update(draftId, { appEnv });
     }
 
-    const result = await finalizeAndDeploy(sdk, draft.draftId, { name, strict: opts.strict, noStream: opts.noStream }, out);
+    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream }, out);
 
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else out(`Done. ${appId} → job status: ${result.status}`);

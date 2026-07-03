@@ -22,6 +22,7 @@ import { RealJobService, MockJobService, type JobService } from './core/jobs';
 import { InProcessEventBus, type EventBus } from './core/event-bus';
 import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
 import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
+import { RealRegistryCredentialService, MockRegistryCredentialService, type RegistryCredentialService } from './core/registry-credentials';
 import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
 import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
@@ -46,6 +47,7 @@ export interface Services {
   eventBus: EventBus;
   catalog: CatalogService;
   bundles: BundleService;
+  registryCredentials: RegistryCredentialService;
   drafts: DraftService;
   validation: ValidationService;
   routing: RoutingService;
@@ -88,6 +90,7 @@ export function createServices(env: ServiceEnvironment): Services {
       eventBus,
       catalog: new MockCatalogService(),
       bundles: new MockBundleService(),
+      registryCredentials: new MockRegistryCredentialService(),
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
       routing: new MockRoutingService(),
@@ -121,8 +124,11 @@ export function createServices(env: ServiceEnvironment): Services {
     // Create shared validation service instance to avoid duplication
     const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
 
+    // Registry credentials for private OCI pulls (shared by drafts + deployments).
+    const registryCredentials = new RealRegistryCredentialService(storage);
+
     // Shared draft service: the deployment service builds releases from its finalized artifacts.
-    const drafts = new RealDraftService(storage, catalog, validation);
+    const drafts = new RealDraftService(storage, catalog, validation, registryCredentials);
 
     // Mock provisioner in development for safety (no calls to a real auth platform).
     const provisioner = new MockProvisionerService();
@@ -141,11 +147,12 @@ export function createServices(env: ServiceEnvironment): Services {
       eventBus,
       catalog,
       bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
+      registryCredentials,
       drafts,
       validation,
       routing,
       provisioner,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus),
+      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials),
     };
   }
 
@@ -181,8 +188,11 @@ export function createServices(env: ServiceEnvironment): Services {
   // Create shared validation service instance to avoid duplication
   const validation = new RealValidationService(docker, systemMonitoring, storage, routing);
 
+  // Registry credentials for private OCI pulls (shared by drafts + deployments).
+  const registryCredentials = new RealRegistryCredentialService(storage);
+
   // Shared draft service: the deployment service builds releases from its finalized artifacts.
-  const drafts = new RealDraftService(storage, catalog, validation);
+  const drafts = new RealDraftService(storage, catalog, validation, registryCredentials);
 
   // Provision auth artifacts against the configured platform. When no backend is
   // configured (mode != authentik) use the real no-op provisioner — NOT the Mock,
@@ -206,11 +216,12 @@ export function createServices(env: ServiceEnvironment): Services {
     eventBus,
     catalog,
     bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
+    registryCredentials,
     drafts,
     validation,
     routing,
     provisioner,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials),
   };
 }
 

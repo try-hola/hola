@@ -118,17 +118,36 @@ prog
 // also pin a version inline as `hola install <appId>@<version>`.
 prog
   .command('install <appId>')
-  .describe('Install a catalog app: draft from catalog → validate → finalize → deploy → watch')
+  .describe('Install a catalog app, or a package by OCI reference: draft → validate → finalize → deploy → watch')
   .example('install uptime-kuma@1.2.1')
+  .example('install ghcr.io/acme/hola-cms:0.1.0 --registry-cred acme')
   .option('--app-version', 'App version to install (or use <appId>@<version>)', 'latest')
   .option('--name', 'Deployment name (default: the app id)')
   .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
+  .option('--registry-cred', 'Stored registry credential id for a private OCI reference install')
   .option('--strict', 'Fail on validation warnings', false)
   .option('--no-stream', 'Do not watch the deployment job', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (appId, opts) => {
     const { runInstall } = await load(import('./commands/install/install'));
     await runInstall(appId, streamOpts(opts));
+  });
+
+// registry-cred — manage stored credentials for private OCI pulls
+prog
+  .command('registry-cred <action> [id]')
+  .describe('Manage private registry credentials: add | list | rm')
+  .example('registry-cred add --registry ghcr.io --username acme --token <PAT> --id acme')
+  .example('registry-cred list')
+  .example('registry-cred rm acme')
+  .option('--id', 'Credential id (for add; generated when omitted)')
+  .option('--registry', 'Registry host the credential authorizes, e.g. ghcr.io')
+  .option('--username', 'Registry username')
+  .option('--token', 'Registry token/password (e.g. a GHCR PAT with read:packages)')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (action, id, opts) => {
+    const { runRegistryCred } = await load(import('./commands/registry/registry'));
+    await runRegistryCred(action, camelKeys(opts), { args: id ? [id] : [] });
   });
 
 // deployments — list installed deployments

@@ -51,6 +51,10 @@ export const api = {
     ? sdkAdapter.drafts
     : originalApi.drafts,
 
+  // Registry credentials + install-by-ref (multi-catalog Slice 1) — SDK-only.
+  registryCredentials: sdkAdapter.registryCredentials,
+  installFromRef: sdkAdapter.installFromRef,
+
   // Deployment endpoints - not migrated yet
   deployments: USE_SDK_FOR.deployments
     ? sdkAdapter.deployments
