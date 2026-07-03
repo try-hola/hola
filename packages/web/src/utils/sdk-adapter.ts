@@ -10,6 +10,8 @@ import type {
   // Registry credentials + install-by-ref (multi-catalog Slice 1)
   AddRegistryCredentialRequest, ListRegistryCredentialsResponse, RegistryCredentialRecord,
   InstallFromRefRequest, InstallFromRefResponse,
+  // Catalog sources (multi-catalog Slice 2)
+  AddCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
@@ -297,24 +299,24 @@ export class SdkAdapter {
 
   // Catalog with smart caching
   catalog = {
-    apps: (params?: { query?: string; category?: string; page?: number; limit?: number }): Promise<GetCatalogAppsResponse> => {
+    apps: (params?: { query?: string; category?: string; source?: string; page?: number; limit?: number }): Promise<GetCatalogAppsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/catalog/apps${query}`;
       return this.getWithCache(path, () => this.sdk.get<GetCatalogAppsResponse>(path));
     },
-    
-    appById: (appId: string): Promise<GetCatalogAppResponse> => {
-      const path = `/api/catalog/apps/${appId}`;
+
+    appById: (appId: string, source?: string): Promise<GetCatalogAppResponse> => {
+      const path = `/api/catalog/apps/${appId}${this.buildQuery({ source })}`;
       return this.getWithCache(path, () => this.sdk.get<GetCatalogAppResponse>(path));
     },
-    
-    versions: (appId: string): Promise<GetCatalogAppVersionsResponse> => {
-      const path = `/api/catalog/apps/${appId}/versions`;
+
+    versions: (appId: string, source?: string): Promise<GetCatalogAppVersionsResponse> => {
+      const path = `/api/catalog/apps/${appId}/versions${this.buildQuery({ source })}`;
       return this.getWithCache(path, () => this.sdk.get<GetCatalogAppVersionsResponse>(path));
     },
-    
-    versionDetail: (appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse> => {
-      const path = `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`;
+
+    versionDetail: (appId: string, version: string, source?: string): Promise<GetCatalogAppVersionDetailResponse> => {
+      const path = `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}${this.buildQuery({ source })}`;
       return this.getWithCache(path, () => this.sdk.get<GetCatalogAppVersionDetailResponse>(path));
     },
 
@@ -351,6 +353,25 @@ export class SdkAdapter {
   // Install a package straight from an OCI reference (escape hatch for one-offs).
   installFromRef = (data: InstallFromRefRequest): Promise<InstallFromRefResponse> =>
     this.enhancedRequest('POST', '/api/install-from-ref', () => this.sdk.installFromRef(data), data, false);
+
+  // Managed catalog sources (Homebrew-tap model). Mutations drop the cached list
+  // and the catalog listing so newly-added sources' apps surface.
+  catalogSources = {
+    list: (): Promise<ListCatalogSourcesResponse> =>
+      this.getWithCache('/api/catalog-sources', () => this.sdk.catalogSources.list()),
+    add: async (data: AddCatalogSourceRequest): Promise<CatalogSourceRecord> => {
+      const res = await this.sdk.catalogSources.add(data);
+      globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      return res;
+    },
+    remove: async (id: string): Promise<{ success: boolean }> => {
+      const res = await this.sdk.catalogSources.remove(id);
+      globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      return res;
+    },
+  };
 
   // Drafts (Install Wizard) with cache invalidation
   drafts = {

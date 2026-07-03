@@ -14,6 +14,8 @@ export interface InstallOptions {
   strict?: boolean;
   /** From `--registry-cred`: stored credential id for a private OCI ref install. */
   registryCred?: string;
+  /** From `--source`: catalog source id to install from (default: hola). */
+  source?: string;
 }
 
 /**
@@ -89,8 +91,9 @@ export async function runInstall(
       out(`Creating draft from OCI reference ${rawAppId}${opts.registryCred ? ` (credential: ${opts.registryCred})` : ''}`);
       draftId = (await sdk.installFromRef({ ociRef: rawAppId, credentialRef: opts.registryCred })).draftId;
     } else {
-      out(`Creating draft for ${appId}@${version} (from catalog)`);
-      draftId = ((await sdk.drafts.create({ appId, version })) as CreateDraftResponse).draftId;
+      const from = opts.source && opts.source !== 'hola' ? ` (source: ${opts.source})` : '';
+      out(`Creating draft for ${appId}@${version} (from catalog${from})`);
+      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source })) as CreateDraftResponse).draftId;
     }
 
     // Apply env overrides onto the catalog-seeded appEnv (merge by key).

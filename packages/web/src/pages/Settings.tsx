@@ -15,7 +15,8 @@ import {
 import type {
   SystemEnvVar,
   GetBackupSettingsResponse,
-  RegistryCredentialRecord
+  RegistryCredentialRecord,
+  CatalogSourceRecord
 } from '@hola/shared';
 import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
@@ -122,6 +123,119 @@ const RegistryCredentialsCard: React.FC<{ inputClass: string; labelClass: string
       ) : (
         <button onClick={() => setAdding(true)} className="flex items-center gap-2 text-[13px] font-medium text-primary hover:opacity-80 transition-opacity">
           <Plus className="w-4 h-4" /> Add credential
+        </button>
+      )}
+    </div>
+  );
+};
+
+/**
+ * Manage catalog sources (the Homebrew-tap model). A source is a catalog.json —
+ * the SAME schema as the public catalog — hosted elsewhere, optionally with a
+ * stored registry credential for private packages. The built-in `hola` source is
+ * always present (verified) and can't be removed.
+ */
+const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> = ({ inputClass, labelClass }) => {
+  const [items, setItems] = useState<CatalogSourceRecord[]>([]);
+  const [creds, setCreds] = useState<RegistryCredentialRecord[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [id, setId] = useState('');
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const [credentialRef, setCredentialRef] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = React.useCallback(() => {
+    api.catalogSources.list().then(r => setItems(r.items)).catch(() => setItems([]));
+    api.registryCredentials.list().then(r => setCreds(r.items)).catch(() => setCreds([]));
+  }, []);
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const add = async () => {
+    if (!id.trim() || !url.trim()) { setErr('id and url are required.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      // Pair the credential with the registry host derived from the credential record.
+      const cred = creds.find(c => c.id === credentialRef);
+      const auth = cred ? { registry: cred.registry, credentialRef: cred.id } : undefined;
+      await api.catalogSources.add({ id: id.trim(), name: name.trim() || id.trim(), url: url.trim(), auth });
+      setId(''); setName(''); setUrl(''); setCredentialRef(''); setAdding(false);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to add source');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (sourceId: string) => {
+    setBusy(true); setErr(null);
+    try { await api.catalogSources.remove(sourceId); refresh(); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Failed to remove source'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-surface-1 border border-border rounded-card p-5">
+      <div className="font-semibold text-[15px] mb-1">Catalog Sources</div>
+      <p className="text-[13px] text-text-muted mb-3.5">
+        Add your own app catalogs (the same <code>catalog.json</code> schema, hosted anywhere). Apps from custom sources are badged in the catalog.
+      </p>
+
+      {err && (
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-3 text-[13px] mb-3 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 flex-none" />
+          <span>{err}</span>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2 mb-3">
+        {items.map(s => (
+          <div key={s.id} className="flex items-center justify-between bg-surface-0 border border-border rounded-lg px-3 py-2">
+            <div className="text-[13px] min-w-0">
+              <span className="font-medium text-text-strong">{s.id}</span>
+              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${s.trust === 'verified' ? 'text-success bg-success/10' : 'text-warning bg-warning/10'}`}>{s.trust}</span>
+              <div className="text-text-muted truncate">{s.url || '(built-in)'}</div>
+            </div>
+            {s.id !== 'hola' && (
+              <button onClick={() => remove(s.id)} disabled={busy} className="text-text-muted hover:text-danger transition-colors disabled:opacity-50 flex-none ml-2" aria-label={`Remove ${s.id}`}>
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {adding ? (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className={labelClass}>Source id</div>
+            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="acme" className={inputClass} />
+          </div>
+          <div>
+            <div className={labelClass}>Name (optional)</div>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme apps" className={inputClass} />
+          </div>
+          <div className="col-span-2">
+            <div className={labelClass}>Catalog URL</div>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://raw.githubusercontent.com/acme/hola-apps/main/catalog.json" className={inputClass} />
+          </div>
+          <div className="col-span-2">
+            <div className={labelClass}>Registry credential (for private packages)</div>
+            <select value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} className={inputClass}>
+              <option value="">None (public)</option>
+              {creds.map(c => <option key={c.id} value={c.id}>{c.id} — {c.registry}</option>)}
+            </select>
+          </div>
+          <div className="col-span-2 flex items-center gap-2">
+            <button onClick={add} disabled={busy} className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">
+              <Save className="w-4 h-4" /> Add source
+            </button>
+            <button onClick={() => { setAdding(false); setErr(null); }} className="px-4 py-2 rounded-lg text-[13px] text-text-muted hover:text-text-strong transition-colors">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} className="flex items-center gap-2 text-[13px] font-medium text-primary hover:opacity-80 transition-opacity">
+          <Plus className="w-4 h-4" /> Add source
         </button>
       )}
     </div>
@@ -656,6 +770,9 @@ export const Settings: React.FC = () => {
 
         {/* Registry credentials for private OCI pulls (multi-catalog) */}
         <RegistryCredentialsCard inputClass={inputClass} labelClass={labelClass} />
+
+        {/* Catalog sources (Homebrew-tap model, multi-catalog) */}
+        <CatalogSourcesCard inputClass={inputClass} labelClass={labelClass} />
 
         {/* Identity management notice */}
         <div className="bg-surface-1 border border-border rounded-card p-5 flex items-start gap-3">

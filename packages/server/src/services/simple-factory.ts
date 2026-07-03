@@ -23,6 +23,7 @@ import { InProcessEventBus, type EventBus } from './core/event-bus';
 import { RealCatalogService, MockCatalogService, type CatalogService } from './core/catalog';
 import { RealBundleService, MockBundleService, type BundleService } from './core/bundles';
 import { RealRegistryCredentialService, MockRegistryCredentialService, type RegistryCredentialService } from './core/registry-credentials';
+import { RealCatalogSourceService, MockCatalogSourceService, type CatalogSourceService } from './core/catalog-sources';
 import { RealDraftService, MockDraftService, type DraftService } from './core/draft';
 import { RealValidationService, MockValidationService, type ValidationService } from './core/validation';
 import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
@@ -48,6 +49,7 @@ export interface Services {
   catalog: CatalogService;
   bundles: BundleService;
   registryCredentials: RegistryCredentialService;
+  catalogSources: CatalogSourceService;
   drafts: DraftService;
   validation: ValidationService;
   routing: RoutingService;
@@ -91,6 +93,7 @@ export function createServices(env: ServiceEnvironment): Services {
       catalog: new MockCatalogService(),
       bundles: new MockBundleService(),
       registryCredentials: new MockRegistryCredentialService(),
+      catalogSources: new MockCatalogSourceService(),
       drafts: new MockDraftService(),
       validation: new MockValidationService(),
       routing: new MockRoutingService(),
@@ -148,6 +151,7 @@ export function createServices(env: ServiceEnvironment): Services {
       catalog,
       bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
       registryCredentials,
+      catalogSources: new RealCatalogSourceService(storage),
       drafts,
       validation,
       routing,
@@ -217,6 +221,7 @@ export function createServices(env: ServiceEnvironment): Services {
     catalog,
     bundles: new RealBundleService(storage.resolveHolaPath('cache', 'bundles')),
     registryCredentials,
+    catalogSources: new RealCatalogSourceService(storage),
     drafts,
     validation,
     routing,

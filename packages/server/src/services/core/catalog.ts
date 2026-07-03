@@ -13,7 +13,11 @@ import type {
   GetCatalogAppVersionDetailResponse,
   CatalogApp,
   CatalogAppVersion,
+  CatalogSourceRecord,
+  CatalogSourceTrust,
 } from '@hola/shared';
+import type { CatalogSourceService } from './catalog-sources';
+import type { RegistryCredentialService } from './registry-credentials';
 import { coerceManifestAuth } from './manifest-auth';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
@@ -95,9 +99,9 @@ export function parseOciRef(ref: string): { appId: string; version: string } {
 
 export interface CatalogService {
   listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse>;
-  getApp(appId: string): Promise<GetCatalogAppResponse>;
-  getVersions(appId: string): Promise<GetCatalogAppVersionsResponse>;
-  getVersionDetail(appId: string, version: string): Promise<GetCatalogAppVersionDetailResponse>;
+  getApp(appId: string, source?: string): Promise<GetCatalogAppResponse>;
+  getVersions(appId: string, source?: string): Promise<GetCatalogAppVersionsResponse>;
+  getVersionDetail(appId: string, version: string, source?: string): Promise<GetCatalogAppVersionDetailResponse>;
   /**
    * Resolve a version detail directly from an OCI package reference, bypassing
    * the catalog index (Slice 1 install-by-ref). Pulls + validates + coerces the
@@ -108,35 +112,176 @@ export interface CatalogService {
   refresh(force?: boolean): Promise<void>;
 }
 
-export class RealCatalogService implements CatalogService, HealthCheckable {
-  private logger = getLogger().child({ service: 'RealCatalogService' });
+/**
+ * One catalog.json source: encapsulates the HTTP fetch with ETag/Last-Modified
+ * conditional requests, a timeout with stale-cache fallback, and concurrent-fetch
+ * de-duplication. The aggregator holds one of these per enabled source.
+ */
+export class SourceCatalog {
+  private logger = getLogger().child({ service: 'SourceCatalog' });
   private cache: { data: RemoteCatalog | null; ts: number; etag?: string; lastModified?: string } = { data: null, ts: 0 };
   private inflight?: Promise<void>;
 
-  /** Optional injected bundle service (tests). Production resolves it lazily from
-   *  the service factory to avoid a circular import at module load. */
-  constructor(private bundlesOverride?: BundleService) {}
+  constructor(readonly url: string) {}
+
+  async ensureLoaded(): Promise<RemoteCatalog> {
+    const now = Date.now();
+    if (this.cache.data && now - this.cache.ts < catalogConfig.refreshIntervalMs) return this.cache.data;
+    await this.load();
+    if (!this.cache.data) throw new Error('CATALOG_UNAVAILABLE');
+    return this.cache.data;
+  }
+
+  async refresh(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - this.cache.ts < catalogConfig.refreshIntervalMs) return;
+    await this.load();
+  }
+
+  private async load(): Promise<void> {
+    if (this.inflight) { await this.inflight; return; }
+
+    if (!this.url) {
+      this.cache = { data: { apps: [] }, ts: Date.now() };
+      return;
+    }
+
+    this.inflight = (async () => {
+      this.logger.info('Fetching catalog source', { url: this.url });
+      const headers: Record<string, string> = {};
+      if (this.cache.etag) headers['If-None-Match'] = this.cache.etag;
+      if (this.cache.lastModified) headers['If-Modified-Since'] = this.cache.lastModified;
+
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), catalogConfig.fetchTimeoutMs || 3000);
+      try {
+        const res = await fetch(this.url, { headers, signal: controller.signal });
+        if (res.status === 304 && this.cache.data) {
+          this.cache.ts = Date.now();
+          return;
+        }
+        if (!res.ok) throw new Error(`Catalog fetch failed: ${res.status}`);
+        const data = (await res.json()) as RemoteCatalog;
+        this.cache = {
+          data,
+          ts: Date.now(),
+          etag: res.headers.get('etag') || undefined,
+          lastModified: res.headers.get('last-modified') || undefined,
+        };
+      } catch (error) {
+        if (error instanceof Error && (error.name === 'AbortError' || error.message.includes('aborted'))) {
+          this.logger.warn('Catalog fetch aborted (timeout)', { url: this.url, timeoutMs: catalogConfig.fetchTimeoutMs });
+          if (this.cache.data) { this.cache.ts = Date.now(); return; }
+        }
+        if (!this.cache.data) throw error instanceof Error ? error : new Error(String(error));
+        this.logger.warn('Catalog fetch failed; retaining prior cache', { url: this.url, error: error instanceof Error ? error.message : String(error) });
+        this.cache.ts = Date.now();
+      } finally {
+        clearTimeout(tid);
+      }
+    })();
+
+    try {
+      await this.inflight;
+    } finally {
+      this.inflight = undefined;
+    }
+  }
+}
+
+/**
+ * Display/collision key for an app across sources: bare for the built-in `hola`
+ * source, `<sourceId>/<appId>` otherwise, so a private app can't collide with a
+ * public one. NOTE: this is NOT the wire id — `CatalogApp.id` stays bare and the
+ * source travels in a separate `source` field.
+ */
+export function qualifiedId(source: string, appId: string): string {
+  return source === 'hola' ? appId : `${source}/${appId}`;
+}
+
+export class RealCatalogService implements CatalogService, HealthCheckable {
+  private logger = getLogger().child({ service: 'RealCatalogService' });
+  /** Per-source fetchers, keyed by `${id}::${url}` so a URL change re-fetches. */
+  private catalogs = new Map<string, SourceCatalog>();
+
+  /**
+   * All optional so existing constructions/tests keep working; production resolves
+   * bundles/sources/credentials lazily from the service factory to avoid a circular
+   * import at module load.
+   */
+  constructor(
+    private bundlesOverride?: BundleService,
+    private sourcesOverride?: CatalogSourceService,
+    private credentialsOverride?: RegistryCredentialService,
+  ) {}
+
+  private async sourcesService(): Promise<CatalogSourceService> {
+    return this.sourcesOverride ?? (await import('../simple-factory')).getServices().catalogSources;
+  }
+
+  private async credentialsService(): Promise<RegistryCredentialService> {
+    return this.credentialsOverride ?? (await import('../simple-factory')).getServices().registryCredentials;
+  }
+
+  /** Reuse (or create) the fetcher for a source, re-creating it if the URL changed. */
+  private catalogFor(source: CatalogSourceRecord): SourceCatalog {
+    const key = `${source.id}::${source.url}`;
+    let sc = this.catalogs.get(key);
+    if (!sc) {
+      // Drop any stale entry for this id under a different URL.
+      for (const k of this.catalogs.keys()) if (k.startsWith(`${source.id}::`)) this.catalogs.delete(k);
+      sc = new SourceCatalog(source.url);
+      this.catalogs.set(key, sc);
+    }
+    return sc;
+  }
+
+  /** The sources to serve: a single one when `source` is given (else all enabled). */
+  private async resolveSources(source?: string): Promise<CatalogSourceRecord[]> {
+    const svc = await this.sourcesService();
+    if (source) {
+      const rec = await svc.get(source);
+      return rec ? [rec] : [];
+    }
+    return svc.listEnabled();
+  }
 
   async healthCheck(): Promise<ServiceHealth> {
-    try {
-      // If a catalog URL is configured, attempt a HEAD/GET
-      if (catalogConfig.catalogUrl) {
-        await this.ensureLoaded();
-      }
-      return { healthy: true, lastCheck: new Date() };
-    } catch (error) {
-      return { healthy: false, lastCheck: new Date(), error: error instanceof Error ? error.message : String(error) };
-    }
+    // Fetch failures are fail-soft in listApps, so health is about the service
+    // being wired, not every source being reachable.
+    return { healthy: true, lastCheck: new Date() };
   }
 
   async listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse> {
-    const data = await this.ensureLoaded();
     const page = req.page ?? 1;
     const limit = req.limit ?? 12;
     const q = (req.q || req.query || '').toLowerCase();
     const category = req.category?.toLowerCase();
 
-    let items = data.apps.map(this.mapApp);
+    const sources = await this.resolveSources(req.source);
+    // Fan out; a slow/broken source must not sink the whole listing.
+    const results = await Promise.allSettled(
+      sources.map(async (s) => {
+        const data = await this.catalogFor(s).ensureLoaded();
+        return data.apps.map(a => this.mapApp(a, s));
+      })
+    );
+
+    // Merge + dedupe by the source-qualified id (an app can appear once per source).
+    const seen = new Set<string>();
+    let items: CatalogApp[] = [];
+    for (const r of results) {
+      if (r.status !== 'fulfilled') {
+        this.logger.warn('A catalog source failed to load; skipping', { error: r.reason instanceof Error ? r.reason.message : String(r.reason) });
+        continue;
+      }
+      for (const app of r.value) {
+        const key = qualifiedId(app.source, app.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push(app);
+      }
+    }
 
     if (q) {
       items = items.filter(a =>
@@ -151,33 +296,24 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
 
     const total = items.length;
     const start = (page - 1) * limit;
-    const slice = items.slice(start, start + limit);
-
-    return { items: slice, page, limit, total };
+    return { items: items.slice(start, start + limit), page, limit, total };
   }
 
-  async getApp(appId: string): Promise<GetCatalogAppResponse> {
-    const data = await this.ensureLoaded();
-    const app = data.apps.find(a => a.id === appId);
-    if (!app) throw new Error('APP_NOT_FOUND');
-    const mapped = this.mapApp(app);
+  async getApp(appId: string, source = 'hola'): Promise<GetCatalogAppResponse> {
+    const { app, record } = await this.locateApp(appId, source);
+    const mapped = this.mapApp(app, record);
     const versions = (app.versions || []).map(v => v.version);
     return { ...mapped, versions };
   }
 
-  async getVersions(appId: string): Promise<GetCatalogAppVersionsResponse> {
-    const data = await this.ensureLoaded();
-    const app = data.apps.find(a => a.id === appId);
-    if (!app) throw new Error('APP_NOT_FOUND');
+  async getVersions(appId: string, source = 'hola'): Promise<GetCatalogAppVersionsResponse> {
+    const { app } = await this.locateApp(appId, source);
     const items: CatalogAppVersion[] = (app.versions || []).map(v => ({ version: v.version, createdAt: v.createdAt || new Date().toISOString() }));
     return { items, total: items.length };
   }
 
-  async getVersionDetail(appId: string, version: string, credentials?: PullCredentials, source?: string): Promise<GetCatalogAppVersionDetailResponse> {
-    // Locate app/version with OCI ref
-    const data = await this.ensureLoaded();
-    const app = data.apps.find(a => a.id === appId);
-    if (!app) throw new Error('APP_NOT_FOUND');
+  async getVersionDetail(appId: string, version: string, source = 'hola'): Promise<GetCatalogAppVersionDetailResponse> {
+    const { app, record } = await this.locateApp(appId, source);
     const versions = app.versions || [];
     // Resolve the meta-version "latest" (and an unspecified version) to the
     // newest concrete release. Catalog entries pin real versions (e.g. 1.2.1),
@@ -191,14 +327,27 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const ref = v.refs?.oci;
     if (!ref) throw new Error('NO_OCI_REF');
 
-    // Pull and validate bundle. Key the cache by the RESOLVED concrete version
-    // (`v.version`), NOT the meta-version `version` ("latest"). ensurePulled skips
-    // the OCI pull when a cached bundle's compose.yaml+manifest.json already exist,
-    // so caching under `<app>/latest` means a server that installed an app before a
-    // fix was published keeps serving that stale `latest` bundle forever — the new
-    // concrete version never gets pulled. Keying by the concrete version makes every
-    // new release a cache miss, so published fixes actually reach existing servers.
-    return this.pullValidateBuild({ appId, source, version: v.version, ociRef: ref, credentials });
+    // Resolve the source's stored credential (if any) for a private package pull.
+    let credentials: PullCredentials | undefined;
+    if (record.auth?.credentialRef) {
+      credentials = await (await this.credentialsService()).resolve(record.auth.credentialRef);
+      if (!credentials) throw new Error(`CREDENTIAL_NOT_FOUND: ${record.auth.credentialRef}`);
+    }
+
+    // Key the cache by the RESOLVED concrete version (`v.version`) + source, so a
+    // published fix reaches existing servers (a "latest" cache would go stale) and
+    // two sources can't alias the same appId/version.
+    return this.pullValidateBuild({ appId, source: record.id, version: v.version, ociRef: ref, credentials });
+  }
+
+  /** Find an app within a specific source's catalog (default the built-in `hola`). */
+  private async locateApp(appId: string, source: string): Promise<{ app: RemoteCatalog['apps'][number]; record: CatalogSourceRecord }> {
+    const record = await (await this.sourcesService()).get(source);
+    if (!record) throw new Error('APP_NOT_FOUND');
+    const data = await this.catalogFor(record).ensureLoaded();
+    const app = data.apps.find(a => a.id === appId);
+    if (!app) throw new Error('APP_NOT_FOUND');
+    return { app, record };
   }
 
   async getVersionDetailByRef(ociRef: string, credentials?: PullCredentials): Promise<GetCatalogAppVersionDetailResponse & { appId: string }> {
@@ -341,87 +490,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
   }
 
   async refresh(force = false): Promise<void> {
-    const now = Date.now();
-    if (!force && now - this.cache.ts < catalogConfig.refreshIntervalMs) return;
-    await this.loadRemoteCatalog();
+    const sources = await this.resolveSources();
+    await Promise.allSettled(sources.map(s => this.catalogFor(s).refresh(force)));
   }
 
-  // Helpers
-  private async ensureLoaded(): Promise<RemoteCatalog> {
-    const now = Date.now();
-    if (this.cache.data && (now - this.cache.ts < catalogConfig.refreshIntervalMs)) {
-      return this.cache.data;
-    }
-    await this.loadRemoteCatalog();
-    if (!this.cache.data) throw new Error('CATALOG_UNAVAILABLE');
-    return this.cache.data;
-  }
-
-  private async loadRemoteCatalog(): Promise<void> {
-    // De-duplicate concurrent fetches
-    if (this.inflight) {
-      await this.inflight;
-      return;
-    }
-
-    if (!catalogConfig.catalogUrl) {
-      // Without a URL, treat as healthy but empty; callers will fallback if needed
-      this.logger.info('No catalog URL configured; real catalog is inert');
-      this.cache = { data: { apps: [] }, ts: Date.now() };
-      return;
-    }
-
-    this.inflight = (async () => {
-      this.logger.info('Fetching remote catalog', { url: catalogConfig.catalogUrl });
-      const headers: Record<string, string> = {};
-      if (this.cache.etag) headers['If-None-Match'] = this.cache.etag;
-      if (this.cache.lastModified) headers['If-Modified-Since'] = this.cache.lastModified;
-
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), catalogConfig.fetchTimeoutMs || 3000);
-      try {
-        const res = await fetch(catalogConfig.catalogUrl!, { headers, signal: controller.signal });
-        if (res.status === 304 && this.cache.data) {
-          this.logger.debug('Catalog not modified');
-          this.cache.ts = Date.now();
-          return;
-        }
-        if (!res.ok) throw new Error(`Catalog fetch failed: ${res.status}`);
-        const data = (await res.json()) as RemoteCatalog;
-        this.cache = {
-          data,
-            ts: Date.now(),
-            etag: res.headers.get('etag') || undefined,
-            lastModified: res.headers.get('last-modified') || undefined,
-        };
-      } catch (error) {
-        if ((error instanceof Error && error.name === 'AbortError') || (error instanceof Error && error.message.includes('aborted'))) {
-          this.logger.warn('Catalog fetch aborted (timeout)', { timeoutMs: catalogConfig.fetchTimeoutMs });
-          // If we have existing cache, treat as not modified
-          if (this.cache.data) {
-            this.cache.ts = Date.now();
-            return;
-          }
-        }
-        // Re-throw for outer callers when no cache exists
-        if (!this.cache.data) {
-          throw error instanceof Error ? error : new Error(String(error));
-        }
-        this.logger.warn('Catalog fetch failed; retaining prior cache', { error: error instanceof Error ? error.message : String(error) });
-        this.cache.ts = Date.now();
-      } finally {
-        clearTimeout(tid);
-      }
-    })();
-
-    try {
-      await this.inflight;
-    } finally {
-      this.inflight = undefined;
-    }
-  }
-
-  private mapApp(app: RemoteCatalog['apps'][number]): CatalogApp {
+  private mapApp(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord): CatalogApp {
     return {
       id: app.id,
       name: app.name,
@@ -432,6 +505,8 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       downloads: app.downloads ?? 0,
       tags: app.tags || [],
       featured: !!app.featured,
+      source: source.id,
+      trust: source.trust as CatalogSourceTrust,
     };
   }
 }

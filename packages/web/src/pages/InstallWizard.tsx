@@ -33,6 +33,8 @@ export const InstallWizard: React.FC = () => {
   // a catalog index entry.
   const ociRef = searchParams.get('ref') || undefined;
   const credentialRef = searchParams.get('cred') || undefined;
+  // Catalog source the app comes from (Slice 2); defaults to the built-in `hola`.
+  const source = searchParams.get('source') || undefined;
   const [currentStep, setCurrentStep] = useState(0);
   
   // Draft API hooks
@@ -108,7 +110,7 @@ export const InstallWizard: React.FC = () => {
       try {
         const result = ociRef
           ? await createDraftHook.createDraft({ ociRef, credentialRef })
-          : await createDraftHook.createDraft({ appId });
+          : await createDraftHook.createDraft({ appId, source });
 
         // Update state with draft data. Float required-but-empty secrets to the
         // top so the operator sees what they must fill first (env order doesn't
@@ -132,7 +134,7 @@ export const InstallWizard: React.FC = () => {
     };
 
     initializeDraft();
-  }, [appId, ociRef, credentialRef, createDraftHook]); // Include the whole hook object
+  }, [appId, ociRef, credentialRef, source, createDraftHook]); // Include the whole hook object
 
   // Update draft data helper function
   const updateDraftData = React.useCallback(async (updates: PatchDraftRequest) => {
