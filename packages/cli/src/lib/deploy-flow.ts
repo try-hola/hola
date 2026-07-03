@@ -23,7 +23,7 @@ export interface DeployResult {
 export async function finalizeAndDeploy(
   sdk: HolaSdk,
   draftId: string,
-  opts: { name: string; strict?: boolean; noStream?: boolean },
+  opts: { name?: string; strict?: boolean; noStream?: boolean },
   out: (msg: string) => void
 ): Promise<DeployResult> {
   out('Validating…');

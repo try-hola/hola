@@ -7,10 +7,12 @@
 
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { getLogger } from '../../lib/logger';
 import type { ServiceHealth, HealthCheckable } from './types';
+import type { PullCredentials } from './bundles';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -57,8 +59,8 @@ export interface DockerService {
   /** Pull all images for a project ahead of `up`, with a generous timeout.
    *  Image pulls for large multi-service apps (e.g. Postiz) routinely exceed the
    *  short `up` timeout; pulling first means `up` only has to start local images. */
-  composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
-  composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
+  composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }>;
+  composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }>;
   composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
   composeRestart(projectPath: string, projectName: string, serviceName?: string): Promise<{ success: boolean; output: string }>;
@@ -158,9 +160,28 @@ export class RealDockerService implements DockerService, HealthCheckable {
     return info.available;
   }
 
-  async composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+  /**
+   * Materialize a scoped DOCKER_CONFIG dir (0o600 config.json) authenticating the
+   * given private registries, and return the env to pass to a docker invocation.
+   * Never touches ~/.docker/config.json; caller removes the dir when done. Returns
+   * undefined (and no temp dir) when there are no credentials.
+   */
+  private makeRegistryAuthEnv(registryAuth?: PullCredentials[]): { env?: NodeJS.ProcessEnv; dir?: string } {
+    if (!registryAuth || registryAuth.length === 0) return {};
+    const dir = mkdtempSync(join(tmpdir(), 'hola-docker-'));
+    const auths: Record<string, { auth: string }> = {};
+    for (const c of registryAuth) {
+      const host = c.registry.trim().split('/')[0];
+      auths[host] = { auth: Buffer.from(`${c.username}:${c.password}`, 'utf8').toString('base64') };
+    }
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ auths }), { mode: 0o600 });
+    return { env: { ...process.env, DOCKER_CONFIG: dir }, dir };
+  }
+
+  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
+    const { env, dir } = this.makeRegistryAuthEnv(registryAuth);
     try {
-      this.logger.info('Pulling compose images', { projectPath, projectName });
+      this.logger.info('Pulling compose images', { projectPath, projectName, authenticated: Boolean(dir) });
 
       const composeFile = join(projectPath, 'docker-compose.yml');
       if (!existsSync(composeFile)) {
@@ -173,7 +194,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
       const { stdout, stderr } = await execFileAsync(
         'docker',
         ['compose', '-f', composeFile, '-p', projectName, 'pull', '--quiet'],
-        { cwd: projectPath, timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024 }
+        { cwd: projectPath, timeout: 1_800_000, maxBuffer: 16 * 1024 * 1024, env }
       );
       const output = [stdout, stderr].filter(Boolean).join('\n');
       this.logger.info('Compose images pulled', { projectName, output: output.substring(0, 1000) });
@@ -185,10 +206,13 @@ export class RealDockerService implements DockerService, HealthCheckable {
       const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n') || String(error);
       this.logger.error('Failed to pull compose images', error instanceof Error ? error : undefined, { projectName });
       return { success: false, output };
+    } finally {
+      if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
     }
   }
 
-  async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
+    const { env, dir } = this.makeRegistryAuthEnv(registryAuth);
     try {
       this.logger.info('Starting compose project', { projectPath, projectName });
 
@@ -199,18 +223,19 @@ export class RealDockerService implements DockerService, HealthCheckable {
 
       // Images are pre-pulled by composePull, so `up` only starts local images.
       // The 5-minute timeout covers container creation for large stacks (it is
-      // no longer gated on download time).
+      // no longer gated on download time). A scoped DOCKER_CONFIG is passed as a
+      // fallback so a recreate that needs to pull still authenticates.
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" up -d`,
-        { cwd: projectPath, timeout: 300000 } // 5 minute timeout
+        { cwd: projectPath, timeout: 300000, env } // 5 minute timeout
       );
-      
+
       const output = [stdout, stderr].filter(Boolean).join('\n');
       this.logger.info('Compose project started successfully', {
         projectName,
         output: output.substring(0, 1000), // Truncate for logging
       });
-      
+
       return { success: true, output };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -218,8 +243,10 @@ export class RealDockerService implements DockerService, HealthCheckable {
         projectPath,
         projectName,
       });
-      
+
       return { success: false, output: errorMessage };
+    } finally {
+      if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
     }
   }
 
@@ -663,13 +690,13 @@ export class MockDockerService implements DockerService {
     return true;
   }
 
-  async composePull(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose pull', { projectPath, projectName });
+  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose pull', { projectPath, projectName, authenticated: Boolean(registryAuth?.length) });
     return { success: true, output: `[mock] Project ${projectName} images pulled` };
   }
 
-  async composeUp(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose up', { projectPath, projectName });
+  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length) });
     return { success: true, output: `[mock] Project ${projectName} created and started` };
   }
 

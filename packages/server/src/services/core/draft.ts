@@ -33,6 +33,7 @@ import { validateComposeDocument } from '@hola/shared/compose-validate';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
+import type { RegistryCredentialService } from './registry-credentials';
 
 /**
  * Shape of `drafts/<id>/finalized/manifest.json` produced by `finalizeDraft`.
@@ -56,6 +57,11 @@ export interface FinalizedManifest {
   // catalog at create time.
   icon?: string;
   displayName?: string;
+  // Catalog source the app came from (defaults to `hola`) and the registry
+  // credential id used to pull it — carried so the deploy lifecycle can pull the
+  // runtime image from a private registry and check the right source for updates.
+  source?: string;
+  credentialRef?: string;
   systemOverrides: Record<string, string>;
   appEnv: AppEnvVar[];
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;
@@ -186,7 +192,10 @@ export class RealDraftService implements DraftService {
   constructor(
     private storageService: StorageService,
     private catalogService: CatalogService,
-    private validationService: ValidationService
+    private validationService: ValidationService,
+    // Resolves a credentialRef → registry secret for the install-by-ref path.
+    // Optional so existing wiring/tests that don't need private pulls still work.
+    private registryCredentials?: RegistryCredentialService
   ) {}
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -312,7 +321,17 @@ export class RealDraftService implements DraftService {
   async createDraft(request: CreateDraftRequest): Promise<CreateDraftResponse> {
     await this.ensureLoaded();
     const draftId = crypto.randomUUID();
-    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version });
+
+    // Install-by-ref path (Slice 1): seed the draft straight from a pulled OCI
+    // package instead of a catalog index entry. Shares the same pull→validate
+    // primitive so the strict compose rules still apply.
+    if (request.ociRef) {
+      return this.createDraftFromRef(draftId, request);
+    }
+
+    if (!request.appId) throw new ValidationError('appId or ociRef is required');
+    const source = request.source ?? 'hola';
+    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source });
 
     try {
       // Get app info from catalog
@@ -337,6 +356,9 @@ export class RealDraftService implements DraftService {
         // update detection compares against. Fall back to the raw request only if
         // the catalog couldn't resolve one.
         version: defaults.resolvedVersion ?? request.version,
+        // Catalog source the app came from (defaults to the built-in `hola`).
+        source,
+        credentialRef: request.credentialRef,
         icon: app.icon,
         displayName: app.name,
         systemOverrides: {},
@@ -387,6 +409,79 @@ export class RealDraftService implements DraftService {
       return response;
     } catch (error) {
       this.logger.error('Failed to create draft', error as Error, { draftId, appId: request.appId });
+      throw error;
+    }
+  }
+
+  /**
+   * Build a draft directly from an OCI package reference (install-by-ref). The
+   * bundle is pulled + validated by the same catalog primitive; a private ref is
+   * authenticated with the stored credential named by `request.credentialRef`.
+   * The resolved appId (a slug from the ref), source sentinel `(ref)`, and
+   * credentialRef are persisted so the deploy lifecycle can pull the runtime
+   * image with the same credential.
+   */
+  private async createDraftFromRef(draftId: string, request: CreateDraftRequest): Promise<CreateDraftResponse> {
+    const ociRef = request.ociRef!;
+    this.logger.info('Creating draft from OCI ref', { draftId, ociRef, credentialRef: request.credentialRef });
+    try {
+      let credentials;
+      if (request.credentialRef) {
+        credentials = await this.registryCredentials?.resolve(request.credentialRef);
+        if (!credentials) throw new ValidationError(`Unknown registry credential: ${request.credentialRef}`);
+      }
+
+      const detail = await this.catalogService.getVersionDetailByRef(ociRef, credentials);
+      const appId = detail.appId;
+
+      const composeOverride = detail.composeOverride ?? '';
+      assertComposeParses(composeOverride, 'oci bundle');
+
+      const draft: Draft = {
+        draftId,
+        appId,
+        version: detail.version,
+        source: '(ref)',
+        credentialRef: request.credentialRef,
+        icon: '📦',
+        displayName: appId,
+        systemOverrides: {},
+        appEnv: detail.defaultEnv,
+        ports: detail.defaults.ports,
+        composeOverride,
+        auth: detail.auth,
+        consumes: detail.consumes,
+        ingressService: detail.ingressService,
+        upgrade: detail.upgrade,
+        backup: detail.backup,
+        files: [],
+      };
+
+      const now = new Date().toISOString();
+      const record: DraftRecord = {
+        draft,
+        status: 'draft',
+        createdAt: now,
+        updatedAt: now,
+        fileChecksums: {},
+        filePaths: {},
+      };
+
+      this.drafts.set(draftId, record);
+      this.fileContents.set(draftId, new Map());
+      await this.storageService.ensureDir(`drafts/${draftId}`);
+      await this.persistRecord(record);
+
+      this.logger.info('Draft created from ref successfully', { draftId, appId, version: detail.version });
+      return {
+        draftId,
+        app: { id: appId, name: draft.displayName ?? appId, icon: draft.icon ?? '📦' },
+        systemEnv: [],
+        appEnv: detail.defaultEnv,
+        defaults: detail.defaults,
+      };
+    } catch (error) {
+      this.logger.error('Failed to create draft from ref', error as Error, { draftId, ociRef });
       throw error;
     }
   }
@@ -633,7 +728,10 @@ export class RealDraftService implements DraftService {
       // `icon`/`displayName` are presentation, not part of the deployable spec,
       // so they're added outside canonicalSpec — keeping the checksum a pure
       // function of the spec.
-      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, checksum, finalizedAt };
+      // `source`/`credentialRef` are install-time routing metadata (which catalog
+      // source + which registry credential), not deployable content, so they live
+      // outside canonicalSpec and don't perturb the checksum — like icon/displayName.
+      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, checksum, finalizedAt };
       await this.storageService.writeFile(
         `${finalizedDir}/manifest.json`,
         JSON.stringify(manifest, null, 2)
@@ -732,10 +830,15 @@ export class MockDraftService implements DraftService {
   async createDraft(request: CreateDraftRequest): Promise<CreateDraftResponse> {
     const draftId = crypto.randomUUID();
     this.logger.info('Mock: Creating draft', { draftId, request });
+    // appId is optional on the wire (the install-by-ref path supplies ociRef); the
+    // mock derives a placeholder id so its Draft/response stay well-formed.
+    const appId = request.appId ?? 'mock-app';
     const draft: Draft = {
       draftId,
-      appId: request.appId,
+      appId,
       version: request.version,
+      source: request.source ?? (request.ociRef ? '(ref)' : 'hola'),
+      credentialRef: request.credentialRef,
       icon: '📦',
       displayName: 'Mock App',
       systemOverrides: {},
@@ -749,7 +852,7 @@ export class MockDraftService implements DraftService {
 
     return {
       draftId,
-      app: { id: request.appId, name: draft.displayName ?? 'Mock App', icon: draft.icon ?? '📦' },
+      app: { id: appId, name: draft.displayName ?? 'Mock App', icon: draft.icon ?? '📦' },
       systemEnv: [],
       appEnv: draft.appEnv,
       defaults: { ports: draft.ports, volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }] },

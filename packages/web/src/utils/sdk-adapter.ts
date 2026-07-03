@@ -7,6 +7,9 @@ import type {
   HealthResponse, GetSummaryResponse, GetMeResponse,
   // Catalog types
   GetCatalogAppsResponse, GetCatalogAppResponse, GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  // Registry credentials + install-by-ref (multi-catalog Slice 1)
+  AddRegistryCredentialRequest, ListRegistryCredentialsResponse, RegistryCredentialRecord,
+  InstallFromRefRequest, InstallFromRefResponse,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
@@ -327,6 +330,27 @@ export class SdkAdapter {
       return res;
     },
   };
+
+  // Registry credentials for private OCI pulls. Token is write-only; list never
+  // returns it. Mutations drop the cached list so the UI reflects changes.
+  registryCredentials = {
+    list: (): Promise<ListRegistryCredentialsResponse> =>
+      this.getWithCache('/api/registry-credentials', () => this.sdk.registryCredentials.list()),
+    add: async (data: AddRegistryCredentialRequest): Promise<RegistryCredentialRecord> => {
+      const res = await this.sdk.registryCredentials.add(data);
+      globalCache.deleteByPattern(/^api:.*\/registry-credentials/);
+      return res;
+    },
+    remove: async (id: string): Promise<{ success: boolean }> => {
+      const res = await this.sdk.registryCredentials.remove(id);
+      globalCache.deleteByPattern(/^api:.*\/registry-credentials/);
+      return res;
+    },
+  };
+
+  // Install a package straight from an OCI reference (escape hatch for one-offs).
+  installFromRef = (data: InstallFromRefRequest): Promise<InstallFromRefResponse> =>
+    this.enhancedRequest('POST', '/api/install-from-ref', () => this.sdk.installFromRef(data), data, false);
 
   // Drafts (Install Wizard) with cache invalidation
   drafts = {

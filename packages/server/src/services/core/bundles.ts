@@ -1,7 +1,8 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdirSync, existsSync, rmSync, statSync } from 'fs';
+import { mkdirSync, existsSync, rmSync, statSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { tmpdir } from 'os';
 import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
@@ -16,22 +17,53 @@ export type BundleInfo = {
   sizeBytes?: number;
 };
 
+/**
+ * Credentials for a private OCI pull. Server-internal — NEVER serialized to
+ * clients or written to logs. `registry` is the host (optionally host/path) the
+ * credential authorizes; it both extends the pull allowlist and keys the auth
+ * file entry. Resolved from a stored RegistryCredentialRecord by the caller.
+ */
+export interface PullCredentials {
+  registry: string;
+  username: string;
+  password: string;
+}
+
+export type EnsurePulledOpts = {
+  appId: string;
+  version: string;
+  ociRef: string;
+  /**
+   * Catalog source id (default `hola`). Namespaces the bundle cache so two
+   * sources publishing the same appId/version can't alias each other. The `hola`
+   * default keeps the on-disk path byte-identical to the single-source layout.
+   */
+  source?: string;
+  /** When set, authenticate the `oras pull` for a private registry. */
+  credentials?: PullCredentials;
+};
+
 export interface BundleService {
-  ensurePulled(opts: { appId: string; version: string; ociRef: string }): Promise<BundleInfo>;
+  ensurePulled(opts: EnsurePulledOpts): Promise<BundleInfo>;
   validateLayout(bundlePath: string): Promise<{ ok: boolean; errors: string[]; warnings: string[] }>;
   verifySignature?(bundlePath: string): Promise<{ verified: boolean; error?: string }>;
   cleanup?(): Promise<{ evicted: number; freedBytes: number }>;
   healthCheck(): Promise<ServiceHealth>;
 }
 
+/** Command runner seam so tests can stub the `oras`/`cosign` invocations. */
+export type CommandRunner = (cmd: string) => Promise<{ stdout: string; stderr: string }>;
+
 export class RealBundleService implements BundleService, HealthCheckable {
   private logger = getLogger().child({ service: 'RealBundleService' });
   private baseCache: string;
   private cacheManager: BundleCacheManager;
+  private run: CommandRunner;
 
-  constructor(baseCache = join(getHolaDataDir(), 'cache', 'bundles')) {
+  constructor(baseCache = join(getHolaDataDir(), 'cache', 'bundles'), run: CommandRunner = execAsync) {
     this.baseCache = baseCache;
     this.cacheManager = new BundleCacheManager(baseCache);
+    this.run = run;
   }
 
   async healthCheck(): Promise<ServiceHealth> {
@@ -43,19 +75,28 @@ export class RealBundleService implements BundleService, HealthCheckable {
     }
   }
 
-  async ensurePulled(opts: { appId: string; version: string; ociRef: string }): Promise<BundleInfo> {
-    this.enforceAllowlist(opts.ociRef);
+  async ensurePulled(opts: EnsurePulledOpts): Promise<BundleInfo> {
+    // A registered credential's registry extends the allowlist: registering it is
+    // the operator's explicit consent to pull from that registry. Anonymous pulls
+    // to a non-baseline registry stay blocked.
+    this.enforceAllowlist(opts.ociRef, opts.credentials ? [opts.credentials.registry] : []);
+
+    // Source-qualify the cache key so two sources can't alias the same
+    // appId/version. `hola` (the built-in source) keeps the bare appId key, so the
+    // on-disk path is byte-identical to the pre-multi-catalog layout (no re-pull).
+    const cacheKey = bundleCacheKey(opts.source, opts.appId);
+
     // Protect this bundle from eviction while we pull and return it: cleanup()
     // runs inside ensurePulled, so a concurrent pull could otherwise rmSync a
     // bundle dir that's mid-pull/in-use. (The cache's "never evict in-use" guard
     // was previously dead because nothing ever marked a bundle in-use.)
-    this.cacheManager.markInUse(opts.appId, opts.version);
+    this.cacheManager.markInUse(cacheKey, opts.version);
     try {
-      const dest = join(this.baseCache, sanitize(opts.appId), sanitize(opts.version));
+      const dest = join(this.baseCache, sanitize(cacheKey), sanitize(opts.version));
       mkdirSync(dest, { recursive: true });
 
       // Touch cache entry for LRU tracking
-      this.cacheManager.touch(opts.appId, opts.version);
+      this.cacheManager.touch(cacheKey, opts.version);
 
       // If already has compose.yaml and manifest.json, assume cached
       if (existsSync(join(dest, 'compose.yaml')) && existsSync(join(dest, 'manifest.json'))) {
@@ -70,15 +111,27 @@ export class RealBundleService implements BundleService, HealthCheckable {
       // Run cache cleanup before pulling new content
       await this.cleanup();
 
+      // For a private pull, materialize a scoped docker-config auth file and pass
+      // it via `--registry-config` rather than putting the token on argv (which
+      // would leak via `ps`) or in ~/.docker/config.json. Removed in `finally`.
+      let authDir: string | undefined;
+      const flags: string[] = ['--include-subject'];
+      if (opts.credentials) {
+        authDir = this.writeRegistryAuth(opts.credentials);
+        flags.push(`--registry-config ${shellEscape(join(authDir, 'config.json'))}`);
+      }
+
       // oras pull to a temp dir then move is ideal; for simplicity, pull into dest
-      const pullCmd = `oras pull --include-subject ${shellEscape(opts.ociRef)} -o ${shellEscape(dest)}`;
-      this.logger.info('Pulling OCI bundle via ORAS', { ref: opts.ociRef, dest });
+      const pullCmd = `oras pull ${flags.join(' ')} ${shellEscape(opts.ociRef)} -o ${shellEscape(dest)}`;
+      this.logger.info('Pulling OCI bundle via ORAS', { ref: opts.ociRef, dest, authenticated: Boolean(opts.credentials) });
       try {
-        const { stdout, stderr } = await execAsync(pullCmd);
+        const { stdout, stderr } = await this.run(pullCmd);
         this.logger.debug('ORAS pull output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
       } catch (error) {
         this.logger.error('ORAS pull failed', error as Error, { ref: opts.ociRef });
         throw new Error('ORAS_PULL_FAILED', { cause: error });
+      } finally {
+        if (authDir) { try { rmSync(authDir, { recursive: true, force: true }); } catch { /* best effort */ } }
       }
 
       // Optional signature verify-if-present
@@ -95,8 +148,22 @@ export class RealBundleService implements BundleService, HealthCheckable {
 
       return { localPath: dest, ...this.safeStat(dest) };
     } finally {
-      this.cacheManager.markNotInUse(opts.appId, opts.version);
+      this.cacheManager.markNotInUse(cacheKey, opts.version);
     }
+  }
+
+  /**
+   * Write a scoped docker-config auth file (0o600, in a private temp dir) for a
+   * single registry so `oras pull --registry-config` can authenticate without
+   * touching ~/.docker/config.json. Caller removes the returned dir when done.
+   */
+  private writeRegistryAuth(creds: PullCredentials): string {
+    const dir = mkdtempSync(join(tmpdir(), 'hola-oras-'));
+    const host = registryHost(creds.registry);
+    const auth = Buffer.from(`${creds.username}:${creds.password}`, 'utf8').toString('base64');
+    const config = { auths: { [host]: { auth } } };
+    writeFileSync(join(dir, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+    return dir;
   }
 
   async validateLayout(bundlePath: string): Promise<{ ok: boolean; errors: string[]; warnings: string[] }> {
@@ -117,7 +184,7 @@ export class RealBundleService implements BundleService, HealthCheckable {
   async verifySignature(bundlePath: string): Promise<{ verified: boolean; error?: string }> {
     try {
       // Check if cosign is available
-      await execAsync('cosign version');
+      await this.run('cosign version');
       
       // For now, just return verified=true since we don't have a specific signature to verify
       // In a real implementation, this would verify against a known public key
@@ -147,13 +214,17 @@ export class RealBundleService implements BundleService, HealthCheckable {
 
   // Helpers
   private async getOrasVersion(): Promise<string> {
-    const { stdout } = await execAsync('oras version');
+    const { stdout } = await this.run('oras version');
     const m = stdout.match(/oras\s+([^\s]+)/i);
     return m ? m[1] : stdout.trim();
   }
 
-  private enforceAllowlist(ref: string): void {
-    const allowed = catalogConfig.registryAllowlist;
+  private enforceAllowlist(ref: string, extraAllowed: string[] = []): void {
+    // Base allowlist (e.g. ghcr.io/try-hola/*) plus any registries the operator
+    // authorized by registering a credential/source for them. Match by
+    // glob/host-prefix (never substring) so `ghcr.io.evil.com` can't slip past a
+    // `ghcr.io` entry.
+    const allowed = [...catalogConfig.registryAllowlist, ...extraAllowed];
     const ok = allowed.some(pattern => matchesAllowlist(pattern, ref));
     if (!ok) {
       throw new Error(`REF_NOT_ALLOWED: ${ref}`);
@@ -175,9 +246,9 @@ export class MockBundleService implements BundleService {
 
   constructor(private basePath = join(getHolaDataDir(), 'mock-bundles')) {}
 
-  async ensurePulled(opts: { appId: string; version: string; ociRef: string }): Promise<BundleInfo> {
-    this.logger.debug('Mock ensurePulled', opts);
-    const p = join(this.basePath, sanitize(opts.appId), sanitize(opts.version));
+  async ensurePulled(opts: EnsurePulledOpts): Promise<BundleInfo> {
+    this.logger.debug('Mock ensurePulled', { appId: opts.appId, version: opts.version, source: opts.source });
+    const p = join(this.basePath, sanitize(bundleCacheKey(opts.source, opts.appId)), sanitize(opts.version));
     return { localPath: p };
   }
   async validateLayout(bundlePath: string) {
@@ -191,6 +262,22 @@ export class MockBundleService implements BundleService {
 
 // Utilities
 function sanitize(s: string): string { return s.replace(/[^a-zA-Z0-9._-]/g, '_'); }
+
+/**
+ * Cache directory key for a bundle. The built-in `hola` source (and an
+ * unspecified source) keeps the bare appId so the on-disk cache layout is
+ * unchanged from the single-source era; every other source is prefixed so it
+ * can't collide with a hola app (or another source) publishing the same appId.
+ */
+export function bundleCacheKey(source: string | undefined, appId: string): string {
+  const s = (source || 'hola').trim();
+  return s === 'hola' ? appId : `${sanitize(s)}__${appId}`;
+}
+
+/** The registry host (drop any path/tag) used as the docker-config auths key. */
+function registryHost(registry: string): string {
+  return registry.trim().split('/')[0];
+}
 
 function matchesAllowlist(pattern: string, ref: string): boolean {
   // Convert simple glob like ghcr.io/org/* to regex start match

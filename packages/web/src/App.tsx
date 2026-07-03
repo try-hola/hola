@@ -38,6 +38,8 @@ function App() {
                         <Route path="/dashboard" element={<Dashboard />} />
                         <Route path="/catalog" element={<Catalog />} />
                         <Route path="/catalog/:appId/install" element={<InstallWizard />} />
+                        {/* Install-by-ref: same wizard, draft seeded from an OCI ref (?ref=&cred=) */}
+                        <Route path="/install/ref" element={<InstallWizard />} />
                         <Route path="/deployments" element={<Deployments />} />
                         <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
                         <Route path="/backups" element={<Backups />} />

@@ -15,6 +15,9 @@ import {
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
   GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  // Registry credentials + install-by-ref (multi-catalog Slice 1)
+  RegistryCredentialRecord, AddRegistryCredentialRequest, ListRegistryCredentialsResponse,
+  InstallFromRefRequest, InstallFromRefResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
   // System types
@@ -97,6 +100,19 @@ export class HolaSdk {
     // TTL) so newly-published app versions surface as available updates right away.
     refresh: (force = true) => this.post<{ success: boolean; timestamp: string }>(`${API.catalog.refresh}${buildQuery({ force })}`),
   };
+
+  // Registry credentials for private OCI pulls. The token is write-only: `add`
+  // sends it, `list` never returns it. Instance-level, admin-gated server-side.
+  registryCredentials = {
+    list: () => this.get<ListRegistryCredentialsResponse>(API.registryCredentials.base),
+    add: (data: AddRegistryCredentialRequest) => this.post<RegistryCredentialRecord>(API.registryCredentials.base, data),
+    remove: (id: string) => this.delete<{ success: boolean }>(API.registryCredentials.byId(id)),
+  };
+
+  // Install a package straight from an OCI reference (the escape hatch for
+  // one-offs). Returns the created draft id; finalize + deploy it like any draft.
+  installFromRef = (data: InstallFromRefRequest) =>
+    this.post<InstallFromRefResponse>(API.installFromRef, data);
 
   drafts = {
     create: (data: CreateDraftRequest) => this.post<CreateDraftResponse>(API.drafts.create, data),

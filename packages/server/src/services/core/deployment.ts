@@ -47,6 +47,8 @@ import type { JobService, JobContext } from './jobs';
 import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
+import type { RegistryCredentialService } from './registry-credentials';
+import type { PullCredentials } from './bundles';
 import type { CatalogService } from './catalog';
 import type { EventBus } from './event-bus';
 import type { RoutingService } from './routing';
@@ -956,6 +958,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Optional global event bus; when wired, status changes emit `deployment_update`
     // for the dashboard-wide `/api/events` stream (#291).
     private eventBus?: EventBus,
+    // Optional; resolves a release's credentialRef → registry secret so a private
+    // app's runtime image can be pulled at deploy time. Absent ⇒ anonymous pulls.
+    private registryCredentials?: RegistryCredentialService,
   ) {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
@@ -1197,6 +1202,33 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     } catch {
       return {};
     }
+  }
+
+  /**
+   * Resolve the registry credential (if any) recorded on the active release, so
+   * the runtime image can be pulled from a private registry. Returns undefined
+   * when the app has no credentialRef (the common anonymous case). A credentialRef
+   * that no longer resolves (credential deleted after install) throws with a clear
+   * message rather than surfacing a raw docker auth error later.
+   */
+  private async resolveRegistryAuth(deployment: EnhancedDeploymentDetail): Promise<PullCredentials[] | undefined> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return undefined;
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
+    let credentialRef: string | undefined;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      credentialRef = manifest.credentialRef;
+    } catch {
+      return undefined;
+    }
+    if (!credentialRef) return undefined;
+    const creds = await this.registryCredentials?.resolve(credentialRef);
+    if (!creds) {
+      throw new Error(`Registry credential not found: ${credentialRef}. Re-add it in Settings → Registry Credentials.`);
+    }
+    return [creds];
   }
 
   /** Public accessor for the active release's carry-forward config — its app env
@@ -1696,7 +1728,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // freshly materialized compose, so changed env/labels (e.g. updated OIDC
         // wiring) would silently never reach the app. `up -d` recreates only the
         // services whose config changed, using the already-present images.
-        const res = await this.dockerService.composeUp(composeDir, projectName);
+        const registryAuth = await this.resolveRegistryAuth(deployment);
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
@@ -1726,8 +1759,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
         // Pull first (generous timeout) so `up` isn't gated on download time —
         // large stacks like Postiz used to be SIGKILLed mid-pull by up's 2-min cap.
+        // Resolve any private-registry credential once for both pull and up.
+        const registryAuth = await this.resolveRegistryAuth(deployment);
         await logBoth('info', 'Pulling images (first install can take several minutes)…');
-        const pull = await this.dockerService.composePull(composeDir, projectName);
+        const pull = await this.dockerService.composePull(composeDir, projectName, registryAuth);
         if (!pull.success) throw new Error(`Image pull failed: ${pull.output}`);
         await ctx.setProgress(60);
 
@@ -1735,7 +1770,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // irreversible step) if the job was cancelled during the long pull.
         if (ctx.isCancelled()) throw new JobCancelledError();
 
-        const res = await this.dockerService.composeUp(composeDir, projectName);
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);

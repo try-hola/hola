@@ -21,6 +21,17 @@ export const API = {
       `/api/catalog/apps/${appId}/versions/${encodeURIComponent(version)}`
   },
 
+  // Registry credentials for private OCI pulls (GHCR PAT etc.). Instance-level,
+  // admin-gated. Secrets are stored server-side and never returned to clients.
+  registryCredentials: {
+    base: '/api/registry-credentials',
+    byId: (id: string) => `/api/registry-credentials/${id}`,
+  },
+
+  // Install a package directly by OCI reference (the escape hatch for one-offs,
+  // and the shared primitive every catalog install builds on).
+  installFromRef: '/api/install-from-ref',
+
   drafts: {
     create: '/api/drafts',
     byId: (draftId: string) => `/api/drafts/${draftId}`,
@@ -392,6 +403,55 @@ export type CatalogApp = {
 export type GetCatalogAppsRequest = PageRequest & {
   query?: string;
   category?: string;
+  // Restrict the listing to a single catalog source id (Slice 2). Omitted =>
+  // merge across all enabled sources. The built-in public catalog is `hola`.
+  source?: string;
+};
+
+// ------------------------------------------------------
+// Registry credentials (private OCI pulls)
+// ------------------------------------------------------
+
+/**
+ * A stored registry credential, as returned to clients. The password/token is
+ * NEVER serialized — only the metadata needed to pick a credential is exposed.
+ * `registry` is the host (optionally host/path) the credential authorizes, e.g.
+ * `ghcr.io` or `ghcr.io/acme`.
+ */
+export type RegistryCredentialRecord = {
+  id: string;
+  registry: string;
+  username: string;
+};
+
+export type AddRegistryCredentialRequest = {
+  registry: string;
+  username: string;
+  /** The secret token (e.g. a GHCR PAT with read:packages). Write-only. */
+  password: string;
+  /** Optional stable id; the server generates one when omitted. */
+  id?: string;
+};
+
+export type ListRegistryCredentialsResponse = {
+  items: RegistryCredentialRecord[];
+};
+
+/**
+ * Install a package straight from an OCI reference (e.g.
+ * `ghcr.io/acme/hola-cms:0.1.0`), bypassing the catalog index. `credentialRef`
+ * names a stored RegistryCredentialRecord used for both the `oras pull` and the
+ * runtime image pull when the ref points at a private registry.
+ */
+export type InstallFromRefRequest = {
+  ociRef: string;
+  credentialRef?: string;
+  name?: string;
+  version?: string;
+};
+
+export type InstallFromRefResponse = {
+  draftId: string;
 };
 
 export type GetCatalogAppsResponse = PageResponse<CatalogApp>;
@@ -580,6 +640,14 @@ export type Draft = {
   draftId: string;
   appId: string;
   version?: string;
+  // Catalog source id this draft's app came from (defaults to `hola`). Carried
+  // through finalize so the deployment record knows which source to check for
+  // updates and, with `credentialRef`, how to authenticate the runtime image pull.
+  source?: string;
+  // Stored registry credential id used to pull this app's bundle + runtime image
+  // from a private registry. Seeded from the install request; carried through
+  // finalize (read-only; not user-editable). Never contains the secret itself.
+  credentialRef?: string;
   // App icon (emoji or image URL) and product display name seeded from the
   // catalog and carried through finalize, so the deployment can persist both
   // without a live catalog lookup at render time.
@@ -610,7 +678,20 @@ export type Draft = {
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 
-export type CreateDraftRequest = { appId: string; version?: string };
+export type CreateDraftRequest = {
+  // Catalog install path: the app id (bare, e.g. `uptime-kuma`). Optional only
+  // because the install-by-ref path supplies `ociRef` instead.
+  appId?: string;
+  version?: string;
+  // Catalog source id the app comes from (Slice 2). Defaults to `hola` (the
+  // built-in public catalog) so existing bare-appId callers are unaffected.
+  source?: string;
+  // Install-by-ref path (Slice 1): a full OCI package reference. When present,
+  // the draft is seeded directly from the pulled bundle rather than the index.
+  ociRef?: string;
+  // Stored registry credential id used to pull `ociRef` / the source's packages.
+  credentialRef?: string;
+};
 export type CreateDraftResponse = {
   draftId: string;
   app: { id: string; name: string; icon: string };

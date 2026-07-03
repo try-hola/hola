@@ -14,13 +14,119 @@ import {
 } from 'lucide-react';
 import type {
   SystemEnvVar,
-  GetBackupSettingsResponse
+  GetBackupSettingsResponse,
+  RegistryCredentialRecord
 } from '@hola/shared';
 import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
 import { useSystemStatusApi } from '../hooks/useSettingsApi';
 import { useTheme, type ThemePref } from '../hooks/useTheme';
 import { useAuth } from '../hooks/useAuth';
+import { api } from '../utils/api-hybrid';
+
+/**
+ * Manage registry credentials for private OCI pulls (a GHCR PAT etc.). The token
+ * is write-only: it's sent on add and never returned by the list. Used for both
+ * `oras pull` of a package and the runtime image pull at deploy time; referenced
+ * by id from a catalog source or `install … --registry-cred`.
+ */
+const RegistryCredentialsCard: React.FC<{ inputClass: string; labelClass: string }> = ({ inputClass, labelClass }) => {
+  const [items, setItems] = useState<RegistryCredentialRecord[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [id, setId] = useState('');
+  const [registry, setRegistry] = useState('');
+  const [username, setUsername] = useState('');
+  const [token, setToken] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = React.useCallback(() => {
+    api.registryCredentials.list().then(r => setItems(r.items)).catch(() => setItems([]));
+  }, []);
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const add = async () => {
+    if (!registry.trim() || !username.trim() || !token) { setErr('Registry, username and token are required.'); return; }
+    setBusy(true); setErr(null);
+    try {
+      await api.registryCredentials.add({ registry: registry.trim(), username: username.trim(), password: token, id: id.trim() || undefined });
+      setId(''); setRegistry(''); setUsername(''); setToken(''); setAdding(false);
+      refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to add credential');
+    } finally { setBusy(false); }
+  };
+
+  const remove = async (credId: string) => {
+    setBusy(true); setErr(null);
+    try { await api.registryCredentials.remove(credId); refresh(); }
+    catch (e) { setErr(e instanceof Error ? e.message : 'Failed to remove credential'); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-surface-1 border border-border rounded-card p-5">
+      <div className="font-semibold text-[15px] mb-1">Registry Credentials</div>
+      <p className="text-[13px] text-text-muted mb-3.5">
+        Tokens for pulling private catalog packages and their images (e.g. a GHCR PAT with <code>read:packages</code>). Stored server-side and never shown again.
+      </p>
+
+      {err && (
+        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-3 text-[13px] mb-3 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 flex-none" />
+          <span>{err}</span>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div className="flex flex-col gap-2 mb-3">
+          {items.map(c => (
+            <div key={c.id} className="flex items-center justify-between bg-surface-0 border border-border rounded-lg px-3 py-2">
+              <div className="text-[13px]">
+                <span className="font-medium text-text-strong">{c.id}</span>
+                <span className="text-text-muted"> — {c.registry} ({c.username})</span>
+              </div>
+              <button onClick={() => remove(c.id)} disabled={busy} className="text-text-muted hover:text-danger transition-colors disabled:opacity-50" aria-label={`Remove ${c.id}`}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {adding ? (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <div className={labelClass}>Registry</div>
+            <input value={registry} onChange={(e) => setRegistry(e.target.value)} placeholder="ghcr.io" className={inputClass} />
+          </div>
+          <div>
+            <div className={labelClass}>Credential id (optional)</div>
+            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="acme" className={inputClass} />
+          </div>
+          <div>
+            <div className={labelClass}>Username</div>
+            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="acme-bot" className={inputClass} />
+          </div>
+          <div>
+            <div className={labelClass}>Token</div>
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="ghp_…" className={inputClass} />
+          </div>
+          <div className="col-span-2 flex items-center gap-2">
+            <button onClick={add} disabled={busy} className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">
+              <Save className="w-4 h-4" /> Save credential
+            </button>
+            <button onClick={() => { setAdding(false); setErr(null); }} className="px-4 py-2 rounded-lg text-[13px] text-text-muted hover:text-text-strong transition-colors">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} className="flex items-center gap-2 text-[13px] font-medium text-primary hover:opacity-80 transition-opacity">
+          <Plus className="w-4 h-4" /> Add credential
+        </button>
+      )}
+    </div>
+  );
+};
 
 export const Settings: React.FC = () => {
   // API hooks for data management
@@ -547,6 +653,9 @@ export const Settings: React.FC = () => {
             </div>
           </div>
         ) : null}
+
+        {/* Registry credentials for private OCI pulls (multi-catalog) */}
+        <RegistryCredentialsCard inputClass={inputClass} labelClass={labelClass} />
 
         {/* Identity management notice */}
         <div className="bg-surface-1 border border-border rounded-card p-5 flex items-start gap-3">

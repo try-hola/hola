@@ -46,6 +46,10 @@ import {
   type RollbackResponse,
   type PromoteDeploymentRequest,
   type PromoteDeploymentResponse,
+  type AddRegistryCredentialRequest,
+  type ListRegistryCredentialsResponse,
+  type InstallFromRefRequest,
+  type InstallFromRefResponse,
 } from '@hola/shared';
 
 // Error interface for proper typing
@@ -487,6 +491,72 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // ===== REGISTRY CREDENTIAL ROUTES =====
+  // Instance-level, admin-gated (behind the same auth middleware as every /api
+  // route). Secrets are write-only: the token is never returned to clients.
+  if (pathname === API.registryCredentials.base && req.method === 'GET') {
+    try {
+      const items = await getServices().registryCredentials.list();
+      return json({ items } satisfies ListRegistryCredentialsResponse);
+    } catch (error) {
+      logger.error('Failed to list registry credentials', error as Error);
+      return json({ error: { code: 'CREDENTIAL_LIST_FAILED', message: 'Failed to list registry credentials' } }, { status: 500 });
+    }
+  }
+
+  if (pathname === API.registryCredentials.base && req.method === 'POST') {
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<AddRegistryCredentialRequest>;
+      if (!body.registry || !body.username || !body.password) {
+        return json({ error: { code: 'MISSING_FIELDS', message: 'registry, username and password are required' } }, { status: 400 });
+      }
+      const record = await getServices().registryCredentials.add(body as AddRegistryCredentialRequest);
+      return json(record, { status: 201 });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'CREDENTIAL_ID_EXISTS' ? 409 : 500;
+      logger.warn('Failed to add registry credential', { error: message });
+      return json({ error: { code: 'CREDENTIAL_ADD_FAILED', message } }, { status });
+    }
+  }
+
+  const credMatch = pathname.match(/^\/api\/registry-credentials\/([^/]+)$/);
+  if (credMatch && req.method === 'DELETE') {
+    const id = decodeURIComponent(credMatch[1]);
+    try {
+      await getServices().registryCredentials.remove(id);
+      return json({ success: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'CREDENTIAL_NOT_FOUND') return notFound();
+      logger.error('Failed to remove registry credential', error as Error);
+      return json({ error: { code: 'CREDENTIAL_REMOVE_FAILED', message: 'Failed to remove registry credential' } }, { status: 500 });
+    }
+  }
+
+  // ===== INSTALL FROM OCI REFERENCE =====
+  // The escape hatch for one-off private/first-party packages. Builds a by-ref
+  // draft (pull → validate → seed) via the same primitive catalog installs use;
+  // the caller then finalizes + deploys the returned draft like any other.
+  if (pathname === API.installFromRef && req.method === 'POST') {
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<InstallFromRefRequest>;
+      if (!body.ociRef) {
+        return json({ error: { code: 'MISSING_OCI_REF', message: 'ociRef is required' } }, { status: 400 });
+      }
+      const payload = await getServices().drafts.createDraft({
+        ociRef: body.ociRef,
+        credentialRef: body.credentialRef,
+        version: body.version,
+      });
+      return json({ draftId: payload.draftId } satisfies InstallFromRefResponse);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn('Install-from-ref failed', { error: message });
+      return json({ error: { code: 'INSTALL_FROM_REF_FAILED', message } }, { status: 400 });
+    }
+  }
+
   // ===== DRAFT ROUTES =====
   // Draft creation
   if (pathname === API.drafts.create && req.method === 'POST') {
@@ -502,8 +572,8 @@ async function route(url: URL, req: Request): Promise<Response> {
         version: body.version 
       });
 
-      if (!body.appId) {
-        return json({ error: { code: 'MISSING_APP_ID', message: 'appId is required' } }, { status: 400 });
+      if (!body.appId && !body.ociRef) {
+        return json({ error: { code: 'MISSING_APP_ID', message: 'appId or ociRef is required' } }, { status: 400 });
       }
 
       const services = getServices();

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ChevronRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2 } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
 import type {
@@ -25,7 +25,14 @@ const steps = [
 
 export const InstallWizard: React.FC = () => {
   const { appId } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+
+  // Install-by-ref mode: `/install/ref?ref=<oci>&cred=<credentialId>`. The wizard
+  // is otherwise identical — the draft is seeded from the pulled bundle instead of
+  // a catalog index entry.
+  const ociRef = searchParams.get('ref') || undefined;
+  const credentialRef = searchParams.get('cred') || undefined;
   const [currentStep, setCurrentStep] = useState(0);
   
   // Draft API hooks
@@ -69,7 +76,7 @@ export const InstallWizard: React.FC = () => {
 
   // Real app metadata, resolved from the catalog when the draft is created.
   // Falls back to the route's appId for the brief window before the draft loads.
-  const app = createDraftHook.data?.app ?? { id: appId ?? '', name: appId ?? 'app', icon: '📦' };
+  const app = createDraftHook.data?.app ?? { id: appId ?? ociRef ?? '', name: appId ?? ociRef ?? 'app', icon: '📦' };
   // The catalog version this draft pins (defaults to 'latest' when unversioned).
   const version = draftApi.data?.version ?? 'latest';
 
@@ -94,12 +101,14 @@ export const InstallWizard: React.FC = () => {
   // `data` is set races dozens of duplicate createDraft calls).
   const creatingDraftRef = React.useRef(false);
   useEffect(() => {
-    if (!appId || createDraftHook.data || creatingDraftRef.current) return;
+    if ((!appId && !ociRef) || createDraftHook.data || creatingDraftRef.current) return;
     creatingDraftRef.current = true;
 
     const initializeDraft = async () => {
       try {
-        const result = await createDraftHook.createDraft({ appId });
+        const result = ociRef
+          ? await createDraftHook.createDraft({ ociRef, credentialRef })
+          : await createDraftHook.createDraft({ appId });
 
         // Update state with draft data. Float required-but-empty secrets to the
         // top so the operator sees what they must fill first (env order doesn't
@@ -123,7 +132,7 @@ export const InstallWizard: React.FC = () => {
     };
 
     initializeDraft();
-  }, [appId, createDraftHook]); // Include the whole hook object
+  }, [appId, ociRef, credentialRef, createDraftHook]); // Include the whole hook object
 
   // Update draft data helper function
   const updateDraftData = React.useCallback(async (updates: PatchDraftRequest) => {
