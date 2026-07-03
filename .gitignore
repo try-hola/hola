@@ -2,6 +2,10 @@
 node_modules/
 bun.lockb
 
+# Local, machine-specific tooling artifacts (never commit)
+.deacon/
+.claude/settings.local.json
+
 # Build outputs
 dist/
 build/
