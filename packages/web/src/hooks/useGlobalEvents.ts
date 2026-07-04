@@ -33,13 +33,15 @@ export function useGlobalEvents(): void {
         });
       }
       // A deployment status change usually rides alongside a lifecycle job, so
-      // refresh both the deployments list and the job tracker.
+      // refresh both the deployments list and the job tracker (`signalLive`
+      // itself drops each resource's stale `globalCache` entries first, so a
+      // page that isn't currently mounted — e.g. Apps while the operator is
+      // on Deployments — won't re-serve stale data on its next mount either).
       signalLive('deployments');
       signalLive('jobs');
     } else if (event.type === 'deployment_deleted') {
-      // The record is gone — drop any cached detail page rather than patch it,
-      // and tell the Apps/Deployments lists to refetch so the tile disappears
-      // live instead of only after a hard refresh.
+      // The record is gone — drop its cached detail page rather than patch
+      // it, then tell the deployments list to refetch live.
       globalCache.delete(`deployment-detail-${event.data.deploymentId}`);
       signalLive('deployments');
     }
