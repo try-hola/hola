@@ -18,6 +18,7 @@ import type {
 import { useCatalogAppsApi, useCatalogAppVersionsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { api } from '../utils/api-hybrid';
+import { globalCache } from '../utils/cache';
 
 const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database', 'Infrastructure', 'Networking'];
 
@@ -142,6 +143,9 @@ const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose })
             <div>
               <h2 className="text-xl font-semibold">{app.name}</h2>
               <span className="text-sm text-text-muted bg-surface-2 px-2 py-1 rounded">{app.category}</span>
+              {app.version && (
+                <span className="ml-2 text-sm font-mono text-text-muted bg-surface-2 px-2 py-1 rounded">v{app.version}</span>
+              )}
               {app.source && app.source !== 'hola' && (
                 <span className="ml-2 text-xs text-warning bg-warning/10 px-2 py-1 rounded">{app.source} · {app.trust}</span>
               )}
@@ -267,6 +271,8 @@ export const Catalog: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [appsPerPage] = useState(12);
   const [showRefModal, setShowRefModal] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<{ text: string; failed: boolean } | null>(null);
 
   // Build API request parameters
   const apiParams = useMemo(() => {
@@ -282,8 +288,32 @@ export const Catalog: React.FC = () => {
   }, [searchTerm, selectedCategory, currentPage, appsPerPage]);
 
   // Use API hook for catalog apps
-  const { data: appsData, loading, error } = useCatalogAppsApi(apiParams);
-  
+  const { data: appsData, loading, error, refetch } = useCatalogAppsApi(apiParams);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      const result = await api.catalog.refresh(true);
+      // The hook's own 30s cache is separate from the SDK-adapter cache the
+      // server call already invalidated — clear it too, or refetch() below
+      // would just re-serve the stale in-memory entry.
+      globalCache.deleteByPattern(/^catalog-apps-/);
+      await refetch();
+      const failed = result.sources.filter((s) => !s.ok);
+      setRefreshMessage(
+        failed.length > 0
+          ? { text: `${failed.length} of ${result.sources.length} catalog source(s) failed to refresh: ${failed.map((s) => s.name).join(', ')}`, failed: true }
+          : { text: `Refreshed ${result.sources.length} catalog source(s).`, failed: false }
+      );
+    } catch (e) {
+      setRefreshMessage({ text: e instanceof Error ? e.message : 'Catalog refresh failed', failed: true });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+
   // Extract data from API response
   const apps = useMemo(() => appsData?.items || [], [appsData?.items]);
   const totalPages = useMemo(() => {
@@ -351,6 +381,15 @@ export const Catalog: React.FC = () => {
         </div>
         <div className="flex-1" />
         <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          title="Re-pull every configured catalog source"
+          className="h-[38px] px-3.5 flex items-center gap-2 bg-surface-1 border border-border rounded-[9px] text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+        <button
           onClick={() => setShowRefModal(true)}
           className="h-[38px] px-3.5 flex items-center gap-2 bg-surface-1 border border-border rounded-[9px] text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors"
         >
@@ -370,6 +409,20 @@ export const Catalog: React.FC = () => {
       </div>
 
       <InstallFromRefModal isOpen={showRefModal} onClose={() => setShowRefModal(false)} />
+
+      {/* Refresh result */}
+      {refreshMessage && (
+        <div
+          className={`mb-4 rounded-card p-3 text-[13px] flex items-center gap-2 ${
+            refreshMessage.failed
+              ? 'bg-warning-weak border border-warning/20 text-warning'
+              : 'bg-success-weak border border-success/20 text-success'
+          }`}
+        >
+          <AlertCircle className="w-4 h-4 flex-none" />
+          <span>{refreshMessage.text}</span>
+        </div>
+      )}
 
       {/* Category chips */}
       <div className="flex gap-2 flex-wrap mb-5">
@@ -441,6 +494,7 @@ export const Catalog: React.FC = () => {
                       </div>
                       <div className="text-xs text-text-faint mt-px">
                         {app.category}
+                        {app.version && <span className="font-mono ml-1.5">· v{app.version}</span>}
                         {custom && <span className="ml-1.5 text-warning">· {app.source} ({app.trust})</span>}
                       </div>
                     </div>

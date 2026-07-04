@@ -53,6 +53,7 @@ import {
   type InstallFromRefResponse,
   type AddCatalogSourceRequest,
   type ListCatalogSourcesResponse,
+  type RefreshCatalogResponse,
 } from '@hola/shared';
 
 // Error interface for proper typing
@@ -490,8 +491,9 @@ async function route(url: URL, req: Request): Promise<Response> {
       const force = searchParams.get('force') === 'true';
       const services = getServices();
       const catalog = services.catalog;
-      await catalog.refresh(force);
-      return json({ success: true, timestamp: new Date().toISOString() });
+      const sources = await catalog.refresh(force);
+      const response: RefreshCatalogResponse = { success: true, timestamp: new Date().toISOString(), sources };
+      return json(response);
     } catch (error) {
       logger.warn('Catalog refresh failed', { error: error instanceof Error ? error.message : String(error) });
       return json({ error: { code: 'REFRESH_FAILED', message: 'Catalog refresh failed' } }, { status: 500 });

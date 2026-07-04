@@ -36,11 +36,17 @@ export function useGlobalEvents(): void {
       // refresh both the deployments list and the job tracker.
       signalLive('deployments');
       signalLive('jobs');
+    } else if (event.type === 'deployment_deleted') {
+      // The record is gone — drop any cached detail page rather than patch it,
+      // and tell the Apps/Deployments lists to refetch so the tile disappears
+      // live instead of only after a hard refresh.
+      globalCache.delete(`deployment-detail-${event.data.deploymentId}`);
+      signalLive('deployments');
     }
   }, []);
 
   const sse = useSSE('/api/events', onEvent, {
-    eventTypes: ['job_update', 'deployment_update'],
+    eventTypes: ['job_update', 'deployment_update', 'deployment_deleted'],
     reconnect: true,
     reconnectDelay: 2000,
     maxReconnectDelay: 15000,

@@ -2036,6 +2036,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await this.routingService.deactivateRoute(deploymentId);
     // The removed app drops out of the registry feed for remaining consumers.
     await this.reconcileAppRegistry();
+    // Deletion has no further `deployment_update` (the record is gone), so it
+    // needs its own event or the Apps/Deployments lists never learn about it
+    // short of a hard refresh.
+    this.eventBus?.emit({ type: 'deployment_deleted', data: { deploymentId } });
   }
 
   /**

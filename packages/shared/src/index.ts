@@ -414,6 +414,10 @@ export type CatalogApp = {
   // public catalog) and its trust level, so the UI can badge custom sources.
   source: string;
   trust: CatalogSourceTrust;
+  // Newest available version (resolved the same way "latest" resolves at
+  // install time), so the browse listing can show it without a drill-down
+  // request. Omitted if the source has no versions at all.
+  version?: string;
 };
 
 export type GetCatalogAppsRequest = PageRequest & {
@@ -501,6 +505,17 @@ export type AddCatalogSourceRequest = {
 
 export type ListCatalogSourcesResponse = {
   items: CatalogSourceRecord[];
+};
+
+/**
+ * Result of re-pulling every enabled catalog source. `sources` reports each
+ * source's outcome individually so one bad source (unreachable URL, bad JSON)
+ * doesn't silently mask the others succeeding.
+ */
+export type RefreshCatalogResponse = {
+  success: boolean;
+  timestamp: string;
+  sources: Array<{ id: string; name: string; ok: boolean; error?: string }>;
 };
 
 export type GetCatalogAppsResponse = PageResponse<CatalogApp>;
@@ -1004,7 +1019,12 @@ export type SSEDeploymentUpdateEvent = {
   };
 };
 
-export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent;
+export type SSEDeploymentDeletedEvent = {
+  type: 'deployment_deleted';
+  data: { deploymentId: string };
+};
+
+export type SSEEvent = SSELogEvent | SSEJobUpdateEvent | SSESystemUpdateEvent | SSEDeploymentUpdateEvent | SSEDeploymentDeletedEvent;
 
 // Connection status for SSE
 export type SSEConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
