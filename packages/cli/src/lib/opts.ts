@@ -11,12 +11,19 @@ export const camelKeys = <T extends Record<string, unknown>>(opts: T): T => {
 };
 
 /**
- * camelKeys + normalize the `--no-stream` flag. sade/mri routes `--no-stream` to
- * `{ stream: false }` and never sets `noStream`, so command handlers that read
- * `opts.noStream` would never see the flag take effect. Surface it explicitly so
- * `--no-stream` actually disables job watching.
+ * camelKeys + normalize the `--no-stream` and `--no-generate-secrets` flags.
+ * sade/mri routes `--no-stream` to `{ stream: false }` (and `--no-generate-secrets`
+ * to `{ generateSecrets: false }`) rather than setting `noStream`/`noGenerateSecrets`
+ * directly, so command handlers that read those `opts.no*` fields would never see
+ * the flag take effect. Surface both explicitly.
  */
-export const streamOpts = <T extends Record<string, unknown>>(opts: T): T & { noStream: boolean } => {
+export const streamOpts = <T extends Record<string, unknown>>(
+  opts: T
+): T & { noStream: boolean; noGenerateSecrets: boolean } => {
   const o = camelKeys(opts);
-  return { ...o, noStream: o.noStream === true || o.stream === false };
+  return {
+    ...o,
+    noStream: o.noStream === true || o.stream === false,
+    noGenerateSecrets: o.noGenerateSecrets === true || o.generateSecrets === false,
+  };
 };
