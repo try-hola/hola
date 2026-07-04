@@ -34,12 +34,15 @@ import type {
   DeploymentListItem,
   ProvisionedAuthRef,
   GetLogsResponse,
-  LogEntry
+  LogEntry,
+  GetDeploymentConfigResponse,
+  AppEnvVar
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion } from '@hola/shared';
+import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError } from '../../middleware/error-mapping';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto } from './snapshot-fs';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
@@ -47,6 +50,7 @@ import type { JobService, JobContext } from './jobs';
 import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
+import { hardenAppEnv } from './draft';
 import type { RegistryCredentialService } from './registry-credentials';
 import type { PullCredentials } from './bundles';
 import type { CatalogService } from './catalog';
@@ -115,6 +119,9 @@ export interface DeploymentService extends HealthCheckable {
   promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse>;
   /** The active release's carry-forward config (app env incl. secrets + system overrides), for an upgrade. */
   getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
+  /** The active release's full config (typed appEnv rows, spec intact, + system
+   *  overrides), for the DeploymentDetail Configuration tab. */
+  getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -292,6 +299,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
   abstract healthCheck(): Promise<ServiceHealth>;
   abstract getActiveConfig(deploymentId: string): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }>;
+  abstract getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse>;
 
   // --- persistence hooks (no-ops here; overridden by the real service) ---
   protected async ensureLayout(deploymentId: string): Promise<void> {
@@ -1217,6 +1225,30 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
   }
 
+  /** Absolute path to the active release's manifest, or undefined if there's no
+   *  active release. Shared by `getConfig`/`updateDeployment` so both operate on
+   *  the exact same file `materializeCompose` reads at deploy time. */
+  private activeManifestPath(deployment: EnhancedDeploymentDetail): string | undefined {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return undefined;
+    return `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+  }
+
+  /** The active release's app env as full `AppEnvVar` rows — spec intact (label/
+   *  type/required/pattern/etc.), unlike `readActiveAppEnv`'s value-only map.
+   *  Source for the Configuration tab (`getConfig`), which renders each row via
+   *  the typed `ParamField` rather than a plain text box. */
+  private async readActiveFullAppEnv(deployment: EnhancedDeploymentDetail): Promise<AppEnvVar[]> {
+    const manifestPath = this.activeManifestPath(deployment);
+    if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) return [];
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      return manifest.appEnv ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Resolve the registry credential (if any) recorded on the active release, so
    * the runtime image can be pulled from a private registry. Returns undefined
@@ -1263,6 +1295,88 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     } catch {
       return empty;
     }
+  }
+
+  /** Full config for the DeploymentDetail Configuration tab: the active release's
+   *  typed `appEnv` rows (spec intact) + system overrides. Unlike `getActiveConfig`
+   *  (value-only maps for the internal promote carry-forward merge), this is the
+   *  public read-path the web UI renders via `ParamField`. */
+  async getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse> {
+    const deployment = this.requireDeployment(deploymentId);
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return { appEnv: [], systemOverrides: {} };
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return { appEnv: [], systemOverrides: {} };
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {} };
+    } catch {
+      return { appEnv: [], systemOverrides: {} };
+    }
+  }
+
+  /**
+   * Real env/system-override PATCH (#325 Configuration tab): validates the
+   * incoming `appEnv` against its own typed spec (re-imposed from the stored
+   * manifest — a client only ever owns `value`, mirroring the draft PATCH
+   * hardening in `draft.ts`), rewrites the active release's manifest, and — if
+   * anything actually changed — triggers a real restart so
+   * `materializeCompose` regenerates `runtime/.env` from the freshly-rewritten
+   * manifest and `docker compose up` applies it. Previously a logged no-op.
+   */
+  override async updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse> {
+    await this.ensureLoaded();
+    const deployment = this.requireDeployment(deploymentId);
+
+    this.logger.info('Updating deployment configuration', { deploymentId });
+
+    if (!request.env && !request.systemOverrides) {
+      // Nothing to do — mirror the base class's cheap no-op path (still bumps
+      // lastUpdated) rather than requiring an active release for a no-op call.
+      deployment.lastUpdated = new Date().toISOString();
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+      return { ok: true };
+    }
+
+    const manifestPath = this.activeManifestPath(deployment);
+    if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) {
+      throw new ConflictError('Deployment has no active release to configure');
+    }
+    const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+
+    if (request.env) {
+      // Re-impose spec (type/required/pattern/etc.) from the stored manifest
+      // onto the incoming rows — a client only owns `value`, never the spec —
+      // then validate the merged result against that same spec.
+      const merged = hardenAppEnv(manifest.appEnv ?? [], request.env);
+      const issues = validateParams(merged);
+      const errors = issues.filter((i) => i.severity === 'error');
+      if (errors.length > 0) {
+        const err = new DraftValidationError('Deployment configuration update failed validation', issues);
+        err.code = 'DEPLOYMENT_VALIDATION_FAILED';
+        throw err;
+      }
+      manifest.appEnv = merged;
+    }
+
+    if (request.systemOverrides) {
+      manifest.systemOverrides = request.systemOverrides;
+    }
+
+    await this.storageService.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+    deployment.lastUpdated = new Date().toISOString();
+    this.deployments.set(deploymentId, deployment);
+    await this.persistDeployment(deployment);
+
+    // Trigger a real redeploy: `executeAction('restart')` enqueues the same
+    // lifecycle job `runLifecycleJob` runs for an operator-initiated restart,
+    // which calls `materializeCompose` — that reads the manifest fresh off disk
+    // (see `readActiveAppEnv`/`readActiveFullAppEnv` above), so it picks up the
+    // rewrite just persisted and runs a real `docker compose up` against it.
+    const { jobId } = await this.executeAction(deploymentId, { action: 'restart' });
+    return { ok: true, jobId };
   }
 
   /** The active release's declared ingress/web compose service, if any. */
@@ -2090,6 +2204,15 @@ export class MockDeploymentService extends InMemoryDeploymentService {
   /** Mock has no persisted release manifests; the upgrade flow carries no config in tests. */
   async getActiveConfig(): Promise<{ appEnv: Record<string, string>; systemOverrides: Record<string, string> }> {
     return { appEnv: {}, systemOverrides: {} };
+  }
+
+  /** Mock has no persisted release manifests (see `getActiveConfig`); the
+   *  Configuration tab's GET simply reports an empty config in tests/dev UI —
+   *  but still 404s for an unknown id, consistent with every other per-
+   *  deployment route (`getDeployment`, `updateDeployment`, etc.). */
+  async getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse> {
+    this.requireDeployment(deploymentId);
+    return { appEnv: [], systemOverrides: {} };
   }
 
   /** Seed a couple of sample deployments so list views are non-empty out of the box. */

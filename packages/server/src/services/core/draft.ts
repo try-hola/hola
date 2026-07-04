@@ -189,8 +189,12 @@ function assertComposeParses(content: string, source: string): void {
  * `required`, `pattern`, etc. A row whose key has no match in the stored draft
  * (a custom/user-added var, e.g. the wizard's "Add variable" or an unknown CLI
  * `--set` key) passes through unmodified — it has no spec to protect.
+ *
+ * Exported: `RealDeploymentService.updateDeployment` (deployment.ts) reuses the
+ * exact same re-imposition semantics for a live deployment's config PATCH — a
+ * client only ever owns `value` there either, never the manifest-declared spec.
  */
-function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): AppEnvVar[] {
+export function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): AppEnvVar[] {
   const byKey = new Map(storedEnv.map((e) => [e.key, e]));
   return incomingEnv.map((incoming) => {
     const stored = byKey.get(incoming.key);

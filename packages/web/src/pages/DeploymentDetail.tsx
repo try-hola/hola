@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useSearchParams, useNavigate } from 'react-router-dom';
 import { LogsViewer } from '../components/LogsViewer';
 import { JobTracker } from '../components/JobTracker';
@@ -28,11 +28,40 @@ import {
 } from 'lucide-react';
 import type {
   AppEnvVar,
-  SystemEnvVar
+  ValidationIssue
 } from '@hola/shared';
+import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
-import { useDeploymentDetailApi, useDeploymentHistoryApi } from '../hooks/useDeploymentDetailApi';
+import { ParamField } from '../components/ui/fields/ParamField';
+import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi } from '../hooks/useDeploymentDetailApi';
+
+/** A row carries a manifest-declared typed spec if it has any field beyond
+ *  key/value/isSecret/description — mirrors `param-validate.ts`'s internal
+ *  `hasParamSpec` (not exported; this is the same ~10-line check). Used to
+ *  gate which rows are safe to remove from the editor (a spec-bearing row is
+ *  catalog-declared and shouldn't be deletable from the UI, only re-valued). */
+const hasParamSpec = (spec: AppEnvVar): boolean =>
+  spec.type !== undefined ||
+  spec.required !== undefined ||
+  spec.pattern !== undefined ||
+  spec.minLength !== undefined ||
+  spec.maxLength !== undefined ||
+  spec.min !== undefined ||
+  spec.max !== undefined ||
+  spec.options !== undefined ||
+  spec.trueValue !== undefined ||
+  spec.falseValue !== undefined ||
+  spec.httpsOnly !== undefined ||
+  spec.generate !== undefined;
+
+/** Fallback for a specless secret (no `generate` recipe): 32 random bytes as
+ *  hex, matching `openssl rand -hex 32` — same behavior InstallWizard uses. */
+const legacyRandomSecretHex = (): string => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+};
 
 // Decorative sparkline bar heights — computed once at module load (the values
 // are illustrative, not real time-series data).
@@ -119,30 +148,37 @@ export const DeploymentDetail: React.FC = () => {
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [operationLoading, setOperationLoading] = useState<{[key: string]: boolean}>({});
 
-  // System-wide environment variables (would come from API/context)
-  const systemEnvVars: SystemEnvVar[] = [
-    { key: 'DOMAIN', value: 'localhost', isSecret: false, description: 'Base domain for all services' },
-    { key: 'TIMEZONE', value: 'UTC', isSecret: false, description: 'System timezone' },
-    { key: 'BACKUP_RETENTION_DAYS', value: '30', isSecret: false, description: 'Default backup retention period' },
-    { key: 'SMTP_HOST', value: '', isSecret: false, description: 'SMTP server for notifications' },
-    { key: 'SMTP_USER', value: '', isSecret: false, description: 'SMTP username' },
-    { key: 'SMTP_PASSWORD', value: '', isSecret: true, description: 'SMTP password' },
-    { key: 'SSL_EMAIL', value: '', isSecret: false, description: 'Email for SSL certificates' },
-  ];
+  // The active release's real config (typed appEnv rows + whatever system
+  // overrides the operator set at install time) — replaces the old hardcoded
+  // Nextcloud-flavored placeholder state.
+  const {
+    data: configData,
+    loading: configLoading,
+    error: configError,
+    refetch: refetchConfig,
+  } = useDeploymentConfigApi(deploymentId);
 
-  // Deployment-specific overrides (would come from API)
-  const [deploymentOverrides, setDeploymentOverrides] = useState<{[key: string]: string}>({
-    'DOMAIN': 'nextcloud.example.com', // This deployment overrides the domain
-  });
+  // Editable working copies. Reset from the server whenever a fresh config
+  // arrives and we're NOT mid-edit, so a background refetch never clobbers
+  // in-progress changes.
+  const [envVars, setEnvVars] = useState<AppEnvVar[]>([]);
+  const [systemOverrides, setSystemOverrides] = useState<{[key: string]: string}>({});
+  // Keys the operator has actually touched this session — a field's validation
+  // error only surfaces after it's been edited (mirrors InstallWizard step 0).
+  const [touchedKeys, setTouchedKeys] = useState<Set<string>>(new Set());
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Deployment-specific environment variables
-  const [deploymentEnvVars, setDeploymentEnvVars] = useState<AppEnvVar[]>([
-    { key: 'POSTGRES_DB', value: 'nextcloud', isSecret: false, description: 'Database name' },
-    { key: 'POSTGRES_USER', value: 'nextcloud', isSecret: false, description: 'Database user' },
-    { key: 'POSTGRES_PASSWORD', value: 'secure_password_123', isSecret: true, description: 'Database password' },
-    { key: 'NEXTCLOUD_ADMIN_USER', value: 'admin', isSecret: false, description: 'Admin username' },
-    { key: 'NEXTCLOUD_ADMIN_PASSWORD', value: 'admin_password_456', isSecret: true, description: 'Admin password' },
-  ]);
+  useEffect(() => {
+    if (!configData || isEditing) return;
+    setEnvVars(configData.appEnv);
+    setSystemOverrides(configData.systemOverrides);
+  }, [configData, isEditing]);
+
+  // Every row's issues against its own spec (legacy/custom rows with no spec
+  // reduce to just the required-tri-state check — see param-validate.ts).
+  const paramIssues = useMemo(() => validateParams(envVars), [envVars]);
+  const issuesForKey = (key: string): ValidationIssue[] =>
+    touchedKeys.has(key) ? paramIssues.filter((i) => i.path === `env.${key}`) : [];
 
   // Handle tab changes
   // Note: handleTabChange was unused; tabs update via inline onClick handlers above.
@@ -194,40 +230,70 @@ export const DeploymentDetail: React.FC = () => {
     );
   }
 
+  // Add a free-form custom variable (no manifest spec — plain key/value/secret).
   const addDeploymentEnvVar = () => {
-    setDeploymentEnvVars([...deploymentEnvVars, { key: '', value: '', isSecret: false, description: '' }]);
+    setEnvVars([...envVars, { key: '', value: '', isSecret: false, description: '' }]);
   };
 
   const updateDeploymentEnvVar = <K extends keyof AppEnvVar>(index: number, field: K, value: AppEnvVar[K]) => {
-    const updated = [...deploymentEnvVars];
+    const updated = [...envVars];
     updated[index] = { ...updated[index], [field]: value };
-    setDeploymentEnvVars(updated);
+    setEnvVars(updated);
+    const key = updated[index].key;
+    if (key) setTouchedKeys(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
   };
 
+  // Only a row with no manifest-declared spec can be removed from the editor —
+  // a spec-bearing row is catalog-declared and should only ever be re-valued.
   const removeDeploymentEnvVar = (index: number) => {
-    setDeploymentEnvVars(deploymentEnvVars.filter((_, i) => i !== index));
+    setEnvVars(envVars.filter((_, i) => i !== index));
+  };
+
+  // ParamField's onChange for a typed (spec-bearing) row.
+  const handleParamChange = (index: number, value: string) => {
+    updateDeploymentEnvVar(index, 'value', value);
+  };
+
+  // Fill a secret field with a random value: the manifest's own `generate`
+  // recipe (hex/base64/fernet) when the row has one, else a legacy hex-32
+  // fallback for specless secrets. Reveals it so the operator can see/copy it.
+  const generateSecret = (index: number) => {
+    const spec = envVars[index];
+    const value = spec?.generate ? generateSecretValue(spec.generate) : legacyRandomSecretHex();
+    if (spec?.key) setShowSecrets(prev => ({ ...prev, [spec.key]: true }));
+    updateDeploymentEnvVar(index, 'value', value);
   };
 
   const toggleSecretVisibility = (key: string) => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const updateSystemOverride = (key: string, value: string) => {
-    if (value === systemEnvVars.find(v => v.key === key)?.value) {
-      // If value matches system default, remove override
-      const newOverrides = { ...deploymentOverrides };
-      delete newOverrides[key];
-      setDeploymentOverrides(newOverrides);
-    } else {
-      // Set override
-      setDeploymentOverrides({ ...deploymentOverrides, [key]: value });
+  // System overrides are an arbitrary operator-set key/value map (no fixed
+  // platform-wide var list exists server-side) — add/update/remove directly.
+  const addSystemOverride = () => {
+    // Pick a placeholder key that doesn't collide with an existing one.
+    let key = 'NEW_VAR';
+    let n = 2;
+    while (Object.prototype.hasOwnProperty.call(systemOverrides, key)) {
+      key = `NEW_VAR_${n++}`;
     }
+    setSystemOverrides({ ...systemOverrides, [key]: '' });
   };
 
-  const resetSystemOverride = (key: string) => {
-    const newOverrides = { ...deploymentOverrides };
-    delete newOverrides[key];
-    setDeploymentOverrides(newOverrides);
+  const renameSystemOverride = (oldKey: string, newKey: string) => {
+    if (!newKey || newKey === oldKey || Object.prototype.hasOwnProperty.call(systemOverrides, newKey)) return;
+    const { [oldKey]: value, ...rest } = systemOverrides;
+    setSystemOverrides({ ...rest, [newKey]: value });
+  };
+
+  const updateSystemOverride = (key: string, value: string) => {
+    setSystemOverrides({ ...systemOverrides, [key]: value });
+  };
+
+  const removeSystemOverride = (key: string) => {
+    const rest = { ...systemOverrides };
+    delete rest[key];
+    setSystemOverrides(rest);
   };
 
   const handleAction = async (action: 'start' | 'stop' | 'restart') => {
@@ -286,18 +352,29 @@ export const DeploymentDetail: React.FC = () => {
   const saveConfiguration = async () => {
     if (!deployment) return;
 
+    setSaveError(null);
+
+    // Client-side validation first (mirrors InstallWizard step 0): mark every
+    // row touched so its error (if any) is visible, and don't call the API at
+    // all if anything is error-severity — the server would reject it anyway.
+    setTouchedKeys(new Set(envVars.map((e) => e.key).filter(Boolean)));
+    if (paramIssues.some((i) => i.severity === 'error')) {
+      setSaveError('Fix the highlighted fields before saving.');
+      return;
+    }
+
     setOperationLoading(prev => ({ ...prev, 'save-config': true }));
 
     try {
       await updateConfiguration({
-        env: deploymentEnvVars,
-        systemOverrides: deploymentOverrides
+        env: envVars,
+        systemOverrides
       });
       setIsEditing(false);
-      // TODO: Show success message
+      await refetchConfig();
     } catch (error) {
       console.error('Error saving configuration:', error);
-      // TODO: Show error message to user
+      setSaveError(error instanceof Error ? error.message : 'Failed to save configuration');
     } finally {
       setOperationLoading(prev => ({ ...prev, 'save-config': false }));
     }
@@ -490,6 +567,7 @@ export const DeploymentDetail: React.FC = () => {
                   if (isEditing) {
                     saveConfiguration();
                   } else {
+                    setSaveError(null);
                     setIsEditing(true);
                   }
                 }}
@@ -507,7 +585,23 @@ export const DeploymentDetail: React.FC = () => {
               </button>
             </div>
 
-            {/* Environment variables */}
+            {saveError && (
+              <div className="flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>{saveError}</span>
+              </div>
+            )}
+
+            {configError && !configData && (
+              <div className="flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Failed to load configuration: {configError}</span>
+              </div>
+            )}
+
+            {/* Environment variables — real values from the active release's
+                manifest, rendered via the typed ParamField (spec intact) rather
+                than plain text boxes. */}
             <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
               <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
                 <div className="font-semibold text-[15px]">Environment variables</div>
@@ -522,48 +616,129 @@ export const DeploymentDetail: React.FC = () => {
                 )}
               </div>
 
-              {deploymentEnvVars.map((envVar, index) => {
-                const showValue = envVar.isSecret && !showSecrets[envVar.key];
-                return (
+              {configLoading && envVars.length === 0 && (
+                <div className="px-[18px] py-6 text-center text-sm text-text-muted">Loading configuration…</div>
+              )}
+
+              {!configLoading && envVars.length === 0 && (
+                <div className="px-[18px] py-6 text-center text-sm text-text-muted">
+                  This app has no configurable environment variables.
+                </div>
+              )}
+
+              {isEditing ? (
+                <div className="p-[18px] space-y-3">
+                  {envVars.map((envVar, index) => (
+                    <div key={envVar.key || index} className="flex items-start gap-2">
+                      <div className="flex-1">
+                        {envVar.key ? (
+                          <ParamField
+                            spec={envVar}
+                            value={envVar.value}
+                            onChange={(v) => handleParamChange(index, v)}
+                            issues={issuesForKey(envVar.key)}
+                            showSecret={showSecrets[envVar.key]}
+                            onToggleSecret={() => toggleSecretVisibility(envVar.key)}
+                            onGenerateSecret={envVar.isSecret ? () => generateSecret(index) : undefined}
+                          />
+                        ) : (
+                          // A just-added custom row has no key yet — ParamField needs
+                          // one for its id/label, so show a bare key input until set.
+                          <input
+                            type="text"
+                            autoFocus
+                            placeholder="VARIABLE_NAME"
+                            value={envVar.key}
+                            onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value.toUpperCase())}
+                            className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary"
+                          />
+                        )}
+                      </div>
+                      {!hasParamSpec(envVar) && (
+                        <button
+                          type="button"
+                          onClick={() => removeDeploymentEnvVar(index)}
+                          className="flex-none mt-2.5 text-text-muted hover:text-danger transition-colors"
+                          title="Remove custom variable"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                envVars.map((envVar) => {
+                  const showValue = envVar.isSecret && !showSecrets[envVar.key];
+                  return (
+                    <div
+                      key={envVar.key}
+                      className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft last:border-b-0"
+                    >
+                      <span className="font-mono text-[12.5px] text-text-muted w-[200px] flex-none break-all">
+                        {envVar.label ?? envVar.key}
+                      </span>
+                      <span className="flex-1 font-mono text-[12.5px] break-all">
+                        {showValue ? '••••••••' : (envVar.value || '(empty)')}
+                      </span>
+                      {envVar.isSecret && (
+                        <button
+                          type="button"
+                          onClick={() => toggleSecretVisibility(envVar.key)}
+                          className="flex text-text-faint hover:text-text-strong transition-colors"
+                        >
+                          {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* System overrides — an arbitrary operator-set key/value map (no
+                fixed platform-wide var list exists server-side), shown only
+                when there's something to show or the operator is editing. */}
+            {(isEditing || Object.keys(systemOverrides).length > 0) && (
+              <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+                <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
+                  <div className="font-semibold text-[15px]">System overrides</div>
+                  {isEditing && (
+                    <button
+                      onClick={addSystemOverride}
+                      className="h-[34px] px-[13px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Add Override</span>
+                    </button>
+                  )}
+                </div>
+
+                {Object.keys(systemOverrides).length === 0 && (
+                  <div className="px-[18px] py-6 text-center text-sm text-text-muted">No system overrides set.</div>
+                )}
+
+                {Object.entries(systemOverrides).map(([key, value]) => (
                   <div
-                    key={index}
-                    className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft"
+                    key={key}
+                    className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft last:border-b-0"
                   >
                     {isEditing ? (
                       <>
                         <input
                           type="text"
-                          placeholder="VARIABLE_NAME"
-                          value={envVar.key}
-                          onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value)}
-                          className="w-[170px] flex-none px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
+                          defaultValue={key}
+                          onBlur={(e) => renameSystemOverride(key, e.target.value.trim())}
+                          className="w-[200px] flex-none px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
                         />
                         <input
-                          type={showValue ? 'password' : 'text'}
-                          value={envVar.value}
-                          onChange={(e) => updateDeploymentEnvVar(index, 'value', e.target.value)}
+                          type="text"
+                          value={value}
+                          onChange={(e) => updateSystemOverride(key, e.target.value)}
                           className="flex-1 px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
                         />
-                        <label className="flex items-center gap-1">
-                          <input
-                            type="checkbox"
-                            checked={envVar.isSecret}
-                            onChange={(e) => updateDeploymentEnvVar(index, 'isSecret', e.target.checked)}
-                            className="w-4 h-4 text-primary bg-surface-0 border-border rounded focus:ring-primary/50"
-                          />
-                          <span className="text-xs text-text-muted">Secret</span>
-                        </label>
-                        {envVar.isSecret && (
-                          <button
-                            type="button"
-                            onClick={() => toggleSecretVisibility(envVar.key)}
-                            className="flex text-text-faint hover:text-text-strong transition-colors"
-                          >
-                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        )}
                         <button
-                          onClick={() => removeDeploymentEnvVar(index)}
+                          onClick={() => removeSystemOverride(key)}
                           className="flex text-text-muted hover:text-danger transition-colors"
                         >
                           <X className="w-4 h-4" />
@@ -571,118 +746,14 @@ export const DeploymentDetail: React.FC = () => {
                       </>
                     ) : (
                       <>
-                        <span className="font-mono text-[12.5px] text-text-muted w-[170px] flex-none break-all">
-                          {envVar.key}
-                        </span>
-                        <span className="flex-1 font-mono text-[12.5px] break-all">
-                          {showValue ? '••••••••' : envVar.value}
-                        </span>
-                        {envVar.isSecret && (
-                          <button
-                            type="button"
-                            onClick={() => toggleSecretVisibility(envVar.key)}
-                            className="flex text-text-faint hover:text-text-strong transition-colors"
-                          >
-                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        )}
+                        <span className="font-mono text-[12.5px] text-text-muted w-[200px] flex-none break-all">{key}</span>
+                        <span className="flex-1 font-mono text-[12.5px] break-all">{value || '(empty)'}</span>
                       </>
                     )}
                   </div>
-                );
-              })}
-            </div>
-
-            {/* System Environment Variables */}
-            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
-              <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
-                <div className="font-semibold text-[15px]">System Environment Variables</div>
-                <div className="text-xs text-text-faint">
-                  Inherited from system settings · Override only when needed
-                </div>
+                ))}
               </div>
-
-              {systemEnvVars.map((envVar) => {
-                const isOverridden = Object.prototype.hasOwnProperty.call(deploymentOverrides, envVar.key);
-                const currentValue = isOverridden ? deploymentOverrides[envVar.key] : envVar.value;
-                const showValue = envVar.isSecret && !showSecrets[envVar.key];
-
-                return (
-                  <div
-                    key={envVar.key}
-                    className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft"
-                  >
-                    <span className="font-mono text-[12.5px] text-text-muted w-[170px] flex-none flex items-center gap-2 break-all">
-                      {envVar.key}
-                      {isOverridden && (
-                        <span className="text-[10px] bg-warning text-primary-contrast px-1.5 py-0.5 rounded font-semibold">
-                          OVERRIDDEN
-                        </span>
-                      )}
-                    </span>
-                    {isEditing ? (
-                      <>
-                        <input
-                          type={showValue ? 'password' : 'text'}
-                          value={currentValue}
-                          onChange={(e) => updateSystemOverride(envVar.key, e.target.value)}
-                          className="flex-1 px-3 py-1 bg-surface-0 border border-border rounded text-[12.5px] font-mono"
-                          placeholder={envVar.value || 'Enter value...'}
-                        />
-                        {envVar.isSecret && (
-                          <button
-                            type="button"
-                            onClick={() => toggleSecretVisibility(envVar.key)}
-                            className="flex text-text-faint hover:text-text-strong transition-colors"
-                          >
-                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        )}
-                        {isOverridden && (
-                          <button
-                            onClick={() => resetSystemOverride(envVar.key)}
-                            className="flex text-text-muted hover:text-warning transition-colors"
-                            title="Reset to system default"
-                          >
-                            <RotateCw className="w-4 h-4" />
-                          </button>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <span className="flex-1 font-mono text-[12.5px] break-all">
-                          {showValue ? '••••••••' : (currentValue || '(empty)')}
-                        </span>
-                        {envVar.isSecret && (
-                          <button
-                            type="button"
-                            onClick={() => toggleSecretVisibility(envVar.key)}
-                            className="flex text-text-faint hover:text-text-strong transition-colors"
-                          >
-                            {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                );
-              })}
-
-              {Object.keys(deploymentOverrides).length > 0 && (
-                <div className="m-[18px] bg-warning/10 border border-warning/20 rounded-lg p-4">
-                  <div className="flex items-start space-x-3">
-                    <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
-                    <div className="text-sm">
-                      <div className="font-medium text-warning">System Variable Overrides</div>
-                      <div className="text-text-muted mt-1">
-                        This deployment overrides {Object.keys(deploymentOverrides).length} system variable(s).
-                        Changes will only affect this deployment.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+            )}
 
             {/* Materialized Compose · read-only */}
             <div className="bg-surface-1 border border-border rounded-card overflow-hidden">

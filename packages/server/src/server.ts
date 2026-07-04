@@ -17,6 +17,7 @@ import {
   
   type PatchDeploymentRequest,
   type PatchDeploymentResponse,
+  type GetDeploymentConfigResponse,
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
   type GetJobsResponse,
@@ -1151,6 +1152,20 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const services = getServices();
       const payload = await services.deployments.getDeploymentHistory(deploymentId, { page, limit });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  // Active release's full config (typed appEnv rows + system overrides) for the
+  // DeploymentDetail Configuration tab.
+  const deploymentConfigMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/config$/);
+  if (deploymentConfigMatch && req.method === 'GET') {
+    const deploymentId = deploymentConfigMatch[1];
+    try {
+      const services = getServices();
+      const payload: GetDeploymentConfigResponse = await services.deployments.getConfig(deploymentId);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);

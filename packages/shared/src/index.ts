@@ -58,6 +58,9 @@ export const API = {
     actions: (deploymentId: string) => `/api/deployments/${deploymentId}/actions`,
     rollback: (deploymentId: string) => `/api/deployments/${deploymentId}/rollback`,
     promote: (deploymentId: string) => `/api/deployments/${deploymentId}/promote`,
+    // Active release's full config (typed appEnv rows + system overrides), for the
+    // DeploymentDetail Configuration tab.
+    config: (deploymentId: string) => `/api/deployments/${deploymentId}/config`,
   },
 
   jobs: {
@@ -887,7 +890,20 @@ export type PatchDeploymentRequest = {
   env?: AppEnvVar[];
   systemOverrides?: Record<string, string>;
 };
-export type PatchDeploymentResponse = { ok: true };
+// `jobId` is present when the update triggered a real redeploy (a restart job
+// that re-materializes Compose from the freshly-rewritten manifest); absent
+// when the PATCH touched nothing that needs a redeploy.
+export type PatchDeploymentResponse = { ok: true; jobId?: string };
+
+// The active release's full config for the DeploymentDetail Configuration tab —
+// unlike `getActiveConfig`'s value-only maps (used internally for promote's
+// carry-forward merge), this carries the full typed `AppEnvVar` rows (spec
+// intact: label/type/required/pattern/etc.) so the UI can render them via
+// `ParamField` instead of plain text boxes.
+export type GetDeploymentConfigResponse = {
+  appEnv: AppEnvVar[];
+  systemOverrides: Record<string, string>;
+};
 
 export type DeploymentHistoryItem = {
   id: string;
