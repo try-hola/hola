@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, rm } from 'fs/promises';
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, statSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { RealBundleService, bundleCacheKey, type CommandRunner } from '../../services/core/bundles';
@@ -99,5 +99,105 @@ describe('RealBundleService authenticated pull', () => {
       credentials: { registry: 'registry.example.com', username: 'u', password: 'p' },
     });
     expect(ok.localPath).toBe(join(base, 'acme__app', '1.0'));
+  });
+});
+
+describe('RealBundleService digest-based staleness detection', () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function makeCache() {
+    const base = await mkdtemp(join(tmpdir(), 'hola-bundle-digest-test-'));
+    dirs.push(base);
+    return base;
+  }
+
+  /** Seeds a cache dir as if a prior `ensurePulled` already ran for this version. */
+  function seedCachedBundle(base: string, appId: string, version: string, digest?: string) {
+    const dest = join(base, appId, version);
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, 'compose.yaml'), 'services: {}');
+    writeFileSync(join(dest, 'manifest.json'), '{}');
+    if (digest) writeFileSync(join(dest, '.oras-digest'), digest);
+    return dest;
+  }
+
+  const DIGEST_A = 'sha256:' + 'a'.repeat(64);
+  const DIGEST_B = 'sha256:' + 'b'.repeat(64);
+
+  function runnerResolving(digest: string, pullLog: string[]): CommandRunner {
+    return async (cmd) => {
+      if (cmd.startsWith('oras resolve')) return { stdout: digest + '\n', stderr: '' };
+      if (cmd.startsWith('oras pull')) pullLog.push(cmd);
+      return { stdout: '', stderr: '' };
+    };
+  }
+
+  test('reuses the cache when the resolved digest matches the stamped marker', async () => {
+    const base = await makeCache();
+    seedCachedBundle(base, 'app', '1.0', DIGEST_A);
+    const pulls: string[] = [];
+    const svc = new RealBundleService(base, runnerResolving(DIGEST_A, pulls));
+
+    const info = await svc.ensurePulled({ appId: 'app', version: '1.0', ociRef: 'ghcr.io/try-hola/app:1.0' });
+
+    expect(pulls).toHaveLength(0); // no re-pull
+    expect(info.digest).toBe(DIGEST_A);
+  });
+
+  test('re-pulls when the registry digest no longer matches the marker (same-tag republish)', async () => {
+    const base = await makeCache();
+    const dest = seedCachedBundle(base, 'app', '1.0', DIGEST_A);
+    const pulls: string[] = [];
+    const svc = new RealBundleService(base, runnerResolving(DIGEST_B, pulls));
+
+    const info = await svc.ensurePulled({ appId: 'app', version: '1.0', ociRef: 'ghcr.io/try-hola/app:1.0' });
+
+    expect(pulls).toHaveLength(1); // stale cache triggered a fresh pull
+    expect(info.digest).toBe(DIGEST_B);
+    // The old mixed-content marker is gone/replaced after the re-pull.
+    expect(readFileSync(join(dest, '.oras-digest'), 'utf8').trim()).toBe(DIGEST_B);
+  });
+
+  test('trusts the existing cache when digest resolution fails (offline registry)', async () => {
+    const base = await makeCache();
+    seedCachedBundle(base, 'app', '1.0', DIGEST_A);
+    const pulls: string[] = [];
+    const runner: CommandRunner = async (cmd) => {
+      if (cmd.startsWith('oras resolve')) throw new Error('network unreachable');
+      if (cmd.startsWith('oras pull')) pulls.push(cmd);
+      return { stdout: '', stderr: '' };
+    };
+    const svc = new RealBundleService(base, runner);
+
+    const info = await svc.ensurePulled({ appId: 'app', version: '1.0', ociRef: 'ghcr.io/try-hola/app:1.0' });
+
+    expect(pulls).toHaveLength(0); // resolve failure must not fail or force-repull the install
+    expect(info.localPath).toBe(join(base, 'app', '1.0'));
+  });
+
+  test('trusts a pre-existing cache with no marker (bundle cached before this feature shipped)', async () => {
+    const base = await makeCache();
+    seedCachedBundle(base, 'app', '1.0'); // no .oras-digest written
+    const pulls: string[] = [];
+    const svc = new RealBundleService(base, runnerResolving(DIGEST_A, pulls));
+
+    await svc.ensurePulled({ appId: 'app', version: '1.0', ociRef: 'ghcr.io/try-hola/app:1.0' });
+
+    expect(pulls).toHaveLength(0); // no marker to compare against -> don't force a redundant re-pull
+  });
+
+  test('stamps a digest marker after a fresh (first-time) pull', async () => {
+    const base = await makeCache();
+    const pulls: string[] = [];
+    const svc = new RealBundleService(base, runnerResolving(DIGEST_A, pulls));
+
+    const info = await svc.ensurePulled({ appId: 'app', version: '2.0', ociRef: 'ghcr.io/try-hola/app:2.0' });
+
+    expect(pulls).toHaveLength(1);
+    expect(info.digest).toBe(DIGEST_A);
+    expect(readFileSync(join(base, 'app', '2.0', '.oras-digest'), 'utf8').trim()).toBe(DIGEST_A);
   });
 });

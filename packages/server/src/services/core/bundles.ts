@@ -1,6 +1,6 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdirSync, existsSync, rmSync, statSync, mkdtempSync, writeFileSync } from 'fs';
+import { mkdirSync, existsSync, rmSync, statSync, mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { getLogger } from '../../lib/logger';
@@ -98,10 +98,26 @@ export class RealBundleService implements BundleService, HealthCheckable {
       // Touch cache entry for LRU tracking
       this.cacheManager.touch(cacheKey, opts.version);
 
-      // If already has compose.yaml and manifest.json, assume cached
-      if (existsSync(join(dest, 'compose.yaml')) && existsSync(join(dest, 'manifest.json'))) {
-        this.logger.debug('Bundle already cached', { appId: opts.appId, version: opts.version });
-        return { localPath: dest, ...this.safeStat(dest) };
+      // A cache hit by file presence alone is unsafe: a publisher can push new
+      // content under the SAME version tag (no version bump, new digest) —
+      // e.g. a hand-pushed test image, or a re-tagged `latest`/by-ref install.
+      // The on-disk path is keyed by version string, not digest, so that
+      // republish would otherwise be served stale forever. Confirm the
+      // registry's current digest still matches what we last pulled before
+      // trusting the cache; a resolve failure (offline registry, blip) falls
+      // back to trusting the existing cache rather than failing the install.
+      const filesPresent = existsSync(join(dest, 'compose.yaml')) && existsSync(join(dest, 'manifest.json'));
+      let remoteDigest: string | undefined;
+      if (filesPresent) {
+        remoteDigest = await this.resolveDigest(opts.ociRef, opts.credentials);
+        const cachedDigest = this.readDigestMarker(dest);
+        if (!remoteDigest || !cachedDigest || remoteDigest === cachedDigest) {
+          this.logger.debug('Bundle already cached', { appId: opts.appId, version: opts.version });
+          return { localPath: dest, digest: cachedDigest ?? remoteDigest, ...this.safeStat(dest) };
+        }
+        this.logger.info('Cached bundle digest is stale; re-pulling', {
+          appId: opts.appId, version: opts.version, cachedDigest, remoteDigest,
+        });
       }
 
       // Clean dest to avoid mixed content
@@ -146,10 +162,58 @@ export class RealBundleService implements BundleService, HealthCheckable {
         }
       }
 
-      return { localPath: dest, ...this.safeStat(dest) };
+      // Stamp the digest we just pulled so a FUTURE call can tell a same-tag
+      // republish apart from an untouched cache. Reuse the digest resolved
+      // above when this was a stale-cache re-pull; resolve fresh otherwise
+      // (first-ever pull for this version). Best-effort: a resolve/write
+      // failure here just means the next call re-verifies via a full pull
+      // comparison rather than trusting a marker — never fails the install.
+      const pulledDigest = remoteDigest ?? await this.resolveDigest(opts.ociRef, opts.credentials);
+      if (pulledDigest) this.writeDigestMarker(dest, pulledDigest);
+
+      return { localPath: dest, digest: pulledDigest, ...this.safeStat(dest) };
     } finally {
       this.cacheManager.markNotInUse(cacheKey, opts.version);
     }
+  }
+
+  /** Resolve the current manifest digest for an OCI ref without pulling blobs. */
+  private async resolveDigest(ociRef: string, credentials?: PullCredentials): Promise<string | undefined> {
+    let authDir: string | undefined;
+    const flags: string[] = [];
+    if (credentials) {
+      authDir = this.writeRegistryAuth(credentials);
+      flags.push(`--registry-config ${shellEscape(join(authDir, 'config.json'))}`);
+    }
+    try {
+      const { stdout } = await this.run(`oras resolve ${flags.join(' ')} ${shellEscape(ociRef)}`);
+      const digest = stdout.trim().split('\n').pop()?.trim();
+      return digest && /^sha256:[0-9a-f]{64}$/.test(digest) ? digest : undefined;
+    } catch (error) {
+      this.logger.warn('Failed to resolve remote digest; trusting existing cache if present', {
+        ref: ociRef, error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    } finally {
+      if (authDir) { try { rmSync(authDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+    }
+  }
+
+  private digestMarkerPath(dest: string): string {
+    return join(dest, '.oras-digest');
+  }
+
+  private readDigestMarker(dest: string): string | undefined {
+    try {
+      const digest = readFileSync(this.digestMarkerPath(dest), 'utf8').trim();
+      return digest || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private writeDigestMarker(dest: string, digest: string): void {
+    try { writeFileSync(this.digestMarkerPath(dest), digest, { mode: 0o644 }); } catch { /* best effort */ }
   }
 
   /**
