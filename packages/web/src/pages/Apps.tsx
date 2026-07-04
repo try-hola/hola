@@ -120,19 +120,23 @@ export const Apps: React.FC = () => {
                   />
                 )}
 
-                {/* Manage shortcut (running tiles only — non-running tiles already
-                    route to the detail). Sits above the stretched link. */}
-                {openable && (
-                  <Link
-                    to={`/deployments/${app.id}`}
-                    onClick={(e) => e.stopPropagation()}
-                    title="Manage & logs"
-                    aria-label={`Manage ${displayName}`}
-                    className="absolute top-2.5 right-2.5 z-[2] w-7 h-7 flex items-center justify-center rounded-[8px] text-text-faint opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary-weak transition"
-                  >
-                    <SlidersHorizontal className="w-[15px] h-[15px]" />
-                  </Link>
-                )}
+                {/* Manage shortcut — always shown, even though a non-running
+                    tile's whole card already routes here too: without it,
+                    a failed/stopped app has no visible affordance at all for
+                    "go manage/remove this", and the card being clickable
+                    everywhere isn't obvious on its own. Sits above the
+                    stretched link (which points elsewhere for an openable
+                    tile — the external app URL — so this needs its own
+                    stopPropagation to win). */}
+                <Link
+                  to={`/deployments/${app.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  title="Manage & logs"
+                  aria-label={`Manage ${displayName}`}
+                  className="absolute top-2.5 right-2.5 z-[2] w-7 h-7 flex items-center justify-center rounded-[8px] text-text-faint opacity-0 group-hover:opacity-100 hover:text-primary hover:bg-primary-weak transition"
+                >
+                  <SlidersHorizontal className="w-[15px] h-[15px]" />
+                </Link>
                 {openable && (
                   <ExternalLink className="absolute top-2.5 left-2.5 w-4 h-4 text-text-faint opacity-0 group-hover:opacity-100 group-hover:text-primary transition" />
                 )}
