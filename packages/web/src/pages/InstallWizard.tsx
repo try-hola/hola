@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronRight, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2 } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
+import { ParamField } from '../components/ui/fields/ParamField';
 import type {
   AppEnvVar,
   SystemEnvVar,
   DraftDefaults,
   PatchDraftRequest,
+  ValidationIssue,
 } from '@hola/shared';
+import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
 import { useDraftUpload } from '../hooks/useDraftUpload';
@@ -67,7 +70,22 @@ export const InstallWizard: React.FC = () => {
   
   // Application-specific environment variables (loaded from draft creation)
   const [envVars, setEnvVars] = useState<AppEnvVar[]>([]);
-  
+
+  // Keys present at draft-creation time ("seeded" — manifest-declared rows,
+  // rendered via ParamField in the Basic/Advanced sections below) vs. rows
+  // added later via "Add app variable" (free-form Custom rows, no spec).
+  // Captured once when the draft loads; a ref rather than state since it
+  // never needs to trigger its own re-render (envVars changing already does).
+  const seededKeysRef = React.useRef<Set<string>>(new Set());
+
+  // Keys the operator has actually edited — typed-field errors only show
+  // after a first edit, so an untouched placeholder row never blocks Next
+  // with a wall of red before the user has looked at it.
+  const [touchedKeys, setTouchedKeys] = useState<Set<string>>(new Set());
+
+  // Collapsed by default; a manifest's `advanced` rows live behind this.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [ports, setPorts] = useState<DraftDefaults['ports']>([]);
   const [volumes, setVolumes] = useState<DraftDefaults['volumes']>([]);
@@ -112,18 +130,15 @@ export const InstallWizard: React.FC = () => {
           ? await createDraftHook.createDraft({ ociRef, credentialRef })
           : await createDraftHook.createDraft({ appId, source });
 
-        // Update state with draft data. Float required-but-empty secrets to the
-        // top so the operator sees what they must fill first (env order doesn't
-        // affect deployment). Stable otherwise, and sorted once at load so rows
-        // don't jump around as values are typed in.
+        // Update state with draft data. Row order is preserved exactly as the
+        // catalog declares it (env order doesn't affect deployment) — the
+        // Basic section below floats required-and-empty rows to the top for
+        // display without reordering this underlying array. Record which keys
+        // were present right now ("seeded", manifest-declared) vs. added later
+        // via "Add app variable" (free-form "Custom" rows with no spec).
         setSystemEnvVars(result.systemEnv);
-        const needsValue = (e: AppEnvVar) => Boolean(e.key && e.isSecret && !e.value);
-        setEnvVars(
-          [...result.appEnv]
-            .map((env, i) => ({ env, i }))
-            .sort((a, b) => Number(needsValue(b.env)) - Number(needsValue(a.env)) || a.i - b.i)
-            .map(({ env }) => env)
-        );
+        seededKeysRef.current = new Set(result.appEnv.map((e) => e.key));
+        setEnvVars(result.appEnv);
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
 
@@ -186,15 +201,36 @@ export const InstallWizard: React.FC = () => {
     }
   };
 
+  // Every row's issues against its own spec (legacy/custom rows with no spec
+  // reduce to just the required-tri-state check — see param-validate.ts).
+  // Recomputed whenever envVars changes; cheap (linear scan, pure functions).
+  const paramIssues = React.useMemo(() => validateParams(envVars), [envVars]);
+
+  // A field's issues are only surfaced once the operator has touched it (see
+  // `touchedKeys`) — `canProceed` below uses the untouched-agnostic
+  // `paramIssues` directly so Next still gets gated even before a field is
+  // touched, matching what the server would reject anyway.
+  const issuesForKey = (key: string): ValidationIssue[] =>
+    touchedKeys.has(key) ? paramIssues.filter(i => i.path === `env.${key}`) : [];
+
   const canProceed = () => {
     switch (currentStep) {
       case 0: {
         // Environment Variables. A completely empty row is an unused placeholder
         // (e.g. a default trailing row or one added via "Add variable") — it must
         // not block Next. Only rows the user actually started filling in are
-        // validated: a populated row needs a key, and a secret also needs a value.
+        // validated: a populated row needs a key, and an effectively-required
+        // row (same tri-state formula as the shared validator: `required ??
+        // isSecret`) also needs a value.
+        const effectivelyRequired = (env: AppEnvVar) => env.required ?? env.isSecret;
         const meaningful = envVars.filter(env => env.key || env.value);
-        return !isLoading && meaningful.every(env => env.key && (env.value || !env.isSecret));
+        const requiredOk = meaningful.every(env => env.key && (env.value || !effectivelyRequired(env)));
+        // Typed rows (Basic/Advanced) must also pass their own type checks —
+        // an invalid URL or out-of-range port blocks Next client-side too,
+        // mirroring what the server would reject at validate/preflight time
+        // anyway. Server validation remains authoritative and unchanged.
+        const noBlockingIssues = !paramIssues.some(i => i.severity === 'error');
+        return !isLoading && requiredOk && noBlockingIssues;
       }
       case 4: // Validate & Preflight
         // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
@@ -267,11 +303,21 @@ export const InstallWizard: React.FC = () => {
   const removeEnvVar = async (index: number) => {
     const updated = envVars.filter((_, i) => i !== index);
     setEnvVars(updated);
-    
+
     // Update draft with new environment variables
     if (draftId) {
       await updateDraftData({ appEnv: updated });
     }
+  };
+
+  // ParamField's onChange for a typed (Basic/Advanced) row: marks the key
+  // touched (so its error, if any, can show) and delegates to updateEnvVar.
+  const handleParamChange = (index: number, value: string) => {
+    const key = envVars[index]?.key;
+    if (key) {
+      setTouchedKeys(prev => (prev.has(key) ? prev : new Set(prev).add(key)));
+    }
+    void updateEnvVar(index, 'value', value);
   };
 
   const addPort = async () => {
@@ -378,18 +424,27 @@ export const InstallWizard: React.FC = () => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Fill a secret field with a cryptographically-random value (32 bytes → 64
-  // hex chars, matching `openssl rand -hex 32`). Reveals it so the operator can
-  // see/copy what was generated. Used for required secrets like Postiz's
-  // JWT_SECRET that just need to be random and stable, not human-chosen.
-  const generateSecret = async (index: number) => {
+  // Legacy fallback for a specless secret (no `generate` recipe): 32 random
+  // bytes → 64 hex chars, matching `openssl rand -hex 32`. Kept byte-for-byte
+  // identical to the original behavior so untyped/custom secrets don't regress.
+  const legacyRandomSecretHex = (): string => {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
-    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-    if (envVars[index]?.key) {
-      setShowSecrets(prev => ({ ...prev, [envVars[index].key]: true }));
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  // Fill a secret field with a random value. Reveals it so the operator can
+  // see/copy what was generated. Prefers the manifest's own `generate` recipe
+  // (hex/base64/fernet, with its declared length) when the row has one;
+  // otherwise falls back to the legacy hex-32 behavior for specless secrets.
+  const generateSecret = async (index: number) => {
+    const spec = envVars[index];
+    const value = spec?.generate ? generateSecretValue(spec.generate) : legacyRandomSecretHex();
+    if (spec?.key) {
+      setShowSecrets(prev => ({ ...prev, [spec.key]: true }));
+      setTouchedKeys(prev => (prev.has(spec.key) ? prev : new Set(prev).add(spec.key)));
     }
-    await updateEnvVar(index, 'value', hex);
+    await updateEnvVar(index, 'value', value);
   };
 
   const handleFileUpload = async (files: FileList | null) => {
@@ -533,7 +588,24 @@ services:
 
   const renderStepContent = () => {
     switch (currentStep) {
-      case 0: // Environment Variables
+      case 0: { // Environment Variables
+        // Seeded (manifest-declared) rows split into Basic (not `advanced`)
+        // and Advanced; anything not seeded is a free-form Custom row (added
+        // via "Add app variable", no spec — rendered with the original grid).
+        const effectivelyRequired = (env: AppEnvVar) => env.required ?? env.isSecret;
+        const seededKeys = seededKeysRef.current;
+        const indexedEnvVars = envVars.map((env, index) => ({ env, index }));
+        const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced);
+        const advancedRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && env.advanced === true);
+        const customRows = indexedEnvVars.filter(({ env }) => !seededKeys.has(env.key));
+        // Float required-and-empty rows to the top within Basic; stable
+        // (original catalog-declared order) otherwise — env order doesn't
+        // affect deployment, only what the operator sees first.
+        const basicSorted = [...basicRows].sort((a, b) => {
+          const needsValue = (r: { env: AppEnvVar }) => Number(Boolean(effectivelyRequired(r.env) && !r.env.value));
+          return needsValue(b) - needsValue(a) || a.index - b.index;
+        });
+
         return (
           <div>
             <div className="text-base font-semibold mb-1">Environment variables</div>
@@ -640,12 +712,66 @@ services:
             </div>
             )}
 
-            {/* Application-Specific Environment Variables */}
+            {/* Basic application variables — seeded (manifest-declared),
+                non-advanced rows, rendered via the typed ParamField. */}
+            {basicSorted.length > 0 && (
+              <div className="mb-6">
+                <h4 className="text-[13.5px] font-semibold text-text-strong mb-3">Application variables</h4>
+                <div className="space-y-3">
+                  {basicSorted.map(({ env, index }) => (
+                    <ParamField
+                      key={env.key}
+                      spec={env}
+                      value={env.value}
+                      onChange={(v) => handleParamChange(index, v)}
+                      issues={issuesForKey(env.key)}
+                      showSecret={showSecrets[env.key]}
+                      onToggleSecret={() => toggleSecretVisibility(env.key)}
+                      onGenerateSecret={env.isSecret ? () => generateSecret(index) : undefined}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Advanced application variables — seeded rows with `advanced:
+                true`, collapsed by default. */}
+            {advancedRows.length > 0 && (
+              <div className="mb-6">
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(v => !v)}
+                  className="flex items-center gap-2 text-[13.5px] font-semibold text-text-strong mb-3"
+                >
+                  {showAdvanced ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  <span>Advanced ({advancedRows.length})</span>
+                </button>
+                {showAdvanced && (
+                  <div className="space-y-3">
+                    {advancedRows.map(({ env, index }) => (
+                      <ParamField
+                        key={env.key}
+                        spec={env}
+                        value={env.value}
+                        onChange={(v) => handleParamChange(index, v)}
+                        issues={issuesForKey(env.key)}
+                        showSecret={showSecrets[env.key]}
+                        onToggleSecret={() => toggleSecretVisibility(env.key)}
+                        onGenerateSecret={env.isSecret ? () => generateSecret(index) : undefined}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Custom variables — free-form rows with no manifest spec (added
+                via "Add app variable"). Unchanged from the original grid. */}
             <div>
-              <h4 className="text-[13.5px] font-semibold text-text-strong mb-3">Application variables</h4>
+              <h4 className="text-[13.5px] font-semibold text-text-strong mb-3">Custom variables</h4>
 
               <div className="space-y-3 mb-3">
-                {envVars.map((env, index) => {
+                {customRows.map(({ env, index }) => {
                   // A populated secret with no value is what keeps Next disabled
                   // (canProceed, case 0). Mark it so the operator can see exactly
                   // which row to fix in a long list.
@@ -721,7 +847,7 @@ services:
                 })}
               </div>
 
-              {envVars.some(env => env.key && env.isSecret && !env.value) && (
+              {customRows.some(({ env }) => env.key && env.isSecret && !env.value) && (
                 <p className="flex items-center gap-2 mb-3 text-[12.5px] text-text-muted">
                   <AlertTriangle className="w-3.5 h-3.5 text-warning shrink-0" />
                   <span>
@@ -741,6 +867,7 @@ services:
             </div>
           </div>
         );
+      }
 
       case 1: // Compose Override
         return (
