@@ -27,12 +27,7 @@ import { coerceManifestAuth } from './manifest-auth';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
-import { validateParamSpec } from '@hola/shared/param-validate';
-
-const PARAM_TYPES: ReadonlySet<string> = new Set<ParamType>([
-  'string', 'integer', 'port', 'boolean', 'enum', 'url', 'email', 'timezone',
-]);
-const GENERATE_KINDS: ReadonlySet<string> = new Set(['hex', 'base64', 'fernet']);
+import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
 
 /**
  * Coerce one raw `manifest.defaultEnv[]` row into an `AppEnvVar`, including the

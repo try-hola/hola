@@ -35,8 +35,7 @@ import type {
   ProvisionedAuthRef,
   GetLogsResponse,
   LogEntry,
-  GetDeploymentConfigResponse,
-  AppEnvVar
+  GetDeploymentConfigResponse
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion } from '@hola/shared';
 import { validateParams } from '@hola/shared/param-validate';
@@ -1234,21 +1233,6 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
   }
 
-  /** The active release's app env as full `AppEnvVar` rows — spec intact (label/
-   *  type/required/pattern/etc.), unlike `readActiveAppEnv`'s value-only map.
-   *  Source for the Configuration tab (`getConfig`), which renders each row via
-   *  the typed `ParamField` rather than a plain text box. */
-  private async readActiveFullAppEnv(deployment: EnhancedDeploymentDetail): Promise<AppEnvVar[]> {
-    const manifestPath = this.activeManifestPath(deployment);
-    if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) return [];
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return manifest.appEnv ?? [];
-    } catch {
-      return [];
-    }
-  }
-
   /**
    * Resolve the registry credential (if any) recorded on the active release, so
    * the runtime image can be pulled from a private registry. Returns undefined
@@ -1302,11 +1286,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    *  (value-only maps for the internal promote carry-forward merge), this is the
    *  public read-path the web UI renders via `ParamField`. */
   async getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse> {
+    // Rehydrate first, like every sibling per-deployment method — otherwise a
+    // config read racing the initial detail fetch on a cold server sees the
+    // empty in-memory map and 404s a deployment that exists on disk.
+    await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
-    const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return { appEnv: [], systemOverrides: {} };
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return { appEnv: [], systemOverrides: {} };
+    const manifestPath = this.activeManifestPath(deployment);
+    if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) return { appEnv: [], systemOverrides: {} };
     try {
       const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
       return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {} };
@@ -1373,8 +1359,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Trigger a real redeploy: `executeAction('restart')` enqueues the same
     // lifecycle job `runLifecycleJob` runs for an operator-initiated restart,
     // which calls `materializeCompose` — that reads the manifest fresh off disk
-    // (see `readActiveAppEnv`/`readActiveFullAppEnv` above), so it picks up the
-    // rewrite just persisted and runs a real `docker compose up` against it.
+    // (see `readActiveAppEnv` above), so it picks up the rewrite just persisted
+    // and runs a real `docker compose up` against it.
     const { jobId } = await this.executeAction(deploymentId, { action: 'restart' });
     return { ok: true, jobId };
   }

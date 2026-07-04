@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AppEnvVar, ValidationIssue } from '@hola/shared';
+import { isEffectivelyRequired } from '@hola/shared/param-validate';
 import { FieldShell } from './FieldShell';
 import { TextInput } from './TextInput';
 import { NumberInput } from './NumberInput';
@@ -40,9 +41,9 @@ export const ParamField: React.FC<ParamFieldProps> = ({
   onGenerateSecret,
 }) => {
   const label = spec.label ?? spec.key;
-  // Tri-state mirrors `validateParamValue`'s `effectivelyRequired` exactly, so
-  // the UI's required marker never disagrees with what the server will reject.
-  const required = spec.required ?? spec.isSecret;
+  // Shared with `validateParamValue`, so the UI's required marker never
+  // disagrees with what the server will reject.
+  const required = isEffectivelyRequired(spec);
   const error = issues?.find((i) => i.severity === 'error')?.message;
   const hasError = Boolean(error);
   const id = `param-${spec.key}`;

@@ -196,6 +196,15 @@ describe('validateParamValue — timezone', () => {
     expect(validateParamValue(spec, 'UTC')).toEqual([]);
   });
 
+  test('accepts IANA aliases omitted from supportedValuesOf (e.g. webtop TZ default)', () => {
+    // `Intl.supportedValuesOf('timeZone')` lists canonical zones only and omits
+    // aliases; the validator must still accept them via the DateTimeFormat
+    // fallback, or webtop's own default TZ='Etc/UTC' would block install.
+    const spec = baseVar({ type: 'timezone' });
+    expect(validateParamValue(spec, 'Etc/UTC')).toEqual([]);
+    expect(validateParamValue(spec, 'US/Eastern')).toEqual([]);
+  });
+
   test('invalid zone → PARAM_INVALID_TIMEZONE', () => {
     const spec = baseVar({ type: 'timezone' });
     expect(codes(validateParamValue(spec, 'Not/AZone'))).toEqual(['PARAM_INVALID_TIMEZONE']);
@@ -339,10 +348,12 @@ describe('generateSecretValue', () => {
   test('fernet: always exactly 32 bytes regardless of length input', () => {
     const short = generateSecretValue({ kind: 'fernet', length: 4 });
     const long = generateSecretValue({ kind: 'fernet', length: 128 });
-    // 32 raw bytes → 43 base64url chars with no padding (ceil(32*4/3) - padding).
-    expect(short).toHaveLength(43);
-    expect(long).toHaveLength(43);
-    expect(short).toMatch(/^[A-Za-z0-9_-]+$/);
+    // 32 raw bytes → 44-char urlsafe-base64 WITH padding. The trailing `=` is
+    // mandatory: Python's cryptography.Fernet rejects an unpadded 43-char key
+    // ("Incorrect padding"), so a stripped key would break e.g. Hangar.
+    expect(short).toHaveLength(44);
+    expect(long).toHaveLength(44);
+    expect(short).toMatch(/^[A-Za-z0-9_-]+=$/);
   });
 
   test('successive calls are not identical (random)', () => {

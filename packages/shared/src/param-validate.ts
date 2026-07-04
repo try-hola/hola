@@ -33,9 +33,28 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // input. Not an error — just a skip, since the value may well be valid.
 const MAX_PATTERN_VALUE_LENGTH = 10_000;
 
-const PARAM_TYPES: ReadonlySet<string> = new Set<ParamType>([
+export const PARAM_TYPES: ReadonlySet<string> = new Set<ParamType>([
   'string', 'integer', 'port', 'boolean', 'enum', 'url', 'email', 'timezone',
 ]);
+
+/** The `generate.kind` vocabulary understood by `generateSecretValue`. Exported
+ *  so the server's catalog coercion narrows against one source of truth. */
+export const GENERATE_KINDS: ReadonlySet<string> = new Set<ParamGenerate['kind']>([
+  'hex', 'base64', 'fernet',
+]);
+
+// Compile author-supplied `pattern`s once and reuse — `validateParams` runs on
+// every keystroke in the wizard, so recompiling the same manifest regex per
+// value is pure waste. Keyed by the pattern source string.
+const patternCache = new Map<string, RegExp>();
+function compilePattern(pattern: string): RegExp {
+  let re = patternCache.get(pattern);
+  if (re === undefined) {
+    re = new RegExp(pattern);
+    patternCache.set(pattern, re);
+  }
+  return re;
+}
 
 function issue(
   code: 'PARAM_REQUIRED_MISSING' | 'PARAM_INVALID_INTEGER' | 'PARAM_INTEGER_OUT_OF_RANGE'
@@ -66,8 +85,12 @@ function isValidTimezone(value: string): boolean {
       ? new Set(supportedValuesOf('timeZone'))
       : TIMEZONE_LOOKUP_UNSUPPORTED;
   }
-  if (cachedTimezones !== TIMEZONE_LOOKUP_UNSUPPORTED) {
-    return cachedTimezones.has(value);
+  // Fast path: the canonical zone list. It omits valid IANA *aliases* (e.g.
+  // 'Etc/UTC', 'US/Eastern'), so a miss here is NOT a rejection — fall through
+  // to `DateTimeFormat`, which accepts aliases too. (Checking the set only
+  // avoids a try/catch for the common canonical zones.)
+  if (cachedTimezones !== TIMEZONE_LOOKUP_UNSUPPORTED && cachedTimezones.has(value)) {
+    return true;
   }
   try {
     void new Intl.DateTimeFormat(undefined, { timeZone: value });
@@ -90,7 +113,7 @@ function isValidTimezone(value: string): boolean {
 export function validateParamValue(spec: AppEnvVar, value: string, path?: string): ValidationIssue[] {
   const at = path ?? `env.${spec.key}`;
   const label = spec.label ?? spec.key;
-  const effectivelyRequired = spec.required ?? spec.isSecret;
+  const effectivelyRequired = isEffectivelyRequired(spec);
 
   if (value === '') {
     if (effectivelyRequired) {
@@ -108,7 +131,7 @@ export function validateParamValue(spec: AppEnvVar, value: string, path?: string
     case 'string': {
       if (spec.pattern !== undefined && value.length < MAX_PATTERN_VALUE_LENGTH) {
         try {
-          const re = new RegExp(spec.pattern);
+          const re = compilePattern(spec.pattern);
           if (!re.test(value)) {
             issues.push(issue('PARAM_PATTERN_MISMATCH', 'error', `${label} does not match the required format`, at));
           }
@@ -196,8 +219,18 @@ export function validateParamValue(spec: AppEnvVar, value: string, path?: string
   return issues;
 }
 
+/**
+ * The tri-state "is this param required" rule, in one place so the server's
+ * rejection, the wizard's required-marker + Next gate, and `ParamField` never
+ * disagree: an explicit `required` wins; otherwise a secret is required by
+ * legacy convention (`isSecret ⇒ required`).
+ */
+export function isEffectivelyRequired(spec: AppEnvVar): boolean {
+  return spec.required ?? spec.isSecret;
+}
+
 /** Whether a row carries any typed-spec field at all (vs. a plain legacy/custom var). */
-function hasParamSpec(spec: AppEnvVar): boolean {
+export function hasParamSpec(spec: AppEnvVar): boolean {
   return (
     spec.type !== undefined ||
     spec.required !== undefined ||
@@ -325,6 +358,13 @@ function bytesToBase64Url(bytes: Uint8Array): string {
   return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** urlsafe base64 that KEEPS its `=` padding — required for a Fernet key, which
+ *  Python's `cryptography.Fernet` decodes with `urlsafe_b64decode` and rejects
+ *  (\"Incorrect padding\") if the trailing `=` is stripped. */
+function bytesToBase64UrlPadded(bytes: Uint8Array): string {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_');
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   let out = '';
   for (const b of bytes) out += b.toString(16).padStart(2, '0');
@@ -343,8 +383,10 @@ function randomBytes(length: number): Uint8Array {
  */
 export function generateSecretValue(gen: ParamGenerate): string {
   if (gen.kind === 'fernet') {
-    // Fernet keys are a fixed 32-byte key; `length` doesn't apply.
-    return bytesToBase64Url(randomBytes(32));
+    // A Fernet key is urlsafe-base64 of exactly 32 bytes WITH padding (44
+    // chars); `length` doesn't apply. Must keep the `=` — an unpadded 43-char
+    // key fails `cryptography.Fernet` with "Incorrect padding".
+    return bytesToBase64UrlPadded(randomBytes(32));
   }
   const length = gen.length ?? 32;
   const bytes = randomBytes(length);

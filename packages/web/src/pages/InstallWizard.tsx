@@ -10,7 +10,7 @@ import type {
   PatchDraftRequest,
   ValidationIssue,
 } from '@hola/shared';
-import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
+import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
 import { useDraftUpload } from '../hooks/useDraftUpload';
@@ -222,9 +222,8 @@ export const InstallWizard: React.FC = () => {
         // validated: a populated row needs a key, and an effectively-required
         // row (same tri-state formula as the shared validator: `required ??
         // isSecret`) also needs a value.
-        const effectivelyRequired = (env: AppEnvVar) => env.required ?? env.isSecret;
         const meaningful = envVars.filter(env => env.key || env.value);
-        const requiredOk = meaningful.every(env => env.key && (env.value || !effectivelyRequired(env)));
+        const requiredOk = meaningful.every(env => env.key && (env.value || !isEffectivelyRequired(env)));
         // Typed rows (Basic/Advanced) must also pass their own type checks —
         // an invalid URL or out-of-range port blocks Next client-side too,
         // mirroring what the server would reject at validate/preflight time
@@ -424,22 +423,14 @@ export const InstallWizard: React.FC = () => {
     setShowSecrets(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Legacy fallback for a specless secret (no `generate` recipe): 32 random
-  // bytes → 64 hex chars, matching `openssl rand -hex 32`. Kept byte-for-byte
-  // identical to the original behavior so untyped/custom secrets don't regress.
-  const legacyRandomSecretHex = (): string => {
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
-  };
-
   // Fill a secret field with a random value. Reveals it so the operator can
   // see/copy what was generated. Prefers the manifest's own `generate` recipe
   // (hex/base64/fernet, with its declared length) when the row has one;
-  // otherwise falls back to the legacy hex-32 behavior for specless secrets.
+  // otherwise falls back to hex-32 for specless secrets — which is exactly what
+  // generateSecretValue({ kind: 'hex' }) mints by default (`openssl rand -hex 32`).
   const generateSecret = async (index: number) => {
     const spec = envVars[index];
-    const value = spec?.generate ? generateSecretValue(spec.generate) : legacyRandomSecretHex();
+    const value = generateSecretValue(spec?.generate ?? { kind: 'hex' });
     if (spec?.key) {
       setShowSecrets(prev => ({ ...prev, [spec.key]: true }));
       setTouchedKeys(prev => (prev.has(spec.key) ? prev : new Set(prev).add(spec.key)));
@@ -592,7 +583,6 @@ services:
         // Seeded (manifest-declared) rows split into Basic (not `advanced`)
         // and Advanced; anything not seeded is a free-form Custom row (added
         // via "Add app variable", no spec — rendered with the original grid).
-        const effectivelyRequired = (env: AppEnvVar) => env.required ?? env.isSecret;
         const seededKeys = seededKeysRef.current;
         const indexedEnvVars = envVars.map((env, index) => ({ env, index }));
         const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced);
@@ -602,7 +592,7 @@ services:
         // (original catalog-declared order) otherwise — env order doesn't
         // affect deployment, only what the operator sees first.
         const basicSorted = [...basicRows].sort((a, b) => {
-          const needsValue = (r: { env: AppEnvVar }) => Number(Boolean(effectivelyRequired(r.env) && !r.env.value));
+          const needsValue = (r: { env: AppEnvVar }) => Number(Boolean(isEffectivelyRequired(r.env) && !r.env.value));
           return needsValue(b) - needsValue(a) || a.index - b.index;
         });
 

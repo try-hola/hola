@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { TextInput } from './TextInput';
 
 export interface TimezoneSelectProps {
@@ -33,12 +33,19 @@ function getTimezones(): string[] | null {
 export const TimezoneSelect: React.FC<TimezoneSelectProps> = ({ id, value, onChange, placeholder, hasError }) => {
   const zones = getTimezones();
   const effectivePlaceholder = placeholder ?? 'e.g. America/New_York';
+  const listId = `${id ?? 'tz'}-options`;
+
+  // The datalist depends only on the (module-cached) zone list, not on `value`,
+  // so build the ~430 <option> nodes once instead of on every keystroke.
+  const options = useMemo(
+    () => zones?.map((z) => <option key={z} value={z} />),
+    [zones]
+  );
 
   if (!zones) {
     return <TextInput id={id} value={value} onChange={onChange} placeholder={effectivePlaceholder} hasError={hasError} />;
   }
 
-  const listId = `${id ?? 'tz'}-options`;
   return (
     <>
       <input
@@ -50,11 +57,7 @@ export const TimezoneSelect: React.FC<TimezoneSelectProps> = ({ id, value, onCha
         placeholder={effectivePlaceholder}
         className={`w-full h-10 bg-surface-0 border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary ${hasError ? 'border-danger/60' : 'border-border'}`}
       />
-      <datalist id={listId}>
-        {zones.map((z) => (
-          <option key={z} value={z} />
-        ))}
-      </datalist>
+      <datalist id={listId}>{options}</datalist>
     </>
   );
 };

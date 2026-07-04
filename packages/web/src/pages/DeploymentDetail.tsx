@@ -30,38 +30,15 @@ import type {
   AppEnvVar,
   ValidationIssue
 } from '@hola/shared';
-import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
+import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/param-validate';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi } from '../hooks/useDeploymentDetailApi';
 
-/** A row carries a manifest-declared typed spec if it has any field beyond
- *  key/value/isSecret/description — mirrors `param-validate.ts`'s internal
- *  `hasParamSpec` (not exported; this is the same ~10-line check). Used to
- *  gate which rows are safe to remove from the editor (a spec-bearing row is
- *  catalog-declared and shouldn't be deletable from the UI, only re-valued). */
-const hasParamSpec = (spec: AppEnvVar): boolean =>
-  spec.type !== undefined ||
-  spec.required !== undefined ||
-  spec.pattern !== undefined ||
-  spec.minLength !== undefined ||
-  spec.maxLength !== undefined ||
-  spec.min !== undefined ||
-  spec.max !== undefined ||
-  spec.options !== undefined ||
-  spec.trueValue !== undefined ||
-  spec.falseValue !== undefined ||
-  spec.httpsOnly !== undefined ||
-  spec.generate !== undefined;
-
-/** Fallback for a specless secret (no `generate` recipe): 32 random bytes as
- *  hex, matching `openssl rand -hex 32` — same behavior InstallWizard uses. */
-const legacyRandomSecretHex = (): string => {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-};
+// `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
+// is imported from @hola/shared/param-validate so it can't drift from the
+// server's own definition as new spec fields are added.
 
 // Decorative sparkline bar heights — computed once at module load (the values
 // are illustrative, not real time-series data).
@@ -259,7 +236,9 @@ export const DeploymentDetail: React.FC = () => {
   // fallback for specless secrets. Reveals it so the operator can see/copy it.
   const generateSecret = (index: number) => {
     const spec = envVars[index];
-    const value = spec?.generate ? generateSecretValue(spec.generate) : legacyRandomSecretHex();
+    // A specless secret (no `generate` recipe) falls back to 32 random bytes as
+    // hex — exactly what generateSecretValue({ kind: 'hex' }) mints by default.
+    const value = generateSecretValue(spec?.generate ?? { kind: 'hex' });
     if (spec?.key) setShowSecrets(prev => ({ ...prev, [spec.key]: true }));
     updateDeploymentEnvVar(index, 'value', value);
   };
@@ -371,7 +350,11 @@ export const DeploymentDetail: React.FC = () => {
         systemOverrides
       });
       setIsEditing(false);
-      await refetchConfig();
+      // Force a fresh read: updateConfiguration only invalidates the
+      // deployment-detail cache, so a plain refetch would serve the still-valid
+      // (<30s) deployment-config cache and the [configData,isEditing] effect
+      // would revert the form to the pre-save values, making the save look lost.
+      await refetchConfig(true);
     } catch (error) {
       console.error('Error saving configuration:', error);
       setSaveError(error instanceof Error ? error.message : 'Failed to save configuration');

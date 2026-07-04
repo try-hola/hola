@@ -122,8 +122,12 @@ export async function runInstall(
     }
 
     if (!opts.noGenerateSecrets) {
+      // A key the operator named in `--set` (even `--set SECRET=` to leave it
+      // deliberately empty, e.g. an optional secret the app self-generates on
+      // first boot) is an explicit choice — never auto-fill over it.
+      const explicitKeys = new Set(Object.keys(overrides));
       for (const row of appEnv) {
-        if (row.isSecret === true && row.value === '' && row.generate) {
+        if (row.isSecret === true && row.value === '' && row.generate && !explicitKeys.has(row.key)) {
           row.value = generateSecretValue(row.generate);
           out(`Generated a value for ${row.key} (use --set ${row.key}=... to provide your own)`);
           dirty = true;
