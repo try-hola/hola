@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 import type { AppEnvVar, CreateDraftResponse, Draft } from '@hola/shared';
@@ -89,29 +89,54 @@ afterEach(() => {
   cleanup();
 });
 
-describe('InstallWizard secret wand', () => {
-  it('uses generateSecretValue with the spec recipe for a seeded secret that declares one', async () => {
-    renderWizard();
-    await waitFor(() => expect(screen.getAllByTitle('Generate a random secret')).toHaveLength(2));
+// Auto-fill (see below) reorders rows by "needs a value" — required-and-empty
+// floats to the top — so a field's wand position isn't stable across tests.
+// Look it up relative to its own labeled input instead of a flat array index.
+function wandFor(labelPattern: RegExp): HTMLElement {
+  const input = screen.getByLabelText(labelPattern);
+  const row = input.closest('.relative') as HTMLElement;
+  return within(row).getByTitle('Generate a random secret');
+}
 
-    const wands = screen.getAllByTitle('Generate a random secret');
-    // First seeded row is GEN_SECRET (has a `generate` recipe).
-    fireEvent.click(wands[0]);
+describe('InstallWizard secret wand', () => {
+  it('auto-fills a seeded secret with a `generate` recipe on draft load, no click required', async () => {
+    renderWizard();
 
     await waitFor(() => {
       const generatedInput = screen.getByLabelText(/^Generated secret/) as HTMLInputElement;
       // 4 bytes -> 8 lowercase hex chars, per the spec's generate.length: 4.
       expect(generatedInput.value).toMatch(/^[0-9a-f]{8}$/);
     });
+    // Persisted immediately (not left to the next "Next" click), same
+    // durability the manual wand-click path already gets.
+    await waitFor(() => expect(draftsApi.update).toHaveBeenCalled());
+  });
+
+  it('does not auto-fill a seeded secret with no generate recipe', async () => {
+    renderWizard();
+    await waitFor(() => expect(screen.getByLabelText(/^Generated secret/)).toBeInTheDocument());
+
+    const legacyInput = screen.getByLabelText(/^Legacy secret/) as HTMLInputElement;
+    expect(legacyInput.value).toBe('');
+  });
+
+  it('uses generateSecretValue with the spec recipe when the wand is clicked again', async () => {
+    renderWizard();
+    await waitFor(() => expect(screen.getByLabelText(/^Generated secret/)).toBeInTheDocument());
+
+    fireEvent.click(wandFor(/^Generated secret/));
+
+    await waitFor(() => {
+      const generatedInput = screen.getByLabelText(/^Generated secret/) as HTMLInputElement;
+      expect(generatedInput.value).toMatch(/^[0-9a-f]{8}$/);
+    });
   });
 
   it('falls back to the legacy 32-byte-hex value for a seeded secret with no generate recipe', async () => {
     renderWizard();
-    await waitFor(() => expect(screen.getAllByTitle('Generate a random secret')).toHaveLength(2));
+    await waitFor(() => expect(screen.getByLabelText(/^Legacy secret/)).toBeInTheDocument());
 
-    const wands = screen.getAllByTitle('Generate a random secret');
-    // Second seeded row is LEGACY_SECRET (no `generate` recipe).
-    fireEvent.click(wands[1]);
+    fireEvent.click(wandFor(/^Legacy secret/));
 
     await waitFor(() => {
       const legacyInput = screen.getByLabelText(/^Legacy secret/) as HTMLInputElement;

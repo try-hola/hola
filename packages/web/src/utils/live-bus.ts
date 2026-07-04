@@ -3,6 +3,8 @@
 // (useDeploymentsApi, useJobsApi) subscribe and refetch, so they stay live
 // without each polling. Tiny and synchronous — a UI-local pub/sub.
 
+import { globalCache } from './cache';
+
 export type LiveResource = 'deployments' | 'jobs';
 
 const listeners = new Map<LiveResource, Set<() => void>>();
@@ -20,8 +22,19 @@ export function onLive(resource: LiveResource, cb: () => void): () => void {
   };
 }
 
-/** Notify subscribers that a resource changed (a stream event arrived). */
+/**
+ * Notify subscribers that a resource changed (a stream event arrived).
+ *
+ * Also drops every cached `globalCache` entry for this resource
+ * (`useDeploymentsApi`/`useJobsApi` key their cache entries `<resource>-<params>`)
+ * — not just the currently-mounted listeners' data. `onLive` only reaches a
+ * component that happens to be mounted right now; a page that isn't (e.g.
+ * Apps while the operator is on Deployments) would otherwise still serve its
+ * stale cache entry on its next mount's unforced fetch, since nothing else
+ * ever invalidates it.
+ */
 export function signalLive(resource: LiveResource): void {
+  globalCache.deleteByPattern(new RegExp(`^${resource}-`));
   listeners.get(resource)?.forEach((cb) => {
     try {
       cb();

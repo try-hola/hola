@@ -586,6 +586,15 @@ export type AppEnvVar = {
   required?: boolean;
   /** Hide behind a collapsed "Advanced" section in the install wizard. */
   advanced?: boolean;
+  /**
+   * True for a row discovered by scanning the bundle's compose.yaml
+   * `environment:` blocks rather than declared in the manifest's `defaultEnv`
+   * — internal/hardcoded config the packager never curated a label or type
+   * for (DB passwords shared between two containers, fixed ports, etc). The
+   * UI treats these like `advanced: true` (collapsed by default) since they
+   * lack packager-provided labels; never set on a manifest-declared row.
+   */
+  autoDetected?: boolean;
   placeholder?: string;
   // --- string ---
   pattern?: string;

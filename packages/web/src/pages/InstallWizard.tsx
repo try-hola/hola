@@ -130,6 +130,19 @@ export const InstallWizard: React.FC = () => {
           ? await createDraftHook.createDraft({ ociRef, credentialRef })
           : await createDraftHook.createDraft({ appId, source });
 
+        // Auto-fill empty secrets that carry a manifest `generate` recipe —
+        // these are machine tokens (runner registration keys, app secret
+        // keys) nobody types or remembers, same class as an internal DB
+        // password the app generates for itself. Requiring a manual wand
+        // click here bought nothing; mirrors the CLI's install.ts, which
+        // already auto-fills these non-interactively.
+        let generatedCount = 0;
+        const seededEnv = result.appEnv.map((e) => {
+          if (!(e.isSecret && e.generate && !e.value)) return e;
+          generatedCount++;
+          return { ...e, value: generateSecretValue(e.generate) };
+        });
+
         // Update state with draft data. Row order is preserved exactly as the
         // catalog declares it (env order doesn't affect deployment) — the
         // Basic section below floats required-and-empty rows to the top for
@@ -137,10 +150,17 @@ export const InstallWizard: React.FC = () => {
         // were present right now ("seeded", manifest-declared) vs. added later
         // via "Add app variable" (free-form "Custom" rows with no spec).
         setSystemEnvVars(result.systemEnv);
-        seededKeysRef.current = new Set(result.appEnv.map((e) => e.key));
-        setEnvVars(result.appEnv);
+        seededKeysRef.current = new Set(seededEnv.map((e) => e.key));
+        setEnvVars(seededEnv);
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
+
+        // Persist the generated values immediately so a refresh (or abandoning
+        // the wizard before clicking Next) doesn't lose them — same durability
+        // the manual wand-click path already gets via `updateEnvVar`.
+        if (generatedCount > 0) {
+          await api.drafts.update(result.draftId, { appEnv: seededEnv }).catch(() => {});
+        }
 
       } catch (err) {
         creatingDraftRef.current = false; // allow a retry on failure
@@ -585,8 +605,11 @@ services:
         // via "Add app variable", no spec — rendered with the original grid).
         const seededKeys = seededKeysRef.current;
         const indexedEnvVars = envVars.map((env, index) => ({ env, index }));
-        const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced);
-        const advancedRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && env.advanced === true);
+        // `autoDetected` rows (harvested from compose.yaml, no manifest label)
+        // fold into Advanced alongside manifest `advanced: true` rows — neither
+        // is meant to be the first thing an installer sees.
+        const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced && !env.autoDetected);
+        const advancedRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && (env.advanced === true || env.autoDetected === true));
         const customRows = indexedEnvVars.filter(({ env }) => !seededKeys.has(env.key));
         // Float required-and-empty rows to the top within Basic; stable
         // (original catalog-declared order) otherwise — env order doesn't
@@ -725,7 +748,8 @@ services:
             )}
 
             {/* Advanced application variables — seeded rows with `advanced:
-                true`, collapsed by default. */}
+                true` or `autoDetected: true` (harvested from compose.yaml,
+                no manifest label), collapsed by default. */}
             {advancedRows.length > 0 && (
               <div className="mb-6">
                 <button

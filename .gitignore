@@ -45,6 +45,7 @@ hola-*.env
 .devcontainer/hola.env
 .devcontainer/.vm-state
 .devcontainer/.vm-keys/
+.devcontainer-state/
 
 # Monorepo packages
 packages/*/dist

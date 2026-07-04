@@ -56,6 +56,9 @@ services:
       expect(defaults.environment).toHaveLength(2);
       expect(defaults.environment.some(e => e.key === 'NGINX_WORKER_PROCESSES' && e.value === 'auto')).toBe(true);
       expect(defaults.environment.some(e => e.key === 'NGINX_WORKER_CONNECTIONS' && e.value === '1024')).toBe(true);
+      // Every compose-harvested row is flagged so the wizard/config UI can
+      // collapse it behind Advanced (no packager-provided label exists for it).
+      expect(defaults.environment.every(e => e.autoDetected === true)).toBe(true);
     } finally {
       // Clean up
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -97,6 +100,30 @@ services:
     expect(merged.defaultEnv.some(e => e.key === 'NODE_ENV' && e.value === 'production')).toBe(true); // From compose
     expect(merged.defaultEnv.some(e => e.key === 'PORT' && e.value === '4000')).toBe(true); // Manifest wins
     expect(merged.defaultEnv.some(e => e.key === 'DEBUG' && e.value === 'true')).toBe(true); // From manifest
+  });
+
+  test('manifest wins on key collision, dropping the compose row\'s autoDetected flag entirely', () => {
+    const composeDefaults = {
+      ports: [],
+      volumes: [],
+      environment: [
+        { key: 'PORT', value: '3000', isSecret: false, description: 'Port number', autoDetected: true },
+        { key: 'INTERNAL_DB_PASSWORD', value: 'baked-in', isSecret: true, description: 'DB password', autoDetected: true },
+      ],
+    };
+    const manifestDefaults = { ports: [], volumes: [] };
+    const manifestEnv = [{ key: 'PORT', value: '4000', isSecret: false, label: 'App Port' }];
+
+    const merged = mergeDefaults(composeDefaults, manifestDefaults, manifestEnv);
+
+    // The manifest-declared row fully replaces the compose one — no autoDetected leaks through.
+    const port = merged.defaultEnv.find(e => e.key === 'PORT');
+    expect(port).toMatchObject({ value: '4000', label: 'App Port' });
+    expect(port?.autoDetected).toBeUndefined();
+
+    // A key the manifest never mentions stays compose-derived and flagged.
+    const dbPassword = merged.defaultEnv.find(e => e.key === 'INTERNAL_DB_PASSWORD');
+    expect(dbPassword?.autoDetected).toBe(true);
   });
 
   test('should handle various compose environment formats', async () => {

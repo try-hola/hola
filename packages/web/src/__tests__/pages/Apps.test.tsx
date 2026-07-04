@@ -66,6 +66,18 @@ describe('Apps landing', () => {
     expect(screen.getByTitle('Bravo — view deployment')).toHaveAttribute('href', '/deployments/b-1');
   });
 
+  it('shows the manage shortcut on a non-running (e.g. failed) app too, not just running ones', async () => {
+    mockApi(
+      [{ id: 'c-1', name: 'Charlie', app: 'c', icon: '📦', status: 'error', ports: [], lastUpdated: 'now' }],
+    );
+
+    renderApps();
+
+    // Without this, the only way to reach Remove was clicking the tile itself
+    // (not obvious) or hunting through the Deployments list nav.
+    expect(await screen.findByTitle('Manage & logs')).toHaveAttribute('href', '/deployments/c-1');
+  });
+
   it('falls back to the app id when the deployment has no display name', async () => {
     mockApi(
       [{ id: 'x-1', name: '', app: 'uptime-kuma', icon: '📦', status: 'installing', ports: [], lastUpdated: 'now' }],
