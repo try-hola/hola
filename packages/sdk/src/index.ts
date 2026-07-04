@@ -21,6 +21,7 @@ import {
   InstallFromRefRequest, InstallFromRefResponse,
   // Catalog sources (multi-catalog Slice 2)
   CatalogSourceRecord, AddCatalogSourceRequest, ListCatalogSourcesResponse,
+  RefreshCatalogResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
   // System types
@@ -102,7 +103,7 @@ export class HolaSdk {
     versionDetail: (appId: string, version: string, source?: string) => this.get<GetCatalogAppVersionDetailResponse>(`${API.catalog.versionDetail(appId, version)}${buildQuery({ source })}`),
     // Force an immediate re-fetch of the remote catalog (bypasses the refresh-interval
     // TTL) so newly-published app versions surface as available updates right away.
-    refresh: (force = true) => this.post<{ success: boolean; timestamp: string }>(`${API.catalog.refresh}${buildQuery({ force })}`),
+    refresh: (force = true) => this.post<RefreshCatalogResponse>(`${API.catalog.refresh}${buildQuery({ force })}`),
   };
 
   // Managed catalog sources (Homebrew-tap model). Instance-level, admin-gated.

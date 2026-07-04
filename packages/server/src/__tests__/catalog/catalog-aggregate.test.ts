@@ -85,4 +85,22 @@ describe('RealCatalogService aggregation', () => {
     const globex = await catalog.getVersions('db', 'globex');
     expect(globex.items.map(v => v.version)).toEqual(['9.9.9']);
   });
+
+  test('listApps surfaces each app\'s (latest) version', async () => {
+    const { catalog } = await harness();
+    const { items } = await catalog.listApps({ page: 1, limit: 50 });
+    const byQualified = new Map(items.map(a => [`${a.source}/${a.id}`, a]));
+    expect(byQualified.get('acme/cms')!.version).toBe('1.0.0');
+    expect(byQualified.get('globex/db')!.version).toBe('9.9.9');
+  });
+
+  test('refresh reports per-source success/failure without one masking the other', async () => {
+    const { catalog } = await harness();
+    failGlobex = true;
+    const results = await catalog.refresh(true);
+    const byId = new Map(results.map(r => [r.id, r]));
+    expect(byId.get('acme')!.ok).toBe(true);
+    expect(byId.get('globex')!.ok).toBe(false);
+    expect(byId.get('globex')!.error).toBeTruthy();
+  });
 });

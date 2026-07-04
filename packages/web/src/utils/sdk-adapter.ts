@@ -7,6 +7,7 @@ import type {
   HealthResponse, GetSummaryResponse, GetMeResponse,
   // Catalog types
   GetCatalogAppsResponse, GetCatalogAppResponse, GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
+  RefreshCatalogResponse,
   // Registry credentials + install-by-ref (multi-catalog Slice 1)
   AddRegistryCredentialRequest, ListRegistryCredentialsResponse, RegistryCredentialRecord,
   InstallFromRefRequest, InstallFromRefResponse,
@@ -324,7 +325,7 @@ export class SdkAdapter {
     // TTL) so newly-published versions surface as available updates right away.
     // A refresh can change which apps have updates, so drop the cached deployment
     // lists (they carry `updateAvailable`), catalog, and dashboard summary.
-    refresh: async (force = true): Promise<{ success: boolean; timestamp: string }> => {
+    refresh: async (force = true): Promise<RefreshCatalogResponse> => {
       const res = await this.sdk.catalog.refresh(force);
       globalCache.deleteByPattern(/^api:.*\/deployments/);
       globalCache.deleteByPattern(/^api:.*\/catalog/);

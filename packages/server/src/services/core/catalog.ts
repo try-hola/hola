@@ -209,7 +209,8 @@ export interface CatalogService {
    * too. `credentials` authenticate a private-registry pull.
    */
   getVersionDetailByRef(ociRef: string, credentials?: PullCredentials): Promise<GetCatalogAppVersionDetailResponse & { appId: string }>;
-  refresh(force?: boolean): Promise<void>;
+  /** Per-source outcome, so one bad source doesn't silently mask the others. */
+  refresh(force?: boolean): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>>;
 }
 
 /**
@@ -586,9 +587,16 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     }
   }
 
-  async refresh(force = false): Promise<void> {
+  async refresh(force = false): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>> {
     const sources = await this.resolveSources();
-    await Promise.allSettled(sources.map(s => this.catalogFor(s).refresh(force)));
+    const results = await Promise.allSettled(sources.map(s => this.catalogFor(s).refresh(force)));
+    return sources.map((s, i) => {
+      const r = results[i];
+      if (r.status === 'fulfilled') return { id: s.id, name: s.name, ok: true };
+      const error = r.reason instanceof Error ? r.reason.message : String(r.reason);
+      this.logger.warn('Catalog source refresh failed', { source: s.id, error });
+      return { id: s.id, name: s.name, ok: false, error };
+    });
   }
 
   private mapApp(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord): CatalogApp {
@@ -604,6 +612,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       featured: !!app.featured,
       source: source.id,
       trust: source.trust as CatalogSourceTrust,
+      version: pickLatestVersion(app.versions || [])?.version,
     };
   }
 }
@@ -629,5 +638,5 @@ export class MockCatalogService implements CatalogService {
   async getVersionDetailByRef(): Promise<GetCatalogAppVersionDetailResponse & { appId: string }> {
     throw new Error('VERSION_NOT_FOUND');
   }
-  async refresh(): Promise<void> { /* no-op */ }
+  async refresh(): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>> { return []; }
 }

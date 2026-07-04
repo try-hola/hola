@@ -232,6 +232,21 @@ describe('Deployment persistence (real service)', () => {
     expect((await b.routing.getRoutingMap())['gitea.local.hola']).toBeUndefined();
   });
 
+  test('deleting a deployment emits a deployment_deleted event (#331)', async () => {
+    const storage = new RealStorageService({ holaDir: dataRoot });
+    const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
+    const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
+    const events: Array<{ type: string; data: unknown }> = [];
+    const eventBus = { emit: (e: { type: string; data: unknown }) => events.push(e), subscribe: () => ({ unsubscribe() {} }) };
+    const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing, noLogging, new MockProvisionerService(), undefined, eventBus);
+
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    await deployments.deleteDeployment(dep.deploymentId);
+
+    const deleted = events.find(e => e.type === 'deployment_deleted');
+    expect(deleted?.data).toEqual({ deploymentId: dep.deploymentId });
+  });
+
   test('a second deployment of the same app is rejected as a host conflict', async () => {
     const { drafts, deployments } = makeSystem();
     await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
