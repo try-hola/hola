@@ -31,7 +31,10 @@ describe('install', () => {
     const sdk = makeSdk();
     const res = await runInstall('gitea', { noStream: true, json: true }, { sdk: sdk as unknown as HolaSdk });
 
-    expect(sdk.calls).toEqual(['create', 'validate', 'preflight', 'finalize', 'deploy']);
+    // No --set and no fillable secrets in the seeded appEnv → we still fetch
+    // the draft (to scan for empty generate-recipe secrets) but never PATCH it.
+    expect(sdk.calls).toEqual(['create', 'byId', 'validate', 'preflight', 'finalize', 'deploy']);
+    expect(sdk.drafts.update).not.toHaveBeenCalled();
     expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'gitea', version: 'latest' });
     expect(res?.deploymentId).toBe('dep1');
     expect(res?.status).toBe('completed');
@@ -49,6 +52,90 @@ describe('install', () => {
         { key: 'B', value: 'x', isSecret: false },
       ],
     });
+  });
+
+  it('rejects an invalid typed --set value before finalize (never calls finalize)', async () => {
+    const sdk = makeSdk({
+      drafts: {
+        byId: vi.fn(async () => ({
+          draftId: 'd1',
+          appEnv: [{ key: 'PORT', value: '', isSecret: false, type: 'port' }],
+        })),
+      },
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await runInstall('gitea', { set: ['PORT=99999'], noStream: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(res).toBeUndefined();
+    expect(sdk.drafts.finalize).not.toHaveBeenCalled();
+    expect(sdk.deployments.create).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('PORT:'));
+    errSpy.mockRestore();
+  });
+
+  it('auto-fills an empty required secret that has a generate recipe, and proceeds', async () => {
+    let updatePatch: { appEnv: Array<{ key: string; value: string }> } | undefined;
+    const sdk = makeSdk({
+      drafts: {
+        byId: vi.fn(async () => ({
+          draftId: 'd1',
+          appEnv: [{ key: 'TOKEN', value: '', isSecret: true, required: true, generate: { kind: 'hex', length: 16 } }],
+        })),
+        update: vi.fn(async (_id: string, patch: { appEnv: Array<{ key: string; value: string }> }) => {
+          updatePatch = patch;
+          return { ok: true };
+        }),
+      },
+    });
+    const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(sdk.drafts.update).toHaveBeenCalledTimes(1);
+    const token = updatePatch?.appEnv.find(e => e.key === 'TOKEN');
+    expect(token?.value).toMatch(/^[0-9a-f]{32}$/);
+    expect(sdk.deployments.create).toHaveBeenCalled();
+    expect(res?.deploymentId).toBe('dep1');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('fails validation on an empty required secret with NO generate recipe (actionable message)', async () => {
+    const sdk = makeSdk({
+      drafts: {
+        byId: vi.fn(async () => ({
+          draftId: 'd1',
+          appEnv: [{ key: 'TOKEN', value: '', isSecret: true, required: true }],
+        })),
+      },
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(res).toBeUndefined();
+    expect(sdk.drafts.update).not.toHaveBeenCalled();
+    expect(sdk.deployments.create).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('TOKEN:'));
+    errSpy.mockRestore();
+  });
+
+  it('--no-generate-secrets disables auto-fill, so the same secret now fails validation', async () => {
+    const sdk = makeSdk({
+      drafts: {
+        byId: vi.fn(async () => ({
+          draftId: 'd1',
+          appEnv: [{ key: 'TOKEN', value: '', isSecret: true, required: true, generate: { kind: 'hex', length: 16 } }],
+        })),
+      },
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await runInstall('gitea', { noStream: true, noGenerateSecrets: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(res).toBeUndefined();
+    expect(sdk.drafts.update).not.toHaveBeenCalled();
+    expect(sdk.deployments.create).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('TOKEN:'));
+    errSpy.mockRestore();
   });
 
   it('fails (exit 1) on validation errors under --strict and does not deploy', async () => {
