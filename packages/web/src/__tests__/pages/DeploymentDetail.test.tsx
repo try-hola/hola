@@ -132,4 +132,23 @@ describe('DeploymentDetail Configuration tab', () => {
     await waitFor(() => expect(screen.getByText(/must be between/i)).toBeInTheDocument());
     expect(deploymentsApi.update).not.toHaveBeenCalled();
   });
+
+  it('collapses autoDetected (compose-harvested, unlabeled) rows behind an Advanced toggle', async () => {
+    deploymentsApi.config.mockResolvedValueOnce({
+      appEnv: [
+        ...config.appEnv,
+        { key: 'GITEA__server__HTTP_PORT', value: '3000', isSecret: false, autoDetected: true },
+      ],
+      systemOverrides: config.systemOverrides,
+    });
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('ADMIN_USER')).toBeInTheDocument());
+    // Hidden until the operator expands Advanced.
+    expect(screen.queryByText('GITEA__server__HTTP_PORT')).not.toBeInTheDocument();
+    expect(screen.getByText('Advanced (1)')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Advanced (1)'));
+    expect(screen.getByText('GITEA__server__HTTP_PORT')).toBeInTheDocument();
+  });
 });

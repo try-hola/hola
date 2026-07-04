@@ -585,8 +585,11 @@ services:
         // via "Add app variable", no spec — rendered with the original grid).
         const seededKeys = seededKeysRef.current;
         const indexedEnvVars = envVars.map((env, index) => ({ env, index }));
-        const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced);
-        const advancedRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && env.advanced === true);
+        // `autoDetected` rows (harvested from compose.yaml, no manifest label)
+        // fold into Advanced alongside manifest `advanced: true` rows — neither
+        // is meant to be the first thing an installer sees.
+        const basicRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && !env.advanced && !env.autoDetected);
+        const advancedRows = indexedEnvVars.filter(({ env }) => seededKeys.has(env.key) && (env.advanced === true || env.autoDetected === true));
         const customRows = indexedEnvVars.filter(({ env }) => !seededKeys.has(env.key));
         // Float required-and-empty rows to the top within Basic; stable
         // (original catalog-declared order) otherwise — env order doesn't
@@ -725,7 +728,8 @@ services:
             )}
 
             {/* Advanced application variables — seeded rows with `advanced:
-                true`, collapsed by default. */}
+                true` or `autoDetected: true` (harvested from compose.yaml,
+                no manifest label), collapsed by default. */}
             {advancedRows.length > 0 && (
               <div className="mb-6">
                 <button

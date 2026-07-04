@@ -120,6 +120,7 @@ export function parseComposeDefaults(bundlePath: string): ParsedDefaults {
                     value: value || '',
                     isSecret: isLikelySecret(key),
                     description: generateEnvDescription(key),
+                    autoDetected: true,
                   });
                 }
               }
@@ -132,6 +133,7 @@ export function parseComposeDefaults(bundlePath: string): ParsedDefaults {
                 value: String(value ?? ''),
                 isSecret: isLikelySecret(key),
                 description: generateEnvDescription(key),
+                autoDetected: true,
               });
             }
           }

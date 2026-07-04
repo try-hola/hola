@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Copy,
   ArrowUpCircle
 } from 'lucide-react';
@@ -124,6 +125,8 @@ export const DeploymentDetail: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [operationLoading, setOperationLoading] = useState<{[key: string]: boolean}>({});
+  // Collapses `advanced`/`autoDetected` env rows out of view by default (mirrors InstallWizard).
+  const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
 
   // The active release's real config (typed appEnv rows + whatever system
   // overrides the operator set at install time) — replaces the old hardcoded
@@ -540,7 +543,80 @@ export const DeploymentDetail: React.FC = () => {
           </div>
         );
 
-      case 'configuration':
+      case 'configuration': {
+        // `advanced`/`autoDetected` rows (manifest-flagged or harvested from
+        // compose.yaml with no packager-provided label) collapse behind a
+        // chevron, same split as InstallWizard step 0. A freshly-added custom
+        // row (no spec, no flags) lands in the always-visible basic bucket.
+        const indexedEnvVars = envVars.map((env, index) => ({ env, index }));
+        const basicEnvVars = indexedEnvVars.filter(({ env }) => !env.advanced && !env.autoDetected);
+        const advancedEnvVars = indexedEnvVars.filter(({ env }) => env.advanced === true || env.autoDetected === true);
+
+        const renderEditableRow = ({ env: envVar, index }: { env: AppEnvVar; index: number }) => (
+          <div key={envVar.key || index} className="flex items-start gap-2">
+            <div className="flex-1">
+              {envVar.key ? (
+                <ParamField
+                  spec={envVar}
+                  value={envVar.value}
+                  onChange={(v) => handleParamChange(index, v)}
+                  issues={issuesForKey(envVar.key)}
+                  showSecret={showSecrets[envVar.key]}
+                  onToggleSecret={() => toggleSecretVisibility(envVar.key)}
+                  onGenerateSecret={envVar.isSecret ? () => generateSecret(index) : undefined}
+                />
+              ) : (
+                // A just-added custom row has no key yet — ParamField needs
+                // one for its id/label, so show a bare key input until set.
+                <input
+                  type="text"
+                  autoFocus
+                  placeholder="VARIABLE_NAME"
+                  value={envVar.key}
+                  onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value.toUpperCase())}
+                  className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary"
+                />
+              )}
+            </div>
+            {!hasParamSpec(envVar) && !envVar.autoDetected && (
+              <button
+                type="button"
+                onClick={() => removeDeploymentEnvVar(index)}
+                className="flex-none mt-2.5 text-text-muted hover:text-danger transition-colors"
+                title="Remove custom variable"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        );
+
+        const renderReadOnlyRow = ({ env: envVar }: { env: AppEnvVar; index: number }) => {
+          const showValue = envVar.isSecret && !showSecrets[envVar.key];
+          return (
+            <div
+              key={envVar.key}
+              className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft last:border-b-0"
+            >
+              <span className="font-mono text-[12.5px] text-text-muted w-[200px] flex-none break-all">
+                {envVar.label ?? envVar.key}
+              </span>
+              <span className="flex-1 font-mono text-[12.5px] break-all">
+                {showValue ? '••••••••' : (envVar.value || '(empty)')}
+              </span>
+              {envVar.isSecret && (
+                <button
+                  type="button"
+                  onClick={() => toggleSecretVisibility(envVar.key)}
+                  className="flex text-text-faint hover:text-text-strong transition-colors"
+                >
+                  {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+          );
+        };
+
         return (
           <div className="animate-fadein flex flex-col gap-4">
             <div className="flex items-center justify-between">
@@ -611,71 +687,30 @@ export const DeploymentDetail: React.FC = () => {
 
               {isEditing ? (
                 <div className="p-[18px] space-y-3">
-                  {envVars.map((envVar, index) => (
-                    <div key={envVar.key || index} className="flex items-start gap-2">
-                      <div className="flex-1">
-                        {envVar.key ? (
-                          <ParamField
-                            spec={envVar}
-                            value={envVar.value}
-                            onChange={(v) => handleParamChange(index, v)}
-                            issues={issuesForKey(envVar.key)}
-                            showSecret={showSecrets[envVar.key]}
-                            onToggleSecret={() => toggleSecretVisibility(envVar.key)}
-                            onGenerateSecret={envVar.isSecret ? () => generateSecret(index) : undefined}
-                          />
-                        ) : (
-                          // A just-added custom row has no key yet — ParamField needs
-                          // one for its id/label, so show a bare key input until set.
-                          <input
-                            type="text"
-                            autoFocus
-                            placeholder="VARIABLE_NAME"
-                            value={envVar.key}
-                            onChange={(e) => updateDeploymentEnvVar(index, 'key', e.target.value.toUpperCase())}
-                            className="w-full h-10 bg-surface-0 border border-border rounded-[9px] text-text-strong px-[13px] text-[13px] font-mono outline-none focus:border-primary"
-                          />
-                        )}
-                      </div>
-                      {!hasParamSpec(envVar) && (
-                        <button
-                          type="button"
-                          onClick={() => removeDeploymentEnvVar(index)}
-                          className="flex-none mt-2.5 text-text-muted hover:text-danger transition-colors"
-                          title="Remove custom variable"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      )}
-                    </div>
-                  ))}
+                  {basicEnvVars.map(renderEditableRow)}
                 </div>
               ) : (
-                envVars.map((envVar) => {
-                  const showValue = envVar.isSecret && !showSecrets[envVar.key];
-                  return (
-                    <div
-                      key={envVar.key}
-                      className="flex items-center gap-[14px] px-[18px] py-[11px] border-b border-border-soft last:border-b-0"
-                    >
-                      <span className="font-mono text-[12.5px] text-text-muted w-[200px] flex-none break-all">
-                        {envVar.label ?? envVar.key}
-                      </span>
-                      <span className="flex-1 font-mono text-[12.5px] break-all">
-                        {showValue ? '••••••••' : (envVar.value || '(empty)')}
-                      </span>
-                      {envVar.isSecret && (
-                        <button
-                          type="button"
-                          onClick={() => toggleSecretVisibility(envVar.key)}
-                          className="flex text-text-faint hover:text-text-strong transition-colors"
-                        >
-                          {showSecrets[envVar.key] ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
+                basicEnvVars.map(renderReadOnlyRow)
+              )}
+
+              {advancedEnvVars.length > 0 && (
+                <div className={isEditing ? 'px-[18px] pb-[18px]' : 'border-t border-border-soft'}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedConfig(v => !v)}
+                    className={`flex items-center gap-2 text-[13px] font-semibold text-text-strong ${isEditing ? 'pt-1 pb-3' : 'w-full px-[18px] py-[11px]'}`}
+                  >
+                    {showAdvancedConfig ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    <span>Advanced ({advancedEnvVars.length})</span>
+                  </button>
+                  {showAdvancedConfig && (
+                    isEditing ? (
+                      <div className="space-y-3">{advancedEnvVars.map(renderEditableRow)}</div>
+                    ) : (
+                      advancedEnvVars.map(renderReadOnlyRow)
+                    )
+                  )}
+                </div>
               )}
             </div>
 
@@ -776,6 +811,7 @@ export const DeploymentDetail: React.FC = () => {
             </div>
           </div>
         );
+      }
 
       case 'history':
         return (
