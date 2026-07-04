@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { getLogger } from '../../lib/logger';
+import type { Logger } from '../../lib/logger';
 import type { ServiceHealth, HealthCheckable } from './types';
 import type { PullCredentials, BundleService } from './bundles';
 import { catalogConfig } from '../../config/catalog';
@@ -15,6 +16,10 @@ import type {
   CatalogAppVersion,
   CatalogSourceRecord,
   CatalogSourceTrust,
+  AppEnvVar,
+  ParamType,
+  ParamGenerate,
+  ParamEnumOption,
 } from '@hola/shared';
 import type { CatalogSourceService } from './catalog-sources';
 import type { RegistryCredentialService } from './registry-credentials';
@@ -22,6 +27,101 @@ import { coerceManifestAuth } from './manifest-auth';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
+import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
+
+/**
+ * Coerce one raw `manifest.defaultEnv[]` row into an `AppEnvVar`, including the
+ * typed-param spec fields added by ADR 0003. Mirrors the narrow-shape coercion
+ * style of `coerceManifestAuth`/`coerceManifestUpgrade`/`coerceManifestBackup`:
+ * anything malformed is dropped (never thrown), so a sloppy or newer-vocabulary
+ * manifest degrades gracefully rather than failing the whole bundle load.
+ *
+ * `type` is the one field with a genuine forward-compat rule: an unrecognized
+ * string (a future type this server build doesn't know about yet) is dropped
+ * to `undefined` (degrading the row to untyped/free-text) rather than kept
+ * as-is or rejected — see ADR 0003 "unknown type degrades to untyped".
+ */
+export function coerceManifestEnvVar(e: unknown, logger: Logger, ctx: { appId?: string; version: string }): AppEnvVar {
+  const rec = (e && typeof e === 'object' ? e : {}) as Record<string, unknown>;
+
+  const row: AppEnvVar = {
+    key: String(rec.key ?? ''),
+    value: String(rec.value ?? ''),
+    isSecret: Boolean(rec.isSecret),
+    description: rec.description ? String(rec.description) : undefined,
+  };
+
+  if (typeof rec.label === 'string') row.label = rec.label;
+
+  if (typeof rec.type === 'string') {
+    if (PARAM_TYPES.has(rec.type)) {
+      row.type = rec.type as ParamType;
+    } else {
+      logger.warn('Unknown env param type; degrading to untyped', {
+        appId: ctx.appId, version: ctx.version, key: row.key, type: rec.type,
+      });
+    }
+  }
+
+  if (rec.required === true || rec.required === false) row.required = rec.required;
+  if (typeof rec.advanced === 'boolean') row.advanced = rec.advanced;
+  if (typeof rec.placeholder === 'string') row.placeholder = rec.placeholder;
+
+  // --- string ---
+  if (typeof rec.pattern === 'string') row.pattern = rec.pattern;
+  if (typeof rec.minLength === 'number') row.minLength = rec.minLength;
+  if (typeof rec.maxLength === 'number') row.maxLength = rec.maxLength;
+
+  // --- integer / port ---
+  if (typeof rec.min === 'number') row.min = rec.min;
+  if (typeof rec.max === 'number') row.max = rec.max;
+
+  // --- enum ---
+  if (Array.isArray(rec.options)) {
+    const options: ParamEnumOption[] = [];
+    for (const o of rec.options) {
+      if (!o || typeof o !== 'object') continue;
+      const orec = o as Record<string, unknown>;
+      if (typeof orec.value !== 'string') continue;
+      options.push({
+        value: orec.value,
+        label: typeof orec.label === 'string' ? orec.label : undefined,
+        description: typeof orec.description === 'string' ? orec.description : undefined,
+      });
+    }
+    if (options.length > 0) row.options = options;
+  }
+
+  // --- boolean ---
+  if (typeof rec.trueValue === 'string') row.trueValue = rec.trueValue;
+  if (typeof rec.falseValue === 'string') row.falseValue = rec.falseValue;
+
+  // --- url ---
+  if (typeof rec.httpsOnly === 'boolean') row.httpsOnly = rec.httpsOnly;
+
+  // --- secret generation ---
+  if (rec.generate && typeof rec.generate === 'object') {
+    const grec = rec.generate as Record<string, unknown>;
+    if (typeof grec.kind === 'string' && GENERATE_KINDS.has(grec.kind)) {
+      const generate: ParamGenerate = { kind: grec.kind as ParamGenerate['kind'] };
+      if (typeof grec.length === 'number') generate.length = grec.length;
+      row.generate = generate;
+    }
+  }
+
+  // Spec lint: never fails the bundle, just logs so an authoring mistake in the
+  // apps repo is visible in server logs (the apps repo's manifest CI treats the
+  // same check as build-failing).
+  const specIssues = validateParamSpec(row);
+  if (specIssues.length > 0) {
+    logger.warn('Manifest env param spec has issues', {
+      appId: ctx.appId, version: ctx.version, key: row.key,
+      issues: specIssues.map((i) => i.message),
+    });
+  }
+
+  return row;
+}
 
 // Shape of remote catalog JSON (minimal for now)
 type RemoteCatalog = {
@@ -373,21 +473,23 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       this.logger.warn('Bundle layout invalid', { appId: opts.appId, version: opts.version, errors: validation.errors });
       throw new Error('INVALID_BUNDLE_LAYOUT');
     }
-    return this.buildDetailFromBundle(info.localPath, opts.version);
+    return this.buildDetailFromBundle(info.localPath, opts.version, opts.appId);
   }
 
   /**
    * Read + coerce a pulled bundle's manifest.json/compose.yaml into a version
    * detail. Throws MANIFEST_UNAVAILABLE if the bundle can't be parsed.
    */
-  private buildDetailFromBundle(localPath: string, version: string): GetCatalogAppVersionDetailResponse {
+  private buildDetailFromBundle(localPath: string, version: string, appId?: string): GetCatalogAppVersionDetailResponse {
     try {
       const manifestPath = join(localPath, 'manifest.json');
       const raw = readFileSync(manifestPath, 'utf8');
 
-      // Define a narrow manifest shape we accept
+      // Define a narrow manifest shape we accept. `defaultEnv` rows are coerced
+      // by `coerceManifestEnvVar` (which does its own narrow field-by-field
+      // checks), so they're read here as fully unknown.
       type Manifest = {
-        defaultEnv?: Array<{ key: unknown; value: unknown; isSecret?: unknown; description?: unknown }>;
+        defaultEnv?: unknown[];
         defaults?: {
           ports?: Array<{ host?: unknown; container: unknown; protocol?: unknown }>;
           volumes?: Array<{ hostPath?: unknown; containerPath: unknown; readOnly?: unknown }>;
@@ -420,12 +522,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       }
 
       // Coerce manifest shapes
-      const manifestEnv = (manifest.defaultEnv ?? []).map((e) => ({
-        key: String((e as { key?: unknown }).key ?? ''),
-        value: String((e as { value?: unknown }).value ?? ''),
-        isSecret: Boolean((e as { isSecret?: unknown }).isSecret),
-        description: (e as { description?: unknown }).description ? String((e as { description?: unknown }).description) : undefined,
-      }));
+      const manifestEnv = (manifest.defaultEnv ?? []).map((e) => coerceManifestEnvVar(e, this.logger, { appId, version }));
       const manifestDefaults = {
         ports: Array.isArray(manifest.defaults?.ports)
           ? manifest.defaults!.ports!.map((p) => ({

@@ -25,6 +25,7 @@ import type { RoutingService } from './routing';
 import type { StorageService } from './storage';
 import { parse as parseYAML } from 'yaml';
 import { validateComposeDocument } from '@hola/shared/compose-validate';
+import { validateParams } from '@hola/shared/param-validate';
 import type { ComposeFile, ComposeService } from './compose-parser';
 
 /**
@@ -353,20 +354,17 @@ export class RealValidationService implements ValidationService {
   }
 
   async validateEnvironment(env: AppEnvVar[]): Promise<ValidationIssue[]> {
-    const issues: ValidationIssue[] = [];
+    // `validateParams` (shared/param-validate) supersedes the old inline
+    // `MISSING_SECRET_VALUE` check: for a legacy row (no typed-spec fields) it
+    // reproduces the exact same isSecret-implies-required rule via
+    // `PARAM_REQUIRED_MISSING`, but ALSO honors an explicit `required: false` on
+    // a secret (the optional-secret bug fix) and adds every type-specific check
+    // (integer/port/boolean/enum/url/email/timezone/pattern/length). Do not
+    // additionally run the old check — both codes firing on the same empty
+    // secret would double-report the identical problem.
+    const issues: ValidationIssue[] = [...validateParams(env)];
 
     for (const envVar of env) {
-      // Check for empty required variables
-      if (!envVar.value && envVar.isSecret) {
-        issues.push({
-          code: 'MISSING_SECRET_VALUE',
-          severity: 'error',
-          field: `env.${envVar.key}`,
-          path: `env.${envVar.key}`,
-          message: `Secret environment variable '${envVar.key}' is required but empty`,
-        });
-      }
-
       // Check for invalid characters in keys
       if (!envVar.key.match(/^[A-Z_][A-Z0-9_]*$/)) {
         issues.push({

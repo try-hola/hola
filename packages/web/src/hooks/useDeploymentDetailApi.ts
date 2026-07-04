@@ -1,11 +1,12 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
-import type { 
-  GetDeploymentResponse, 
+import type {
+  GetDeploymentResponse,
   GetDeploymentHistoryResponse,
+  GetDeploymentConfigResponse,
   PatchDeploymentRequest,
-  PostDeploymentActionRequest 
+  PostDeploymentActionRequest
 } from '@hola/shared';
 
 /**
@@ -201,8 +202,67 @@ export function useDeploymentHistoryApi(deploymentId: string | undefined, page: 
     fetchData();
   }, [fetchData]);
 
-  return { 
-    ...state, 
+  return {
+    ...state,
+    refetch: fetchData
+  };
+}
+
+/**
+ * Hook for the active release's full config (typed `appEnv` rows + system
+ * overrides), backing the DeploymentDetail Configuration tab. Mirrors
+ * `useDeploymentDetailApi`'s cache/loading/error shape.
+ */
+export function useDeploymentConfigApi(deploymentId: string | undefined) {
+  const [state, setState] = React.useState<{
+    data: GetDeploymentConfigResponse | null;
+    loading: boolean;
+    error: string | null;
+  }>({
+    data: null,
+    loading: false,
+    error: null,
+  });
+
+  const cacheKey = React.useMemo(() => {
+    if (!deploymentId) return null;
+    return `deployment-config-${deploymentId}`;
+  }, [deploymentId]);
+
+  const fetchData = React.useCallback(async (force = false) => {
+    if (!deploymentId || !cacheKey) {
+      setState({ data: null, loading: false, error: null });
+      return;
+    }
+
+    const now = Date.now();
+    const cached = globalCache.get(cacheKey);
+    if (!force && cached && (now - cached.timestamp) < 30000) {
+      setState({ data: cached.data as GetDeploymentConfigResponse, loading: false, error: null });
+      return;
+    }
+
+    setState(prev => ({ ...prev, loading: true, error: null }));
+
+    try {
+      const result = await api.deployments.config(deploymentId) as GetDeploymentConfigResponse;
+      globalCache.set(cacheKey, { data: result, timestamp: now });
+      setState({ data: result, loading: false, error: null });
+    } catch (error) {
+      setState({
+        data: null,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }, [cacheKey, deploymentId]);
+
+  React.useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  return {
+    ...state,
     refetch: fetchData
   };
 }

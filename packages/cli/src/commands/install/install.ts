@@ -1,5 +1,6 @@
 import { HolaSdk } from '@hola/sdk';
 import type { CreateDraftResponse, GetDraftResponse, AppEnvVar } from '@hola/shared';
+import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
 
 import { finalizeAndDeploy, reportDeployError, type DeployResult } from '../../lib/deploy-flow';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
@@ -16,6 +17,14 @@ export interface InstallOptions {
   registryCred?: string;
   /** From `--source`: catalog source id to install from (default: hola). */
   source?: string;
+  /**
+   * From `--no-generate-secrets`: don't auto-fill empty secrets that carry a
+   * manifest `generate` recipe — leave them empty so they hit validation with
+   * an actionable "provide --set" message instead of being silently
+   * randomized. For operators who always intend to pass every secret explicitly
+   * (reproducible/scripted installs).
+   */
+  noGenerateSecrets?: boolean;
 }
 
 /**
@@ -96,16 +105,50 @@ export async function runInstall(
       draftId = ((await sdk.drafts.create({ appId, version, source: opts.source })) as CreateDraftResponse).draftId;
     }
 
-    // Apply env overrides onto the catalog-seeded appEnv (merge by key).
-    if (Object.keys(overrides).length) {
-      const current = (await sdk.drafts.byId(draftId)) as GetDraftResponse;
-      const appEnv: AppEnvVar[] = [...(current.appEnv ?? [])];
-      for (const [key, value] of Object.entries(overrides)) {
-        const existing = appEnv.find(e => e.key === key);
-        if (existing) existing.value = value;
-        else appEnv.push({ key, value, isSecret: false });
+    // Merge `--set` overrides and auto-fill empty generate-recipe secrets onto
+    // the catalog-seeded appEnv, then persist both in a single PATCH (only if
+    // anything actually changed). We always re-fetch the draft — even with no
+    // `--set` — because auto-fill must run for a plain `hola install <app>`
+    // too (that's the actual non-interactive-install regression this fixes).
+    const current = (await sdk.drafts.byId(draftId)) as GetDraftResponse;
+    const appEnv: AppEnvVar[] = [...(current.appEnv ?? [])];
+    let dirty = false;
+
+    for (const [key, value] of Object.entries(overrides)) {
+      const existing = appEnv.find(e => e.key === key);
+      if (existing) existing.value = value;
+      else appEnv.push({ key, value, isSecret: false });
+      dirty = true;
+    }
+
+    if (!opts.noGenerateSecrets) {
+      // A key the operator named in `--set` (even `--set SECRET=` to leave it
+      // deliberately empty, e.g. an optional secret the app self-generates on
+      // first boot) is an explicit choice — never auto-fill over it.
+      const explicitKeys = new Set(Object.keys(overrides));
+      for (const row of appEnv) {
+        if (row.isSecret === true && row.value === '' && row.generate && !explicitKeys.has(row.key)) {
+          row.value = generateSecretValue(row.generate);
+          out(`Generated a value for ${row.key} (use --set ${row.key}=... to provide your own)`);
+          dirty = true;
+        }
       }
+    }
+
+    if (dirty) {
       await sdk.drafts.update(draftId, { appEnv });
+    }
+
+    // Validate typed values before spending a finalize round-trip on them —
+    // clear `KEY: message` errors instead of a generic 422 from the server.
+    const paramIssues = validateParams(appEnv).filter(i => i.severity === 'error');
+    if (paramIssues.length) {
+      for (const issue of paramIssues) {
+        const key = issue.path?.startsWith('env.') ? issue.path.slice('env.'.length) : (issue.field ?? issue.code);
+        console.error(`${key}: ${issue.message}`);
+      }
+      process.exitCode = 1;
+      return undefined;
     }
 
     const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream }, out);

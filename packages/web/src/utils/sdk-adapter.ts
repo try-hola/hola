@@ -22,7 +22,7 @@ import type {
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
-  GetDeploymentHistoryResponse,
+  GetDeploymentHistoryResponse, GetDeploymentConfigResponse,
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
   // Backup types  
@@ -486,8 +486,15 @@ export class SdkAdapter {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments/${deploymentId}/logs${query}`;
       // Don't cache logs
-      return this.enhancedRequest('GET', path, () => 
+      return this.enhancedRequest('GET', path, () =>
         this.sdk.deployments.logs(deploymentId, params), undefined, false);
+    },
+
+    // Active release's full config (typed appEnv rows + system overrides) for
+    // the Configuration tab.
+    config: (deploymentId: string): Promise<GetDeploymentConfigResponse> => {
+      const path = `/api/deployments/${deploymentId}/config`;
+      return this.getWithCache(path, () => this.sdk.deployments.config(deploymentId));
     },
   };
 

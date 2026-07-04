@@ -17,6 +17,7 @@ import {
   
   type PatchDeploymentRequest,
   type PatchDeploymentResponse,
+  type GetDeploymentConfigResponse,
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
   type GetJobsResponse,
@@ -69,7 +70,7 @@ import { coreRoutesFromEnv } from './services/core/routing';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
-import { mapErrorToResponse } from './middleware/error-mapping';
+import { mapErrorToResponse, asPromoteValidationError } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
 import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
@@ -1114,7 +1115,11 @@ async function route(url: URL, req: Request): Promise<Response> {
         if (mergedAppEnv.length > 0) patch.appEnv = mergedAppEnv;
         if (Object.keys(carried.systemOverrides).length > 0) patch.systemOverrides = carried.systemOverrides;
         if (Object.keys(patch).length > 0) await services.drafts.updateDraft(draft.draftId, patch);
-        await services.drafts.finalizeDraft(draft.draftId);
+        try {
+          await services.drafts.finalizeDraft(draft.draftId);
+        } catch (finalizeErr) {
+          throw asPromoteValidationError(finalizeErr);
+        }
         logger.info('Promoting deployment to new release', {
           requestId: context?.requestId,
           deploymentId,
@@ -1147,6 +1152,20 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const services = getServices();
       const payload = await services.deployments.getDeploymentHistory(deploymentId, { page, limit });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  // Active release's full config (typed appEnv rows + system overrides) for the
+  // DeploymentDetail Configuration tab.
+  const deploymentConfigMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/config$/);
+  if (deploymentConfigMatch && req.method === 'GET') {
+    const deploymentId = deploymentConfigMatch[1];
+    try {
+      const services = getServices();
+      const payload: GetDeploymentConfigResponse = await services.deployments.getConfig(deploymentId);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);

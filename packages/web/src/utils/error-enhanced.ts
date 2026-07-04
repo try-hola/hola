@@ -191,17 +191,28 @@ export async function toEnhancedErrorMessage(res: Response): Promise<string> {
           if ('message' in errorObj && typeof (errorObj as { message?: unknown }).message === 'string') {
             serverMessage = (errorObj as { message: string }).message;
           }
-          // Check for validation errors array
-          if ('details' in errorObj && Array.isArray((errorObj as { details?: unknown }).details)) {
-            const details = (errorObj as { details: unknown[] }).details;
-            const validationErrors = details
-              .filter((detail): detail is { message: string } => 
-                typeof detail === 'object' && detail !== null && 'message' in detail
-              )
-              .map(detail => detail.message);
-            
-            if (validationErrors.length > 0) {
-              serverMessage = validationErrors.join('; ');
+          // Check for validation errors. The server sends these either as a
+          // bare `details` array or, for DraftValidationError (the finalize /
+          // promote / deployment-config 422s), as `details: { issues: [...] }`.
+          // Accept both shapes so per-key messages aren't swallowed.
+          if ('details' in errorObj) {
+            const rawDetails = (errorObj as { details?: unknown }).details;
+            const detailArray = Array.isArray(rawDetails)
+              ? rawDetails
+              : rawDetails && typeof rawDetails === 'object'
+                  && Array.isArray((rawDetails as { issues?: unknown }).issues)
+                ? (rawDetails as { issues: unknown[] }).issues
+                : null;
+            if (detailArray) {
+              const validationErrors = detailArray
+                .filter((detail): detail is { message: string } =>
+                  typeof detail === 'object' && detail !== null && 'message' in detail
+                )
+                .map(detail => detail.message);
+
+              if (validationErrors.length > 0) {
+                serverMessage = validationErrors.join('; ');
+              }
             }
           }
         }

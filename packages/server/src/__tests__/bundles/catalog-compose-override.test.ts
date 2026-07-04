@@ -34,7 +34,22 @@ volumes:
 const MANIFEST = JSON.stringify({
   name: APP_ID,
   ingress: { service: 'fixtureapp', port: 80 },
-  defaultEnv: [{ key: 'APP_ENV', value: 'production', isSecret: false }],
+  defaultEnv: [
+    { key: 'APP_ENV', value: 'production', isSecret: false },
+    // A bogus/future param type must degrade to untyped rather than reject the
+    // bundle (ADR 0003 forward-compat rule — see catalog.ts's coerceManifestEnvVar).
+    { key: 'WEIRD_FIELD', value: 'x', isSecret: false, type: 'from-the-future' },
+    // A fully-specified typed row must carry through end to end.
+    {
+      key: 'DOMAIN',
+      value: 'https://example.com',
+      isSecret: false,
+      label: 'Domain',
+      type: 'url',
+      required: true,
+      httpsOnly: true,
+    },
+  ],
   defaults: {
     ports: [{ container: 80, protocol: 'tcp' }],
     volumes: [{ containerPath: '/data' }],
@@ -96,6 +111,24 @@ describe('RealCatalogService composeOverride (#82)', () => {
     // The manifest's ingress.service is surfaced so the deploy lifecycle can
     // route to / inject auth env into the right service.
     expect(detail.ingressService).toBe('fixtureapp');
+  });
+
+  test('defaultEnv carries typed-spec fields through and degrades an unknown type without rejecting the bundle (ADR 0003)', async () => {
+    const svc = new RealCatalogService();
+    const detail = await svc.getVersionDetail(APP_ID, VERSION);
+
+    const weird = detail.defaultEnv.find((e) => e.key === 'WEIRD_FIELD');
+    expect(weird).toBeDefined();
+    expect(weird!.type).toBeUndefined(); // degraded to untyped, bundle still loaded
+
+    const domain = detail.defaultEnv.find((e) => e.key === 'DOMAIN');
+    expect(domain).toMatchObject({
+      value: 'https://example.com',
+      label: 'Domain',
+      type: 'url',
+      required: true,
+      httpsOnly: true,
+    });
   });
 
   test('resolves "latest" to the concrete version before pulling (cache keyed by resolved version)', async () => {

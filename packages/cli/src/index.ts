@@ -148,6 +148,7 @@ prog
   .option('--registry-cred', 'Stored registry credential id for a private OCI reference install')
   .option('--strict', 'Fail on validation warnings', false)
   .option('--no-stream', 'Do not watch the deployment job', false)
+  .option('--no-generate-secrets', 'Do not auto-fill empty secrets that have a generate recipe; fail validation instead', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (appId, opts) => {
     const { runInstall } = await load(import('./commands/install/install'));

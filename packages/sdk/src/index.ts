@@ -12,6 +12,7 @@ import {
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
+  GetDeploymentConfigResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
   GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
@@ -149,6 +150,7 @@ export class HolaSdk {
     rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),
     promote: (deploymentId: string, promote: PromoteDeploymentRequest = {}) => this.post<PromoteDeploymentResponse>(API.deployments.promote(deploymentId), promote),
     logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
+    config: (deploymentId: string) => this.get<GetDeploymentConfigResponse>(API.deployments.config(deploymentId)),
   };
 
   jobs = {
