@@ -11,6 +11,10 @@
     "./compose-validate": {
       "types": "./src/compose-validate.ts",
       "default": "./src/compose-validate.ts"
+    },
+    "./param-validate": {
+      "types": "./src/param-validate.ts",
+      "default": "./src/param-validate.ts"
     }
   },
   "scripts": {
