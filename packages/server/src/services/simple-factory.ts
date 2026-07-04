@@ -130,8 +130,10 @@ export function createServices(env: ServiceEnvironment): Services {
     // Registry credentials for private OCI pulls (shared by drafts + deployments).
     const registryCredentials = new RealRegistryCredentialService(storage);
 
-    // Shared draft service: the deployment service builds releases from its finalized artifacts.
-    const drafts = new RealDraftService(storage, catalog, validation, registryCredentials);
+    // Shared draft service: the deployment service builds releases from its finalized
+    // artifacts. Reuses the shared `routing` instance above for seed-time platform-
+    // token prefill (`${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` → concrete values).
+    const drafts = new RealDraftService(storage, catalog, validation, registryCredentials, routing);
 
     // Mock provisioner in development for safety (no calls to a real auth platform).
     const provisioner = new MockProvisionerService();
@@ -195,8 +197,10 @@ export function createServices(env: ServiceEnvironment): Services {
   // Registry credentials for private OCI pulls (shared by drafts + deployments).
   const registryCredentials = new RealRegistryCredentialService(storage);
 
-  // Shared draft service: the deployment service builds releases from its finalized artifacts.
-  const drafts = new RealDraftService(storage, catalog, validation, registryCredentials);
+  // Shared draft service: the deployment service builds releases from its finalized
+  // artifacts. Reuses the shared `routing` instance above for seed-time platform-
+  // token prefill (`${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` → concrete values).
+  const drafts = new RealDraftService(storage, catalog, validation, registryCredentials, routing);
 
   // Provision auth artifacts against the configured platform. When no backend is
   // configured (mode != authentik) use the real no-op provisioner — NOT the Mock,

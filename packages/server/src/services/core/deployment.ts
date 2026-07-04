@@ -1153,9 +1153,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // Also resolve `${HOLA_USER_EMAIL}` inside env VALUES, so an app can set it as a
       // `defaultEnv` default and pair it with a compose fallback. Written verbatim to
       // `.env`, which Compose reads literally (no recursive interpolation of values),
-      // so the token must be resolved here rather than left for Compose.
+      // so the token must be resolved here rather than left for Compose. Belt-and-
+      // braces: also resolve `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` here — the draft
+      // service already resolves these at seed time (draft.ts createDraft), but a
+      // draft created before that existed, or a promote's carried-forward value, may
+      // still carry the literal token; this is the last chance to resolve it before
+      // it leaks into the running container's env.
       const dotenv = interpKeys
-        .map(k => `${k}=${dotenvValue(interp[k].replaceAll(USER_EMAIL_TOKEN, userEmail))}`)
+        .map(k => `${k}=${dotenvValue(
+          interp[k]
+            .replaceAll(USER_EMAIL_TOKEN, userEmail)
+            .replaceAll(APP_HOST_TOKEN, rule.host)
+            .replaceAll(BASE_DOMAIN_TOKEN, rule.domain)
+        )}`)
         .join('\n') + '\n';
       await this.storageService.writeFile(`deployments/${deployment.id}/runtime/.env`, dotenv, 0o600);
     }

@@ -8,6 +8,7 @@
 import { getLogger } from '../lib/logger';
 import { recordErrorMetric } from '../lib/metrics';
 import { getRequestContext } from './request';
+import type { ValidationIssue } from '@hola/shared';
 
 export interface ErrorResponse {
   error: {
@@ -37,6 +38,38 @@ export class ValidationError extends Error implements ApiError {
     this.name = 'ValidationError';
     this.details = details;
   }
+}
+
+/**
+ * Raised when `finalizeDraft` fails validation. 422 (not 400/500) with the full
+ * per-issue detail so a client (install wizard, CLI, or the promote endpoint,
+ * which relabels the `code` to `PROMOTE_VALIDATION_FAILED`) can name the
+ * offending key(s) rather than seeing an opaque server error.
+ */
+export class DraftValidationError extends Error implements ApiError {
+  code = 'DRAFT_VALIDATION_FAILED';
+  status = 422;
+  details?: unknown;
+
+  constructor(message: string, public issues: ValidationIssue[]) {
+    super(message);
+    this.name = 'DraftValidationError';
+    this.details = { issues };
+  }
+}
+
+/**
+ * Relabel a `finalizeDraft` validation failure for the promote endpoint: same
+ * 422 shape (`details.issues` names the offending key(s)), but a promote-
+ * specific `code` so a client can tell "this upgrade's carried-forward config
+ * now fails validation" apart from a plain wizard/CLI draft finalize failure.
+ * Anything other than a `DraftValidationError` passes through unchanged.
+ */
+export function asPromoteValidationError(err: unknown): unknown {
+  if (err instanceof DraftValidationError) {
+    err.code = 'PROMOTE_VALIDATION_FAILED';
+  }
+  return err;
 }
 
 export class NotFoundError extends Error implements ApiError {

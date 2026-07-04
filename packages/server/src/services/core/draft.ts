@@ -28,12 +28,13 @@ import type {
 import { createHash } from 'crypto';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError } from '../../middleware/error-mapping';
-import { validateComposeDocument } from '@hola/shared/compose-validate';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError } from '../../middleware/error-mapping';
+import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
 import type { RegistryCredentialService } from './registry-credentials';
+import type { RoutingService } from './routing';
 
 /**
  * Shape of `drafts/<id>/finalized/manifest.json` produced by `finalizeDraft`.
@@ -181,6 +182,22 @@ function assertComposeParses(content: string, source: string): void {
   }
 }
 
+/**
+ * Re-impose every typed-spec field (everything but `value`) from the stored
+ * draft's env rows onto an incoming PATCH's `appEnv`, so a client (web/CLI) can
+ * only ever change a seeded row's `value` — never forge/strip its `type`,
+ * `required`, `pattern`, etc. A row whose key has no match in the stored draft
+ * (a custom/user-added var, e.g. the wizard's "Add variable" or an unknown CLI
+ * `--set` key) passes through unmodified — it has no spec to protect.
+ */
+function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): AppEnvVar[] {
+  const byKey = new Map(storedEnv.map((e) => [e.key, e]));
+  return incomingEnv.map((incoming) => {
+    const stored = byKey.get(incoming.key);
+    return stored ? { ...stored, value: incoming.value } : incoming;
+  });
+}
+
 export class RealDraftService implements DraftService {
   private logger = getLogger().child({ service: 'DraftService' });
   private drafts = new Map<string, DraftRecord>();
@@ -195,8 +212,36 @@ export class RealDraftService implements DraftService {
     private validationService: ValidationService,
     // Resolves a credentialRef → registry secret for the install-by-ref path.
     // Optional so existing wiring/tests that don't need private pulls still work.
-    private registryCredentials?: RegistryCredentialService
+    private registryCredentials?: RegistryCredentialService,
+    // Resolves the install's base domain for platform-token prefill (seed-time
+    // `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` resolution). Optional so existing
+    // wiring/tests that don't need prefill still work — when absent, seeded env
+    // values keep the literal token (deploy-time resolution in
+    // `deployment.ts`'s materializeCompose is the belt-and-braces fallback).
+    private routingService?: RoutingService
   ) {}
+
+  /**
+   * Replace `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in seeded env values with
+   * this install's concrete values, so the wizard shows a real prefilled URL/
+   * domain (e.g. `https://vaultwarden.example.com`) instead of a raw token.
+   * The app's public host follows the same `<appId>.<baseDomain>` pattern used
+   * by `RoutingService.generateRule` (routing.ts's `buildRule`) — there's no
+   * deployment/deploymentId yet at draft-creation time, so this computes the
+   * host directly rather than calling `generateRule`.
+   */
+  private resolvePlatformTokens(appId: string, env: AppEnvVar[]): AppEnvVar[] {
+    if (!this.routingService) return env;
+    const baseDomain = this.routingService.baseDomain();
+    const appHost = `${appId}.${baseDomain}`;
+    return env.map((e) => {
+      if (!e.value.includes(APP_HOST_TOKEN) && !e.value.includes(BASE_DOMAIN_TOKEN)) return e;
+      return {
+        ...e,
+        value: e.value.replaceAll(APP_HOST_TOKEN, appHost).replaceAll(BASE_DOMAIN_TOKEN, baseDomain),
+      };
+    });
+  }
 
   async healthCheck(): Promise<ServiceHealth> {
     try {
@@ -340,6 +385,11 @@ export class RealDraftService implements DraftService {
       // Get default environment and configuration
       const defaults = await this.getDraftDefaults(request.appId, request.version, source);
 
+      // Resolve `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in the seeded env values
+      // to this install's concrete host/domain, so the wizard shows a real
+      // prefilled value rather than a raw platform token.
+      const appEnv = this.resolvePlatformTokens(request.appId, defaults.env);
+
       // Seed the draft's compose from the catalog bundle so it can be deployed
       // without the user pasting compose. Guard it through the same parse check
       // as user-supplied compose so a bad bundle fails fast.
@@ -362,7 +412,7 @@ export class RealDraftService implements DraftService {
         icon: app.icon,
         displayName: app.name,
         systemOverrides: {},
-        appEnv: defaults.env,
+        appEnv,
         ports: defaults.defaults.ports,
         composeOverride,
         auth: defaults.auth,
@@ -401,7 +451,7 @@ export class RealDraftService implements DraftService {
         // their bundle compose + tokens), so this is empty rather than seeded with
         // placeholder vars that don't affect the deploy.
         systemEnv: [],
-        appEnv: defaults.env,
+        appEnv,
         defaults: defaults.defaults,
       };
 
@@ -437,6 +487,10 @@ export class RealDraftService implements DraftService {
       const composeOverride = detail.composeOverride ?? '';
       assertComposeParses(composeOverride, 'oci bundle');
 
+      // Resolve `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in the seeded env values
+      // to this install's concrete host/domain (see createDraft).
+      const appEnv = this.resolvePlatformTokens(appId, detail.defaultEnv);
+
       const draft: Draft = {
         draftId,
         appId,
@@ -446,7 +500,7 @@ export class RealDraftService implements DraftService {
         icon: '📦',
         displayName: appId,
         systemOverrides: {},
-        appEnv: detail.defaultEnv,
+        appEnv,
         ports: detail.defaults.ports,
         composeOverride,
         auth: detail.auth,
@@ -477,7 +531,7 @@ export class RealDraftService implements DraftService {
         draftId,
         app: { id: appId, name: draft.displayName ?? appId, icon: draft.icon ?? '📦' },
         systemEnv: [],
-        appEnv: detail.defaultEnv,
+        appEnv,
         defaults: detail.defaults,
       };
     } catch (error) {
@@ -504,8 +558,18 @@ export class RealDraftService implements DraftService {
       assertComposeParses(patch.composeOverride, 'composeOverride');
     }
 
+    // A client only ever owns `value` per env row — the typed spec (type/label/
+    // required/pattern/etc) is seeded from the catalog at draft-creation time and
+    // must not be forgeable/droppable via PATCH. Re-impose every spec field from
+    // the currently-stored row before merging the patch. Only touch `appEnv` when
+    // the patch actually carries one — spreading an explicit `appEnv: undefined`
+    // key into the merge below would wipe the stored env entirely.
+    const hardenedPatch: PatchDraftRequest = patch.appEnv
+      ? { ...patch, appEnv: hardenAppEnv(record.draft.appEnv, patch.appEnv) }
+      : patch;
+
     // Apply patch (preserve file metadata managed by upload/delete).
-    record.draft = { ...record.draft, ...patch };
+    record.draft = { ...record.draft, ...hardenedPatch };
     record.updatedAt = new Date().toISOString();
     this.drafts.set(draftId, record);
     await this.persistRecord(record);
@@ -667,7 +731,14 @@ export class RealDraftService implements DraftService {
       // First validate the draft
       const validation = await this.validateDraft(draftId);
       if (!validation.ok) {
-        throw new Error(`Draft validation failed: ${validation.errors.map(e => e.message).join(', ')}`);
+        // Structured 422 (code + per-issue details) rather than a message-only
+        // Error, so a client (wizard/CLI/promote) can render/name the offending
+        // key(s) instead of a generic 500. `mapErrorToResponse` picks this up
+        // automatically via its `'status' in error && 'code' in error` branch.
+        throw new DraftValidationError(
+          `Draft validation failed: ${validation.errors.map(e => e.message).join(', ')}`,
+          validation.errors,
+        );
       }
 
       const draft = record.draft;
