@@ -438,7 +438,10 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     // Key the cache by the RESOLVED concrete version (`v.version`) + source, so a
     // published fix reaches existing servers (a "latest" cache would go stale) and
     // two sources can't alias the same appId/version.
-    return this.pullValidateBuild({ appId, source: record.id, version: v.version, ociRef: ref, credentials });
+    // Thread the source's `allowRegistries` (operator consent declared at source-add
+    // time) through to the bundle pull so a first-party registry namespace is
+    // unlocked without registering a credential.
+    return this.pullValidateBuild({ appId, source: record.id, version: v.version, ociRef: ref, credentials, extraAllowlist: record.allowRegistries });
   }
 
   /** Find an app within a specific source's catalog (default the built-in `hola`). */
@@ -464,11 +467,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
    * paths. Reuses the bundle service (oras pull + allowlist + optional creds) and
    * the strict layout check, so every source is held to the same rules.
    */
-  private async pullValidateBuild(opts: { appId: string; source?: string; version: string; ociRef: string; credentials?: PullCredentials }): Promise<GetCatalogAppVersionDetailResponse> {
+  private async pullValidateBuild(opts: { appId: string; source?: string; version: string; ociRef: string; credentials?: PullCredentials; extraAllowlist?: string[] }): Promise<GetCatalogAppVersionDetailResponse> {
     // Injected in tests; otherwise lazy-imported to avoid a circular dep at load.
     const bundles = this.bundlesOverride ?? (await import('../simple-factory')).getServices().bundles;
 
-    const info = await bundles.ensurePulled({ appId: opts.appId, version: opts.version, ociRef: opts.ociRef, source: opts.source, credentials: opts.credentials });
+    const info = await bundles.ensurePulled({ appId: opts.appId, version: opts.version, ociRef: opts.ociRef, source: opts.source, credentials: opts.credentials, extraAllowlist: opts.extraAllowlist });
     const validation = await bundles.validateLayout(info.localPath);
     if (!validation.ok) {
       this.logger.warn('Bundle layout invalid', { appId: opts.appId, version: opts.version, errors: validation.errors });

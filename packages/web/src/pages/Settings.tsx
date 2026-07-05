@@ -143,6 +143,9 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [credentialRef, setCredentialRef] = useState('');
+  // Comma-separated registry globs (e.g. "ghcr.io/myorg/*"). Empty = baseline
+  // allowlist only; matches the server's normalizeAllowRegistries parser.
+  const [allowRegistries, setAllowRegistries] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -159,8 +162,18 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
       // Pair the credential with the registry host derived from the credential record.
       const cred = creds.find(c => c.id === credentialRef);
       const auth = cred ? { registry: cred.registry, credentialRef: cred.id } : undefined;
-      await api.catalogSources.add({ id: id.trim(), name: name.trim() || id.trim(), url: url.trim(), auth });
-      setId(''); setName(''); setUrl(''); setCredentialRef(''); setAdding(false);
+      // Server accepts comma-separated globs in a single string; no client-side
+      // validation beyond non-empty trimming — the server rejects malformed
+      // globs with SOURCE_ALLOW_REGISTRY_INVALID and surfaces the message.
+      const globs = allowRegistries.split(',').map(s => s.trim()).filter(Boolean);
+      await api.catalogSources.add({
+        id: id.trim(),
+        name: name.trim() || id.trim(),
+        url: url.trim(),
+        auth,
+        allowRegistries: globs.length > 0 ? globs : undefined,
+      });
+      setId(''); setName(''); setUrl(''); setCredentialRef(''); setAllowRegistries(''); setAdding(false);
       refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to add source');
@@ -195,6 +208,11 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
               <span className="font-medium text-text-strong">{s.id}</span>
               <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${s.trust === 'verified' ? 'text-success bg-success/10' : 'text-warning bg-warning/10'}`}>{s.trust}</span>
               <div className="text-text-muted truncate">{s.url || '(built-in)'}</div>
+              {s.allowRegistries && s.allowRegistries.length > 0 && (
+                <div className="text-[12px] text-text-muted truncate">
+                  allows: {s.allowRegistries.join(', ')}
+                </div>
+              )}
             </div>
             {s.id !== 'hola' && (
               <button onClick={() => remove(s.id)} disabled={busy} className="text-text-muted hover:text-danger transition-colors disabled:opacity-50 flex-none ml-2" aria-label={`Remove ${s.id}`}>
@@ -225,6 +243,18 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
               <option value="">None (public)</option>
               {creds.map(c => <option key={c.id} value={c.id}>{c.id} — {c.registry}</option>)}
             </select>
+          </div>
+          <div className="col-span-2">
+            <div className={labelClass}>Allowed registries (optional, comma-separated)</div>
+            <input
+              value={allowRegistries}
+              onChange={(e) => setAllowRegistries(e.target.value)}
+              placeholder="ghcr.io/myorg/*"
+              className={inputClass}
+            />
+            <p className="text-[12px] text-text-muted mt-1">
+              Registry globs this source may pull bundles from (e.g. <code>ghcr.io/myorg/*</code>); adds to the server&rsquo;s baseline allowlist. Use for <em>public</em> first-party packages — for private packages, register a credential above.
+            </p>
           </div>
           <div className="col-span-2 flex items-center gap-2">
             <button onClick={add} disabled={busy} className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">

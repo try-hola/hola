@@ -491,6 +491,15 @@ export type CatalogSourceRecord = {
   type: 'index-url';
   url: string;
   auth?: { registry: string; credentialRef: string };
+  /**
+   * Registry glob patterns this source's bundles are permitted to pull from
+   * (e.g. `ghcr.io/pofallon/*`). Adds to the server's baseline
+   * `HOLA_REGISTRY_ALLOWLIST` for any pull sourced from this catalog — the
+   * operator's explicit consent to trust a first-party registry without
+   * registering a credential (which is only needed for *private* packages).
+   * Default empty: behaviour matches the pre-existing baseline allowlist only.
+   */
+  allowRegistries?: string[];
   trust: CatalogSourceTrust;
   enabled: boolean;
 };
@@ -500,6 +509,8 @@ export type AddCatalogSourceRequest = {
   name: string;
   url: string;
   auth?: { registry: string; credentialRef: string };
+  /** Optional registry globs (e.g. `ghcr.io/pofallon/*`) — see CatalogSourceRecord. */
+  allowRegistries?: string[];
   enabled?: boolean;
 };
 

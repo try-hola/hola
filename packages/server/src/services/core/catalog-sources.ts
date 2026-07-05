@@ -20,6 +20,38 @@ import type { CatalogSourceRecord, AddCatalogSourceRequest } from '@hola/shared'
 /** Reserved source ids that a custom source may not use. */
 export const RESERVED_SOURCE_IDS = new Set(['hola', 'ref', '(ref)']);
 
+/**
+ * A registry glob pattern an operator declared for a source. Allows the same
+ * shape as the `HOLA_REGISTRY_ALLOWLIST` baseline: a host with an optional
+ * `/*` suffix. The matcher (`matchesAllowlist` in bundles.ts) globs on `*`,
+ * so reject anything weirder than `host` / `host/*` / `host/prefix/*` so an
+ * operator doesn't expect a richer pattern than the matcher honors.
+ */
+function isValidRegistryGlob(s: string): boolean {
+  // One trailing `/*` allowed, anywhere before `/*` is host/path chars only.
+  // Disallow spaces and anything that could smuggle regex metachars past glob.
+  return /^[a-zA-Z0-9._:/-]+(?:\/\*|\/[^/\s][a-zA-Z0-9._:/-]*\/\*)?$/.test(s)
+    || /^[a-zA-Z0-9._:-]+(?::\d+)?$/.test(s);
+}
+
+function normalizeAllowRegistries(input: unknown): string[] {
+  if (!input) return [];
+  const arr = Array.isArray(input) ? input : [input];
+  const out: string[] = [];
+  for (const v of arr) {
+    if (typeof v !== 'string') continue;
+    for (const part of v.split(',')) {
+      const s = part.trim();
+      if (!s) continue;
+      if (!isValidRegistryGlob(s)) {
+        throw new Error(`SOURCE_ALLOW_REGISTRY_INVALID: ${s}`);
+      }
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 const STORE_PATH = 'config/catalog-sources.json';
 
 interface SourceFile {
@@ -109,6 +141,8 @@ export class RealCatalogSourceService implements CatalogSourceService {
     if (!req.url || !isHttpUrl(req.url)) throw new Error('SOURCE_URL_INVALID');
     if (req.auth && (!req.auth.registry || !req.auth.credentialRef)) throw new Error('SOURCE_AUTH_INVALID');
 
+    const allowRegistries = normalizeAllowRegistries(req.allowRegistries);
+
     const custom = await this.loadCustom();
     if (custom.some(s => s.id === id)) throw new Error('SOURCE_ID_EXISTS');
 
@@ -118,12 +152,13 @@ export class RealCatalogSourceService implements CatalogSourceService {
       type: 'index-url',
       url: req.url.trim(),
       auth: req.auth,
+      allowRegistries: allowRegistries.length > 0 ? allowRegistries : undefined,
       trust: 'custom',
       enabled: req.enabled ?? true,
     };
     custom.push(record);
     await this.saveCustom(custom);
-    this.logger.info('Catalog source added', { id, url: record.url, hasAuth: Boolean(record.auth) });
+    this.logger.info('Catalog source added', { id, url: record.url, hasAuth: Boolean(record.auth), allowRegistries: record.allowRegistries ?? [] });
     return record;
   }
 
@@ -157,9 +192,11 @@ export class MockCatalogSourceService implements CatalogSourceService {
     const id = (req.id || '').trim();
     if (RESERVED_SOURCE_IDS.has(id)) throw new Error('SOURCE_ID_RESERVED');
     if (this.custom.some(s => s.id === id)) throw new Error('SOURCE_ID_EXISTS');
+    const allowRegistries = normalizeAllowRegistries(req.allowRegistries);
     const record: CatalogSourceRecord = {
       id, name: req.name || id, type: 'index-url', url: req.url,
-      auth: req.auth, trust: 'custom', enabled: req.enabled ?? true,
+      auth: req.auth, allowRegistries: allowRegistries.length > 0 ? allowRegistries : undefined,
+      trust: 'custom', enabled: req.enabled ?? true,
     };
     this.custom.push(record);
     return record;
