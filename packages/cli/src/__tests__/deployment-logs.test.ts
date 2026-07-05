@@ -23,6 +23,15 @@ describe('deployment logs', () => {
     expect(logs.join('\n')).toContain('hello');
   });
 
+  it('does not crash when the SDK returns undefined (non-JSON / empty 204 response)', async () => {
+    const sdk = {
+      deployments: { logs: vi.fn(async () => undefined as unknown as undefined) },
+    };
+    await runDeploymentLogs('dep1', {}, { sdk: sdk as unknown as HolaSdk });
+    expect(process.exitCode).toBe(0);
+    expect(logs.join('\n')).toContain('No logs.');
+  });
+
   it('streams over SSE with --follow and prints message frames', async () => {
     const sdk = { deployments: { logs: vi.fn() } };
     const stream: typeof streamSSE = vi.fn(async (_url, _opts, onEvent) => {
