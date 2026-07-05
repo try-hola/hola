@@ -121,6 +121,10 @@ export interface DeploymentService extends HealthCheckable {
   /** The active release's full config (typed appEnv rows, spec intact, + system
    *  overrides), for the DeploymentDetail Configuration tab. */
   getConfig(deploymentId: string): Promise<GetDeploymentConfigResponse>;
+  /** The catalog source this deployment was installed from (defaults to `hola`).
+   *  Not surfaced on the public DeploymentDetail; the promote/upgrade flow needs
+   *  it to rebuild the draft from the same source the app came from (#340). */
+  getDeploymentSource(deploymentId: string): Promise<string>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -455,6 +459,14 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       throw new NotFoundError(`Deployment not found: ${deploymentId}`);
     }
     return deployment;
+  }
+
+  /** The catalog source a deployment was installed from, defaulting to `hola`
+   *  (matching createDraft's own default). Rehydrates first so a cold server
+   *  reads the persisted metadata rather than an empty in-memory map. */
+  async getDeploymentSource(deploymentId: string): Promise<string> {
+    await this.ensureLoaded();
+    return this.requireDeployment(deploymentId).metadata?.source ?? 'hola';
   }
 
   private countReleases(deploymentId: string): number {
