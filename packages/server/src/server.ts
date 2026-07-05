@@ -1106,7 +1106,12 @@ async function route(url: URL, req: Request): Promise<Response> {
       // config forward onto the new version: env values/secrets (merged by key — a key
       // absent from the deployment keeps the new version's catalog default) and system
       // overrides. Ports are NOT carried — the new version's compose defines its own.
-      const draft = await services.drafts.createDraft({ appId, version: targetVersion });
+      //
+      // Rebuild the draft from the SAME catalog source the app was installed from
+      // (#340): createDraft defaults source to `hola`, so an app from a custom
+      // source (e.g. a private catalog) would 404 with APP_NOT_FOUND on upgrade.
+      const source = await services.deployments.getDeploymentSource(deploymentId);
+      const draft = await services.drafts.createDraft({ appId, version: targetVersion, source });
       try {
         const carried = await services.deployments.getActiveConfig(deploymentId);
         const draftDetail = await services.drafts.getDraft(draft.draftId);

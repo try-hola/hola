@@ -104,6 +104,28 @@ describe('Deployment persistence (real service)', () => {
     return draftId;
   }
 
+  test('getDeploymentSource returns the source the app was installed from, defaulting to hola (#340)', async () => {
+    const { drafts, deployments } = makeSystem();
+
+    // Installed from the built-in catalog (no explicit source) → defaults to `hola`.
+    const draftDefault = (await drafts.createDraft({ appId: 'gitea', version: '1.0.0' })).draftId;
+    await drafts.finalizeDraft(draftDefault);
+    const depDefault = await deployments.createFromDraft({ draftId: draftDefault, name: 'gitea', options: { autoStart: false } });
+    expect(await deployments.getDeploymentSource(depDefault.deploymentId)).toBe('hola');
+
+    // Installed from a custom catalog source → that source is what promote must
+    // rebuild the draft from, or the upgrade 404s with APP_NOT_FOUND. (Distinct
+    // appId so it doesn't collide with the gitea host above.)
+    const draftCustom = (await drafts.createDraft({ appId: 'nextcloud', version: '1.0.0', source: 'get2know' })).draftId;
+    await drafts.finalizeDraft(draftCustom);
+    const depCustom = await deployments.createFromDraft({ draftId: draftCustom, name: 'nextcloud-custom', options: { autoStart: false } });
+    expect(await deployments.getDeploymentSource(depCustom.deploymentId)).toBe('get2know');
+
+    // Survives a restart (fresh service over the same data root rehydrates metadata).
+    const restarted = makeSystem();
+    expect(await restarted.deployments.getDeploymentSource(depCustom.deploymentId)).toBe('get2know');
+  });
+
   test('promotes a finalized draft into a deployment with a persisted active release', async () => {
     const { storage, drafts, deployments } = makeSystem();
     const draftId = await finalizedDraft(drafts, 'services:\n  gitea:\n    image: gitea/gitea\n');
