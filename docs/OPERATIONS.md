@@ -81,6 +81,43 @@ The web dashboard browses a remote **catalog** of installable apps, set via
 catalog renders them. See the catalog notes in the compose
 [README](../packages/compose/README.md#app-catalog).
 
+#### Pulling bundles from a non-default registry
+
+Each version in a catalog points at an OCI package (the loose-layer
+`compose.yaml` + `manifest.json` bundle) in a registry. The server only pulls
+from a registry the operator has consented to, matching against the
+`HOLA_REGISTRY_ALLOWLIST` baseline (default `ghcr.io/try-hola/*`). This is a
+typo-squat guard, not auth — a `ghcr.io.evil.com` ref can't slip past a
+`ghcr.io/*` consent (glob-prefix anchored, not substring).
+
+For a **private** package in another namespace, register a credential (the
+credential's registry extends the allowlist automatically):
+
+```bash
+hola registry-cred add --registry ghcr.io/myorg --username <user> --token <PAT> --id myorg-ghcr
+hola install <appId> --registry-cred myorg-ghcr
+```
+
+For a **public** package in a first-party namespace (no token needed), either
+extend the baseline allowlist in the host `.env`:
+
+```bash
+HOLA_REGISTRY_ALLOWLIST=ghcr.io/try-hola/*,ghcr.io/myorg/*
+```
+
+or declare the consent per catalog source at `source add` time (the source's
+`allowRegistries` is honored on every pull sourced from it):
+
+```bash
+hola source add myorg --url https://raw.githubusercontent.com/myorg/hola-apps/main/catalog.json \
+  --allow-registry ghcr.io/myorg/*
+hola refresh    # web UI refresh button hits the same force-refresh endpoint
+hola install <appId>
+```
+
+The install-by-ref escape hatch (`hola install <ociRef>`) has no source, so it
+still needs either `--registry-cred` or the baseline allowlist to cover the ref.
+
 Through the web dashboard (or the SDK/CLI against the API), an app moves through:
 
 ```

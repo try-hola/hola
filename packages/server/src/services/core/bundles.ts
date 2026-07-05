@@ -41,6 +41,14 @@ export type EnsurePulledOpts = {
   source?: string;
   /** When set, authenticate the `oras pull` for a private registry. */
   credentials?: PullCredentials;
+  /**
+   * Additional registry glob patterns to permit for this pull (extends the
+   * server baseline `HOLA_REGISTRY_ALLOWLIST`). Used to honor a catalog
+   * source's `allowRegistries` consent — e.g. an operator-added source that
+   * declares `ghcr.io/pofallon/*` unlocks pulls from that namespace without a
+   * registered credential (which is only needed for *private* packages).
+   */
+  extraAllowlist?: string[];
 };
 
 export interface BundleService {
@@ -77,9 +85,16 @@ export class RealBundleService implements BundleService, HealthCheckable {
 
   async ensurePulled(opts: EnsurePulledOpts): Promise<BundleInfo> {
     // A registered credential's registry extends the allowlist: registering it is
-    // the operator's explicit consent to pull from that registry. Anonymous pulls
-    // to a non-baseline registry stay blocked.
-    this.enforceAllowlist(opts.ociRef, opts.credentials ? [opts.credentials.registry] : []);
+    // the operator's explicit consent to pull from that registry. A catalog
+    // source's `allowRegistries` extends it too (operator consent declared at
+    // source-add time — useful for public packages in a first-party namespace
+    // that don't need a token). Anonymous pulls to a non-baseline registry
+    // without a matching consent stay blocked.
+    const extraAllowed = [
+      ...(opts.credentials ? [opts.credentials.registry] : []),
+      ...(opts.extraAllowlist ?? []),
+    ];
+    this.enforceAllowlist(opts.ociRef, extraAllowed);
 
     // Source-qualify the cache key so two sources can't alias the same
     // appId/version. `hola` (the built-in source) keeps the bare appId key, so the

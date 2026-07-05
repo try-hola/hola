@@ -8,6 +8,14 @@ export interface SourceOptions {
   /** `--registry` + `--cred` register auth for a private source. */
   registry?: string;
   cred?: string;
+  /**
+   * `--allow-registry <glob>` (repeatable, comma-separated) declares the
+   * operator's consent to pull this source's bundles from a registry namespace
+   * without registering a credential — useful for *public* packages in a
+   * first-party registry (e.g. `ghcr.io/myorg/*`). Adds to the server's
+   * baseline `HOLA_REGISTRY_ALLOWLIST`.
+   */
+  allowRegistry?: string[] | string;
   json?: boolean;
 }
 
@@ -30,7 +38,7 @@ export async function runSource(
       case 'add': {
         const id = opts.id ?? positional[0];
         if (!id || !opts.url) {
-          console.error('source add requires an id and --url (and optionally --name, --registry + --cred)');
+          console.error('source add requires an id and --url (and optionally --name, --registry + --cred, --allow-registry)');
           process.exitCode = 1;
           return;
         }
@@ -40,9 +48,21 @@ export async function runSource(
           return;
         }
         const auth = opts.registry && opts.cred ? { registry: opts.registry, credentialRef: opts.cred } : undefined;
-        const record = await sdk.catalogSources.add({ id, name: opts.name ?? id, url: opts.url, auth });
+        // mri may pass repeated --allow-registry flags as an array, or comma-
+        // separated in a single flag. Flatten both into a clean glob list.
+        const allowRegistries = (Array.isArray(opts.allowRegistry) ? opts.allowRegistry : opts.allowRegistry ? [opts.allowRegistry] : [])
+          .flatMap((s) => s.split(','))
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const record = await sdk.catalogSources.add({ id, name: opts.name ?? id, url: opts.url, auth, allowRegistries: allowRegistries.length > 0 ? allowRegistries : undefined });
         if (opts.json) console.log(JSON.stringify(record, null, 2));
-        else console.log(`Added catalog source '${record.id}' → ${record.url}${auth ? ` (auth: ${auth.credentialRef})` : ''}.`);
+        else {
+          const tail = [
+            auth ? `auth: ${auth.credentialRef}` : '',
+            allowRegistries.length > 0 ? `allow: ${allowRegistries.join(', ')}` : '',
+          ].filter(Boolean).join(' · ');
+          console.log(`Added catalog source '${record.id}' → ${record.url}${tail ? ` (${tail})` : ''}.`);
+        }
         return;
       }
       case 'list': {

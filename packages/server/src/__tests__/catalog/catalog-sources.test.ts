@@ -64,3 +64,43 @@ describe('RealCatalogSourceService', () => {
     expect(reloaded?.url).toBe(CATALOG);
   });
 });
+
+describe('RealCatalogSourceService allowRegistries (persistence + validation)', () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  test('persists allowRegistries across instances and rejects malformed globs', async () => {
+    const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-allow-test-'));
+    dirs.push(holaDir);
+    const storage = new RealStorageService({ holaDir });
+    const svc = new RealCatalogSourceService(storage);
+
+    // Valid: host/* and host/prefix/* both accepted, comma-separated in a single
+    // string and as an array.
+    const rec = await svc.add({
+      id: 'pofallon',
+      name: 'Pofallon',
+      url: CATALOG,
+      allowRegistries: ['ghcr.io/pofallon/*', 'ghcr.io/acme,ghcr.io/other/*'],
+    });
+    expect(rec.allowRegistries).toEqual(['ghcr.io/pofallon/*', 'ghcr.io/acme', 'ghcr.io/other/*']);
+
+    // Persists across instances.
+    const reloaded = await new RealCatalogSourceService(storage).get('pofallon');
+    expect(reloaded?.allowRegistries).toEqual(['ghcr.io/pofallon/*', 'ghcr.io/acme', 'ghcr.io/other/*']);
+
+    // Malformed (spaces, regex metachars): rejected with a discrete error.
+    await expect(svc.add({ id: 'bad1', name: 'Bad', url: CATALOG, allowRegistries: ['ghcr io/pofallon/*'] })).rejects.toThrow('SOURCE_ALLOW_REGISTRY_INVALID');
+    await expect(svc.add({ id: 'bad2', name: 'Bad', url: CATALOG, allowRegistries: ['ghcr.io/pofallon/.+'] })).rejects.toThrow('SOURCE_ALLOW_REGISTRY_INVALID');
+  });
+
+  test('add with no allowRegistries leaves the field undefined (baseline behaviour unchanged)', async () => {
+    const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-allow-test-'));
+    dirs.push(holaDir);
+    const svc = new RealCatalogSourceService(new RealStorageService({ holaDir }));
+    const rec = await svc.add({ id: 'acme', name: 'Acme', url: CATALOG });
+    expect(rec.allowRegistries).toBeUndefined();
+  });
+});

@@ -201,3 +201,55 @@ describe('RealBundleService digest-based staleness detection', () => {
     expect(readFileSync(join(base, 'app', '2.0', '.oras-digest'), 'utf8').trim()).toBe(DIGEST_A);
   });
 });
+
+describe('RealBundleService allowlist consent via extraAllowlist', () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  async function makeCache() {
+    const base = await mkdtemp(join(tmpdir(), 'hola-bundle-allow-test-'));
+    dirs.push(base);
+    return base;
+  }
+
+  test('an extraAllowlist glob unlocks an anonymous pull from a non-baseline registry', async () => {
+    const base = await makeCache();
+    const runner: CommandRunner = async () => ({ stdout: '', stderr: '' });
+    const svc = new RealBundleService(base, runner);
+
+    // Without consent: blocked (baseline allowlist is ghcr.io/try-hola/*).
+    await expect(
+      svc.ensurePulled({ appId: 'cms', version: '0.1.2', source: 'pofallon', ociRef: 'ghcr.io/pofallon/hola-get2know-cms:0.1.2' })
+    ).rejects.toThrow('REF_NOT_ALLOWED');
+
+    // With the source's allowRegistries threaded as extraAllowlist: unlocked.
+    const ok = await svc.ensurePulled({
+      appId: 'cms',
+      version: '0.1.2',
+      source: 'pofallon',
+      ociRef: 'ghcr.io/pofallon/hola-get2know-cms:0.1.2',
+      extraAllowlist: ['ghcr.io/pofallon/*'],
+    });
+    expect(ok.localPath).toBe(join(base, 'pofallon__cms', '0.1.2'));
+  });
+
+  test('a typo-squat registry is still rejected even when a broader glob is allowed', async () => {
+    const base = await makeCache();
+    const runner: CommandRunner = async () => ({ stdout: '', stderr: '' });
+    const svc = new RealBundleService(base, runner);
+
+    // matchesAllowlist is glob-prefix anchored, so ghcr.io.evil.com must NOT
+    // slip past a ghcr.io/* consent (the original typo-squat defense).
+    await expect(
+      svc.ensurePulled({
+        appId: 'evil',
+        version: '1.0',
+        source: 'pofallon',
+        ociRef: 'ghcr.io.evil.com/pofallon/evil:1.0',
+        extraAllowlist: ['ghcr.io/*'],
+      })
+    ).rejects.toThrow('REF_NOT_ALLOWED');
+  });
+});

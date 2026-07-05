@@ -119,6 +119,7 @@ prog
   .describe('Manage catalog sources: add | list | rm')
   .example('source add acme --url https://raw.githubusercontent.com/acme/hola-apps/main/catalog.json')
   .example('source add acme --url <catalog.json> --registry ghcr.io --cred acme')
+  .example('source add acme --url <catalog.json> --allow-registry ghcr.io/acme/*')
   .example('source list')
   .example('source rm acme')
   .option('--id', 'Source id (alternative to the positional id)')
@@ -126,6 +127,7 @@ prog
   .option('--url', 'URL of the source catalog.json')
   .option('--registry', 'Registry host for private packages (with --cred)')
   .option('--cred', 'Stored registry credential id (with --registry)')
+  .option('--allow-registry', 'Registry glob to permit for this source (repeatable or comma-separated; e.g. ghcr.io/acme/*)')
   .option('--json', 'Print raw JSON output', false)
   .action(async (action, id, opts) => {
     const { runSource } = await load(import('./commands/source/source'));
