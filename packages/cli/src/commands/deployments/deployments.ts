@@ -63,11 +63,21 @@ export async function runDeploymentLogs(
   }
   const sdk = injected?.sdk ?? new HolaSdk();
   try {
-    const res = (await sdk.deployments.logs(deploymentId)) as {
-      entries?: Array<{ timestamp?: string; message?: string }>;
-    };
+    const res = (await sdk.deployments.logs(deploymentId)) as
+      | { entries?: Array<{ timestamp?: string; message?: string }> }
+      | undefined
+      | null;
     if (opts.json) {
-      console.log(JSON.stringify(res, null, 2));
+      console.log(JSON.stringify(res ?? {}, null, 2));
+      return;
+    }
+    // SDK's parseJson returns undefined when the server responded 2xx with a
+    // non-JSON body (e.g. an upstream proxy returned a cached empty 204, or the
+    // server returned no body). Rather than crash evaluating `res.entries`,
+    // fall back to "No logs." — same UX as an empty but well-formed response.
+    if (!res || typeof res !== 'object') {
+      console.log('No logs.');
+      await maybeNotifyUpdate(sdk, opts);
       return;
     }
     const entries = res.entries ?? [];
