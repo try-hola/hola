@@ -1,9 +1,33 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { GetDeploymentResponse, GetDeploymentConfigResponse } from '@hola/shared';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { GetDeploymentResponse, GetDeploymentConfigResponse, SSEEvent, SSEConnectionState } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
+import { handleGlobalEvent, useGlobalQueryEvents } from '../../state/useGlobalQueryEvents';
+
+// `useGlobalQueryEvents` (mounted alongside `DeploymentDetail` below so T018 can
+// exercise the real deletion→redirect chain) drives itself off `useSSE`. Mock it
+// the same way `state/__tests__/useGlobalQueryEvents.test.ts` does: capture the
+// `onEvent` callback so a test can hand it a simulated SSE event directly.
+let capturedOnEvent: ((event: SSEEvent) => void) | null = null;
+
+vi.mock('../../hooks/useSSE', () => ({
+  useSSE: (_url: string, onEvent: (event: SSEEvent) => void) => {
+    capturedOnEvent = onEvent;
+    return {
+      connectionState: 'connected' as SSEConnectionState,
+      lastEvent: null,
+      error: null,
+      reconnectAttempt: 0,
+      events: [],
+      connect: () => {},
+      disconnect: () => {},
+      isConnected: true,
+    };
+  },
+}));
 
 // De-stubbed Configuration tab (declarative-drifting-tiger PR 5): the tab used
 // to render hardcoded Nextcloud-flavored placeholder rows regardless of which
@@ -60,14 +84,45 @@ vi.mock('../../utils/api-hybrid', () => ({
 // Imported after the mock so DeploymentDetail picks up the mocked api-hybrid.
 const { DeploymentDetail } = await import('../../pages/DeploymentDetail');
 
-function renderDetail() {
-  return render(
-    <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=configuration`]}>
-      <Routes>
-        <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
-      </Routes>
-    </MemoryRouter>
+// Mounted alongside `DeploymentDetail` so the real deletion→redirect chain
+// (SSE event -> useGlobalQueryEvents -> handleGlobalEvent -> notifyDeploymentDeleted
+// -> the page's subscribeDeploymentDeleted callback) can be exercised end to end,
+// same as production (both are mounted under AppShell there).
+function GlobalEventsMount() {
+  useGlobalQueryEvents();
+  return null;
+}
+
+// The list route the page redirects to on deletion-while-viewing (T018);
+// surfaces `location.state.notice` so tests can assert its content.
+function DeploymentsListSentinel() {
+  const location = useLocation();
+  const notice = (location.state as { notice?: string } | null)?.notice;
+  return (
+    <div>
+      Deployments List
+      {notice && <div data-testid="notice">{notice}</div>}
+    </div>
   );
+}
+
+// Accepts an existing `QueryClient` (T009/T018 need to call `handleGlobalEvent`
+// against the SAME client the mounted component reads from) and always returns
+// the one actually used, alongside the render result. A `/deployments` route
+// with a sentinel is included so tests can assert a redirect landed there.
+function renderDetail(queryClient: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+  const utils = render(
+    <QueryClientProvider client={queryClient}>
+      <GlobalEventsMount />
+      <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=configuration`]}>
+        <Routes>
+          <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          <Route path="/deployments" element={<DeploymentsListSentinel />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
+  return { ...utils, queryClient };
 }
 
 beforeEach(() => {
@@ -150,5 +205,87 @@ describe('DeploymentDetail Configuration tab', () => {
 
     fireEvent.click(screen.getByText('Advanced (1)'));
     expect(screen.getByText('GITEA__server__HTTP_PORT')).toBeInTheDocument();
+  });
+});
+
+describe('DeploymentDetail live updates (T009)', () => {
+  it('re-renders the new status from a deployment_update event patched onto the same QueryClient the page reads from, with no page remount', async () => {
+    const { queryClient } = renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Running')).toBeInTheDocument());
+
+    // An identifier that would be a *different* DOM node after a remount —
+    // used below to confirm this is the same component instance, just re-rendered.
+    const appNameEl = screen.getByText('My App');
+
+    // `handleGlobalEvent`'s `deployment_update` branch both (a) patches the
+    // cached detail directly via `setQueryData` and (b) invalidates the whole
+    // `deployments` family, which — since this detail query is actively
+    // mounted — triggers a background revalidation refetch (the
+    // "server-confirmed" model per the 2026-07-06 clarification). Have that
+    // refetch agree with the new status so the settled UI state is
+    // deterministic regardless of which of the two mechanisms wins the race.
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      status: 'stopped',
+      uptime: '0s',
+    });
+
+    act(() => {
+      handleGlobalEvent(queryClient, {
+        type: 'deployment_update',
+        data: {
+          deploymentId,
+          status: 'stopped',
+          uptime: '0s',
+          lastUpdated: new Date(Date.now() + 1000).toISOString(),
+        },
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText('Stopped')).toBeInTheDocument());
+    expect(screen.queryByText('Running')).not.toBeInTheDocument();
+    // Same component instance, not a remount.
+    expect(screen.getByText('My App')).toBe(appNameEl);
+  });
+});
+
+describe('DeploymentDetail deletion-while-viewing redirect (T018)', () => {
+  beforeEach(() => {
+    capturedOnEvent = null;
+  });
+
+  it('navigates to the deployments list and carries a "removed" notice when the viewed deployment is deleted elsewhere', async () => {
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Running')).toBeInTheDocument());
+    expect(capturedOnEvent).not.toBeNull();
+
+    // Simulate the global `/api/events` stream delivering a `deployment_deleted`
+    // for THIS deployment — the same path the real SSE connection drives via
+    // `useGlobalQueryEvents` -> `handleGlobalEvent` -> `notifyDeploymentDeleted`
+    // -> the page's own `subscribeDeploymentDeleted` callback.
+    act(() => {
+      capturedOnEvent!({ type: 'deployment_deleted', data: { deploymentId } });
+    });
+
+    await waitFor(() => expect(screen.getByText('Deployments List')).toBeInTheDocument());
+    expect(screen.getByTestId('notice')).toHaveTextContent('My App was removed');
+  });
+
+  it('ignores a deployment_deleted event for a different id (stays on the detail page)', async () => {
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('Running')).toBeInTheDocument());
+    expect(capturedOnEvent).not.toBeNull();
+
+    act(() => {
+      capturedOnEvent!({ type: 'deployment_deleted', data: { deploymentId: 'some-other-deployment' } });
+    });
+
+    // Give any (incorrect) navigation a chance to happen, then assert it didn't.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText('Deployments List')).not.toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
   });
 });

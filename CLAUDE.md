@@ -128,3 +128,9 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 - `docs/OPERATIONS.md` — install, recovery, backup, SSO.
 - `packages/compose/README.md` — the production stack, catalog, and Authentik setup.
 - `docs/adr/` — architecture decision records (e.g. authentication).
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan:
+`specs/001-web-state-freshness/plan.md`
+<!-- SPECKIT END -->

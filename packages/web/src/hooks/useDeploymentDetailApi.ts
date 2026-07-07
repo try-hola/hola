@@ -1,6 +1,6 @@
-import React from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { queryKeys } from '../state/queryKeys';
 import type {
   GetDeploymentResponse,
   GetDeploymentHistoryResponse,
@@ -10,259 +10,133 @@ import type {
 } from '@hola/shared';
 
 /**
- * Hook for fetching deployment detail data
- * Follows StrictMode-compatible patterns from useWorkingApi.ts
+ * Hook for fetching deployment detail data, backed by TanStack Query.
+ * See specs/001-web-state-freshness/contracts/hooks.md.
  */
 export function useDeploymentDetailApi(deploymentId: string | undefined) {
-  const [state, setState] = React.useState<{
-    data: GetDeploymentResponse | null;
-    loading: boolean;
-    error: string | null;
-  }>({
-    data: null,
-    loading: false,
-    error: null,
+  const qc = useQueryClient();
+
+  const query = useQuery({
+    queryKey: queryKeys.deployments.detail(deploymentId ?? ''),
+    queryFn: () => api.deployments.byId(deploymentId!) as Promise<GetDeploymentResponse>,
+    enabled: !!deploymentId,
+    // Fallback poll (T028): while a deployment is mid-transition
+    // (installing/updating), poll so the status converges to its terminal state
+    // even if the SSE stream isn't driving convergence.
+    refetchInterval: (q) => {
+      const status = (q.state.data as GetDeploymentResponse | undefined)?.status;
+      return status === 'installing' || status === 'updating' ? 4000 : false;
+    },
   });
 
-  // Use useMemo for stable cache key based on deploymentId
-  const cacheKey = React.useMemo(() => {
-    if (!deploymentId) return null;
-    return `deployment-detail-${deploymentId}`;
-  }, [deploymentId]);
-
-  // `force` bypasses the 30s cache read — required for polling, since a status
-  // mid-transition (installing/updating) would otherwise be served stale for up
-  // to 30s and never appear to progress.
-  const fetchData = React.useCallback(async (force = false) => {
-    if (!deploymentId || !cacheKey) {
-      setState({ data: null, loading: false, error: null });
-      return;
-    }
-
-    const now = Date.now();
-    const cached = globalCache.get(cacheKey);
-
-    // Check cache first (unless forced)
-    if (!force && cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetDeploymentResponse,
-        loading: false,
-        error: null,
-      });
-      return;
-    }
-
-    setState(prev => ({ ...prev, loading: true, error: null }));
-
-    try {
-      const result = await api.deployments.byId(deploymentId) as GetDeploymentResponse;
-      globalCache.set(cacheKey, { data: result, timestamp: now });
-      setState({ data: result, loading: false, error: null });
-    } catch (error) {
-      setState({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, [cacheKey, deploymentId]); // Include params to refetch when they change
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Auto-refresh while a deployment is mid-transition so the status badge moves
-  // from "Installing"/"Updating" to its terminal state without a manual reload
-  // (the deploy lifecycle runs asynchronously server-side).
-  const status = state.data?.status;
-  const isTransitional = status === 'installing' || status === 'updating';
-  React.useEffect(() => {
-    if (!isTransitional) return;
-    const interval = setInterval(() => { void fetchData(true); }, 4000);
-    return () => clearInterval(interval);
-  }, [isTransitional, fetchData]);
-
   // Update configuration
-  const updateConfiguration = React.useCallback(async (request: PatchDeploymentRequest) => {
-    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
-    
-    const result = await api.deployments.update(deploymentId, request);
-    
-    // Invalidate cache and refetch
-    globalCache.delete(cacheKey);
-    await fetchData();
-    
-    return result;
-  }, [deploymentId, cacheKey, fetchData]);
+  const updateConfigMutation = useMutation({
+    mutationFn: (request: PatchDeploymentRequest) => api.deployments.update(deploymentId!, request),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.detail(deploymentId!) });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.config(deploymentId!) });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      qc.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+  const updateConfiguration = (request: PatchDeploymentRequest) => updateConfigMutation.mutateAsync(request);
 
   // Execute a lifecycle action (start/stop/restart). NOT delete — removal is a
   // full teardown via the DELETE endpoint (see removeDeployment), not a lifecycle
   // action, otherwise the Traefik route stays held and blocks reinstall.
-  const executeAction = React.useCallback(async (action: 'start' | 'stop' | 'restart') => {
-    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
-
-    const request: PostDeploymentActionRequest = { action };
-    const result = await api.deployments.action(deploymentId, request);
-
-    // Invalidate cache and refetch
-    globalCache.delete(cacheKey);
-    await fetchData();
-
-    return result;
-  }, [deploymentId, cacheKey, fetchData]);
+  const executeActionMutation = useMutation({
+    mutationFn: (action: 'start' | 'stop' | 'restart') => {
+      const request: PostDeploymentActionRequest = { action };
+      return api.deployments.action(deploymentId!, request);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.detail(deploymentId!) });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      qc.invalidateQueries({ queryKey: queryKeys.jobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+  const executeAction = (action: 'start' | 'stop' | 'restart') => executeActionMutation.mutateAsync(action);
 
   // Upgrade to a newer catalog version (#284 Phase 2) via POST
   // /api/deployments/:id/promote. The server carries env/secrets forward and runs
   // the upgrade skip-guard + pre-upgrade snapshot before switching the release.
-  const upgradeDeployment = React.useCallback(async (body?: { version?: string; snapshot?: boolean }) => {
-    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
-
-    const result = await api.deployments.promote(deploymentId, body);
-    globalCache.delete(cacheKey);
-    await fetchData();
-    return result;
-  }, [deploymentId, cacheKey, fetchData]);
+  const upgradeDeploymentMutation = useMutation({
+    mutationFn: (body?: { version?: string; snapshot?: boolean }) => api.deployments.promote(deploymentId!, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.detail(deploymentId!) });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      qc.invalidateQueries({ queryKey: queryKeys.jobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+  const upgradeDeployment = (body?: { version?: string; snapshot?: boolean }) =>
+    upgradeDeploymentMutation.mutateAsync(body);
 
   // Remove the deployment entirely (stop + deprovision auth + release route +
   // delete record + clean storage) via DELETE /api/deployments/:id. The caller
   // navigates away on success since the deployment no longer exists.
-  const removeDeployment = React.useCallback(async () => {
-    if (!deploymentId || !cacheKey) throw new Error('No deployment ID');
-
-    await api.deployments.remove(deploymentId);
-    globalCache.delete(cacheKey);
-  }, [deploymentId, cacheKey]);
+  const removeDeploymentMutation = useMutation({
+    mutationFn: () => api.deployments.remove(deploymentId!),
+    onSuccess: () => {
+      qc.removeQueries({ queryKey: queryKeys.deployments.detail(deploymentId!), exact: true });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      qc.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+  const removeDeployment = () => removeDeploymentMutation.mutateAsync();
 
   return {
-    ...state,
-    refetch: fetchData,
+    data: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error ? (query.error instanceof Error ? query.error.message : 'Unknown error') : null,
+    refetch: () => query.refetch(),
     updateConfiguration,
     executeAction,
     upgradeDeployment,
-    removeDeployment
+    removeDeployment,
   };
 }
 
 /**
- * Hook for fetching deployment history with pagination
- * Follows parameterized API hook patterns from useDeploymentsApi.ts
+ * Hook for fetching deployment history with pagination, backed by TanStack Query.
  */
 export function useDeploymentHistoryApi(deploymentId: string | undefined, page: number = 1) {
-  const [state, setState] = React.useState<{
-    data: GetDeploymentHistoryResponse | null;
-    loading: boolean;
-    error: string | null;
-  }>({
-    data: null,
-    loading: false,
-    error: null,
+  const query = useQuery({
+    queryKey: queryKeys.deployments.history(deploymentId ?? '', page),
+    queryFn: () => api.deployments.history(deploymentId!, { page, limit: 10 }) as Promise<GetDeploymentHistoryResponse>,
+    enabled: !!deploymentId,
   });
 
-  // Use useMemo for stable cache key based on params
-  const cacheKey = React.useMemo(() => {
-    if (!deploymentId) return null;
-    return `deployment-history-${deploymentId}-page-${page}`;
-  }, [deploymentId, page]);
-
-  const fetchData = React.useCallback(async () => {
-    if (!deploymentId || !cacheKey) {
-      setState({ data: null, loading: false, error: null });
-      return;
-    }
-
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-    
-    // Check cache first
-    if (cached && (now - cached.timestamp) < 30000) {
-      setState({
-        data: cached.data as GetDeploymentHistoryResponse,
-        loading: false,
-        error: null,
-      });
-      return;
-    }
-    
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    
-    try {
-      const result = await api.deployments.history(deploymentId, { page, limit: 10 }) as GetDeploymentHistoryResponse;
-      globalCache.set(cacheKey, { data: result, timestamp: now });
-      setState({ data: result, loading: false, error: null });
-    } catch (error) {
-      setState({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, [cacheKey, deploymentId, page]); // Include params to refetch when they change
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
   return {
-    ...state,
-    refetch: fetchData
+    data: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error ? (query.error instanceof Error ? query.error.message : 'Unknown error') : null,
+    refetch: () => query.refetch(),
   };
 }
 
 /**
  * Hook for the active release's full config (typed `appEnv` rows + system
  * overrides), backing the DeploymentDetail Configuration tab. Mirrors
- * `useDeploymentDetailApi`'s cache/loading/error shape.
+ * `useDeploymentDetailApi`'s data/loading/error shape.
  */
 export function useDeploymentConfigApi(deploymentId: string | undefined) {
-  const [state, setState] = React.useState<{
-    data: GetDeploymentConfigResponse | null;
-    loading: boolean;
-    error: string | null;
-  }>({
-    data: null,
-    loading: false,
-    error: null,
+  const query = useQuery({
+    queryKey: queryKeys.deployments.config(deploymentId ?? ''),
+    queryFn: () => api.deployments.config(deploymentId!) as Promise<GetDeploymentConfigResponse>,
+    enabled: !!deploymentId,
   });
 
-  const cacheKey = React.useMemo(() => {
-    if (!deploymentId) return null;
-    return `deployment-config-${deploymentId}`;
-  }, [deploymentId]);
-
-  const fetchData = React.useCallback(async (force = false) => {
-    if (!deploymentId || !cacheKey) {
-      setState({ data: null, loading: false, error: null });
-      return;
-    }
-
-    const now = Date.now();
-    const cached = globalCache.get(cacheKey);
-    if (!force && cached && (now - cached.timestamp) < 30000) {
-      setState({ data: cached.data as GetDeploymentConfigResponse, loading: false, error: null });
-      return;
-    }
-
-    setState(prev => ({ ...prev, loading: true, error: null }));
-
-    try {
-      const result = await api.deployments.config(deploymentId) as GetDeploymentConfigResponse;
-      globalCache.set(cacheKey, { data: result, timestamp: now });
-      setState({ data: result, loading: false, error: null });
-    } catch (error) {
-      setState({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, [cacheKey, deploymentId]);
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
   return {
-    ...state,
-    refetch: fetchData
+    data: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error ? (query.error instanceof Error ? query.error.message : 'Unknown error') : null,
+    // `force` accepted for backward compatibility with call sites (e.g.
+    // DeploymentDetail's post-save `refetchConfig(true)`); TanStack's refetch
+    // always bypasses staleTime and goes to the network, so the boolean is a
+    // no-op that satisfies the old "force" semantics. The refetch promise is
+    // returned so `await refetchConfig(true)` waits for the fresh config.
+    refetch: (force?: boolean) => { void force; return query.refetch(); },
   };
 }

@@ -1,54 +1,89 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import * as React from 'react';
+import { describe, it, expect, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook } from '@testing-library/react';
-import { globalCache } from '../utils/cache';
-import type { SSEEvent } from '@hola/shared';
+import type { DeploymentDetail, SSEEvent } from '@hola/shared';
+import { queryKeys } from '../state/queryKeys';
 
-// `useGlobalEvents` is mounted once (in AppShell) and is the ONLY thing that
-// hears every SSE event — a page that isn't currently mounted (e.g. Apps
-// while the operator is on Deployments) has no live-bus subscriber of its
-// own, so the fix must invalidate the shared `globalCache` directly rather
-// than relying on `signalLive` reaching a listener that doesn't exist yet.
+// `useGlobalEvents` is now a thin wrapper around `useGlobalQueryEvents` (the
+// actual SSE -> QueryClient translation layer, fully covered by
+// `state/__tests__/useGlobalQueryEvents.test.ts`). This test is an
+// integration-style smoke test proving the whole chain — useGlobalEvents ->
+// useGlobalQueryEvents -> handleGlobalEvent -> QueryClient — works end to end.
 let capturedOnEvent: ((event: SSEEvent) => void) | undefined;
+
 vi.mock('./useSSE', () => ({
   useSSE: (_url: string, onEvent: (event: SSEEvent) => void) => {
     capturedOnEvent = onEvent;
-    return { isConnected: true };
+    return {
+      connectionState: 'connected',
+      lastEvent: null,
+      error: null,
+      reconnectAttempt: 0,
+      events: [],
+      connect: () => {},
+      disconnect: () => {},
+      isConnected: true,
+    };
   },
 }));
 
 const { useGlobalEvents } = await import('./useGlobalEvents');
 
-describe('useGlobalEvents cache invalidation', () => {
-  beforeEach(() => {
-    globalCache.clear();
-    capturedOnEvent = undefined;
-  });
+function seedDetail(id: string, overrides: Partial<DeploymentDetail> = {}): DeploymentDetail {
+  return {
+    id,
+    name: 'Test App',
+    app: 'test-app',
+    icon: 'icon.svg',
+    status: 'running',
+    resources: { cpu: '0.5', memory: '256Mi' },
+    ports: [],
+    lastUpdated: new Date(0).toISOString(),
+    ...overrides,
+  };
+}
 
-  it('drops every cached deployments-list variant on deployment_deleted, not just a currently-mounted one', () => {
-    // Two different param combinations, e.g. Apps.tsx vs Deployments.tsx.
-    globalCache.set('deployments-{"page":1,"limit":100}', { data: {}, timestamp: Date.now() });
-    globalCache.set('deployments-{"status":"running"}', { data: {}, timestamp: Date.now() });
-    globalCache.set('deployment-detail-app-abc123', { data: {}, timestamp: Date.now() });
+function createWrapper(qc: QueryClient) {
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(QueryClientProvider, { client: qc }, children);
+  };
+}
 
-    renderHook(() => useGlobalEvents());
+describe('useGlobalEvents', () => {
+  it('mounts the SSE subscription and drives the QueryClient on deployment_update', () => {
+    const qc = new QueryClient();
+    const id = 'app-abc123';
+
+    qc.setQueryData(queryKeys.deployments.detail(id), seedDetail(id));
+    qc.setQueryData(queryKeys.deployments.list({}), { items: [], total: 0, page: 1, limit: 20 });
+
+    renderHook(() => useGlobalEvents(), { wrapper: createWrapper(qc) });
     expect(capturedOnEvent).toBeDefined();
 
-    capturedOnEvent!({ type: 'deployment_deleted', data: { deploymentId: 'app-abc123' } });
-
-    expect(globalCache.get('deployments-{"page":1,"limit":100}')).toBeNull();
-    expect(globalCache.get('deployments-{"status":"running"}')).toBeNull();
-    expect(globalCache.get('deployment-detail-app-abc123')).toBeNull();
-  });
-
-  it('drops every cached deployments-list variant on deployment_update too', () => {
-    globalCache.set('deployments-{"page":1,"limit":100}', { data: {}, timestamp: Date.now() });
-
-    renderHook(() => useGlobalEvents());
     capturedOnEvent!({
       type: 'deployment_update',
-      data: { deploymentId: 'app-abc123', status: 'running', lastUpdated: new Date(0).toISOString() },
+      data: { deploymentId: id, status: 'stopped', uptime: '0s', lastUpdated: new Date(1000).toISOString() },
     });
 
-    expect(globalCache.get('deployments-{"page":1,"limit":100}')).toBeNull();
+    const patched = qc.getQueryData<DeploymentDetail>(queryKeys.deployments.detail(id));
+    expect(patched?.status).toBe('stopped');
+    expect(qc.getQueryState(queryKeys.deployments.list({}))?.isInvalidated).toBe(true);
+  });
+
+  it('mounts the SSE subscription and drives the QueryClient on deployment_deleted', () => {
+    const qc = new QueryClient();
+    const id = 'app-abc123';
+
+    qc.setQueryData(queryKeys.deployments.detail(id), seedDetail(id));
+    qc.setQueryData(queryKeys.deployments.list({}), { items: [], total: 0, page: 1, limit: 20 });
+
+    renderHook(() => useGlobalEvents(), { wrapper: createWrapper(qc) });
+    expect(capturedOnEvent).toBeDefined();
+
+    capturedOnEvent!({ type: 'deployment_deleted', data: { deploymentId: id } });
+
+    expect(qc.getQueryData(queryKeys.deployments.detail(id))).toBeUndefined();
+    expect(qc.getQueryState(queryKeys.deployments.list({}))?.isInvalidated).toBe(true);
   });
 });

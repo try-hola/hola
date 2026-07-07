@@ -16,6 +16,7 @@
   "dependencies": {
     "@hola/sdk": "workspace:*",
     "@hola/shared": "workspace:*",
+    "@tanstack/react-query": "^5.101.2",
     "lucide-react": "^1.18.0",
     "oidc-client-ts": "^3.5.0",
     "react": "^19.2.7",

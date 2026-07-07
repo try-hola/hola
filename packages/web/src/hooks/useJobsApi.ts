@@ -1,7 +1,6 @@
-import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
-import { onLive, isLiveConnected } from '../utils/live-bus';
+import { queryKeys } from '../state/queryKeys';
 import type { GetJobsResponse, JobStatus } from '@hola/shared';
 
 interface UseJobsApiParams {
@@ -13,7 +12,7 @@ interface UseJobsApiParams {
   refreshInterval?: number;
 }
 
-// StrictMode-compatible API hook for jobs data
+// TanStack Query-backed hook for jobs data (#291 / T024).
 export function useJobsApi(params: UseJobsApiParams = {}) {
   const {
     deploymentId,
@@ -24,90 +23,37 @@ export function useJobsApi(params: UseJobsApiParams = {}) {
     refreshInterval = 5000, // 5 seconds for live updates
   } = params;
 
-  const [state, setState] = React.useState<{
-    data: GetJobsResponse | null;
-    loading: boolean;
-    error: string | null;
-  }>({
-    data: null,
-    loading: false,
-    error: null,
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.jobs.list({ deploymentId, status, page, limit }),
+    queryFn: () =>
+      api.jobs.list({
+        page,
+        limit,
+        ...(deploymentId && { deploymentId }),
+        ...(status && { status }),
+      }) as Promise<GetJobsResponse>,
+    // Live updates (#291) invalidate this query from the global event stream, so
+    // that's the primary freshness driver. The poll is a bounded fallback that
+    // only runs while there's actually an active job to converge (contracts/
+    // hooks.md: "while autoRefresh and active jobs exist") — mirroring how the
+    // deployment hooks gate on transitional status, rather than polling at rest.
+    refetchInterval: (query) => {
+      if (!autoRefresh) return false;
+      const current = query.state.data as GetJobsResponse | undefined;
+      const hasActive = current?.items?.some(
+        j => j.status === 'queued' || j.status === 'running'
+      ) ?? false;
+      return hasActive ? refreshInterval : false;
+    },
   });
 
-  // Create stable cache key based on parameters
-  const cacheKey = React.useMemo(() => {
-    const key = `jobs-${JSON.stringify({ deploymentId, status, page, limit })}`;
-    return key;
-  }, [deploymentId, status, page, limit]);
-
-  // Fetch data with caching and error handling. `force` bypasses the cache read
-  // so a manual refresh (and the live poll) always re-fetches instead of
-  // re-serving a recently-cached list — otherwise the refresh button looks dead.
-  const fetchData = React.useCallback(async (force = false) => {
-    const cached = globalCache.get(cacheKey);
-    const now = Date.now();
-
-    // Check cache (2 second TTL for live updates) unless forced
-    if (!force && cached && (now - cached.timestamp) < 2000) {
-      setState({
-        data: cached.data as GetJobsResponse,
-        loading: false,
-        error: null,
-      });
-      return;
-    }
-    
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    
-    try {
-      const requestParams: { page: number; limit: number; deploymentId?: string; status?: JobStatus } = { page, limit };
-      if (deploymentId) requestParams.deploymentId = deploymentId;
-      if (status) requestParams.status = status;
-      
-      const result = await api.jobs.list(requestParams) as GetJobsResponse;
-      
-      // Cache the result
-      globalCache.set(cacheKey, { data: result, timestamp: now });
-      
-      setState({
-        data: result,
-        loading: false,
-        error: null,
-      });
-    } catch (error) {
-      setState({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, [cacheKey, page, limit, deploymentId, status]); // Include primitive params
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Live updates (#291): refetch when the global event stream reports a job
-  // transition — the primary freshness path. The poll below is the fallback.
-  React.useEffect(() => onLive('jobs', () => { void fetchData(true); }), [fetchData]);
-
-  // Polling fallback (#291): only runs when the global event stream ISN'T
-  // connected. While the backplane is live, job_update events drive freshness and
-  // this timer no-ops — so we don't poll redundantly.
-  React.useEffect(() => {
-    if (!autoRefresh) return;
-
-    const interval = setInterval(() => {
-      if (isLiveConnected()) return; // events are driving updates; skip the poll
-      void fetchData(true);
-    }, refreshInterval);
-    return () => clearInterval(interval);
-  }, [fetchData, autoRefresh, refreshInterval]);
-
   return {
-    ...state,
-    // Manual refresh always bypasses the cache.
-    refetch: () => fetchData(true),
+    data: data ?? null,
+    loading: isLoading,
+    error: error instanceof Error ? error.message : error ? String(error) : null,
+    // Return the refetch promise (matches the detail hooks) so `await refetch()`
+    // call sites actually wait for fresh data before proceeding.
+    refetch: () => refetch(),
   };
 }
 
