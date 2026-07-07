@@ -36,6 +36,7 @@ import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi } from '../hooks/useDeploymentDetailApi';
+import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 
 // `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
 // is imported from @hola/shared/param-validate so it can't drift from the
@@ -105,6 +106,18 @@ export const DeploymentDetail: React.FC = () => {
   } = useDeploymentDetailApi(deploymentId);
 
   const navigate = useNavigate();
+
+  // Deletion-while-viewing redirect (spec.md User Story 2 / research.md R9):
+  // the global SSE handler fires for EVERY `deployment_deleted` event, so only
+  // react when it matches the deployment this page is currently showing.
+  useEffect(() => {
+    const unsubscribe = subscribeDeploymentDeleted((deletedId) => {
+      if (deletedId === deploymentId) {
+        navigate('/deployments', { state: { notice: `${deployment?.name ?? 'The app'} was removed` } });
+      }
+    });
+    return unsubscribe;
+  }, [deploymentId, deployment?.name, navigate]);
 
   // Removal confirmation dialog state. Removal is destructive (full teardown +
   // record deletion), so it's gated behind a confirm step rather than firing on

@@ -1,61 +1,23 @@
-import React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { queryKeys } from '../state/queryKeys';
 import type { GetSummaryResponse } from '@hola/shared';
 
-// StrictMode-compatible API hook for dashboard data with enhanced caching
+// Dashboard summary hook backed by TanStack Query. Freshness comes from the
+// query's own staleTime (see state/queryClient.ts) plus targeted invalidation
+// of queryKeys.summary driven by useGlobalQueryEvents on deployment/job events.
 export function useWorkingApi() {
-  const [state, setState] = React.useState<{
-    data: GetSummaryResponse | null;
-    loading: boolean;
-    error: string | null;
-  }>({
-    data: null,
-    loading: false,
-    error: null,
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: queryKeys.summary,
+    queryFn: () => api.summary() as Promise<GetSummaryResponse>,
   });
 
-  // Fetch data with enhanced caching and error handling
-  const fetchData = React.useCallback(async () => {
-    const cacheKey = 'dashboard-summary';
-    const cached = globalCache.get<GetSummaryResponse>(cacheKey);
-    
-    // Check cache first
-    if (cached !== null) {
-      setState({
-        data: cached,
-        loading: false,
-        error: null,
-      });
-      return;
-    }
-    
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    
-    try {
-      const result = await api.summary() as GetSummaryResponse;
-      
-      // Cache is handled automatically by the enhanced API client
-      setState({
-        data: result,
-        loading: false,
-        error: null,
-      });
-    } catch (error) {
-      setState({
-        data: null,
-        loading: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-  }, []); // Empty dependency array for StrictMode compatibility
-
-  React.useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
   return {
-    ...state,
-    refetch: fetchData,
+    data: data ?? null,
+    loading: isLoading,
+    error: error instanceof Error ? error.message : error ? 'Unknown error' : null,
+    // Return the refetch promise (matches the detail hooks) so `await refetch()`
+    // call sites actually wait for fresh data.
+    refetch: () => refetch(),
   };
 }

@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { JobTracker } from '../components/JobTracker';
 import {
   Plus,
@@ -23,6 +23,7 @@ import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
+import { TransientNotice } from '../components/ui/TransientNotice';
 
 const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -38,6 +39,26 @@ const GRID_COLS =
 
 export const Deployments: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Transient "<app> was removed" notice (spec.md User Story 2 / research.md
+  // R9): DeploymentDetail navigates here with `state.notice` when the
+  // deployment being viewed is deleted elsewhere. Captured into local state
+  // once, then the router state is cleared so a refresh or later re-navigation
+  // to this route doesn't re-show a stale notice.
+  const [notice, setNotice] = useState<string | null>(
+    (location.state as { notice?: string } | null)?.notice ?? null
+  );
+
+  useEffect(() => {
+    if ((location.state as { notice?: string } | null)?.notice) {
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+    // Only ever run this once per mount/navigation-with-notice — re-running on
+    // every location change would clear notice state we haven't reacted to yet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<DeploymentStatus | 'all'>('all');
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -144,6 +165,8 @@ export const Deployments: React.FC = () => {
 
   return (
     <div className="animate-fadein">
+      {notice && <TransientNotice message={notice} onDismiss={() => setNotice(null)} />}
+
       {/* Removal confirmation dialog */}
       {pendingDelete && (
         <div

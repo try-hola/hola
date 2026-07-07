@@ -1,6 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { API } from '@hola/shared';
 
 import { Apps } from '../../pages/Apps';
@@ -31,7 +32,15 @@ function mockApi(deployments: unknown[]) {
   }) as unknown as typeof fetch;
 }
 
-const renderApps = () => render(<MemoryRouter><Apps /></MemoryRouter>);
+// useDeploymentsApi now runs on TanStack Query, which needs a QueryClient in scope.
+const renderApps = () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter><Apps /></MemoryRouter>
+    </QueryClientProvider>
+  );
+};
 
 describe('Apps landing', () => {
   it('renders the persisted app name + icon and launches the public URL', async () => {
