@@ -9,6 +9,7 @@ import type {
   DraftDefaults,
   PatchDraftRequest,
   ValidationIssue,
+  AppSecurityConfig,
 } from '@hola/shared';
 import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
@@ -18,13 +19,34 @@ import { useDraftFinalization } from '../hooks/useDraftFinalization';
 import { api } from '../utils/api-hybrid';
 
 const steps = [
-  { id: 'env', name: 'Environment Variables', description: 'Configure application settings' },
+  { id: 'env', name: 'Configuration', description: 'Configure application settings and permissions' },
   { id: 'compose', name: 'Compose Override', description: 'Upload custom Docker Compose configuration' },
   { id: 'files', name: 'Additional Files', description: 'Upload configuration files and certificates' },
   { id: 'advanced', name: 'Advanced Options', description: 'Configure ports, volumes, and other settings' },
   { id: 'validate', name: 'Validate & Preflight', description: 'Check configuration and system compatibility' },
   { id: 'summary', name: 'Summary & Confirm', description: 'Review and confirm installation' },
 ];
+
+// Human-readable label + risk note for each elevated-permission type the wizard
+// surfaces for consent. Kept exhaustive so a new type added to the shared union
+// forces a decision here (TS narrows the default to `never`).
+function elevatedPermissionLabel(type: AppSecurityConfig['elevated'][number]['type']): string {
+  switch (type) {
+    case 'allow-privilege-escalation':
+      return 'Allow privilege escalation (sudo / root)';
+    default:
+      return type;
+  }
+}
+
+function elevatedPermissionRisk(type: AppSecurityConfig['elevated'][number]['type']): string {
+  switch (type) {
+    case 'allow-privilege-escalation':
+      return 'Risk: processes in this container can escalate to root (no-new-privileges is disabled for it).';
+    default:
+      return 'Relaxes this container’s security hardening.';
+  }
+}
 
 export const InstallWizard: React.FC = () => {
   const { appId } = useParams();
@@ -89,6 +111,11 @@ export const InstallWizard: React.FC = () => {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [ports, setPorts] = useState<DraftDefaults['ports']>([]);
   const [volumes, setVolumes] = useState<DraftDefaults['volumes']>([]);
+  // Elevated container permissions the app requests (from its manifest) and the
+  // operator's per-permission acknowledgements. Install is gated until every
+  // requested permission is explicitly acknowledged (see canProceed, case 0).
+  const [security, setSecurity] = useState<AppSecurityConfig | undefined>();
+  const [ackedPermissions, setAckedPermissions] = useState<Set<string>>(new Set());
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [composeOverride, setComposeOverride] = useState('');
   const [editMode, setEditMode] = useState(false);
@@ -154,6 +181,7 @@ export const InstallWizard: React.FC = () => {
         setEnvVars(seededEnv);
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
+        setSecurity(result.security);
 
         // Persist the generated values immediately so a refresh (or abandoning
         // the wizard before clicking Next) doesn't lose them — same durability
@@ -249,7 +277,11 @@ export const InstallWizard: React.FC = () => {
         // mirroring what the server would reject at validate/preflight time
         // anyway. Server validation remains authoritative and unchanged.
         const noBlockingIssues = !paramIssues.some(i => i.severity === 'error');
-        return !isLoading && requiredOk && noBlockingIssues;
+        // Elevated permissions (if any) must each be explicitly acknowledged
+        // before install can proceed — informed consent for relaxing container
+        // hardening (see the elevated-permissions block below).
+        const permissionsAcked = (security?.elevated ?? []).every(p => ackedPermissions.has(p.type));
+        return !isLoading && requiredOk && noBlockingIssues && permissionsAcked;
       }
       case 4: // Validate & Preflight
         // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
@@ -621,10 +653,54 @@ services:
 
         return (
           <div>
-            <div className="text-base font-semibold mb-1">Environment variables</div>
+            <div className="text-base font-semibold mb-1">Configuration</div>
             <p className="text-[13.5px] text-text-muted mb-5">
               Defaults are pre-filled from the catalog. Override system defaults only when needed. Secrets are masked — reveal to check.
             </p>
+
+            {/* Elevated permissions — the app's manifest requests relaxations of
+                the platform's default container hardening. Each must be explicitly
+                acknowledged (informed consent) before install can proceed. */}
+            {(security?.elevated ?? []).length > 0 && (
+              <div className="mb-6 border border-danger/50 bg-danger-weak rounded-[10px] p-[14px]">
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-danger" />
+                  <h4 className="text-[13.5px] font-semibold text-danger">This app requests elevated permissions</h4>
+                </div>
+                <p className="text-[12.5px] text-text-muted mb-3">
+                  Granting these relaxes container security for this app. Review each and confirm to continue.
+                </p>
+                <div className="space-y-2">
+                  {security!.elevated.map((perm) => (
+                    <label
+                      key={perm.type}
+                      className="flex items-start gap-3 p-[12px] border border-danger/40 rounded-[8px] bg-surface-1 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-[3px] accent-danger"
+                        checked={ackedPermissions.has(perm.type)}
+                        onChange={(e) => {
+                          setAckedPermissions((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(perm.type);
+                            else next.delete(perm.type);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>
+                        <span className="block text-[13px] font-semibold text-text-strong">
+                          {elevatedPermissionLabel(perm.type)}
+                        </span>
+                        <span className="block text-[12.5px] text-text-muted mt-[2px]">{perm.reason}</span>
+                        <span className="block text-[12px] text-danger mt-[3px]">{elevatedPermissionRisk(perm.type)}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* System Environment Variables — only shown when the operator has
                 defined platform-wide vars (none by default). */}

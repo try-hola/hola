@@ -101,4 +101,50 @@ describe('applyPlatformDefaults', () => {
     const input = 'networks:\n  hola:\n    external: true\n';
     expect(applyPlatformDefaults(input, ON)).toBe(input);
   });
+
+  describe('privilege escalation opt-out', () => {
+    const withEscalation = (yaml: string, services: string[], opts: ComposeDefaultsConfig = ON) =>
+      parse(applyPlatformDefaults(yaml, opts, { allowPrivilegeEscalationServices: services }));
+
+    test('granted service does NOT get no-new-privileges (so sudo works)', () => {
+      const doc = withEscalation('services:\n  webtop:\n    image: webtop:1\n', ['webtop']);
+      // no security_opt key at all (Docker default no_new_privs unset).
+      expect(doc.services.webtop.security_opt).toBeUndefined();
+      // other platform defaults still apply.
+      expect(doc.services.webtop.restart).toBe('unless-stopped');
+    });
+
+    test('grant strips an app-declared no-new-privileges:true, keeps other opts', () => {
+      const input = [
+        'services:',
+        '  webtop:',
+        '    image: webtop:1',
+        '    security_opt:',
+        '      - no-new-privileges:true',
+        '      - seccomp:unconfined',
+        '',
+      ].join('\n');
+      const doc = withEscalation(input, ['webtop']);
+      expect(doc.services.webtop.security_opt).toEqual(['seccomp:unconfined']);
+    });
+
+    test('escalation is scoped to the named service; siblings stay hardened', () => {
+      const input = 'services:\n  webtop:\n    image: webtop:1\n  db:\n    image: postgres:16\n';
+      const doc = withEscalation(input, ['webtop']);
+      expect(doc.services.webtop.security_opt).toBeUndefined();
+      expect(doc.services.db.security_opt).toEqual(['no-new-privileges:true']);
+    });
+
+    test('escalation applies even when the install-wide config is a no-op', () => {
+      const off: ComposeDefaultsConfig = { restartPolicy: '', logMaxSize: '', logMaxFile: '3', noNewPrivileges: false };
+      const input = 'services:\n  webtop:\n    image: webtop:1\n    security_opt:\n      - no-new-privileges:true\n';
+      const doc = parse(applyPlatformDefaults(input, off, { allowPrivilegeEscalationServices: ['webtop'] }));
+      expect(doc.services.webtop.security_opt).toBeUndefined();
+    });
+
+    test('no escalation list -> hardening applied as usual', () => {
+      const doc = withEscalation('services:\n  webtop:\n    image: webtop:1\n', []);
+      expect(doc.services.webtop.security_opt).toEqual(['no-new-privileges:true']);
+    });
+  });
 });

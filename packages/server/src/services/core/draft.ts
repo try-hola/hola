@@ -21,6 +21,7 @@ import type {
   AppEnvVar,
   DraftDefaults,
   AppAuthConfig,
+  AppSecurityConfig,
   AppUpgradeMeta,
   AppBackupConfig
 } from '@hola/shared';
@@ -73,6 +74,10 @@ export interface FinalizedManifest {
   // Cross-app capabilities consumed (e.g. `app-registry`); carried so the
   // deploy lifecycle can publish the right feeds without re-reading the bundle.
   consumes?: string[];
+  // Elevated container permissions the app requested (e.g. privilege escalation
+  // for sudo); carried so the deploy lifecycle can relax the matching hardening
+  // without re-reading the bundle.
+  security?: AppSecurityConfig;
   // The compose service to route to / inject auth env into; carried so
   // materializeCompose targets the right service for multi-service apps.
   ingressService?: string;
@@ -421,6 +426,7 @@ export class RealDraftService implements DraftService {
         composeOverride,
         auth: defaults.auth,
         consumes: defaults.consumes,
+        security: defaults.security,
         ingressService: defaults.ingressService,
         upgrade: defaults.upgrade,
         backup: defaults.backup,
@@ -457,6 +463,9 @@ export class RealDraftService implements DraftService {
         systemEnv: [],
         appEnv,
         defaults: defaults.defaults,
+        // Surface any elevated permissions the app requested so the wizard can
+        // prompt for consent before install.
+        security: defaults.security,
       };
 
       this.logger.info('Draft created successfully', { draftId, appId: request.appId });
@@ -509,6 +518,7 @@ export class RealDraftService implements DraftService {
         composeOverride,
         auth: detail.auth,
         consumes: detail.consumes,
+        security: detail.security,
         ingressService: detail.ingressService,
         upgrade: detail.upgrade,
         backup: detail.backup,
@@ -537,6 +547,7 @@ export class RealDraftService implements DraftService {
         systemEnv: [],
         appEnv,
         defaults: detail.defaults,
+        security: detail.security,
       };
     } catch (error) {
       this.logger.error('Failed to create draft from ref', error as Error, { draftId, ociRef });
@@ -770,6 +781,7 @@ export class RealDraftService implements DraftService {
         composeOverride: draft.composeOverride ?? '',
         auth: draft.auth,
         consumes: draft.consumes,
+        security: draft.security,
         ingressService: draft.ingressService,
         upgrade: draft.upgrade,
         backup: draft.backup,
@@ -856,7 +868,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
       return {
@@ -865,6 +877,7 @@ export class RealDraftService implements DraftService {
         composeOverride: versionDetail.composeOverride ?? '',
         auth: versionDetail.auth,
         consumes: versionDetail.consumes,
+        security: versionDetail.security,
         ingressService: versionDetail.ingressService,
         upgrade: versionDetail.upgrade,
         backup: versionDetail.backup,

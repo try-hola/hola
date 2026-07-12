@@ -669,6 +669,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // (e.g. pg_dump before a file-level capture). Optional: most apps (and SQLite)
   // are fine with crash-consistent file snapshots and omit it.
   backup?: AppBackupConfig;
+  // Elevated container permissions the app requests (e.g. a browser desktop that
+  // needs `sudo`). Each entry is surfaced for explicit operator consent in the
+  // install wizard and relaxes the corresponding platform hardening at deploy
+  // time. Optional: apps that don't declare it run fully hardened.
+  security?: AppSecurityConfig;
 };
 
 // ------------------------------------------------------
@@ -773,6 +778,35 @@ export type AppAuthConfig = {
   fallback?: 'forward-auth';
 };
 
+// Elevated container permissions an app may request in its bundle manifest.
+// These relax the platform's default container hardening for a specific,
+// declared reason, so the install wizard can surface each one for explicit
+// operator consent before install. Kept as a discriminated list (not a single
+// boolean) so each grant is named, individually explained, and individually
+// acknowledged — and so it can grow (e.g. Linux capabilities) without redesign.
+//
+// - `allow-privilege-escalation`: drop the `no-new-privileges:true` hardening on
+//   the app's ingress service so setuid escalation (i.e. `sudo`) works inside the
+//   container. Needed by browser-desktop apps (e.g. webtop) whose whole purpose is
+//   an interactive shell with admin access. This is the ONLY type today; the
+//   underlying `no_new_privs` flag is a single kernel boolean and is not further
+//   subdivisible (granular grants would be Linux capabilities — a future type).
+export type ElevatedPermissionType = 'allow-privilege-escalation';
+
+export type ElevatedPermission = {
+  type: ElevatedPermissionType;
+  // Human-readable justification shown next to the consent checkbox. Required —
+  // an app must say WHY it needs the grant so the operator can make an informed
+  // decision. Coercion drops any entry missing a non-empty reason.
+  reason: string;
+};
+
+export type AppSecurityConfig = {
+  // Elevated permissions the app requests. Every entry becomes a red, must-check
+  // consent row in the install wizard; the server grants ONLY what's declared.
+  elevated: ElevatedPermission[];
+};
+
 // Opaque handle to the auth artifacts provisioned for a deployment, persisted on
 // its metadata so they can be reused (idempotent re-deploy) and torn down on delete.
 // Keyed on deploymentId (stable across releases), never releaseId.
@@ -815,6 +849,11 @@ export type Draft = {
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
+  // Elevated container permissions the app requests, seeded from the bundle
+  // manifest and carried through finalize (read-only; not user-editable). The
+  // install wizard surfaces each for consent; the deploy lifecycle relaxes the
+  // matching hardening.
+  security?: AppSecurityConfig;
   // The compose service to route to / inject auth env into, for multi-service
   // apps whose ingress service isn't named after the app id. Seeded from the
   // bundle manifest and carried through finalize (read-only; not user-editable).
@@ -850,6 +889,10 @@ export type CreateDraftResponse = {
   systemEnv: AppEnvVar[];
   appEnv: AppEnvVar[];
   defaults: DraftDefaults;
+  // Elevated container permissions the app requests (seeded from the bundle
+  // manifest), so the install wizard can surface each for explicit operator
+  // consent. Absent when the app requests none (the fully-hardened default).
+  security?: AppSecurityConfig;
 };
 
 export type GetDraftResponse = Draft;
