@@ -31,7 +31,7 @@ function isNoop(opts: ComposeDefaultsConfig): boolean {
   );
 }
 
-function applyToService(service: ComposeService, opts: ComposeDefaultsConfig): void {
+function applyToService(service: ComposeService, opts: ComposeDefaultsConfig, allowPrivilegeEscalation: boolean): void {
   // restart — fill-if-absent (app wins).
   if (opts.restartPolicy && service.restart === undefined) {
     service.restart = opts.restartPolicy;
@@ -45,8 +45,23 @@ function applyToService(service: ComposeService, opts: ComposeDefaultsConfig): v
     };
   }
 
-  // security_opt — additive policy: ensure no-new-privileges, preserve app entries.
-  if (opts.noNewPrivileges) {
+  // security_opt — additive hardening: ensure no-new-privileges, preserve app
+  // entries. EXCEPT when the app has been granted privilege escalation for this
+  // service (an operator-consented manifest request, e.g. a browser desktop that
+  // needs `sudo`): then we must NOT set no-new-privileges — and must strip any
+  // no-new-privileges:true the app itself declared — or the `no_new_privs` kernel
+  // flag would still block setuid escalation and defeat the grant.
+  if (allowPrivilegeEscalation) {
+    if (Array.isArray(service.security_opt)) {
+      const kept = (service.security_opt as unknown[]).filter(
+        (e): e is string => typeof e === 'string' && e !== NO_NEW_PRIVILEGES
+      );
+      // Drop the key entirely when nothing else remains, so we don't emit an
+      // empty `security_opt: []` (Docker default is no_new_privs unset → sudo works).
+      if (kept.length) service.security_opt = kept;
+      else delete service.security_opt;
+    }
+  } else if (opts.noNewPrivileges) {
     const existing = Array.isArray(service.security_opt)
       ? (service.security_opt as unknown[]).filter((e): e is string => typeof e === 'string')
       : [];
@@ -69,15 +84,37 @@ function applyToService(service: ComposeService, opts: ComposeDefaultsConfig): v
   if (opts.cpus && service.cpus === undefined) service.cpus = opts.cpus;
 }
 
+/** Per-deploy overrides that can't come from install-wide config. */
+export interface PlatformDefaultsRuntime {
+  /**
+   * Compose service names the app has been granted privilege escalation for
+   * (operator-consented `security.elevated` manifest request). These services
+   * skip the `no-new-privileges` hardening so setuid escalation (`sudo`) works.
+   * Empty/omitted → every service is hardened as usual.
+   */
+  allowPrivilegeEscalationServices?: string[];
+}
+
 /**
  * Return the compose YAML with platform defaults applied to every service.
  * Returns the input unchanged when nothing would change or when the document
  * has no services. Parse-failure tolerant: callers may rely on this not throwing
  * on already-validated compose, but a parse error propagates (mirrors the
  * sibling helpers).
+ *
+ * `runtime.allowPrivilegeEscalationServices` names services the operator has
+ * consented to run without `no-new-privileges` (see AppSecurityConfig). Because
+ * that opt-out must be honored even when the install-wide config is otherwise a
+ * no-op, its presence forces the parse/rewrite path.
  */
-export function applyPlatformDefaults(composeYaml: string, opts: ComposeDefaultsConfig): string {
-  if (isNoop(opts)) return composeYaml;
+export function applyPlatformDefaults(
+  composeYaml: string,
+  opts: ComposeDefaultsConfig,
+  runtime: PlatformDefaultsRuntime = {}
+): string {
+  const escalate = new Set(runtime.allowPrivilegeEscalationServices ?? []);
+  // A no-op config with no escalation to apply changes nothing — skip the rewrite.
+  if (isNoop(opts) && escalate.size === 0) return composeYaml;
 
   const doc = (parse(composeYaml) ?? {}) as ComposeDoc;
   const services = doc.services;
@@ -85,8 +122,8 @@ export function applyPlatformDefaults(composeYaml: string, opts: ComposeDefaults
     return composeYaml;
   }
 
-  for (const service of Object.values(services)) {
-    if (service && typeof service === 'object') applyToService(service, opts);
+  for (const [name, service] of Object.entries(services)) {
+    if (service && typeof service === 'object') applyToService(service, opts, escalate.has(name));
   }
 
   return stringify(doc);

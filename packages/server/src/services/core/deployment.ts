@@ -35,9 +35,11 @@ import type {
   ProvisionedAuthRef,
   GetLogsResponse,
   LogEntry,
-  GetDeploymentConfigResponse
+  GetDeploymentConfigResponse,
+  AppSecurityConfig
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion } from '@hola/shared';
+import { requestsPrivilegeEscalation } from './manifest-security';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
@@ -1132,7 +1134,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Apply install-wide operational defaults (restart, log rotation,
     // no-new-privileges hardening, optional TZ/limits) to every service. The app
     // wins for fill-if-absent fields; hardening is additive. See compose-defaults.
-    content = applyPlatformDefaults(content, composeDefaultsConfig);
+    // An app that declared (and the operator consented to) privilege escalation
+    // gets no-new-privileges dropped on its ingress service so `sudo` works — the
+    // grant is scoped to the ingress service, leaving any sidecars hardened.
+    const security = await this.readActiveSecurity(deployment);
+    const allowPrivilegeEscalationServices = requestsPrivilegeEscalation(security) ? [ingressService] : [];
+    content = applyPlatformDefaults(content, composeDefaultsConfig, { allowPrivilegeEscalationServices });
 
     // Grant a trusted app (e.g. a backup tool) read-only access to ALL apps'
     // data when its manifest declares `consumes: apps-data`. Identity-mapped so
@@ -1216,6 +1223,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       return manifest.consumes ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** Elevated container permissions the active release's manifest declares. */
+  private async readActiveSecurity(deployment: EnhancedDeploymentDetail): Promise<AppSecurityConfig | undefined> {
+    const releaseId = deployment.currentReleaseId;
+    if (!releaseId) return undefined;
+    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
+    try {
+      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+      return manifest.security;
+    } catch {
+      return undefined;
     }
   }
 

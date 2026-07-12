@@ -24,6 +24,7 @@ import type {
 import type { CatalogSourceService } from './catalog-sources';
 import type { RegistryCredentialService } from './registry-credentials';
 import { coerceManifestAuth } from './manifest-auth';
+import { coerceManifestSecurity } from './manifest-security';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
@@ -500,6 +501,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         };
         auth?: unknown;
         consumes?: unknown;
+        security?: unknown;
         upgrade?: unknown;
         backup?: unknown;
         ingress?: { service?: unknown; port?: unknown };
@@ -565,6 +567,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
 
+      // Elevated container permissions the app requests (e.g. sudo needs
+      // privilege escalation). Coerced narrowly like `auth`; the wizard surfaces
+      // each for consent and the deploy lifecycle relaxes the matching hardening.
+      const security = coerceManifestSecurity(manifest.security);
+
       // Upgrade-safety metadata (#284 Phase 0): drives the server-side skip-guard
       // on promote and the dashboard's pre-upgrade warning. Coerced narrowly like
       // `auth`, so unknown fields don't survive into the deploy lifecycle.
@@ -583,7 +590,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });
