@@ -20,6 +20,16 @@ export interface BootstrapOptions {
   dir?: string;
   envFile?: string;
   skipChecks?: boolean;
+  /**
+   * Wipe an existing install and reinstall from scratch. `bootstrap` is a
+   * fresh-install command and refuses a host that already has a Hola `.env` or
+   * Hola volumes (a re-run would rotate install.sh's host-generated AUTHENTIK_*
+   * secrets while the persistent volumes keep the originals, bricking SSO — #351);
+   * the config-preserving path is `hola update`. `--reinstall` is the deliberate
+   * escape hatch: it resets the stateful volumes (Postgres, Authentik, hola-data)
+   * so the freshly-generated secrets and the volumes move together.
+   */
+  reinstall?: boolean;
   dryRun?: boolean;
   json?: boolean;
 }
@@ -159,18 +169,69 @@ export async function runBootstrap(
 
     // 2) Preflight (single remote probe → key=value lines). The host pulls
     //    prebuilt images, so it needs docker + compose + curl/tar — but not git.
+    //    The probe also reports whether the host already looks bootstrapped (an
+    //    existing `.env` or leftover Hola volumes) so the guard below can refuse a
+    //    clobbering re-run — see #351.
     const probe =
       'for c in docker curl tar; do command -v "$c" >/dev/null 2>&1 && echo "$c=ok" || echo "$c=missing"; done; ' +
       'docker compose version >/dev/null 2>&1 && echo compose=ok || echo compose=missing; ' +
-      'docker ps >/dev/null 2>&1 && echo dockerperm=ok || echo dockerperm=fail';
+      'docker ps >/dev/null 2>&1 && echo dockerperm=ok || echo dockerperm=fail; ' +
+      `[ -f ${envPath} ] && echo existing_env=present || echo existing_env=absent; ` +
+      "docker volume ls -q 2>/dev/null | grep -qE '^hola(_|-)' && echo existing_vol=present || echo existing_vol=absent";
     if (opts.dryRun) {
       await ssh('Preflight host', probe);
+      // Can't probe under --dry-run, so surface the reset step only when the
+      // operator explicitly asked to reinstall (the guard would otherwise abort).
+      if (opts.reinstall) {
+        await ssh(
+          'Reset existing install (down -v, remove Hola volumes)',
+          `[ -d ${dir} ] && (cd ${dir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
+            "docker volume ls -q 2>/dev/null | grep -E '^hola(_|-)' | xargs -r docker volume rm -f 2>/dev/null || true",
+        );
+      }
     } else {
       const r = await ssh('Preflight host', probe);
       if (r.code !== 0) throw new BootstrapAbort(`Could not connect to ${host} (ssh exit ${r.code}).`);
       const p = parsePreflight(r.stdout);
       assertPreflight(p);
       out('  host OK (docker, compose, curl/tar, permissions)');
+
+      // 2a) Fresh-install guard (#351). `bootstrap` writes a brand-new `.env`, so
+      //     re-running it against an existing install rotates install.sh's
+      //     host-generated AUTHENTIK_* secrets while the persistent volumes keep
+      //     the originals — Authentik can no longer reach its DB and SSO bricks.
+      //     Route re-runs to `hola update` (config-preserving); `--reinstall` is
+      //     the deliberate wipe path, which resets the stateful volumes so the
+      //     regenerated secrets and the volumes move together.
+      const existing = p.existing_env === 'present' || p.existing_vol === 'present';
+      if (existing && !opts.reinstall) {
+        const where =
+          p.existing_env === 'present' ? `${envPath} exists` : 'Hola volumes are present';
+        const dirFlag = dir === DEFAULT_DIR ? '' : ` --dir ${dir}`;
+        throw new BootstrapAbort(
+          `This host already has a Hola install at ${dir} (${where}).\n` +
+            `bootstrap is for a fresh install — re-running it would rotate the SSO secrets and brick Authentik.\n\n` +
+            `To upgrade or change config (preserves your .env, data, and SSO):\n` +
+            `  hola update --host ${host}${dirFlag}\n\n` +
+            `To wipe this install and start over (DELETES all volumes and data):\n` +
+            `  hola bootstrap --host ${host}${dirFlag} --reinstall`,
+        );
+      }
+      if (existing && opts.reinstall) {
+        // Reset the stateful volumes BEFORE the new .env is written, using the
+        // OLD .env/compose still on disk so the running stack (incl. the Authentik
+        // profile) is torn down cleanly. The named-volume sweep catches anything
+        // `compose down` missed. The install dir and the ACME cert store are kept,
+        // so the reinstall reuses the existing wildcard cert (no LE rate-limit hit).
+        const reset = await ssh(
+          'Reset existing install (down -v, remove Hola volumes)',
+          `[ -d ${dir} ] && (cd ${dir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
+            "docker volume ls -q 2>/dev/null | grep -E '^hola(_|-)' | xargs -r docker volume rm -f 2>/dev/null || true",
+          { stream: true },
+        );
+        if (reset.code !== 0) throw new BootstrapAbort(`Resetting the existing install failed (exit ${reset.code}).`);
+        out('  existing volumes reset — reinstalling from scratch');
+      }
     }
 
     // 3) Download + extract the version-pinned compose bundle (no git, no source

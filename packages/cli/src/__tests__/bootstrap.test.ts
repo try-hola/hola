@@ -119,6 +119,57 @@ describe('hola bootstrap', () => {
     expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
   });
 
+  // --- Fresh-install guard (#351) --------------------------------------------
+
+  const EXISTING_PREFLIGHT =
+    'docker=ok\ncurl=ok\ntar=ok\ncompose=ok\ndockerperm=ok\nexisting_env=present\nexisting_vol=present\n';
+
+  it('refuses to re-run against an already-bootstrapped host and points at hola update (#351)', async () => {
+    const runner = makeRunner(EXISTING_PREFLIGHT);
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)); });
+    try {
+      const res = await runBootstrap(
+        { host: 'me@vm', skipChecks: true, json: true, ref: 'cli-v0.2.0' },
+        { prompter: scriptedPrompter(answers), runner }
+      );
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      // The bug is a clobbering re-run: assert we neither rewrote .env nor ran the installer.
+      expect(runner.calls.some((c) => c.cmd.includes('cat > '))).toBe(false);
+      expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(false);
+      expect(errs.join('\n')).toContain('hola update --host me@vm');
+      expect(errs.join('\n')).toContain('--reinstall');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('--reinstall resets the stateful volumes before reinstalling (#351)', async () => {
+    const runner = makeRunner(EXISTING_PREFLIGHT);
+    const res = await runBootstrap(
+      { host: 'me@vm', skipChecks: true, json: true, ref: 'cli-v0.2.0', reinstall: true },
+      { prompter: scriptedPrompter(answers), runner }
+    );
+    expect(res?.steps).toContain('Reset existing install (down -v, remove Hola volumes)');
+    // The reset must precede the .env write, so regenerated secrets meet fresh volumes.
+    const resetIdx = runner.calls.findIndex((c) => c.cmd.includes('docker compose down -v'));
+    const writeIdx = runner.calls.findIndex((c) => c.cmd.includes('cat > '));
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    expect(writeIdx).toBeGreaterThan(resetIdx);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
+  });
+
+  it('installs normally on a fresh host (no existing .env or volumes)', async () => {
+    const runner = makeRunner('docker=ok\ncurl=ok\ntar=ok\ncompose=ok\ndockerperm=ok\nexisting_env=absent\nexisting_vol=absent\n');
+    const res = await runBootstrap(
+      { host: 'me@vm', skipChecks: true, json: true, ref: 'cli-v0.2.0' },
+      { prompter: scriptedPrompter(answers), runner }
+    );
+    expect(res?.steps).not.toContain('Reset existing install (down -v, remove Hola volumes)');
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
+  });
+
   it('requires --host', async () => {
     const res = await runBootstrap({ skipChecks: true, json: true }, { prompter: scriptedPrompter(answers), runner: makeRunner() });
     expect(res).toBeUndefined();
