@@ -24,6 +24,15 @@ platform from the latest release; builds from source with Bun if none is publish
 curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
 ```
 
+To install the latest **pre-release** (e.g. an `-rc.N` build) instead of the latest
+stable release, add `--prerelease`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh -s -- --prerelease
+```
+
+(Or pin an exact tag with `HOLA_VERSION=cli-v0.7.6-rc.2 sh`.)
+
 Then set up a server with `hola bootstrap --host user@your-vm`, or point the CLI at an
 existing one (`HOLA_API_URL` + `HOLA_TOKEN`). See
 [Install (production)](#install-production-single-host) and
@@ -149,6 +158,7 @@ Bun if no release is published yet):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
+# add `-s -- --prerelease` to install the latest pre-release instead of stable
 export HOLA_API_URL=https://<HOLA_DOMAIN>     # the web origin (proxies /api to the server)
 export HOLA_TOKEN=<admin-api-key>             # printed by the server installer
 hola --help
