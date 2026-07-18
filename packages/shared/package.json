@@ -1,6 +1,6 @@
 {
   "name": "@hola/shared",
-  "version": "0.7.6-rc.2",
+  "version": "0.7.6-rc.3",
   "private": true,
   "type": "module",
   "exports": {
