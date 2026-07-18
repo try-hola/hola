@@ -3,27 +3,60 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
 #
-# Installs the `hola` command. Prefers a prebuilt binary from the latest GitHub
+# While only pre-release builds are published (or to grab the latest -rc.N),
+# install the newest release INCLUDING pre-releases:
+#   curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh -s -- --prerelease
+#
+# Installs the `hola` command. Prefers a prebuilt binary from the chosen GitHub
 # release for your platform; if none is available it builds one from source with
 # Bun (installing Bun if needed). Until the CLI is published to npm this is the
 # supported install path.
 #
+# Options:
+#   --prerelease        Install the newest release INCLUDING pre-releases
+#                       (default: only the latest stable release is considered)
+#
 # Environment overrides:
 #   HOLA_INSTALL_DIR    install directory   (default: $HOME/.local/bin)
 #   HOLA_REPO_SLUG      owner/repo          (default: try-hola/hola)
-#   HOLA_VERSION        release tag to pull (default: latest)
+#   HOLA_VERSION        release tag to pull (e.g. cli-v0.7.6-rc.2); overrides --prerelease
+#   HOLA_PRERELEASE     set to "true" for the same effect as --prerelease
 set -eu
 
 REPO_SLUG="${HOLA_REPO_SLUG:-try-hola/hola}"
 INSTALL_DIR="${HOLA_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${HOLA_VERSION:-latest}"
+PRERELEASE="${HOLA_PRERELEASE:-false}"
 BIN_NAME="hola"
 
 info() { printf '\033[1;36m[hola]\033[0m %s\n' "$1"; }
 warn() { printf '\033[1;33m[hola]\033[0m %s\n' "$1" >&2; }
 die()  { printf '\033[1;31m[hola] error:\033[0m %s\n' "$1" >&2; exit 1; }
 
+# Args (passed via `sh -s -- <args>` when piped from curl). Kept POSIX-simple.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prerelease) PRERELEASE="true"; shift ;;
+    -h|--help)
+      printf 'Usage: cli-install.sh [--prerelease]\n'
+      printf '  --prerelease   Install the newest release including pre-releases\n'
+      exit 0 ;;
+    *) die "Unknown option: $1 (see --help)." ;;
+  esac
+done
+
 command -v curl >/dev/null 2>&1 || die "curl is required."
+
+# Newest release tag including pre-releases. The /releases list is newest-first,
+# so the first cli-v* tag_name is the most recent build (stable or pre-release).
+# Empty on any failure so the caller can fall back to the latest stable release.
+latest_prerelease_tag() {
+  curl -fsSL "https://api.github.com/repos/${REPO_SLUG}/releases?per_page=20" 2>/dev/null \
+    | grep '"tag_name"' \
+    | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/' \
+    | grep -E '^cli-v' \
+    | head -1
+}
 
 # --- detect platform -------------------------------------------------------
 os="$(uname -s)"; arch="$(uname -m)"
@@ -42,11 +75,24 @@ ASSET="hola-${os}-${arch}"
 mkdir -p "$INSTALL_DIR"
 TARGET="$INSTALL_DIR/$BIN_NAME"
 
-# --- try a prebuilt release binary -----------------------------------------
-if [ "$VERSION" = "latest" ]; then
-  API_URL="https://api.github.com/repos/${REPO_SLUG}/releases/latest"
-else
+# --- resolve which release to pull -----------------------------------------
+# An explicit HOLA_VERSION always wins (pin a tag). Otherwise --prerelease picks
+# the newest release including pre-releases; the default is the latest STABLE
+# release (GitHub's /releases/latest excludes pre-releases).
+if [ "$VERSION" != "latest" ]; then
   API_URL="https://api.github.com/repos/${REPO_SLUG}/releases/tags/${VERSION}"
+elif [ "$PRERELEASE" = "true" ]; then
+  info "Resolving the latest pre-release…"
+  tag="$(latest_prerelease_tag || true)"
+  if [ -n "${tag:-}" ]; then
+    VERSION="$tag"
+    API_URL="https://api.github.com/repos/${REPO_SLUG}/releases/tags/${tag}"
+  else
+    warn "Could not resolve a pre-release; falling back to the latest stable release."
+    API_URL="https://api.github.com/repos/${REPO_SLUG}/releases/latest"
+  fi
+else
+  API_URL="https://api.github.com/repos/${REPO_SLUG}/releases/latest"
 fi
 
 DL_URL="$(curl -fsSL "$API_URL" 2>/dev/null \
