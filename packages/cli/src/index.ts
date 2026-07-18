@@ -41,6 +41,7 @@ prog
   .option('--dir', 'Install directory on the host', '/opt/hola')
   .option('--env-file', 'Use an existing .env (skip the wizard)')
   .option('--skip-checks', 'Skip live DNS/credential/catalog validation', false)
+  .option('--reinstall', 'Wipe an existing install (volumes + data) and reinstall from scratch', false)
   .option('--dry-run', 'Print the plan without connecting', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (opts) => {

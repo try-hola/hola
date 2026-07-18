@@ -44,8 +44,10 @@ describe('install schema', () => {
   it("defaults the timezone to this machine's timezone", () => {
     const tz = INSTALL_SCHEMA.find((f) => f.key === 'HOLA_DEFAULT_TZ')!;
     expect(defaultFor(tz, {})).toBe(systemTimeZone());
-    // Intl resolves a real IANA zone on any CI host, so the default is non-empty there.
-    expect(defaultFor(tz, {})).toMatch(/^[A-Za-z]+\/[A-Za-z]/);
+    // Intl resolves a real IANA zone on any host: a `Region/City` like
+    // America/New_York, or a slashless canonical zone like UTC (e.g. a
+    // container whose clock is set to UTC).
+    expect(defaultFor(tz, {})).toMatch(/^([A-Za-z]+\/[A-Za-z]|UTC)/);
   });
 
   it('gates conditional fields with requiredWhen', () => {
