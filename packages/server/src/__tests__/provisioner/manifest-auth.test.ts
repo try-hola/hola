@@ -235,4 +235,28 @@ describe('coerceManifestAuth', () => {
       forwardAuth: { allowedGroups: ['admins'] },
     });
   });
+
+  test('coerces forward-auth bypassPaths and drops invalid prefixes (#356)', () => {
+    // Valid prefixes are kept alongside allowedGroups.
+    expect(
+      coerceManifestAuth({
+        mode: 'forward-auth',
+        forwardAuth: { allowedGroups: ['admins'], bypassPaths: ['/api/v1/setup/'] },
+      })
+    ).toEqual({
+      mode: 'forward-auth',
+      forwardAuth: { allowedGroups: ['admins'], bypassPaths: ['/api/v1/setup/'] },
+    });
+
+    // Entries not starting with `/`, the whole-app `/`, and non-strings are dropped;
+    // when nothing valid survives, `bypassPaths` is omitted entirely.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { bypassPaths: ['no-slash', '/', 123] } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: {} });
+
+    // A mix keeps only the valid entries.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { bypassPaths: ['/', '/hooks/', 'x'] } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: { bypassPaths: ['/hooks/'] } });
+  });
 });

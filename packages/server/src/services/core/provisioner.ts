@@ -63,7 +63,7 @@ export interface ProvisionInput {
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
   };
-  forwardAuth?: { allowedGroups?: string[] };
+  forwardAuth?: { allowedGroups?: string[]; bypassPaths?: string[] };
 }
 
 export interface ProvisionResult {
@@ -510,8 +510,12 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
   // ---- forward-auth ------------------------------------------------------
 
-  private forwardAuthMiddleware(slug: string): ForwardAuthMiddleware {
-    return { name: `ak-${slug}`, outpostUrl: this.config.authentikUrl ?? '' };
+  private forwardAuthMiddleware(slug: string, bypassPaths?: string[]): ForwardAuthMiddleware {
+    return {
+      name: `ak-${slug}`,
+      outpostUrl: this.config.authentikUrl ?? '',
+      ...(bypassPaths && bypassPaths.length > 0 ? { bypassPaths } : {}),
+    };
   }
 
   private async provisionForwardAuth(input: ProvisionInput): Promise<ProvisionResult> {
@@ -537,7 +541,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       // Re-reconcile the group restriction so it tracks manifest changes across redeploys.
       await this.reconcileForwardAuthGroups(reuseSlug, input.forwardAuth?.allowedGroups ?? []);
       this.logger.info('Reused existing forward-auth provider', { deploymentId: input.deploymentId, providerPk: existing.providerPk });
-      return { env: {}, ref: existing, middleware: this.forwardAuthMiddleware(reuseSlug) };
+      return { env: {}, ref: existing, middleware: this.forwardAuthMiddleware(reuseSlug, input.forwardAuth?.bypassPaths) };
     }
 
     const [authFlow, invalidationFlow] = await Promise.all([
@@ -587,7 +591,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     return {
       env: {},
       ref: { mode: 'forward-auth', providerPk: provider.pk, applicationSlug: slug, outpostPk },
-      middleware: this.forwardAuthMiddleware(slug),
+      middleware: this.forwardAuthMiddleware(slug, input.forwardAuth?.bypassPaths),
     };
   }
 

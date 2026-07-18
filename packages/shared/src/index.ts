@@ -651,6 +651,9 @@ export type GetCatalogAppVersionDetailResponse = {
   // Drives provisioning at deploy time (see AppAuthConfig). Optional: apps
   // that don't declare it behave as `none` (no auth wiring).
   auth?: AppAuthConfig;
+  // Drives the dashboard "Connect" panel (URL + code/key) for apps configured
+  // out-of-band by a CLI. Declared in the bundle manifest. Optional.
+  connect?: AppConnectConfig;
   // Cross-app capabilities the app consumes, declared in its bundle manifest
   // (e.g. `app-registry`). The server writes the corresponding feed into the
   // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
@@ -772,10 +775,36 @@ export type AppAuthConfig = {
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
   };
-  // For `forward-auth`: optional access restriction by group.
-  forwardAuth?: { allowedGroups?: string[] };
+  // For `forward-auth`: optional access restriction by group, and optional URL
+  // path prefixes to EXEMPT from the forward-auth gate.
+  //
+  // `bypassPaths` lets a non-browser client (a CLI, a webhook) reach a specific
+  // app API path that the app protects with its OWN credential, without being
+  // bounced to the interactive Authentik login. Each prefix routes straight to
+  // the app with NO forward-auth middleware, so the app MUST enforce its own auth
+  // there (e.g. remo's `/api/v1/setup/` requires REMO_WEB_API_TOKEN). The prefix
+  // is publicly reachable — declare it narrowly. Must start with `/` and never be
+  // `/` (you cannot exempt the whole app). See the `connect` block, which surfaces
+  // the code/key an operator uses against such a path.
+  forwardAuth?: { allowedGroups?: string[]; bypassPaths?: string[] };
   // Optionally gate a `native-oidc`/no-auth app behind proxy login too.
   fallback?: 'forward-auth';
+};
+
+// Drives the dashboard "Connect" panel for apps configured out-of-band by a CLI
+// or other machine client (e.g. remo's `remo web adopt`). Hola shows the app's
+// public URL alongside the value of the `keyEnv` app-env var (the code/key the
+// client authenticates with), so the operator can copy both into their tool.
+// Pair with `auth.forwardAuth.bypassPaths` so the client can actually reach the
+// path the code gates.
+export type AppConnectConfig = {
+  // Name of the app-env var (from `defaultEnv`) whose value is the code/key.
+  keyEnv: string;
+  // Panel title, e.g. "Adopt this instance". Defaults to a generic label.
+  label?: string;
+  // Hint shown under the fields. May contain `{url}` and `{code}` placeholders,
+  // which the panel substitutes with the app URL and the code value.
+  help?: string;
 };
 
 // Elevated container permissions an app may request in its bundle manifest.
@@ -846,6 +875,9 @@ export type Draft = {
   // App auth capability seeded from the catalog bundle manifest (read-only; not
   // user-editable). Carried through finalize so the deploy lifecycle can provision.
   auth?: AppAuthConfig;
+  // Connect-panel config seeded from the bundle manifest and carried through
+  // finalize (read-only; not user-editable). Drives the dashboard "Connect" card.
+  connect?: AppConnectConfig;
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
@@ -981,6 +1013,9 @@ export type PatchDeploymentResponse = { ok: true; jobId?: string };
 export type GetDeploymentConfigResponse = {
   appEnv: AppEnvVar[];
   systemOverrides: Record<string, string>;
+  // Present when the app declares a `connect` block: drives the dashboard
+  // "Connect" panel. The code value itself is the matching `appEnv` row's value.
+  connect?: AppConnectConfig;
 };
 
 export type DeploymentHistoryItem = {
@@ -1504,6 +1539,11 @@ export type ResourceLimits = {
 export type ForwardAuthMiddleware = {
   name: string;
   outpostUrl: string;
+  // URL path prefixes to EXEMPT from the forward-auth gate. The renderer emits a
+  // higher-priority router per prefix that routes straight to the app service with
+  // NO forward-auth middleware, so a non-browser client can reach an app API path
+  // the app protects with its own credential. From `auth.forwardAuth.bypassPaths`.
+  bypassPaths?: string[];
 };
 
 export type TraefikRoutingRule = {

@@ -186,7 +186,13 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
   if (m === 'forward-auth') {
     const fa = asRecord(rec.forwardAuth);
     const allowedGroups = asStringArray(fa?.allowedGroups);
-    result.forwardAuth = allowedGroups ? { allowedGroups } : {};
+    // Path prefixes to exempt from forward-auth. Security-relevant, so validate:
+    // each must start with `/` and never be `/` (can't exempt the whole app).
+    const bypassPaths = asStringArray(fa?.bypassPaths)?.filter((p) => p.startsWith('/') && p !== '/');
+    result.forwardAuth = {
+      ...(allowedGroups ? { allowedGroups } : {}),
+      ...(bypassPaths && bypassPaths.length > 0 ? { bypassPaths } : {}),
+    };
   }
 
   if (asString(rec.fallback) === 'forward-auth') {
