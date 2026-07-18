@@ -14,6 +14,14 @@ Install the standalone `hola` binary (downloads a prebuilt release binary, or bu
 curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh
 ```
 
+To install the latest **pre-release** (e.g. an `-rc.N` build) instead of the latest stable release, pass `--prerelease`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/try-hola/hola/main/cli-install.sh | sh -s -- --prerelease
+```
+
+Other selectors: `HOLA_VERSION=cli-v0.7.6-rc.2` pins an exact tag (overrides `--prerelease`); `HOLA_PRERELEASE=true` is equivalent to the flag.
+
 Then point it at your server:
 ```bash
 export HOLA_API_URL=https://<your-hola-domain>   # web origin; proxies /api to the server
