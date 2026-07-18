@@ -120,6 +120,28 @@ describe('RoutingService', () => {
     expect(map['grafana.local.hola']?.forwardAuth?.name).toBe('ak-grafana-dep-a');
   });
 
+  test('forward-auth bypassPaths emit higher-priority, middleware-less routers (#356)', async () => {
+    const base = routing.generateRule({ deploymentId: 'remo-dep-a', appName: 'remo', port: 8080 });
+    const rule = {
+      ...base,
+      forwardAuth: { name: 'ak-remo-dep-a', outpostUrl: 'http://authentik-server:9000', bypassPaths: ['/api/v1/setup/'] },
+    };
+    await routing.activateRoute(rule);
+
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+
+    // The base app router is still gated by the forward-auth middleware.
+    expect(dynamic.http.routers['remo-dep-a'].middlewares).toEqual(['ak-remo-dep-a']);
+
+    // The bypass router matches the exempt prefix, beats the Host router, routes
+    // straight to the app service, and carries NO middleware (the app's own token gates it).
+    const bypass = dynamic.http.routers['remo-dep-a-bypass-0'];
+    expect(bypass.rule).toBe('Host(`remo.local.hola`) && PathPrefix(`/api/v1/setup/`)');
+    expect(bypass.priority).toBeGreaterThan(1);
+    expect(bypass.service).toBe('remo-dep-a');
+    expect(bypass.middlewares).toBeUndefined();
+  });
+
   test('re-activating the same deployment replaces its prior host', async () => {
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea' }));
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea-renamed' }));

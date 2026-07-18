@@ -202,6 +202,23 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
       services[outpostService] = {
         loadBalancer: { servers: [{ url: outpost }] },
       };
+
+      // Forward-auth exemptions (#356): for each declared bypass prefix, emit a
+      // higher-priority router that matches Host && PathPrefix and routes STRAIGHT
+      // to the app service with NO forward-auth middleware — so a non-browser
+      // client can reach an app API path the app guards with its own credential
+      // (e.g. remo's /api/v1/setup/). Same shape as the outpost router above,
+      // reusing the app's own service (emitted below). Priority beats the Host
+      // router so the exemption wins for those paths.
+      (rule.forwardAuth.bypassPaths ?? []).forEach((prefix, i) => {
+        routers[`${rule.serviceName}-bypass-${i}`] = {
+          rule: `Host(\`${host}\`) && PathPrefix(\`${prefix}\`)`,
+          service: rule.serviceName,
+          priority: 100,
+          entryPoints: ['websecure'],
+          tls: routerTlsBlock(baseDomain, certResolver),
+        };
+      });
     }
 
     routers[rule.serviceName] = router;

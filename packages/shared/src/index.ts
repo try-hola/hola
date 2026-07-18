@@ -772,8 +772,18 @@ export type AppAuthConfig = {
   ldap?: {
     env: { host: string; port: string; bindDn: string; bindPassword: string; baseDn: string };
   };
-  // For `forward-auth`: optional access restriction by group.
-  forwardAuth?: { allowedGroups?: string[] };
+  // For `forward-auth`: optional access restriction by group, and optional URL
+  // path prefixes to EXEMPT from the forward-auth gate.
+  //
+  // `bypassPaths` lets a non-browser client (a CLI, a webhook) reach a specific
+  // app API path that the app protects with its OWN credential, without being
+  // bounced to the interactive Authentik login. Each prefix routes straight to
+  // the app with NO forward-auth middleware, so the app MUST enforce its own auth
+  // there (e.g. remo's `/api/v1/setup/` requires REMO_WEB_API_TOKEN). The prefix
+  // is publicly reachable — declare it narrowly. Must start with `/` and never be
+  // `/` (you cannot exempt the whole app). See the `connect` block, which surfaces
+  // the code/key an operator uses against such a path.
+  forwardAuth?: { allowedGroups?: string[]; bypassPaths?: string[] };
   // Optionally gate a `native-oidc`/no-auth app behind proxy login too.
   fallback?: 'forward-auth';
 };
@@ -1504,6 +1514,11 @@ export type ResourceLimits = {
 export type ForwardAuthMiddleware = {
   name: string;
   outpostUrl: string;
+  // URL path prefixes to EXEMPT from the forward-auth gate. The renderer emits a
+  // higher-priority router per prefix that routes straight to the app service with
+  // NO forward-auth middleware, so a non-browser client can reach an app API path
+  // the app protects with its own credential. From `auth.forwardAuth.bypassPaths`.
+  bypassPaths?: string[];
 };
 
 export type TraefikRoutingRule = {
