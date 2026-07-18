@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup, act, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -287,53 +287,5 @@ describe('DeploymentDetail deletion-while-viewing redirect (T018)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText('Deployments List')).not.toBeInTheDocument();
     expect(screen.getByText('Running')).toBeInTheDocument();
-  });
-});
-
-describe('DeploymentDetail Connect card (#356)', () => {
-  const connectDeployment: GetDeploymentResponse = { ...deployment, url: 'https://remo.example.com' };
-  const connectConfig: GetDeploymentConfigResponse = {
-    appEnv: [{ key: 'REMO_WEB_API_TOKEN', value: 'secret-token-xyz', isSecret: true, label: 'Adoption API Token' }],
-    systemOverrides: {},
-    connect: { keyEnv: 'REMO_WEB_API_TOKEN', label: 'Adopt this instance', help: 'REMO_API_TOKEN={code} remo web adopt {url}' },
-  };
-
-  beforeEach(() => {
-    deploymentsApi.byId.mockResolvedValue(connectDeployment);
-    deploymentsApi.config.mockResolvedValue(connectConfig);
-  });
-  afterEach(() => {
-    // Restore the module-level mocks so other suites see the defaults.
-    deploymentsApi.byId.mockImplementation(async () => deployment);
-    deploymentsApi.config.mockImplementation(async () => config);
-  });
-
-  function renderOverview() {
-    return render(
-      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=overview`]}>
-          <Routes>
-            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
-          </Routes>
-        </MemoryRouter>
-      </QueryClientProvider>
-    );
-  }
-
-  it('shows the URL, a revealable code, and help with {url}/{code} filled', async () => {
-    renderOverview();
-
-    // Scope assertions to the Connect card (the URL also appears in the header).
-    await waitFor(() => expect(screen.getByText('Adopt this instance')).toBeInTheDocument());
-    const card = within(screen.getByText('Adopt this instance').parentElement as HTMLElement);
-    expect(card.getByText('https://remo.example.com')).toBeInTheDocument();
-
-    // The code is masked until revealed (not in the card as plaintext yet).
-    expect(card.queryByText('secret-token-xyz')).not.toBeInTheDocument();
-
-    // Reveal exposes the code, and the help line fills {code}/{url}.
-    fireEvent.click(card.getByRole('button', { name: /reveal code/i }));
-    expect(card.getByText('secret-token-xyz')).toBeInTheDocument();
-    expect(card.getByText(/remo web adopt https:\/\/remo\.example\.com/)).toBeInTheDocument();
   });
 });

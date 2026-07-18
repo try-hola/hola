@@ -1328,7 +1328,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) return { appEnv: [], systemOverrides: {} };
     try {
       const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {}, connect: manifest.connect };
+      return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {} };
     } catch {
       return { appEnv: [], systemOverrides: {} };
     }

@@ -17,7 +17,6 @@ import type {
   CatalogSourceRecord,
   CatalogSourceTrust,
   AppEnvVar,
-  AppConnectConfig,
   ParamType,
   ParamGenerate,
   ParamEnumOption,
@@ -30,23 +29,6 @@ import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
 import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
-
-/**
- * Coerce the optional `manifest.connect` block into an `AppConnectConfig` (#356).
- * Narrow-shape coercion like `coerceManifestAuth`: anything malformed degrades to
- * `undefined`. `keyEnv` MUST name a real app-env var (from `appEnv`) or the whole
- * block is dropped — the dashboard "Connect" card reads that row's value as the code.
- */
-export function coerceManifestConnect(raw: unknown, appEnv: AppEnvVar[]): AppConnectConfig | undefined {
-  const rec = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
-  if (!rec) return undefined;
-  const keyEnv = typeof rec.keyEnv === 'string' && rec.keyEnv.length > 0 ? rec.keyEnv : undefined;
-  if (!keyEnv || !appEnv.some((e) => e.key === keyEnv)) return undefined;
-  const out: AppConnectConfig = { keyEnv };
-  if (typeof rec.label === 'string' && rec.label.length > 0) out.label = rec.label;
-  if (typeof rec.help === 'string' && rec.help.length > 0) out.help = rec.help;
-  return out;
-}
 
 /**
  * Coerce one raw `manifest.defaultEnv[]` row into an `AppEnvVar`, including the
@@ -518,7 +500,6 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           volumes?: Array<{ hostPath?: unknown; containerPath: unknown; readOnly?: unknown }>;
         };
         auth?: unknown;
-        connect?: unknown;
         consumes?: unknown;
         security?: unknown;
         upgrade?: unknown;
@@ -582,11 +563,6 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // the auth block must be coerced or it silently vanishes downstream.
       const auth = coerceManifestAuth(manifest.auth);
 
-      // Connect-panel config (#356): which app-env var holds the code/key an
-      // out-of-band CLI uses, plus a label/help for the dashboard "Connect" card.
-      // Coerced narrowly like `auth`; keyEnv must name a real appEnv var.
-      const connect = coerceManifestConnect(manifest.connect, merged.defaultEnv);
-
       // Cross-app capabilities the app consumes (e.g. `app-registry`); generic,
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
@@ -614,7 +590,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, connect, consumes, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       throw new Error('MANIFEST_UNAVAILABLE', { cause: error });

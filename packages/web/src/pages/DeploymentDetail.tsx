@@ -416,51 +416,6 @@ export const DeploymentDetail: React.FC = () => {
     if (deployment.url) window.open(deployment.url, '_blank', 'noopener,noreferrer');
   };
 
-  // "Connect" card (#356): for apps that declare a `connect` block, show the
-  // public URL plus the code/key an out-of-band CLI uses (e.g. `remo web adopt`),
-  // both copyable, with the code masked behind the same reveal toggle as the
-  // Configuration tab. The code value is the app-env row named by `connect.keyEnv`.
-  const renderConnectCard = () => {
-    const connect = configData?.connect;
-    if (!connect) return null;
-    const url = deployment.url ?? '';
-    const codeRow = (configData?.appEnv ?? []).find((e) => e.key === connect.keyEnv);
-    const code = codeRow?.value ?? '';
-    const revealed = !!showSecrets[connect.keyEnv];
-    const fill = (s: string) => s.split('{url}').join(url).split('{code}').join(revealed ? code : '••••••••');
-    const iconBtn = 'text-text-muted hover:text-text-strong transition-colors';
-    return (
-      <div className="bg-surface-1 border border-border rounded-card p-5">
-        <div className="font-semibold text-[15px] mb-4">{connect.label ?? 'Connect'}</div>
-        <div className="space-y-3">
-          <div>
-            <div className="text-xs text-text-faint mb-1">URL</div>
-            <div className="flex items-center gap-2">
-              <code className="text-[13px] font-mono break-all flex-1">{url || '—'}</code>
-              {url && (
-                <>
-                  <button type="button" aria-label="Copy URL" title="Copy" onClick={() => void navigator.clipboard?.writeText(url)} className={iconBtn}><Copy className="w-4 h-4" /></button>
-                  <a href={url} target="_blank" rel="noopener noreferrer" aria-label="Open app" title="Open" className={iconBtn}><ExternalLink className="w-4 h-4" /></a>
-                </>
-              )}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs text-text-faint mb-1">{codeRow?.label ?? connect.keyEnv}</div>
-            <div className="flex items-center gap-2">
-              <code className="text-[13px] font-mono break-all flex-1">{revealed ? (code || '—') : '••••••••••••'}</code>
-              <button type="button" aria-label={revealed ? 'Hide code' : 'Reveal code'} title={revealed ? 'Hide' : 'Reveal'} onClick={() => toggleSecretVisibility(connect.keyEnv)} className={iconBtn}>{revealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>
-              <button type="button" aria-label="Copy code" title="Copy" onClick={() => void navigator.clipboard?.writeText(code)} className={iconBtn}><Copy className="w-4 h-4" /></button>
-            </div>
-          </div>
-          {connect.help && (
-            <div className="text-[12.5px] text-text-muted whitespace-pre-wrap break-all border-t border-border pt-3">{fill(connect.help)}</div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -505,9 +460,6 @@ export const DeploymentDetail: React.FC = () => {
                 ))}
               </div>
             </div>
-
-            {/* Connect (apps with a `connect` block, e.g. remo adoption) */}
-            {renderConnectCard()}
 
             {/* Recent Jobs */}
             <JobTracker

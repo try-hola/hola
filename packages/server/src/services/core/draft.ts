@@ -21,7 +21,6 @@ import type {
   AppEnvVar,
   DraftDefaults,
   AppAuthConfig,
-  AppConnectConfig,
   AppSecurityConfig,
   AppUpgradeMeta,
   AppBackupConfig
@@ -72,9 +71,6 @@ export interface FinalizedManifest {
   // App auth capability carried from the catalog manifest so the deploy
   // lifecycle can provision SSO without re-reading the bundle.
   auth?: AppAuthConfig;
-  // Connect-panel config (#356) carried from the catalog manifest so the config
-  // endpoint can drive the dashboard "Connect" card without re-reading the bundle.
-  connect?: AppConnectConfig;
   // Cross-app capabilities consumed (e.g. `app-registry`); carried so the
   // deploy lifecycle can publish the right feeds without re-reading the bundle.
   consumes?: string[];
@@ -429,7 +425,6 @@ export class RealDraftService implements DraftService {
         ports: defaults.defaults.ports,
         composeOverride,
         auth: defaults.auth,
-        connect: defaults.connect,
         consumes: defaults.consumes,
         security: defaults.security,
         ingressService: defaults.ingressService,
@@ -522,7 +517,6 @@ export class RealDraftService implements DraftService {
         ports: detail.defaults.ports,
         composeOverride,
         auth: detail.auth,
-        connect: detail.connect,
         consumes: detail.consumes,
         security: detail.security,
         ingressService: detail.ingressService,
@@ -786,7 +780,6 @@ export class RealDraftService implements DraftService {
         ports: draft.ports,
         composeOverride: draft.composeOverride ?? '',
         auth: draft.auth,
-        connect: draft.connect,
         consumes: draft.consumes,
         security: draft.security,
         ingressService: draft.ingressService,
@@ -875,7 +868,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; connect?: AppConnectConfig; consumes?: string[]; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
       return {
@@ -883,7 +876,6 @@ export class RealDraftService implements DraftService {
         defaults: versionDetail.defaults,
         composeOverride: versionDetail.composeOverride ?? '',
         auth: versionDetail.auth,
-        connect: versionDetail.connect,
         consumes: versionDetail.consumes,
         security: versionDetail.security,
         ingressService: versionDetail.ingressService,

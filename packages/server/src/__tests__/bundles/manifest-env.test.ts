@@ -8,9 +8,8 @@
  */
 import { describe, test, expect } from 'bun:test';
 
-import { coerceManifestEnvVar, coerceManifestConnect } from '../../services/core/catalog';
+import { coerceManifestEnvVar } from '../../services/core/catalog';
 import type { Logger, LogContext } from '../../lib/logger';
-import type { AppEnvVar } from '@hola/shared';
 
 /** Captures warn() calls so tests can assert on forward-compat degrade logging. */
 function makeSpyLogger(): { logger: Logger; warnings: Array<{ message: string; context?: LogContext }> } {
@@ -158,33 +157,5 @@ describe('coerceManifestEnvVar', () => {
     expect(row.min).toBe(100);
     expect(row.max).toBe(10);
     expect(warnings.some((w) => w.message.includes('Manifest env param spec has issues'))).toBe(true);
-  });
-});
-
-describe('coerceManifestConnect (#356)', () => {
-  const appEnv: AppEnvVar[] = [{ key: 'REMO_WEB_API_TOKEN', value: 'abc', isSecret: true }];
-
-  test('keeps a valid block whose keyEnv names a real app-env var', () => {
-    expect(
-      coerceManifestConnect(
-        { keyEnv: 'REMO_WEB_API_TOKEN', label: 'Adopt this instance', help: 'run {url} with {code}' },
-        appEnv,
-      ),
-    ).toEqual({ keyEnv: 'REMO_WEB_API_TOKEN', label: 'Adopt this instance', help: 'run {url} with {code}' });
-  });
-
-  test('drops the block when keyEnv does not match any app-env var', () => {
-    expect(coerceManifestConnect({ keyEnv: 'NOPE' }, appEnv)).toBeUndefined();
-  });
-
-  test('drops malformed/missing input', () => {
-    expect(coerceManifestConnect(undefined, appEnv)).toBeUndefined();
-    expect(coerceManifestConnect({}, appEnv)).toBeUndefined();
-    expect(coerceManifestConnect({ keyEnv: 123 }, appEnv)).toBeUndefined();
-    expect(coerceManifestConnect('nope', appEnv)).toBeUndefined();
-  });
-
-  test('omits optional label/help when absent', () => {
-    expect(coerceManifestConnect({ keyEnv: 'REMO_WEB_API_TOKEN' }, appEnv)).toEqual({ keyEnv: 'REMO_WEB_API_TOKEN' });
   });
 });

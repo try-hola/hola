@@ -651,9 +651,6 @@ export type GetCatalogAppVersionDetailResponse = {
   // Drives provisioning at deploy time (see AppAuthConfig). Optional: apps
   // that don't declare it behave as `none` (no auth wiring).
   auth?: AppAuthConfig;
-  // Drives the dashboard "Connect" panel (URL + code/key) for apps configured
-  // out-of-band by a CLI. Declared in the bundle manifest. Optional.
-  connect?: AppConnectConfig;
   // Cross-app capabilities the app consumes, declared in its bundle manifest
   // (e.g. `app-registry`). The server writes the corresponding feed into the
   // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
@@ -791,22 +788,6 @@ export type AppAuthConfig = {
   fallback?: 'forward-auth';
 };
 
-// Drives the dashboard "Connect" panel for apps configured out-of-band by a CLI
-// or other machine client (e.g. remo's `remo web adopt`). Hola shows the app's
-// public URL alongside the value of the `keyEnv` app-env var (the code/key the
-// client authenticates with), so the operator can copy both into their tool.
-// Pair with `auth.forwardAuth.bypassPaths` so the client can actually reach the
-// path the code gates.
-export type AppConnectConfig = {
-  // Name of the app-env var (from `defaultEnv`) whose value is the code/key.
-  keyEnv: string;
-  // Panel title, e.g. "Adopt this instance". Defaults to a generic label.
-  label?: string;
-  // Hint shown under the fields. May contain `{url}` and `{code}` placeholders,
-  // which the panel substitutes with the app URL and the code value.
-  help?: string;
-};
-
 // Elevated container permissions an app may request in its bundle manifest.
 // These relax the platform's default container hardening for a specific,
 // declared reason, so the install wizard can surface each one for explicit
@@ -875,9 +856,6 @@ export type Draft = {
   // App auth capability seeded from the catalog bundle manifest (read-only; not
   // user-editable). Carried through finalize so the deploy lifecycle can provision.
   auth?: AppAuthConfig;
-  // Connect-panel config seeded from the bundle manifest and carried through
-  // finalize (read-only; not user-editable). Drives the dashboard "Connect" card.
-  connect?: AppConnectConfig;
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
@@ -1013,9 +991,6 @@ export type PatchDeploymentResponse = { ok: true; jobId?: string };
 export type GetDeploymentConfigResponse = {
   appEnv: AppEnvVar[];
   systemOverrides: Record<string, string>;
-  // Present when the app declares a `connect` block: drives the dashboard
-  // "Connect" panel. The code value itself is the matching `appEnv` row's value.
-  connect?: AppConnectConfig;
 };
 
 export type DeploymentHistoryItem = {
