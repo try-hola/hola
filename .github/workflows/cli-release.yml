@@ -133,12 +133,20 @@ jobs:
         run: |
           # Create the release if it does not exist, then upload (clobbering) the assets.
           if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            # Auto-generate a PR-based changelog (previous tag auto-detected) so the
-            # release notes are a real "what changed" list. The changelog goes FIRST,
-            # followed by a sentinel comment and the install snippet: `hola update`
-            # prints everything up to the sentinel as the post-upgrade changelog.
+            # Auto-generate a PR-based changelog, anchored at the last STABLE
+            # (non-rc) release so a release's notes cover the WHOLE range since the
+            # previous stable. Without an explicit start tag, GitHub diffs against
+            # the immediately preceding tag — usually the last rc — so a
+            # stable→stable upgrader (and `hola update`, which prints this body)
+            # would only see the final hop and miss everything the rc's introduced.
+            # The changelog goes FIRST, followed by a sentinel comment and the
+            # install snippet: `hola update` prints everything up to the sentinel.
+            PREV_STABLE="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              -q "[.[] | select(.prerelease==false) | .tag_name] | map(select(. != \"$GITHUB_REF_NAME\")) | .[0] // empty" 2>/dev/null || true)"
+            PREV_ARGS=()
+            if [ -n "$PREV_STABLE" ]; then PREV_ARGS=(-f "previous_tag_name=$PREV_STABLE"); fi
             CHANGELOG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-              -f tag_name="$GITHUB_REF_NAME" -q .body 2>/dev/null || true)"
+              -f tag_name="$GITHUB_REF_NAME" "${PREV_ARGS[@]}" -q .body 2>/dev/null || true)"
             {
               if [ -n "$CHANGELOG" ]; then printf '%s\n\n' "$CHANGELOG"; fi
               printf '<!-- hola:changelog-end -->\n'
