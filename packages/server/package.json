@@ -1,6 +1,6 @@
 {
   "name": "@hola/server",
-  "version": "0.7.6-rc.3",
+  "version": "0.7.6",
   "private": true,
   "type": "module",
   "scripts": {
