@@ -152,4 +152,25 @@ describe('promote refreshes the cached catalog icon', () => {
     expect(after.icon).toBe(EMOJI_ICON);
     expect(after.version).toBe('0.5.0');
   });
+
+  test('RECOVERY: a same-version re-promote still refreshes a stale icon', async () => {
+    const { deployments, drafts } = makeSystem();
+
+    // Upgraded to 0.5.0 on a server that predates the icon-refresh fix, so the
+    // record kept the old emoji and there is no newer version left to promote to.
+    const dep = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, '0.5.0'), name: 'remo', options: { autoStart: false },
+    });
+    expect((await deployments.getDeployment(dep.deploymentId)).icon).toBe(EMOJI_ICON);
+
+    icon.current = LOGO_ICON;
+    // Re-promote to the SAME version (what `hola upgrade --app-version 0.5.0` does).
+    await deployments.promote(dep.deploymentId, {
+      draftId: await finalizedDraft(drafts, '0.5.0'), options: { autoStart: false },
+    });
+
+    const after = await deployments.getDeployment(dep.deploymentId);
+    expect(after.icon).toBe(LOGO_ICON);
+    expect(after.version).toBe('0.5.0');
+  });
 });
