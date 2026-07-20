@@ -273,7 +273,10 @@ shared LDAP directory needs an outpost you create once:
    **Outpost** of type *LDAP* bound to it.
 2. Copy the outpost's **token** into `AUTHENTIK_LDAP_OUTPOST_TOKEN` in `.env`, and set
    `HOLA_AUTHENTIK_LDAP_BASE_DN` to the same Base DN.
-3. `docker compose up -d authentik-ldap` — the outpost connects and serves the directory at
+3. Append `authentik-ldap` to `COMPOSE_PROFILES` in `.env` — the outpost has its own profile
+   so a token-less install doesn't start (and crash-loop) it:
+   `COMPOSE_PROFILES=authentik,authentik-ldap`.
+4. `docker compose up -d authentik-ldap` — the outpost connects and serves the directory at
    `authentik-ldap:3389` on the `hola` network. native-LDAP apps then bind automatically.
 
 (Pinning the outpost token without this manual copy is a known Authentik gap; revisit when upstream
