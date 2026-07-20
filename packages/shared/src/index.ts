@@ -514,6 +514,23 @@ export type AddCatalogSourceRequest = {
   enabled?: boolean;
 };
 
+/**
+ * Patch an existing custom catalog source. Every field is optional; only the
+ * ones supplied change. `id`, `type` and `trust` are not patchable — the id is
+ * the key, and the other two are derived.
+ *
+ * Chiefly exists so `allowRegistries` can be added to a source after the fact
+ * (the usual fix for a `REF_NOT_ALLOWED` pull) without deleting and re-adding it.
+ * Pass `allowRegistries: []` to clear it.
+ */
+export type UpdateCatalogSourceRequest = {
+  name?: string;
+  url?: string;
+  auth?: { registry: string; credentialRef: string } | null;
+  allowRegistries?: string[];
+  enabled?: boolean;
+};
+
 export type ListCatalogSourcesResponse = {
   items: CatalogSourceRecord[];
 };

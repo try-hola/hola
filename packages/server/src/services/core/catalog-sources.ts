@@ -15,7 +15,8 @@ import { getLogger } from '../../lib/logger';
 import { catalogConfig } from '../../config/catalog';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
-import type { CatalogSourceRecord, AddCatalogSourceRequest } from '@hola/shared';
+import type { CatalogSourceRecord, AddCatalogSourceRequest, UpdateCatalogSourceRequest } from '@hola/shared';
+import { ServiceError } from '../../middleware/error-mapping';
 
 /** Reserved source ids that a custom source may not use. */
 export const RESERVED_SOURCE_IDS = new Set(['hola', 'ref', '(ref)']);
@@ -64,6 +65,12 @@ export interface CatalogSourceService extends HealthCheckable {
   /** Only the enabled sources (what the catalog aggregator fans out over). */
   listEnabled(): Promise<CatalogSourceRecord[]>;
   add(req: AddCatalogSourceRequest): Promise<CatalogSourceRecord>;
+  /**
+   * Patch a custom source in place. Only the supplied fields change — notably
+   * `allowRegistries`, which otherwise required deleting and re-adding the
+   * source (losing nothing but making a routine fix feel destructive).
+   */
+  update(id: string, req: UpdateCatalogSourceRequest): Promise<CatalogSourceRecord>;
   remove(id: string): Promise<void>;
   /** A single source by id (built-in or custom), or undefined. */
   get(id: string): Promise<CatalogSourceRecord | undefined>;
@@ -110,10 +117,15 @@ export class RealCatalogSourceService implements CatalogSourceService {
       const parsed = JSON.parse(await this.storage.readFileAsString(STORE_PATH)) as SourceFile;
       return Array.isArray(parsed?.sources) ? parsed.sources : [];
     } catch (error) {
-      this.logger.warn('Failed to read catalog sources; treating as empty', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      return [];
+      // Do NOT substitute an empty list. `fileExists` above already covers "no
+      // sources yet", so reaching here means the file exists but is corrupt or
+      // unreadable — and add()/update() are read-modify-write over this result,
+      // so pretending it's empty would silently DELETE every configured source
+      // on the next write. Fail loudly instead; healthCheck() reports it.
+      this.logger.error('Failed to read catalog sources', error as Error, { path: STORE_PATH });
+      throw new ServiceError(
+        `Catalog source store at ${STORE_PATH} is unreadable or corrupt: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 
@@ -162,6 +174,44 @@ export class RealCatalogSourceService implements CatalogSourceService {
     return record;
   }
 
+  async update(id: string, req: UpdateCatalogSourceRequest): Promise<CatalogSourceRecord> {
+    // The built-in `hola` source is synthesized from env at read time, so there's
+    // nothing persisted to patch.
+    if (RESERVED_SOURCE_IDS.has(id)) throw new Error('SOURCE_ID_RESERVED');
+
+    const custom = await this.loadCustom();
+    const idx = custom.findIndex(s => s.id === id);
+    if (idx < 0) throw new Error('SOURCE_NOT_FOUND');
+
+    // Validate before mutating, with the same rules `add` applies — a patch must
+    // not be able to write a record `add` would have rejected.
+    if (req.url !== undefined && !isHttpUrl(req.url)) throw new Error('SOURCE_URL_INVALID');
+    if (req.auth && (!req.auth.registry || !req.auth.credentialRef)) throw new Error('SOURCE_AUTH_INVALID');
+
+    const current = custom[idx];
+    const allowRegistries = req.allowRegistries !== undefined
+      ? normalizeAllowRegistries(req.allowRegistries)
+      : undefined;
+
+    const next: CatalogSourceRecord = {
+      ...current,
+      ...(req.name !== undefined ? { name: req.name.trim() || current.id } : {}),
+      ...(req.url !== undefined ? { url: req.url.trim() } : {}),
+      // `auth: null` clears the credential; omitting it leaves it untouched.
+      ...(req.auth !== undefined ? { auth: req.auth ?? undefined } : {}),
+      // An empty array clears the allowlist (back to the baseline only).
+      ...(allowRegistries !== undefined ? { allowRegistries: allowRegistries.length > 0 ? allowRegistries : undefined } : {}),
+      ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
+    };
+
+    custom[idx] = next;
+    await this.saveCustom(custom);
+    this.logger.info('Catalog source updated', {
+      id, url: next.url, hasAuth: Boolean(next.auth), allowRegistries: next.allowRegistries ?? [], enabled: next.enabled,
+    });
+    return next;
+  }
+
   async remove(id: string): Promise<void> {
     if (RESERVED_SOURCE_IDS.has(id)) throw new Error('SOURCE_ID_RESERVED');
     const custom = await this.loadCustom();
@@ -200,6 +250,22 @@ export class MockCatalogSourceService implements CatalogSourceService {
     };
     this.custom.push(record);
     return record;
+  }
+  async update(id: string, req: UpdateCatalogSourceRequest): Promise<CatalogSourceRecord> {
+    if (RESERVED_SOURCE_IDS.has(id)) throw new Error('SOURCE_ID_RESERVED');
+    const idx = this.custom.findIndex(s => s.id === id);
+    if (idx < 0) throw new Error('SOURCE_NOT_FOUND');
+    const allowRegistries = req.allowRegistries !== undefined ? normalizeAllowRegistries(req.allowRegistries) : undefined;
+    const next: CatalogSourceRecord = {
+      ...this.custom[idx],
+      ...(req.name !== undefined ? { name: req.name } : {}),
+      ...(req.url !== undefined ? { url: req.url } : {}),
+      ...(req.auth !== undefined ? { auth: req.auth ?? undefined } : {}),
+      ...(allowRegistries !== undefined ? { allowRegistries: allowRegistries.length > 0 ? allowRegistries : undefined } : {}),
+      ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
+    };
+    this.custom[idx] = next;
+    return next;
   }
   async remove(id: string): Promise<void> {
     if (RESERVED_SOURCE_IDS.has(id)) throw new Error('SOURCE_ID_RESERVED');

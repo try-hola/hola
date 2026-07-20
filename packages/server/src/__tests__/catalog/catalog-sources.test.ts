@@ -103,4 +103,79 @@ describe('RealCatalogSourceService allowRegistries (persistence + validation)', 
     const rec = await svc.add({ id: 'acme', name: 'Acme', url: CATALOG });
     expect(rec.allowRegistries).toBeUndefined();
   });
+
+  describe('update', () => {
+    test('adds allowRegistries to an existing source without delete-and-re-add', async () => {
+      // The motivating case: a source was added without allowRegistries, its
+      // pulls fail REF_NOT_ALLOWED, and the fix must not require recreating it.
+      const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-update-'));
+      dirs.push(holaDir);
+      const storage = new RealStorageService({ holaDir });
+      const svc = new RealCatalogSourceService(storage);
+      await svc.add({ id: 'pofallon', name: 'Pofallon', url: CATALOG });
+
+      const updated = await svc.update('pofallon', { allowRegistries: ['ghcr.io/pofallon/*'] });
+      expect(updated.allowRegistries).toEqual(['ghcr.io/pofallon/*']);
+
+      // Untouched fields survive, and it persists across instances.
+      expect(updated).toMatchObject({ id: 'pofallon', name: 'Pofallon', url: CATALOG, trust: 'custom', enabled: true });
+      expect((await new RealCatalogSourceService(storage).get('pofallon'))?.allowRegistries).toEqual(['ghcr.io/pofallon/*']);
+    });
+
+    test('patches only the supplied fields, and clears with empty array / null', async () => {
+      const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-update2-'));
+      dirs.push(holaDir);
+      const svc = new RealCatalogSourceService(new RealStorageService({ holaDir }));
+      await svc.add({
+        id: 'acme', name: 'Acme', url: CATALOG,
+        allowRegistries: ['ghcr.io/acme/*'], auth: { registry: 'ghcr.io', credentialRef: 'acme-bot' },
+      });
+
+      const renamed = await svc.update('acme', { name: 'Acme Corp' });
+      expect(renamed.name).toBe('Acme Corp');
+      expect(renamed.url).toBe(CATALOG); // untouched
+      expect(renamed.allowRegistries).toEqual(['ghcr.io/acme/*']); // untouched
+      expect(renamed.auth).toEqual({ registry: 'ghcr.io', credentialRef: 'acme-bot' }); // untouched
+
+      expect((await svc.update('acme', { allowRegistries: [] })).allowRegistries).toBeUndefined();
+      expect((await svc.update('acme', { auth: null })).auth).toBeUndefined();
+      expect((await svc.update('acme', { enabled: false })).enabled).toBe(false);
+    });
+
+    test('applies the same validation as add, and refuses unknown/reserved ids', async () => {
+      const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-update3-'));
+      dirs.push(holaDir);
+      const svc = new RealCatalogSourceService(new RealStorageService({ holaDir }));
+      await svc.add({ id: 'acme', name: 'Acme', url: CATALOG });
+
+      // A patch must not be able to write a record `add` would have rejected.
+      await expect(svc.update('acme', { url: 'ftp://nope' })).rejects.toThrow('SOURCE_URL_INVALID');
+      await expect(svc.update('acme', { allowRegistries: ['ghcr io/x/*'] })).rejects.toThrow('SOURCE_ALLOW_REGISTRY_INVALID');
+      await expect(svc.update('acme', { auth: { registry: 'ghcr.io', credentialRef: '' } })).rejects.toThrow('SOURCE_AUTH_INVALID');
+
+      await expect(svc.update('nope', { name: 'x' })).rejects.toThrow('SOURCE_NOT_FOUND');
+      // The built-in source is synthesized from env — there's nothing to patch.
+      await expect(svc.update('hola', { name: 'x' })).rejects.toThrow('SOURCE_ID_RESERVED');
+    });
+  });
+
+  test('a corrupt source store fails loudly instead of silently wiping every source', async () => {
+    // loadCustom used to return [] on a parse failure. add()/update() are
+    // read-modify-write over that result, so the next write would have persisted
+    // an empty list — destroying every configured source on a transient read error.
+    const holaDir = await mkdtemp(join(tmpdir(), 'hola-src-corrupt-'));
+    dirs.push(holaDir);
+    const storage = new RealStorageService({ holaDir });
+    const svc = new RealCatalogSourceService(storage);
+    await svc.add({ id: 'acme', name: 'Acme', url: CATALOG });
+
+    await storage.writeFile('config/catalog-sources.json', '{ this is not json');
+
+    await expect(svc.list()).rejects.toThrow(/unreadable or corrupt/);
+    await expect(svc.add({ id: 'other', name: 'Other', url: CATALOG })).rejects.toThrow(/unreadable or corrupt/);
+    expect((await svc.healthCheck()).healthy).toBe(false);
+
+    // Critically, the bad add did NOT overwrite the store with an empty list.
+    expect(await storage.readFileAsString('config/catalog-sources.json')).toBe('{ this is not json');
+  });
 });

@@ -29,7 +29,7 @@ import type {
 import { createHash } from 'crypto';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError, DraftValidationError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError } from '../../middleware/error-mapping';
 import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
@@ -886,7 +886,22 @@ export class RealDraftService implements DraftService {
         resolvedVersion: versionDetail.version,
       };
     } catch (error) {
-      this.logger.warn('Failed to get app defaults, using fallback', { appId, version, error: error instanceof Error ? error.message : String(error) });
+      // Only "this app has no bundle" is a legitimate fallback. Everything else —
+      // a registry outside the allowlist, a denied or unreachable pull, an
+      // unresolvable credential, a malformed bundle — is a hard failure that must
+      // reach the caller NOW.
+      //
+      // This catch used to be unconditional, so a blocked pull produced a draft
+      // built from placeholders (APP_PORT=8080, no defaultEnv, no compose). That
+      // draft finalized cleanly and cut a release with no compose file, and the
+      // operator only saw it as "Active release has no compose file" from the
+      // deploy job seconds later — with the real reason buried in a WARN.
+      if (!(error instanceof BundleUnavailableError)) {
+        this.logger.error('Failed to resolve app defaults from the catalog', error as Error, { appId, version, source });
+        throw error;
+      }
+
+      this.logger.info('No catalog bundle for this app; seeding generic defaults', { appId, version, source, reason: error.code });
 
       // Fallback defaults (no bundle compose available — the user supplies one)
       return {
