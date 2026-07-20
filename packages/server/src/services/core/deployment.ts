@@ -43,7 +43,7 @@ import { requestsPrivilegeEscalation } from './manifest-security';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError, DraftValidationError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError, ServiceError } from '../../middleware/error-mapping';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto } from './snapshot-fs';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
@@ -1104,14 +1104,26 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     // Attach the ingress service to the Traefik network so the emitted routing
     // config can reach it (the alias must match the routing service name).
-    let content = raw;
+    //
+    // NOT swallowed, for the same reason as the auth injection below: deploying
+    // the compose as-is produces an app that starts, reports success, and is
+    // unreachable — Traefik gets a routing rule pointing at a service that was
+    // never joined to the network, so every request 502s with nothing but a warn
+    // in the log. Failing the deploy surfaces the real problem while the operator
+    // is still watching.
+    let content: string;
     try {
       content = attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService });
     } catch (error) {
-      this.logger.warn('Could not attach app to Traefik network; deploying compose as-is', {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logger.error('Could not attach app to the Traefik network', error as Error, {
         deploymentId: deployment.id,
-        error: error instanceof Error ? error.message : String(error),
+        ingressService,
       });
+      throw new ServiceError(
+        `Could not attach ${deployment.id} to the Traefik network (ingress service '${ingressService}'): ${detail}. ` +
+          `Deploying without it would start the app unreachable behind a 502.`,
+      );
     }
 
     // Inject provisioned auth env into the ingress service. NOT swallowed: a
@@ -1217,63 +1229,65 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return this.runtimeDir(deployment.id);
   }
 
-  /** Read the active release's declared auth config (if any). */
-  private async readActiveAuth(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest['auth']> {
-    const releaseId = deployment.currentReleaseId;
+  /**
+   * Read a release's finalized manifest.
+   *
+   * Returns `undefined` when there is genuinely nothing to read — no active
+   * release, or no manifest file. That's a legitimate state and callers treat it
+   * as "field absent".
+   *
+   * THROWS when the file exists but cannot be read or parsed. That distinction is
+   * the entire point of this helper. Every caller derives deploy-time behaviour
+   * from this file, and the readers used to `catch { return undefined }` — making
+   * a CORRUPT manifest indistinguishable from one that simply omits the field. A
+   * truncated write therefore silently deployed the app with no auth wiring, no
+   * env, or no config carried forward on upgrade, with nothing in the log but the
+   * absence of a problem. Corruption must stop the operation, not quietly change
+   * what it does.
+   */
+  private async readReleaseManifest(deploymentId: string, releaseId: string | undefined): Promise<FinalizedManifest | undefined> {
     if (!releaseId) return undefined;
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
+    const manifestPath = `deployments/${deploymentId}/releases/${releaseId}/manifest.json`;
     if (!(await this.storageService.fileExists(manifestPath))) return undefined;
     try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return manifest.auth;
-    } catch {
-      return undefined;
+      return JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.logger.error('Release manifest is unreadable or corrupt', error as Error, { deploymentId, releaseId, manifestPath });
+      throw new ServiceError(
+        `Release manifest for ${deploymentId} (release ${releaseId}) is unreadable or corrupt: ${detail}. ` +
+          `Refusing to operate on this deployment with unknown auth/config — roll back to a good release or repair the file.`,
+      );
     }
+  }
+
+  /** The active release's manifest, or undefined when there isn't one. Throws on corruption. */
+  private async readActiveManifest(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest | undefined> {
+    return this.readReleaseManifest(deployment.id, deployment.currentReleaseId);
+  }
+
+  /** Read the active release's declared auth config (if any). */
+  private async readActiveAuth(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest['auth']> {
+    return (await this.readActiveManifest(deployment))?.auth;
   }
 
   /** Cross-app capabilities the active release declares it consumes (ADR 0002). */
   private async readActiveConsumes(deployment: EnhancedDeploymentDetail): Promise<string[]> {
-    const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return [];
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return [];
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return manifest.consumes ?? [];
-    } catch {
-      return [];
-    }
+    return (await this.readActiveManifest(deployment))?.consumes ?? [];
   }
 
   /** Elevated container permissions the active release's manifest declares. */
   private async readActiveSecurity(deployment: EnhancedDeploymentDetail): Promise<AppSecurityConfig | undefined> {
-    const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return undefined;
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return manifest.security;
-    } catch {
-      return undefined;
-    }
+    return (await this.readActiveManifest(deployment))?.security;
   }
 
   /** The active release's app env (manifest `defaultEnv` + any user overrides), as
    *  a flat map — the source for the runtime `.env` Compose interpolates from. */
   private async readActiveAppEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
-    const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return {};
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return {};
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      const out: Record<string, string> = {};
-      for (const e of manifest.appEnv ?? []) out[e.key] = e.value ?? '';
-      return out;
-    } catch {
-      return {};
-    }
+    const manifest = await this.readActiveManifest(deployment);
+    const out: Record<string, string> = {};
+    for (const e of manifest?.appEnv ?? []) out[e.key] = e.value ?? '';
+    return out;
   }
 
   /** Absolute path to the active release's manifest, or undefined if there's no
@@ -1295,15 +1309,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   private async resolveRegistryAuth(deployment: EnhancedDeploymentDetail): Promise<PullCredentials[] | undefined> {
     const releaseId = deployment.currentReleaseId;
     if (!releaseId) return undefined;
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
-    let credentialRef: string | undefined;
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      credentialRef = manifest.credentialRef;
-    } catch {
-      return undefined;
-    }
+    const credentialRef = (await this.readActiveManifest(deployment))?.credentialRef;
     if (!credentialRef) return undefined;
     const creds = await this.registryCredentials?.resolve(credentialRef);
     if (!creds) {
@@ -1321,16 +1327,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const releaseId = deployment.currentReleaseId;
     const empty = { appEnv: {} as Record<string, string>, systemOverrides: {} as Record<string, string> };
     if (!releaseId) return empty;
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return empty;
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      const appEnv: Record<string, string> = {};
-      for (const e of manifest.appEnv ?? []) appEnv[e.key] = e.value ?? '';
-      return { appEnv, systemOverrides: manifest.systemOverrides ?? {} };
-    } catch {
-      return empty;
-    }
+    // Corruption throws rather than returning `empty`: this is the promote
+    // carry-forward source, so an empty return silently ships the upgraded
+    // release with none of the operator's env or secrets.
+    const manifest = await this.readReleaseManifest(deployment.id, releaseId);
+    if (!manifest) return empty;
+    const appEnv: Record<string, string> = {};
+    for (const e of manifest.appEnv ?? []) appEnv[e.key] = e.value ?? '';
+    return { appEnv, systemOverrides: manifest.systemOverrides ?? {} };
   }
 
   /** Full config for the DeploymentDetail Configuration tab: the active release's
@@ -1344,13 +1348,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
     const manifestPath = this.activeManifestPath(deployment);
-    if (!manifestPath || !(await this.storageService.fileExists(manifestPath))) return { appEnv: [], systemOverrides: {} };
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {} };
-    } catch {
-      return { appEnv: [], systemOverrides: {} };
-    }
+    if (!manifestPath) return { appEnv: [], systemOverrides: {} };
+    const manifest = await this.readActiveManifest(deployment);
+    if (!manifest) return { appEnv: [], systemOverrides: {} };
+    return { appEnv: manifest.appEnv ?? [], systemOverrides: manifest.systemOverrides ?? {} };
   }
 
   /**
@@ -1419,16 +1420,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /** The active release's declared ingress/web compose service, if any. */
   private async readActiveIngressService(deployment: EnhancedDeploymentDetail): Promise<string | undefined> {
-    const releaseId = deployment.currentReleaseId;
-    if (!releaseId) return undefined;
-    const manifestPath = `deployments/${deployment.id}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(manifestPath))) return undefined;
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
-      return manifest.ingressService;
-    } catch {
-      return undefined;
-    }
+    return (await this.readActiveManifest(deployment))?.ingressService;
   }
 
   /** Absolute host base that holds every app's data root. */
@@ -1520,14 +1512,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /** Read the per-app backup hooks (#121) from a release's finalized manifest. */
   private async readReleaseBackupConfig(deploymentId: string, releaseId: string): Promise<FinalizedManifest['backup']> {
-    const path = `deployments/${deploymentId}/releases/${releaseId}/manifest.json`;
-    if (!(await this.storageService.fileExists(path))) return undefined;
-    try {
-      const manifest = JSON.parse(await this.storageService.readFileAsString(path)) as FinalizedManifest;
-      return manifest.backup;
-    } catch {
-      return undefined;
-    }
+    return (await this.readReleaseManifest(deploymentId, releaseId))?.backup;
   }
 
   /** Snapshot metadata for a deployment, newest first. */
@@ -1645,7 +1630,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       const content = buildRegistry(apps);
 
       for (const d of this.deployments.values()) {
-        const consumes = await this.readActiveConsumes(d);
+        // Per-deployment guard: readActiveConsumes now throws on a corrupt
+        // manifest, and this loop spans EVERY deployment — without this, one bad
+        // manifest would stop the registry feed being written for all the others.
+        // Skipping the unreadable one is the right blast radius here; the deploy
+        // paths that actually act on a manifest still fail hard.
+        let consumes: string[];
+        try {
+          consumes = await this.readActiveConsumes(d);
+        } catch (error) {
+          this.logger.warn('Skipping deployment in app-registry feed; its manifest is unreadable', {
+            deploymentId: d.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
         if (!consumes.includes(APP_REGISTRY_CAPABILITY)) continue;
         try {
           const root = this.appRootFor(d.id);

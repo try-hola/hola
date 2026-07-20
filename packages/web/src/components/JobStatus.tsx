@@ -147,6 +147,14 @@ export const JobStatus: React.FC<JobStatusProps> = ({
                 )}
               </div>
             )}
+            {/* Why it failed. The server records this on every failed job; without
+                it a failure is just a red pill and the operator has to go digging
+                in the logs for something the UI already knows. */}
+            {showDetails && job.status === 'failed' && job.error && (
+              <div className={`mt-1 break-words text-danger ${size === 'lg' ? 'text-sm' : 'text-xs'}`} title={job.error}>
+                {job.error}
+              </div>
+            )}
           </div>
         </div>
         

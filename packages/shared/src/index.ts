@@ -1038,6 +1038,13 @@ export type Job = {
   // type). Absent for jobs with no/deleted deployment.
   deploymentName?: string;
   app?: string;
+  /**
+   * Why a failed job failed. Recorded on the job record all along but dropped on
+   * the way out, so a failed deploy surfaced as a red status with no reason —
+   * exactly the dead end that made a swallowed bundle-pull failure so hard to
+   * diagnose. Only set for `failed` jobs.
+   */
+  error?: string;
 };
 
 export type GetJobsRequest = PageRequest & {
