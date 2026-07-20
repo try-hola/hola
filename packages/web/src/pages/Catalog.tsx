@@ -9,18 +9,26 @@ import {
   AlertCircle,
   Terminal,
   X,
+  Check,
 } from 'lucide-react';
 import type {
   CatalogApp,
   GetCatalogAppsRequest,
+  GetDeploymentsRequest,
   RegistryCredentialRecord,
 } from '@hola/shared';
 import { useCatalogAppsApi } from '../hooks/useCatalogApi';
+import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { api } from '../utils/api-hybrid';
 import { globalCache } from '../utils/cache';
 
 const categories = ['All', 'Productivity', 'Home Automation', 'Media', 'Monitoring', 'Security', 'Database', 'Infrastructure', 'Networking'];
+
+// Installed apps are read off the deployments list so the catalog can hide the
+// install path for something that's already here. One page is plenty — a host
+// runs tens of apps, not hundreds.
+const DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 100, status: 'all' };
 
 /**
  * Modal to install a package straight from an OCI reference (the escape hatch for
@@ -127,6 +135,9 @@ export const Catalog: React.FC = () => {
 
   // Use API hook for catalog apps
   const { data: appsData, loading, error, refetch } = useCatalogAppsApi(apiParams);
+  // Failure here is non-fatal: no deployments data just means every card falls
+  // back to offering an install, which is the pre-existing behaviour.
+  const { data: deploymentsData } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -161,6 +172,25 @@ export const Catalog: React.FC = () => {
   
   // Calculate featured apps
   const featuredApps = useMemo(() => apps.filter(app => app.featured), [apps]);
+
+  // Map catalog app id -> the deployment already installed for it, so a card can
+  // offer "manage" instead of a second install. Every status counts, not just
+  // running: the server derives an app's Traefik host from its *app name*
+  // (routing.ts generateRule), so any existing deployment owns that host and a
+  // second install is rejected as a ConflictError regardless of whether it's up.
+  //
+  // Matching is on bare app id because DeploymentListItem carries no `source`
+  // (source lives on the detail record's metadata). An app id present in two
+  // catalog sources therefore reads as installed in both — acceptable while a
+  // second install is impossible anyway, and it goes away with multi-instance
+  // support (see the follow-up issue).
+  const installedByApp = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of deploymentsData?.items ?? []) {
+      if (!m.has(d.app)) m.set(d.app, d.id);
+    }
+    return m;
+  }, [deploymentsData?.items]);
 
   // Update URL params when filters change
   useEffect(() => {
@@ -300,10 +330,16 @@ export const Catalog: React.FC = () => {
             {apps.map((app: CatalogApp) => {
               const custom = app.source && app.source !== 'hola';
               const installTo = `/catalog/${app.id}/install${custom ? `?source=${app.source}` : ''}`;
+              // An installed app has no install path — the card manages the
+              // existing deployment instead. Apps that support running more than
+              // one instance would offer "Add" here; nothing does yet (see the
+              // multi-instance follow-up), so installed always means manage.
+              const installedId = installedByApp.get(app.id);
+              const goTo = installedId ? `/deployments/${installedId}` : installTo;
               return (
                 <div
                   key={`${app.source}/${app.id}`}
-                  onClick={() => navigate(installTo)}
+                  onClick={() => navigate(goTo)}
                   className="bg-surface-1 border border-border rounded-card p-[18px] flex flex-col cursor-pointer transition hover:border-primary hover:-translate-y-[2px]"
                 >
                   <div className="flex items-start gap-[13px] mb-[13px]">
@@ -337,14 +373,30 @@ export const Catalog: React.FC = () => {
                       {app.rating}
                     </span>
                     <div className="flex-1" />
-                    <Link
-                      to={installTo}
-                      onClick={(e) => e.stopPropagation()}
-                      className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Install
-                    </Link>
+                    {installedId ? (
+                      <>
+                        <span className="inline-flex items-center gap-1.5 text-[12px] text-text-muted font-medium">
+                          <Check className="w-3.5 h-3.5 text-success" />
+                          Installed
+                        </span>
+                        <Link
+                          to={goTo}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-[34px] px-[14px] flex items-center gap-[6px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
+                        >
+                          Manage
+                        </Link>
+                      </>
+                    ) : (
+                      <Link
+                        to={installTo}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Install
+                      </Link>
+                    )}
                   </div>
                 </div>
               );
