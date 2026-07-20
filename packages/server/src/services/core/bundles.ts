@@ -7,6 +7,7 @@ import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
 import { catalogConfig } from '../../config/catalog';
+import { BundleError } from '../../middleware/error-mapping';
 import { BundleCacheManager } from './bundle-cache';
 
 const execAsync = promisify(exec);
@@ -160,7 +161,11 @@ export class RealBundleService implements BundleService, HealthCheckable {
         this.logger.debug('ORAS pull output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
       } catch (error) {
         this.logger.error('ORAS pull failed', error as Error, { ref: opts.ociRef });
-        throw new Error('ORAS_PULL_FAILED', { cause: error });
+        // Carry oras's own stderr forward — auth failures (401/403), unreachable
+        // registries and 5xx all arrive here, and the distinction only exists in
+        // that text. Swallowing it leaves the operator with nothing to act on.
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new BundleError('ORAS_PULL_FAILED', `ORAS_PULL_FAILED: could not pull ${opts.ociRef}: ${detail}`, { cause: error });
       } finally {
         if (authDir) { try { rmSync(authDir, { recursive: true, force: true }); } catch { /* best effort */ } }
       }
@@ -171,7 +176,10 @@ export class RealBundleService implements BundleService, HealthCheckable {
         if (catalogConfig.signaturePolicy === 'required' && !verifyResult.verified) {
           this.logger.error('Bundle signature verification failed', undefined, { ref: opts.ociRef, error: verifyResult.error });
           rmSync(dest, { recursive: true, force: true });
-          throw new Error('SIGNATURE_VERIFICATION_FAILED');
+          throw new BundleError(
+            'SIGNATURE_VERIFICATION_FAILED',
+            `SIGNATURE_VERIFICATION_FAILED: ${opts.ociRef}${verifyResult.error ? `: ${verifyResult.error}` : ''}`,
+          );
         } else if (!verifyResult.verified) {
           this.logger.warn('Bundle signature verification failed but policy is optional', { ref: opts.ociRef, error: verifyResult.error });
         }
@@ -306,7 +314,15 @@ export class RealBundleService implements BundleService, HealthCheckable {
     const allowed = [...catalogConfig.registryAllowlist, ...extraAllowed];
     const ok = allowed.some(pattern => matchesAllowlist(pattern, ref));
     if (!ok) {
-      throw new Error(`REF_NOT_ALLOWED: ${ref}`);
+      // Name the allowlist in the message: the operator's fix is either to add
+      // `allowRegistries` to the catalog source or to widen HOLA_REGISTRY_ALLOWLIST,
+      // and neither is guessable from "not allowed" alone.
+      throw new BundleError(
+        'REF_NOT_ALLOWED',
+        `REF_NOT_ALLOWED: ${ref} is not covered by the registry allowlist (${allowed.join(', ') || 'empty'}). ` +
+          `Add the registry to this catalog source's allowRegistries, or to HOLA_REGISTRY_ALLOWLIST.`,
+        { status: 403 },
+      );
     }
   }
 

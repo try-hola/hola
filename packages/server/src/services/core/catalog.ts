@@ -29,6 +29,7 @@ import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
 import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
+import { BundleError, BundleUnavailableError } from '../../middleware/error-mapping';
 
 /**
  * Coerce one raw `manifest.defaultEnv[]` row into an `AppEnvVar`, including the
@@ -425,15 +426,23 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const v = (!version || version === 'latest')
       ? pickLatestVersion(versions)
       : versions.find(x => x.version === version);
-    if (!v) throw new Error('VERSION_NOT_FOUND');
+    // Soft: no bundle to fetch. A caller may legitimately fall back to generic
+    // defaults and let the operator supply their own compose.
+    if (!v) throw new BundleUnavailableError(`VERSION_NOT_FOUND: ${appId}@${version}`, 'VERSION_NOT_FOUND');
     const ref = v.refs?.oci;
-    if (!ref) throw new Error('NO_OCI_REF');
+    if (!ref) throw new BundleUnavailableError(`NO_OCI_REF: ${appId}@${v.version}`, 'NO_OCI_REF');
 
     // Resolve the source's stored credential (if any) for a private package pull.
     let credentials: PullCredentials | undefined;
     if (record.auth?.credentialRef) {
       credentials = await (await this.credentialsService()).resolve(record.auth.credentialRef);
-      if (!credentials) throw new Error(`CREDENTIAL_NOT_FOUND: ${record.auth.credentialRef}`);
+      if (!credentials) {
+        throw new BundleError(
+          'CREDENTIAL_NOT_FOUND',
+          `CREDENTIAL_NOT_FOUND: catalog source '${record.id}' references registry credential '${record.auth.credentialRef}', which no longer exists.`,
+          { status: 400 },
+        );
+      }
     }
 
     // Key the cache by the RESOLVED concrete version (`v.version`) + source, so a
@@ -476,7 +485,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     const validation = await bundles.validateLayout(info.localPath);
     if (!validation.ok) {
       this.logger.warn('Bundle layout invalid', { appId: opts.appId, version: opts.version, errors: validation.errors });
-      throw new Error('INVALID_BUNDLE_LAYOUT');
+      throw new BundleError(
+        'INVALID_BUNDLE_LAYOUT',
+        `INVALID_BUNDLE_LAYOUT: ${opts.ociRef}: ${validation.errors.join('; ')}`,
+        { status: 422, details: { errors: validation.errors } },
+      );
     }
     return this.buildDetailFromBundle(info.localPath, opts.version, opts.appId);
   }
@@ -593,7 +606,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       return { ...merged, version, composeOverride, auth, consumes, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
-      throw new Error('MANIFEST_UNAVAILABLE', { cause: error });
+      // Keep the underlying reason in the message, not just the cause: a missing
+      // compose.yaml, malformed manifest.json and a bad env spec are all distinct
+      // operator problems that used to collapse into one opaque string.
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new BundleError('MANIFEST_UNAVAILABLE', `MANIFEST_UNAVAILABLE: ${detail}`, { status: 422, cause: error });
     }
   }
 
@@ -642,11 +659,14 @@ export class MockCatalogService implements CatalogService {
   async getVersions(): Promise<GetCatalogAppVersionsResponse> {
     throw new Error('APP_NOT_FOUND');
   }
+  // Soft, deliberately: the mock catalog is empty, and callers (the draft
+  // service) rely on falling back to generic defaults so test/dev installs work
+  // without a real bundle. A hard BundleError here would break that path.
   async getVersionDetail(): Promise<GetCatalogAppVersionDetailResponse> {
-    throw new Error('VERSION_NOT_FOUND');
+    throw new BundleUnavailableError('VERSION_NOT_FOUND', 'VERSION_NOT_FOUND');
   }
   async getVersionDetailByRef(): Promise<GetCatalogAppVersionDetailResponse & { appId: string }> {
-    throw new Error('VERSION_NOT_FOUND');
+    throw new BundleUnavailableError('VERSION_NOT_FOUND', 'VERSION_NOT_FOUND');
   }
   async refresh(): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>> { return []; }
 }

@@ -52,6 +52,7 @@ import {
   type InstallFromRefRequest,
   type InstallFromRefResponse,
   type AddCatalogSourceRequest,
+  type UpdateCatalogSourceRequest,
   type ListCatalogSourcesResponse,
   type RefreshCatalogResponse,
 } from '@hola/shared';
@@ -481,7 +482,11 @@ async function route(url: URL, req: Request): Promise<Response> {
       return json(payload);
     } catch (error) {
       logger.warn('Catalog version detail failed', { appId, version, error: error instanceof Error ? error.message : String(error) });
-      return notFound();
+      // A blanket 404 told the operator the version doesn't exist when the real
+      // cause was a blocked registry, a bad credential or an unreachable pull.
+      // BundleUnavailableError still maps to 404 (it genuinely is "not there");
+      // BundleError carries its own status and reason.
+      return errorResponse(req, error);
     }
   }
 
@@ -574,6 +579,25 @@ async function route(url: URL, req: Request): Promise<Response> {
   }
 
   const sourceMatch = pathname.match(/^\/api\/catalog-sources\/([^/]+)$/);
+  // PATCH a source in place. Chiefly so `allowRegistries` can be added after the
+  // fact — the usual fix for a REF_NOT_ALLOWED pull — without delete-and-re-add.
+  if (sourceMatch && (req.method === 'PATCH' || req.method === 'PUT')) {
+    const id = decodeURIComponent(sourceMatch[1]);
+    try {
+      const body = (await req.json().catch(() => ({}))) as UpdateCatalogSourceRequest;
+      const record = await getServices().catalogSources.update(id, body);
+      return json(record);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === 'SOURCE_NOT_FOUND') return notFound();
+      const status = message === 'SOURCE_ID_RESERVED' ? 400
+        : message.startsWith('SOURCE_') ? 400
+        : 500;
+      logger.warn('Failed to update catalog source', { id, error: message });
+      return json({ error: { code: 'SOURCE_UPDATE_FAILED', message } }, { status });
+    }
+  }
+
   if (sourceMatch && req.method === 'DELETE') {
     const id = decodeURIComponent(sourceMatch[1]);
     try {
@@ -643,10 +667,12 @@ async function route(url: URL, req: Request): Promise<Response> {
         requestId: context?.requestId,
         appId: body?.appId,
       });
-      return json(
-        { error: { code: 'DRAFT_CREATION_FAILED', message: 'Failed to create draft' } },
-        { status: 500 }
-      );
+      // Surface the real reason. A blanket "Failed to create draft"/500 hid
+      // actionable failures (registry not in the allowlist, bad credential,
+      // unreachable registry) behind a message the operator can do nothing with.
+      // Typed errors map to their own status + code; anything untyped still
+      // lands as a 500, so this only ever adds information.
+      return errorResponse(req, error);
     }
   }
 

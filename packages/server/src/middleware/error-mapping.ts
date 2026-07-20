@@ -72,6 +72,50 @@ export function asPromoteValidationError(err: unknown): unknown {
   return err;
 }
 
+/**
+ * A bundle (OCI package) exists but could not be fetched or is unusable: a
+ * registry outside the allowlist, a failed or denied pull, an unverifiable
+ * signature, an unresolvable credential, or a malformed layout.
+ *
+ * These are HARD failures. They must reach the operator with the real reason —
+ * never be papered over with placeholder defaults, which is how a blocked pull
+ * used to reappear much later as "Active release has no compose file". Callers
+ * discriminate on the CLASS (not the message), so the `code` is free to gain
+ * detail without breaking them.
+ */
+export class BundleError extends Error implements ApiError {
+  status: number;
+  details?: unknown;
+
+  constructor(public code: string, message: string, opts?: { status?: number; details?: unknown; cause?: unknown }) {
+    super(message, opts && 'cause' in opts ? { cause: opts.cause } : undefined);
+    this.name = 'BundleError';
+    // 502 by default: the failure is upstream (a registry we proxy to), not the
+    // operator's request. Individual sites override (403 blocked, 422 malformed).
+    this.status = opts?.status ?? 502;
+    this.details = opts?.details;
+  }
+}
+
+/**
+ * No bundle exists for this app/version at all — the catalog entry carries no
+ * OCI ref, or the version isn't published.
+ *
+ * This is the one SOFT outcome: it's the legitimate install-from-ref /
+ * bundle-less case where a caller may fall back to generic defaults and let the
+ * operator supply their own compose. Anything else is a `BundleError`.
+ */
+export class BundleUnavailableError extends Error implements ApiError {
+  code: string;
+  status = 404;
+
+  constructor(message: string, code = 'BUNDLE_UNAVAILABLE') {
+    super(message);
+    this.name = 'BundleUnavailableError';
+    this.code = code;
+  }
+}
+
 export class NotFoundError extends Error implements ApiError {
   code = 'NOT_FOUND';
   status = 404;
