@@ -268,10 +268,16 @@ services:
   # reachable internally on the `hola` network at authentik-ldap:3389. Requires a
   # one-time setup: create an LDAP provider + outpost in Authentik and copy the
   # outpost token into AUTHENTIK_LDAP_OUTPOST_TOKEN (see README "Authentication & SSO").
+  #
+  # Deliberately on its OWN profile, not `authentik`: the outpost exits 1 on an
+  # empty AUTHENTIK_TOKEN, so enabling it by default crash-loops on every SSO
+  # install until that manual setup is done. Enable it only once you've created
+  # the outpost AND you're installing an app that declares `auth.mode:
+  # native-ldap` — add `authentik-ldap` to COMPOSE_PROFILES in .env.
   authentik-ldap:
     image: ghcr.io/goauthentik/ldap:2025.10
     container_name: authentik-ldap
-    profiles: [authentik]
+    profiles: [authentik-ldap]
     restart: unless-stopped
     environment:
       AUTHENTIK_HOST: http://authentik-server:9000
