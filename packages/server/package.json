@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@hola/shared": "workspace:*",
-    "jose": "^5.9.6",
+    "jose": "^6.2.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
