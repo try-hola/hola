@@ -84,6 +84,9 @@ function toShared(job: JobEntity): SharedJob {
     finishedAt: job.completedAt?.toISOString(),
     progress: job.progress,
     deploymentId: (job.payload?.deploymentId as string | undefined) || undefined,
+    // Carry the failure reason out. It was always recorded on the entity and
+    // then dropped here, leaving the UI with a failed job and no explanation.
+    ...(job.error ? { error: job.error } : {}),
   };
 }
 
