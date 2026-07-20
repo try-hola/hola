@@ -676,14 +676,33 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
 
-    // Sync the deployment's displayed version to the promoted release. promoteRelease
-    // only moves the release pointers (it's shared with rollback and the Release type
-    // carries no version); without this the record (and the UI's "update available")
-    // would still report the pre-upgrade version after a successful promote.
-    if (version) {
+    // Sync the deployment's catalog-derived display fields to the promoted release.
+    // promoteRelease only moves the release pointers (it's shared with rollback and
+    // the Release type carries no version); without this the record (and the UI's
+    // "update available") would still report the pre-upgrade version after a
+    // successful promote.
+    //
+    // The icon rides along for the same reason: it's persisted at install
+    // (createFromDraft) purely as a cache so the launcher needn't hit the catalog,
+    // so an app whose package changes its logo would otherwise show the icon it had
+    // on install day forever. We've just resolved the new manifest, so it's free.
+    //
+    // `name` is deliberately NOT refreshed — a caller-supplied name wins at install
+    // and the record can't distinguish one from a manifest-derived default, so
+    // rewriting it here would clobber an operator's rename.
+    const promotedIcon = artifacts?.manifest.icon;
+    if (version || promotedIcon) {
       const promoted = this.requireDeployment(deploymentId);
-      if (promoted.version !== version) {
+      let changed = false;
+      if (version && promoted.version !== version) {
         promoted.version = version;
+        changed = true;
+      }
+      if (promotedIcon && promoted.icon !== promotedIcon) {
+        promoted.icon = promotedIcon;
+        changed = true;
+      }
+      if (changed) {
         this.deployments.set(deploymentId, promoted);
         await this.persistDeployment(promoted);
       }
