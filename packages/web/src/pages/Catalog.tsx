@@ -15,7 +15,7 @@ import type {
   GetCatalogAppsRequest,
   RegistryCredentialRecord,
 } from '@hola/shared';
-import { useCatalogAppsApi, useCatalogAppVersionsApi } from '../hooks/useCatalogApi';
+import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { AppIcon } from '../components/ui/AppIcon';
 import { api } from '../utils/api-hybrid';
 import { globalCache } from '../utils/cache';
@@ -101,173 +101,11 @@ const InstallFromRefModal: React.FC<{ isOpen: boolean; onClose: () => void }> = 
   );
 };
 
-type AppDetailModalProps = {
-  app: CatalogApp;
-  isOpen: boolean;
-  onClose: () => void;
-};
-
-const AppDetailModal: React.FC<AppDetailModalProps> = ({ app, isOpen, onClose }) => {
-  const [selectedVersion, setSelectedVersion] = useState<string>('');
-  
-  // Use API hook for loading versions
-  const { data: versionsData, loading, error } = useCatalogAppVersionsApi(app?.id || '');
-  
-  // Memoize versions to prevent unnecessary re-renders
-  const versions = useMemo(() => versionsData?.items || [], [versionsData?.items]);
-
-  // Set selected version when versions load
-  useEffect(() => {
-    if (versions.length > 0 && !selectedVersion) {
-      setSelectedVersion(versions[0].version);
-    }
-  }, [versions, selectedVersion]);
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-surface-0 rounded-xl border border-border w-full max-w-2xl max-h-[90vh] overflow-hidden">
-        {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
-          <div className="flex items-center space-x-4">
-            <div className="text-3xl">{app.icon}</div>
-            <div>
-              <h2 className="text-xl font-semibold">{app.name}</h2>
-              <span className="text-sm text-text-muted bg-surface-2 px-2 py-1 rounded">{app.category}</span>
-              {app.version && (
-                <span className="ml-2 text-sm font-mono text-text-muted bg-surface-2 px-2 py-1 rounded">v{app.version}</span>
-              )}
-              {app.source && app.source !== 'hola' && (
-                <span className="ml-2 text-xs text-warning bg-warning/10 px-2 py-1 rounded">{app.source} · {app.trust}</span>
-              )}
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-text-muted hover:text-text-strong transition-colors"
-          >
-            ×
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)]">
-          {/* App Info */}
-          <div className="mb-6">
-            <p className="text-text-muted mb-4">{app.description}</p>
-            
-            <div className="flex items-center space-x-6 text-sm text-text-muted mb-4">
-              <div className="flex items-center space-x-1">
-                <Star className="w-4 h-4 text-warning fill-current" />
-                <span>{app.rating}</span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <Download className="w-4 h-4" />
-                <span>{app.downloads} downloads</span>
-              </div>
-              {app.featured && (
-                <span className="text-warning text-xs font-medium">Featured</span>
-              )}
-            </div>
-
-            <div className="flex flex-wrap gap-2 mb-6">
-              {app.tags.map(tag => (
-                <span key={tag} className="bg-surface-2 text-text-muted px-2 py-1 rounded text-sm">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* Version Selection */}
-          <div className="mb-6">
-            <h3 className="text-lg font-medium mb-3">Available Versions</h3>
-            
-            {loading ? (
-              <div className="flex items-center space-x-2 text-text-muted">
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>Loading versions...</span>
-              </div>
-            ) : error ? (
-              <div className="flex items-center space-x-2 text-error">
-                <AlertCircle className="w-4 h-4" />
-                <span>{error}</span>
-              </div>
-            ) : versions.length > 0 ? (
-              <div className="space-y-2">
-                {versions.map((version) => (
-                  <div
-                    key={version.version}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                      selectedVersion === version.version
-                        ? 'border-primary bg-primary/10'
-                        : 'border-border hover:border-primary/50'
-                    }`}
-                    onClick={() => setSelectedVersion(version.version)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-medium">{version.version}</span>
-                        {versions.indexOf(version) === 0 && (
-                          <span className="ml-2 text-xs bg-primary text-primary-contrast px-2 py-0.5 rounded">
-                            Latest
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-sm text-text-muted">
-                        {formatDate(version.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-text-muted">No versions available</p>
-            )}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-between p-6 border-t border-border bg-surface-1">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-text-muted hover:text-text-strong transition-colors"
-          >
-            Close
-          </button>
-          <div className="flex space-x-3">
-            <Link
-              to={`/catalog/${app.id}/install?${new URLSearchParams({
-                ...(selectedVersion ? { version: selectedVersion } : {}),
-                ...(app.source && app.source !== 'hola' ? { source: app.source } : {}),
-              }).toString()}`}
-              className="bg-primary text-primary-contrast px-6 py-2 rounded-lg font-medium hover:bg-primary/90 transition-colors"
-              onClick={onClose}
-            >
-              Install {selectedVersion && `v${selectedVersion}`}
-            </Link>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
 export const Catalog: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState(searchParams.get('query') || '');
   const [selectedCategory, setSelectedCategory] = useState(searchParams.get('category') || 'All');
-  const [selectedAppId, setSelectedAppId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [appsPerPage] = useState(12);
   const [showRefModal, setShowRefModal] = useState(false);
@@ -323,12 +161,6 @@ export const Catalog: React.FC = () => {
   
   // Calculate featured apps
   const featuredApps = useMemo(() => apps.filter(app => app.featured), [apps]);
-  
-  // Find selected app for modal
-  const selectedApp = useMemo(() => 
-    selectedAppId ? apps.find(app => app.id === selectedAppId) || null : null, 
-    [selectedAppId, apps]
-  );
 
   // Update URL params when filters change
   useEffect(() => {
@@ -362,15 +194,6 @@ export const Catalog: React.FC = () => {
 
   return (
     <div className="animate-fadein">
-      {/* App Detail Modal */}
-      {selectedApp && (
-        <AppDetailModal
-          app={selectedApp}
-          isOpen={!!selectedAppId}
-          onClose={() => setSelectedAppId(null)}
-        />
-      )}
-
       {/* Header */}
       <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
         <div>
