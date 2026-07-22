@@ -392,6 +392,11 @@ export const api = {
       const query = apiClient.buildQuery(params || {});
       return apiClient.get(`${API.deployments.logs(deploymentId)}${query}`, false); // Don't cache logs
     },
+
+    // On-demand richer update check (#299): breaking/backup/notes + skip-guard
+    // path for one deployment. Pulls the target bundle, so callers gate it on
+    // updateAvailable.
+    updateCheck: (deploymentId: string) => apiClient.get(API.deployments.updateCheck(deploymentId)),
   },
 
   // Jobs with frequent updates

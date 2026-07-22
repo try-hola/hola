@@ -5,6 +5,7 @@ import type {
   GetDeploymentResponse,
   GetDeploymentHistoryResponse,
   GetDeploymentConfigResponse,
+  GetDeploymentUpdateCheckResponse,
   PatchDeploymentRequest,
   PostDeploymentActionRequest
 } from '@hola/shared';
@@ -113,6 +114,27 @@ export function useDeploymentHistoryApi(deploymentId: string | undefined, page: 
     loading: query.isLoading,
     error: query.error ? (query.error instanceof Error ? query.error.message : 'Unknown error') : null,
     refetch: () => query.refetch(),
+  };
+}
+
+/**
+ * Hook for the on-demand richer update check (#299): whether the available
+ * update is a safe one-click bump or a guided multi-step upgrade (breaking,
+ * waypoint/floor path, pre-upgrade backup, notes link). This pulls the target
+ * bundle server-side, so it's `enabled`-gated by the caller — only fetch when
+ * an update actually exists, keeping the detail view free of needless pulls.
+ */
+export function useDeploymentUpdateCheckApi(deploymentId: string | undefined, enabled: boolean) {
+  const query = useQuery({
+    queryKey: queryKeys.deployments.updateCheck(deploymentId ?? ''),
+    queryFn: () => api.deployments.updateCheck(deploymentId!) as Promise<GetDeploymentUpdateCheckResponse>,
+    enabled: !!deploymentId && enabled,
+  });
+
+  return {
+    data: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error ? (query.error instanceof Error ? query.error.message : 'Unknown error') : null,
   };
 }
 

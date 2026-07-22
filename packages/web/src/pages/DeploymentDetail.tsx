@@ -35,7 +35,7 @@ import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
-import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi } from '../hooks/useDeploymentDetailApi';
+import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi, useDeploymentUpdateCheckApi } from '../hooks/useDeploymentDetailApi';
 import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 
 // `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
@@ -104,6 +104,17 @@ export const DeploymentDetail: React.FC = () => {
     upgradeDeployment,
     removeDeployment
   } = useDeploymentDetailApi(deploymentId);
+
+  // Richer, on-demand update check (#299). Only fires when the cheap
+  // updateAvailable signal is set, so a bundle pull happens for an actual update
+  // — never on every detail view. Feeds the upgrade dialog the real facts
+  // (breaking / pre-upgrade backup / notes) and, for a guided upgrade, the next
+  // safe waypoint version instead of a bare "update available".
+  const { data: updateCheck } = useDeploymentUpdateCheckApi(deploymentId, !!deployment?.updateAvailable);
+  // A non-ok path (waypoint/floor) means the server would reject a one-shot jump
+  // to latest, so the dialog steers to the suggested version rather than offering
+  // a promote that fails.
+  const guidedPath = updateCheck?.path && updateCheck.path.ok === false ? updateCheck.path : null;
 
   const navigate = useNavigate();
 
@@ -310,12 +321,15 @@ export const DeploymentDetail: React.FC = () => {
 
   // Confirmed upgrade to the latest catalog version. The server carries env/secrets +
   // system overrides forward and snapshots first when the target requires it.
-  const confirmUpgrade = async () => {
+  const confirmUpgrade = async (version?: string) => {
     if (!deployment || !deployment.updateAvailable) return;
     setUpgradeError(null);
     setOperationLoading(prev => ({ ...prev, upgrade: true }));
     try {
-      await upgradeDeployment();
+      // #299: for a guided upgrade the target latest is unreachable in one hop
+      // (server skip-guard rejects it), so promote to the next safe waypoint
+      // version instead; a plain bump promotes straight to latest.
+      await upgradeDeployment(version ? { version } : undefined);
       setShowUpgradeConfirm(false);
     } catch (error) {
       console.error('Error upgrading deployment:', error);
@@ -399,7 +413,16 @@ export const DeploymentDetail: React.FC = () => {
     { label: 'Status', value: deployment.status },
     ...(deployment.version ? [{ label: 'Version', value: deployment.version, mono: true }] : []),
     ...(deployment.updateAvailable && deployment.latestVersion
-      ? [{ label: 'Latest', value: `${deployment.latestVersion} (update available)`, mono: true }]
+      ? [{
+          label: 'Latest',
+          // #299: at-a-glance kind of update, not just "available".
+          value: `${deployment.latestVersion} ${
+            guidedPath ? `(upgrade via ${guidedPath.suggestedVersion} first)`
+              : updateCheck?.breaking ? '(breaking update)'
+              : '(update available)'
+          }`,
+          mono: true,
+        }]
       : []),
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
     { label: 'Last updated', value: deployment.lastUpdated },
@@ -962,14 +985,62 @@ export const DeploymentDetail: React.FC = () => {
                 </div>
                 <div className="min-w-0">
                   <h2 id="upgrade-dialog-title" className="text-lg font-semibold m-0">
-                    Upgrade {deployment.name} to {deployment.latestVersion}?
+                    {guidedPath
+                      ? `Upgrade ${deployment.name} to ${guidedPath.suggestedVersion} first`
+                      : `Upgrade ${deployment.name} to ${deployment.latestVersion}?`}
                   </h2>
                   <p className="mt-1.5 text-sm text-text-muted">
-                    Your settings and secrets carry forward. If this release is marked breaking or
-                    requires a backup, Hola takes a pre-upgrade snapshot first — you can roll back to it.
+                    Your settings and secrets carry forward.
+                    {updateCheck?.preUpgradeBackup === 'required'
+                      ? ' Hola takes a pre-upgrade snapshot first — you can roll back to it.'
+                      : updateCheck?.preUpgradeBackup === 'recommended'
+                        ? ' A pre-upgrade snapshot is recommended before you continue.'
+                        : ''}
                   </p>
                 </div>
               </div>
+
+              {/* #299 richness: what kind of upgrade this actually is. */}
+              {guidedPath && (
+                <div className="mt-4 flex items-start gap-2 text-sm text-warning bg-warning/10 border border-warning/30 rounded-[9px] p-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <div className="font-semibold text-text-strong">Guided upgrade</div>
+                    <p className="mt-0.5 text-text-muted">{guidedPath.message}</p>
+                    <p className="mt-1 text-text-muted">
+                      Upgrade to <span className="font-mono text-text-strong">{guidedPath.suggestedVersion}</span> now,
+                      let it settle, then repeat toward <span className="font-mono">{deployment.latestVersion}</span>.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {updateCheck?.breaking && (
+                <div className="mt-3 flex items-start gap-2 text-sm bg-danger-weak border border-danger/30 rounded-[9px] p-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-danger" />
+                  <div className="min-w-0 text-text-muted">
+                    <span className="font-semibold text-text-strong">Breaking change.</span>{' '}
+                    This release migrates data or changes behavior.
+                    {updateCheck.upgradeNotesUrl ? (
+                      <>
+                        {' '}
+                        <a
+                          href={updateCheck.upgradeNotesUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+                        >
+                          Review the upgrade notes
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>{' '}
+                        before you continue.
+                      </>
+                    ) : (
+                      ' Review the app’s upgrade notes before you continue.'
+                    )}
+                  </div>
+                </div>
+              )}
 
               {upgradeError && (
                 <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
@@ -987,12 +1058,14 @@ export const DeploymentDetail: React.FC = () => {
                   Cancel
                 </button>
                 <button
-                  onClick={confirmUpgrade}
+                  onClick={() => confirmUpgrade(guidedPath ? guidedPath.suggestedVersion : undefined)}
                   disabled={operationLoading.upgrade}
                   className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {operationLoading.upgrade ? <RotateCw className="w-4 h-4 animate-spin" /> : <ArrowUpCircle className="w-4 h-4" />}
-                  {operationLoading.upgrade ? 'Upgrading…' : `Upgrade to ${deployment.latestVersion}`}
+                  {operationLoading.upgrade
+                    ? 'Upgrading…'
+                    : `Upgrade to ${guidedPath ? guidedPath.suggestedVersion : deployment.latestVersion}`}
                 </button>
               </div>
             </div>

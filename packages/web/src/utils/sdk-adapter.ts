@@ -24,7 +24,7 @@ import type {
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
-  GetDeploymentHistoryResponse, GetDeploymentConfigResponse,
+  GetDeploymentHistoryResponse, GetDeploymentConfigResponse, GetDeploymentUpdateCheckResponse,
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
   // Backup types  
@@ -502,6 +502,15 @@ export class SdkAdapter {
     config: (deploymentId: string): Promise<GetDeploymentConfigResponse> => {
       const path = `/api/deployments/${deploymentId}/config`;
       return this.getWithCache(path, () => this.sdk.deployments.config(deploymentId));
+    },
+
+    // On-demand richer update check (#299): safe-bump vs. guided upgrade, with the
+    // target's breaking/backup/notes + a skip-guard path verdict. Distinct from the
+    // cheap latestVersion/updateAvailable that already rides on byId/list — this
+    // pulls the target bundle, so it's only called when an update is available.
+    updateCheck: (deploymentId: string): Promise<GetDeploymentUpdateCheckResponse> => {
+      const path = `/api/deployments/${deploymentId}/update-check`;
+      return this.getWithCache(path, () => this.sdk.deployments.updateCheck(deploymentId));
     },
   };
 

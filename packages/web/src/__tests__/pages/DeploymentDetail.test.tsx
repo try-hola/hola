@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, cleanup, act, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -73,6 +73,7 @@ const deploymentsApi = {
   action: vi.fn(),
   promote: vi.fn(),
   remove: vi.fn(),
+  updateCheck: vi.fn(),
 };
 
 vi.mock('../../utils/api-hybrid', () => ({
@@ -311,5 +312,89 @@ describe('DeploymentDetail deletion-while-viewing redirect (T018)', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText('Deployments List')).not.toBeInTheDocument();
     expect(screen.getByText('Running')).toBeInTheDocument();
+  });
+});
+
+// #299: the deployment detail page pulls the richer, on-demand update check and
+// the upgrade dialog states what kind of update it is (safe bump vs. guided
+// multi-step) instead of a bare confirmation. Appended last so the byId/promote
+// impl overrides below don't leak into the earlier describes.
+describe('DeploymentDetail richer update check (#299)', () => {
+  const updatable: GetDeploymentResponse = {
+    ...deployment,
+    version: '1.0.0',
+    updateAvailable: true,
+    latestVersion: '2.0.0',
+  };
+
+  beforeEach(() => {
+    deploymentsApi.byId.mockResolvedValue(updatable);
+    deploymentsApi.promote.mockResolvedValue({ deploymentId, releaseId: 'r1', jobId: 'j1' });
+    deploymentsApi.updateCheck.mockReset();
+  });
+
+  it('surfaces a guided (waypoint) upgrade and promotes to the next safe version', async () => {
+    deploymentsApi.updateCheck.mockResolvedValue({
+      installedVersion: '1.0.0',
+      latestVersion: '2.0.0',
+      updateAvailable: true,
+      breaking: true,
+      preUpgradeBackup: 'required',
+      upgradeNotesUrl: 'https://notes.example/v2',
+      path: { ok: false, code: 'waypoint-required', suggestedVersion: '1.5.0', message: 'Must pass through 1.5.0 first.' },
+    });
+    renderDetail();
+
+    // Open the upgrade dialog from the header action ("Upgrade to 2.0.0").
+    const openBtn = await screen.findByRole('button', { name: /upgrade to 2\.0\.0/i });
+    fireEvent.click(openBtn);
+
+    // Once the on-demand check resolves, the dialog states what kind of upgrade
+    // this is — guided (waypoint) + breaking — instead of a bare confirmation.
+    await waitFor(() => expect(screen.getByText('Guided upgrade')).toBeInTheDocument());
+    expect(screen.getByText('Must pass through 1.5.0 first.')).toBeInTheDocument();
+    expect(screen.getByText(/Breaking change/i)).toBeInTheDocument();
+    const notes = screen.getByRole('link', { name: /review the upgrade notes/i });
+    expect(notes).toHaveAttribute('href', 'https://notes.example/v2');
+
+    // The confirm button targets the next safe waypoint version, not latest.
+    const confirm = await screen.findByRole('button', { name: /^upgrade to 1\.5\.0$/i });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(deploymentsApi.promote).toHaveBeenCalledWith(deploymentId, { version: '1.5.0' }));
+  });
+
+  it('a clean bump shows no warnings and promotes straight to latest', async () => {
+    deploymentsApi.updateCheck.mockResolvedValue({
+      installedVersion: '1.0.0',
+      latestVersion: '2.0.0',
+      updateAvailable: true,
+      preUpgradeBackup: 'recommended',
+      path: { ok: true },
+    });
+    renderDetail();
+
+    const openBtn = await screen.findByRole('button', { name: /upgrade to 2\.0\.0/i });
+    fireEvent.click(openBtn);
+
+    // The dialog resolves the check (recommended-backup copy appears) but shows
+    // neither a guided-upgrade nor a breaking warning.
+    await waitFor(() => expect(screen.getByText(/pre-upgrade snapshot is recommended/i)).toBeInTheDocument());
+    expect(screen.queryByText('Guided upgrade')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Breaking change/i)).not.toBeInTheDocument();
+
+    // Scope to the dialog: the header action shares the "Upgrade to 2.0.0" label.
+    const confirm = within(screen.getByRole('dialog')).getByRole('button', { name: /^upgrade to 2\.0\.0$/i });
+    fireEvent.click(confirm);
+    // Straight-to-latest: promote with no explicit version.
+    await waitFor(() => expect(deploymentsApi.promote).toHaveBeenCalledWith(deploymentId, undefined));
+  });
+
+  it('never calls update-check when no update is available', async () => {
+    deploymentsApi.byId.mockResolvedValue(deployment); // updateAvailable unset
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('My App')).toBeInTheDocument());
+    // Give the (disabled) query a chance to (not) fire.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deploymentsApi.updateCheck).not.toHaveBeenCalled();
   });
 });
