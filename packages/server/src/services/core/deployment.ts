@@ -37,7 +37,8 @@ import type {
   GetLogsResponse,
   LogEntry,
   GetDeploymentConfigResponse,
-  AppSecurityConfig
+  AppSecurityConfig,
+  AppProfileConfig
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
@@ -92,6 +93,27 @@ function makeDeploymentId(appId: string): string {
  */
 function deriveSubdomain(name: string | undefined, appId: string): string {
   return slugifySubdomain(name || '') || slugifySubdomain(appId) || 'app';
+}
+
+/**
+ * Resolve the Compose profiles (#162) to activate for an install from the app's
+ * declared set and the operator's requested keys. An explicit request (even an
+ * empty array, from the wizard's checkboxes) is authoritative but intersected
+ * with the declared keys — an unknown key can't smuggle an arbitrary profile into
+ * the lifecycle. When no request is given (e.g. a plain CLI install), fall back to
+ * the profiles the manifest marks `default`. Declared order is preserved so
+ * `COMPOSE_PROFILES` is deterministic.
+ */
+function resolveSelectedProfiles(
+  declared: AppProfileConfig[] | undefined,
+  requested: string[] | undefined,
+): string[] {
+  if (!declared || declared.length === 0) return [];
+  if (requested !== undefined) {
+    const want = new Set(requested);
+    return declared.filter(p => want.has(p.key)).map(p => p.key);
+  }
+  return declared.filter(p => p.default === true).map(p => p.key);
 }
 
 type ProvisionCredentials = NonNullable<ProvisionResult['credentials']>;
@@ -597,6 +619,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // The DNS label this deployment routes under; stable for the install's life.
       const subdomain = deriveSubdomain(request.name, app);
 
+      // Compose profiles to activate for this install (#162): the operator's
+      // requested set intersected with what the manifest declares, or the declared
+      // defaults when the caller didn't specify. Persisted on the deployment and
+      // threaded into every compose lifecycle command below.
+      const selectedProfiles = resolveSelectedProfiles(artifacts?.manifest.profiles, request.profiles);
+
       // Reject a routing (host) conflict — a taken, reserved, or invalid subdomain
       // — before creating any deployment state.
       await this.onBeforeCreate(deploymentId, app, subdomain);
@@ -618,6 +646,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // The routed DNS label (#246); reconciled from here, never recomputed from
         // the name — so the URL stays put even if the display name later changes.
         subdomain,
+        // Active Compose profiles (#162); empty for the common no-optional-service
+        // case, so it stays absent in the persisted record rather than `[]`.
+        ...(selectedProfiles.length ? { selectedProfiles } : {}),
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
         // icon without a live catalog lookup. Falls back to a generic glyph.
@@ -1531,13 +1562,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const backup = await this.readReleaseBackupConfig(deploymentId, fromReleaseId);
     const dir = this.runtimeDir(deploymentId);
     const projectName = this.projectName(deploymentId);
+    // A backup hook may target a profiled service (#162); carry the active profiles
+    // so Compose can resolve it.
+    const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
 
     // preHook failure propagates — `promote` decides fail-closed (when the target
     // declares `preUpgradeBackup: required`) vs. best-effort. A consistent dump is
     // worthless if we snapshot anyway.
     if (backup?.preHook) {
       this.logger.info('Running backup preHook before snapshot', { deploymentId, service: backup.preHook.service });
-      const res = await this.dockerService.composeExec(dir, projectName, backup.preHook.service, backup.preHook.command);
+      const res = await this.dockerService.composeExec(dir, projectName, backup.preHook.service, backup.preHook.command, { profiles });
       if (!res.success) throw new Error(`backup preHook failed: ${res.output}`);
     }
 
@@ -1566,7 +1600,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // Best-effort — a cleanup failure must not fail the upgrade.
       if (backup?.postHook) {
         try {
-          const res = await this.dockerService.composeExec(dir, projectName, backup.postHook.service, backup.postHook.command);
+          const res = await this.dockerService.composeExec(dir, projectName, backup.postHook.service, backup.postHook.command, { profiles });
           if (!res.success) this.logger.warn('backup postHook failed', { deploymentId, output: res.output });
         } catch (err) {
           this.logger.warn('backup postHook errored', { deploymentId, error: err instanceof Error ? err.message : String(err) });
@@ -1835,7 +1869,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       if (attempt > 1) await new Promise(r => setTimeout(r, this.authSetupIntervalMs));
 
       if (setup.check) {
-        const chk = await this.dockerService.composeExec(dir, projectName, service, apply(setup.check), { user: setup.user });
+        const chk = await this.dockerService.composeExec(dir, projectName, service, apply(setup.check), { user: setup.user, profiles: deployment.selectedProfiles });
         if (!chk.success) {
           await logBoth('info', `Auth setup: app not ready yet (attempt ${attempt}/${this.authSetupMaxAttempts})`);
           continue; // app likely still starting; retry
@@ -1846,7 +1880,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         }
       }
 
-      const cmd = await this.dockerService.composeExec(dir, projectName, service, apply(setup.command), { user: setup.user });
+      const cmd = await this.dockerService.composeExec(dir, projectName, service, apply(setup.command), { user: setup.user, profiles: deployment.selectedProfiles });
       if (cmd.success) {
         await logBoth('info', 'Auth setup: OIDC source configured');
         return;
@@ -1952,7 +1986,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       let nextLifecycle: EnhancedDeploymentDetail['lifecycleState'];
 
       if (action === 'stop' || action === 'delete') {
-        const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName);
+        const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName, deployment.selectedProfiles);
         output = res.output;
         if (!res.success && action !== 'delete') throw new Error(res.output);
         nextStatus = 'stopped';
@@ -1967,7 +2001,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // wiring) would silently never reach the app. `up -d` recreates only the
         // services whose config changed, using the already-present images.
         const registryAuth = await this.resolveRegistryAuth(deployment);
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth);
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
@@ -1985,7 +2019,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         if (action === 'rollback' && ctx.payload.restoreData === true) {
           const targetReleaseId = (ctx.payload.targetReleaseId as string | undefined) ?? deployment.currentReleaseId ?? '';
           await logBoth('info', 'Data-aware rollback: stopping containers before restoring app data…');
-          await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName);
+          await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName, deployment.selectedProfiles);
           await this.restoreAppDataSnapshot(deploymentId, targetReleaseId, logBoth);
         }
 
@@ -2000,7 +2034,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // Resolve any private-registry credential once for both pull and up.
         const registryAuth = await this.resolveRegistryAuth(deployment);
         await logBoth('info', 'Pulling images (first install can take several minutes)…');
-        const pull = await this.dockerService.composePull(composeDir, projectName, registryAuth);
+        const pull = await this.dockerService.composePull(composeDir, projectName, registryAuth, deployment.selectedProfiles);
         if (!pull.success) throw new Error(`Image pull failed: ${pull.output}`);
         await ctx.setProgress(60);
 
@@ -2008,7 +2042,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // irreversible step) if the job was cancelled during the long pull.
         if (ctx.isCancelled()) throw new JobCancelledError();
 
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth);
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
@@ -2197,7 +2231,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * being removed.
    */
   protected override async teardownContainers(deploymentId: string): Promise<void> {
-    const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), this.projectName(deploymentId));
+    // Carry the install's active profiles (#162) so `down` removes profiled
+    // services too rather than orphaning them.
+    const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
+    const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), this.projectName(deploymentId), profiles);
     if (!res.success) {
       this.logger.warn('compose down reported a failure during delete; continuing with teardown', {
         deploymentId,

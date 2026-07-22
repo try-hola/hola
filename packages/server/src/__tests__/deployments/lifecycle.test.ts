@@ -28,12 +28,14 @@ import { MockDockerService, type DockerService } from '../../services/core/docke
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
 
-function makeCatalog(): CatalogArg {
+function makeCatalog(opts?: { profiles?: Array<{ key: string; label: string; default?: boolean }> }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Gitea', icon: '🍵' }),
     getVersionDetail: async () => ({
       defaultEnv: [],
       defaults: { ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }], volumes: [] },
+      // #162: optional Compose profiles the app declares.
+      ...(opts?.profiles ? { profiles: opts.profiles } : {}),
     }),
   } as unknown as CatalogArg;
 }
@@ -68,13 +70,13 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     await rm(dataRoot, { recursive: true, force: true });
   });
 
-  function makeSystem(docker: DockerService = new MockDockerService()) {
+  function makeSystem(docker: DockerService = new MockDockerService(), catalogOpts?: { profiles?: Array<{ key: string; label: string; default?: boolean }> }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
     const jobs = new RealJobService(database, logging);
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
-    const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
+    const drafts = new RealDraftService(storage, makeCatalog(catalogOpts), makeValidation());
     const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
     return { storage, jobs, logging, drafts, deployments };
   }
@@ -242,6 +244,69 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
 
     const failedJobs = (await jobs.listJobs({ deploymentId: created.deploymentId, status: 'failed' }));
     expect(failedJobs.length).toBe(0);
+  });
+
+  test('selected Compose profiles are threaded through the up/down lifecycle (#162)', async () => {
+    // Capture the profiles arg each compose command receives, so we can assert the
+    // enabled set reaches `up`/`pull` at install and `down` at stop — the "keep
+    // them consistent across the lifecycle" requirement (down tears down what up
+    // started).
+    const upProfiles: (string[] | undefined)[] = [];
+    const pullProfiles: (string[] | undefined)[] = [];
+    const downProfiles: (string[] | undefined)[] = [];
+    const docker = new MockDockerService();
+    docker.composeUp = async (_p, _n, _auth, profiles) => { upProfiles.push(profiles); return { success: true, output: '' }; };
+    docker.composePull = async (_p, _n, _auth, profiles) => { pullProfiles.push(profiles); return { success: true, output: '' }; };
+    docker.composeDown = async (_p, _n, profiles) => { downProfiles.push(profiles); return { success: true, output: '' }; };
+
+    // The app declares two profiles; `metrics` defaults on, `elasticsearch` off.
+    const { jobs, drafts, deployments } = makeSystem(docker, {
+      profiles: [
+        { key: 'elasticsearch', label: 'Elasticsearch', default: false },
+        { key: 'metrics', label: 'Metrics', default: true },
+      ],
+    });
+
+    // The operator explicitly enables only `elasticsearch` (overriding the default
+    // set) — the request is authoritative.
+    const created = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts),
+      name: 'gitea',
+      profiles: ['elasticsearch'],
+    });
+    await waitForJob(jobs, created.jobId!);
+
+    expect(pullProfiles).toEqual([['elasticsearch']]);
+    expect(upProfiles).toEqual([['elasticsearch']]);
+
+    // The resolved set is persisted on the deployment record.
+    const restarted = makeSystem(new MockDockerService());
+    const stored = await restarted.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`);
+    expect(JSON.parse(stored).selectedProfiles).toEqual(['elasticsearch']);
+
+    // Stop tears the same profiled services down.
+    const action = await deployments.executeAction(created.deploymentId, { action: 'stop' });
+    await waitForJob(jobs, action.jobId!);
+    expect(downProfiles).toEqual([['elasticsearch']]);
+  });
+
+  test('with no profiles requested, the manifest defaults are activated (#162)', async () => {
+    const upProfiles: (string[] | undefined)[] = [];
+    const docker = new MockDockerService();
+    docker.composeUp = async (_p, _n, _auth, profiles) => { upProfiles.push(profiles); return { success: true, output: '' }; };
+
+    const { jobs, drafts, deployments } = makeSystem(docker, {
+      profiles: [
+        { key: 'elasticsearch', label: 'Elasticsearch', default: false },
+        { key: 'metrics', label: 'Metrics', default: true },
+      ],
+    });
+
+    // No `profiles` on the request (e.g. a plain CLI install) → fall back to the
+    // manifest's default-on profiles.
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea' });
+    await waitForJob(jobs, created.jobId!);
+    expect(upProfiles).toEqual([['metrics']]);
   });
 
   test('lifecycle logs are streamed to the deployment log target', async () => {

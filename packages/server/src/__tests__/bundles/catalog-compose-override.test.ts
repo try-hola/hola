@@ -36,6 +36,11 @@ const MANIFEST = JSON.stringify({
   ingress: { service: 'fixtureapp', port: 80 },
   // #246: this fixture app opts into multiple instances.
   multiInstance: true,
+  // #162: an optional Compose profile the operator can enable at install time.
+  profiles: [
+    { key: 'elasticsearch', label: 'Elasticsearch advanced visibility', default: false },
+    { key: 'bogus profile' }, // invalid key grammar — must be dropped by coercion
+  ],
   defaultEnv: [
     { key: 'APP_ENV', value: 'production', isSecret: false },
     // A bogus/future param type must degrade to untyped rather than reject the
@@ -116,6 +121,11 @@ describe('RealCatalogService composeOverride (#82)', () => {
     // The manifest's multiInstance flag (#246) is carried through so the singleton
     // guard can honor it at install time.
     expect(detail.multiInstance).toBe(true);
+    // The manifest's optional Compose profiles (#162) carry through, with the
+    // invalid-key entry dropped by narrow-shape coercion.
+    expect(detail.profiles).toEqual([
+      { key: 'elasticsearch', label: 'Elasticsearch advanced visibility' },
+    ]);
   });
 
   test('defaultEnv carries typed-spec fields through and degrades an unknown type without rejecting the bundle (ADR 0003)', async () => {

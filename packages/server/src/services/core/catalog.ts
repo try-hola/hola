@@ -25,6 +25,7 @@ import type { CatalogSourceService } from './catalog-sources';
 import type { RegistryCredentialService } from './registry-credentials';
 import { coerceManifestAuth } from './manifest-auth';
 import { coerceManifestSecurity } from './manifest-security';
+import { coerceManifestProfiles } from './manifest-profiles';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
@@ -518,6 +519,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         security?: unknown;
         upgrade?: unknown;
         backup?: unknown;
+        profiles?: unknown;
         ingress?: { service?: unknown; port?: unknown };
       };
 
@@ -600,6 +602,12 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // transaction-consistent backups. Coerced narrowly like `auth`.
       const backup = coerceManifestBackup(manifest.backup);
 
+      // Optional Compose profiles the app declares (#162): each gates an opt-in
+      // service (e.g. a heavy dependency). Coerced narrowly like `auth`; the
+      // wizard renders a checkbox per profile and the enabled set is threaded into
+      // the compose lifecycle as `COMPOSE_PROFILES`.
+      const profiles = coerceManifestProfiles(manifest.profiles);
+
       // Which compose service is the web/ingress one — the app's bundle manifest
       // declares it as `ingress.service`. Lets the server route to / inject auth
       // env into the right service for a multi-service app whose ingress isn't
@@ -609,7 +617,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       // Keep the underlying reason in the message, not just the cause: a missing
