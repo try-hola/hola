@@ -34,6 +34,8 @@ volumes:
 const MANIFEST = JSON.stringify({
   name: APP_ID,
   ingress: { service: 'fixtureapp', port: 80 },
+  // #246: this fixture app opts into multiple instances.
+  multiInstance: true,
   defaultEnv: [
     { key: 'APP_ENV', value: 'production', isSecret: false },
     // A bogus/future param type must degrade to untyped rather than reject the
@@ -111,6 +113,9 @@ describe('RealCatalogService composeOverride (#82)', () => {
     // The manifest's ingress.service is surfaced so the deploy lifecycle can
     // route to / inject auth env into the right service.
     expect(detail.ingressService).toBe('fixtureapp');
+    // The manifest's multiInstance flag (#246) is carried through so the singleton
+    // guard can honor it at install time.
+    expect(detail.multiInstance).toBe(true);
   });
 
   test('defaultEnv carries typed-spec fields through and degrades an unknown type without rejecting the bundle (ADR 0003)', async () => {

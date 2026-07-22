@@ -39,7 +39,7 @@ import type {
   GetDeploymentConfigResponse,
   AppSecurityConfig
 } from '@hola/shared';
-import { checkUpgradePath, isNewerVersion } from '@hola/shared';
+import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
 import { validateParams } from '@hola/shared/param-validate';
 
@@ -81,6 +81,17 @@ function makeDeploymentId(appId: string): string {
   const slug = appId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
   const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
   return `${slug}-${suffix}`;
+}
+
+/**
+ * Derive the DNS subdomain a deployment routes under (#246) from the user-supplied
+ * name, falling back to the app id. Slugified to a valid DNS label. Computed once
+ * at create time and then persisted on the deployment (stable for the install's
+ * life) — so `<name>` install gets `<name>.<base>` while a first/default install
+ * (name == app id, or no name) keeps the historical `<app>.<base>`.
+ */
+function deriveSubdomain(name: string | undefined, appId: string): string {
+  return slugifySubdomain(name || '') || slugifySubdomain(appId) || 'app';
 }
 
 type ProvisionCredentials = NonNullable<ProvisionResult['credentials']>;
@@ -406,9 +417,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   /** Validate routing (host) availability before creating a deployment. Default no-op. */
-  protected async onBeforeCreate(deploymentId: string, app: string): Promise<void> {
+  protected async onBeforeCreate(deploymentId: string, app: string, subdomain: string): Promise<void> {
     void deploymentId;
     void app;
+    void subdomain;
   }
 
   /**
@@ -438,10 +450,31 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void appName;
   }
 
+  /**
+   * Enforce single-instance-by-default (#246): reject installing an app that
+   * already has a deployment, unless the app's manifest opts into multiples
+   * (`multiInstance: true`) or the caller passes the per-install override. Pure
+   * (operates on the rehydrated in-memory map), so it runs in both the mock and
+   * real services. Global-capability bolt-ons (backup → apps-data, homepage →
+   * app-registry) assume one instance, so the override is "you know what you're
+   * doing" — it still requires a distinct subdomain, validated separately.
+   */
+  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean): void {
+    if (multiInstance || allowMultiple) return;
+    const existing = [...this.deployments.values()].find(d => d.app === appId);
+    if (existing) {
+      throw new ConflictError(
+        `'${appId}' is already installed (deployment ${existing.id}). This app is single-instance; ` +
+          `pass --allow-multiple (CLI) or the "install another" option (dashboard) to run a second copy.`,
+      );
+    }
+  }
+
   /** Public URL the app is reachable at; the real service derives it from routing. */
-  protected appUrl(deploymentId: string, app: string): string | undefined {
+  protected appUrl(deploymentId: string, app: string, subdomain: string): string | undefined {
     void deploymentId;
     void app;
+    void subdomain;
     return undefined;
   }
 
@@ -563,14 +596,24 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // hit, but up front so the user gets the clear error instead of a tombstone.
       this.assertAuthProvisionable(artifacts?.manifest.auth, app);
 
-      // Reject a routing (host) conflict before creating any deployment state.
-      await this.onBeforeCreate(deploymentId, app);
+      // Singleton-by-default (#246): reject a second install of an app whose
+      // manifest doesn't opt into multiples, unless the operator overrides it per
+      // install. Checked up front, before any state is created — like the auth and
+      // routing guards. The override still requires a distinct subdomain (below).
+      this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple);
+
+      // The DNS label this deployment routes under; stable for the install's life.
+      const subdomain = deriveSubdomain(request.name, app);
+
+      // Reject a routing (host) conflict — a taken, reserved, or invalid subdomain
+      // — before creating any deployment state.
+      await this.onBeforeCreate(deploymentId, app, subdomain);
 
       await this.ensureLayout(deploymentId);
 
-      // Public URL the app is reachable at (Traefik routes <app>.<base-domain>);
+      // Public URL the app is reachable at (Traefik routes <subdomain>.<base-domain>);
       // the Real service derives it from routing, the mock leaves it unset.
-      const url = this.appUrl(deploymentId, app);
+      const url = this.appUrl(deploymentId, app, subdomain);
 
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
@@ -580,6 +623,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // name wins.
         name: request.name || artifacts?.manifest.displayName || app,
         app,
+        // The routed DNS label (#246); reconciled from here, never recomputed from
+        // the name — so the URL stays put even if the display name later changes.
+        subdomain,
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
         // icon without a live catalog lookup. Falls back to a generic glyph.
@@ -1037,9 +1083,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   authSetupMaxAttempts = 18;
   authSetupIntervalMs = 5000;
 
-  /** Public URL the app is reachable at (Traefik routes `<app>.<base-domain>`). */
-  protected override appUrl(deploymentId: string, app: string): string {
-    return `https://${this.routingService.generateRule({ deploymentId, appName: app }).host}`;
+  /** Public URL the app is reachable at (Traefik routes `<subdomain>.<base-domain>`). */
+  protected override appUrl(deploymentId: string, app: string, subdomain: string): string {
+    return `https://${this.routingService.generateRule({ deploymentId, appName: app, subdomain }).host}`;
   }
 
   /** Deterministic Compose project name (aligns with the routing network name). */
@@ -1116,7 +1162,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // The routing rule gives us the install-specific values apps reference as
     // tokens (public host, base domain) plus the network alias. generateRule is
     // pure, so compute it once up front and reuse it below.
-    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app });
+    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, subdomain: deployment.subdomain });
 
     // The compose service Traefik routes to and that receives injected auth env.
     // Prefer the manifest-declared ingress service (multi-service apps whose web
@@ -2007,7 +2053,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   private routingRuleFor(deployment: EnhancedDeploymentDetail): ReturnType<RoutingService['generateRule']> {
     const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
     const port = release?.ports?.[0]?.container;
-    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, port });
+    const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, subdomain: deployment.subdomain, port });
     const middleware = deployment.metadata.auth?.middleware;
     return middleware ? { ...rule, forwardAuth: middleware } : rule;
   }
@@ -2083,8 +2129,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     this.logger.info('Rehydrated deployments from storage', { count: this.deployments.size });
   }
 
-  protected override async onBeforeCreate(deploymentId: string, app: string): Promise<void> {
-    const rule = this.routingService.generateRule({ deploymentId, appName: app });
+  protected override async onBeforeCreate(deploymentId: string, app: string, subdomain: string): Promise<void> {
+    // Reject a reserved (core route) or malformed subdomain up front. The `taken`
+    // case falls through to validateRule below, whose conflict message names the
+    // owning deployment.
+    const availability = await this.routingService.checkSubdomain(subdomain);
+    if (!availability.available && availability.reason !== 'taken') {
+      throw new ConflictError(
+        availability.reason === 'reserved'
+          ? `Subdomain '${subdomain}' is reserved by a core Hola route`
+          : `Subdomain '${subdomain}' is not a valid DNS label`,
+      );
+    }
+    const rule = this.routingService.generateRule({ deploymentId, appName: app, subdomain });
     const conflicts = await this.routingService.validateRule(rule);
     if (conflicts.length > 0) {
       throw new ConflictError(conflicts.map(c => c.message).join('; '));

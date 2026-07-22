@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm, mkdir, writeFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, access, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -27,7 +27,7 @@ type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
 type JobArg = ConstructorParameters<typeof RealDeploymentService>[1];
 
-function makeCatalog(): CatalogArg {
+function makeCatalog(opts?: { multiInstance?: boolean }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Test App', icon: '📦' }),
     getVersionDetail: async () => ({
@@ -36,6 +36,8 @@ function makeCatalog(): CatalogArg {
         ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }],
         volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
       },
+      // #246: a catalog app that declares it supports multiple instances.
+      ...(opts?.multiInstance ? { multiInstance: true } : {}),
     }),
   } as unknown as CatalogArg;
 }
@@ -87,9 +89,9 @@ describe('Deployment persistence (real service)', () => {
   });
 
   /** A fresh service set over the same data root simulates a restart. */
-  function makeSystem() {
+  function makeSystem(opts?: { multiInstance?: boolean }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
-    const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
+    const drafts = new RealDraftService(storage, makeCatalog(opts), makeValidation());
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
     const deployments = new RealDeploymentService(storage, makeJobs(), noDocker, drafts, routing, noLogging, new MockProvisionerService());
     return { storage, drafts, routing, deployments };
@@ -299,17 +301,84 @@ describe('Deployment persistence (real service)', () => {
     expect(deleted?.data).toEqual({ deploymentId: dep.deploymentId });
   });
 
-  test('a second deployment of the same app is rejected as a host conflict', async () => {
+  test('a second install of a single-instance app is rejected by the singleton guard (#246)', async () => {
     const { drafts, deployments } = makeSystem();
     await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
 
+    // A distinct name would route to a distinct host, so this is NOT a host
+    // conflict — it's the single-instance-by-default guard that rejects it.
     await expect(
       deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea-2', options: { autoStart: false } })
-    ).rejects.toBeInstanceOf(ConflictError);
+    ).rejects.toThrow(/single-instance/);
 
-    // The conflicting second deployment left no state behind.
+    // The rejected second deployment left no state behind.
     const list = await deployments.listDeployments({ page: 1, limit: 100 });
     expect(list.items).toHaveLength(1);
+  });
+
+  test('the operator override installs a second instance at a distinct subdomain (#246)', async () => {
+    const { drafts, deployments, routing } = makeSystem();
+    const first = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    // First/default install (name == app id) keeps the historical `<app>.<base>`.
+    expect((await deployments.getDeployment(first.deploymentId)).url).toBe('https://gitea.local.hola');
+
+    const second = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts),
+      name: 'Gitea Two',
+      allowMultiple: true,
+      options: { autoStart: false },
+    });
+    // The name is slugified into a distinct DNS label → a distinct host.
+    expect((await deployments.getDeployment(second.deploymentId)).url).toBe('https://gitea-two.local.hola');
+
+    // Both instances coexist as independent deployments and independent routes.
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items).toHaveLength(2);
+    const map = await routing.getRoutingMap();
+    expect(map['gitea.local.hola']?.deploymentId).toBe(first.deploymentId);
+    expect(map['gitea-two.local.hola']?.deploymentId).toBe(second.deploymentId);
+  });
+
+  test('a multiInstance catalog app allows a second install without the override (#246)', async () => {
+    const { drafts, deployments } = makeSystem({ multiInstance: true });
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    // No allowMultiple needed: the manifest opts into multiples.
+    const second = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea-b', options: { autoStart: false } });
+    expect((await deployments.getDeployment(second.deploymentId)).url).toBe('https://gitea-b.local.hola');
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(2);
+  });
+
+  test('a second instance reusing an existing subdomain is rejected as a host conflict (#246)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // Override past the singleton guard, but reuse the same name → same subdomain →
+    // genuine host conflict.
+    await expect(
+      deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', allowMultiple: true, options: { autoStart: false } })
+    ).rejects.toThrow(/already in use/);
+
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
+  });
+
+  test('a persisted subdomain survives a restart and keeps the route stable (#246)', async () => {
+    const s1 = makeSystem({ multiInstance: true });
+    const dep = await s1.deployments.createFromDraft({
+      draftId: await finalizedDraft(s1.drafts),
+      name: 'Second Desk',
+      options: { autoStart: false },
+    });
+    // The derived subdomain is persisted on the deployment record itself.
+    const stored = JSON.parse(await readFile(join(dataRoot, 'deployments', dep.deploymentId, 'metadata.json'), 'utf8'));
+    expect(stored.subdomain).toBe('second-desk');
+
+    // A fresh service set over the same data root rebuilds routing from the stored
+    // deployment (loadFromStorage → reconcile via the stored subdomain), so the
+    // host survives the restart.
+    const s2 = makeSystem({ multiInstance: true });
+    await s2.deployments.getDeployment(dep.deploymentId); // triggers ensureLoaded → reconcile
+    const map = await s2.routing.getRoutingMap();
+    expect(map['second-desk.local.hola']?.deploymentId).toBe(dep.deploymentId);
   });
 
   test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {

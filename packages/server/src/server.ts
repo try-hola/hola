@@ -55,6 +55,7 @@ import {
   type UpdateCatalogSourceRequest,
   type ListCatalogSourcesResponse,
   type RefreshCatalogResponse,
+  type GetSubdomainAvailabilityResponse,
 } from '@hola/shared';
 
 // Error interface for proper typing
@@ -1006,6 +1007,18 @@ async function route(url: URL, req: Request): Promise<Response> {
         q,
         status: statusParam === 'all' ? 'all' : statusParam as 'running' | 'stopped' | 'installing' | 'updating' | 'error',
       });
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  if (pathname === API.deployments.subdomainAvailable && req.method === 'GET') {
+    // Live subdomain-availability check for the install wizard (#246).
+    try {
+      const input = searchParams.get('subdomain') ?? '';
+      const services = getServices();
+      const payload: GetSubdomainAvailabilityResponse = await services.routing.checkSubdomain(input);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);

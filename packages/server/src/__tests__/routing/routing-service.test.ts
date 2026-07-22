@@ -30,6 +30,43 @@ describe('RoutingService', () => {
     expect(rule.port).toBe(3000);
   });
 
+  test('derives the host from the per-deployment subdomain, falling back to appName (#246)', () => {
+    // A subdomain (from the user-supplied name) drives the host…
+    expect(routing.generateRule({ deploymentId: 'gitea-abc', appName: 'gitea', subdomain: 'work-desk' }).host)
+      .toBe('work-desk.local.hola');
+    // …and its absence (a pre-multi-instance deployment) falls back to the app id.
+    expect(routing.generateRule({ deploymentId: 'gitea-abc', appName: 'gitea' }).host)
+      .toBe('gitea.local.hola');
+  });
+
+  test('checkSubdomain reports available / taken / invalid (#246)', async () => {
+    expect(await routing.checkSubdomain('Work Desktop')).toEqual({
+      subdomain: 'work-desktop',
+      host: 'work-desktop.local.hola',
+      available: true,
+    });
+
+    await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea', subdomain: 'taken' }));
+    expect(await routing.checkSubdomain('taken')).toMatchObject({ available: false, reason: 'taken' });
+
+    // Only punctuation → nothing usable → invalid.
+    expect(await routing.checkSubdomain('!!!')).toMatchObject({ available: false, reason: 'invalid' });
+  });
+
+  test('checkSubdomain rejects a reserved core-route label (#246)', async () => {
+    const prev = process.env.HOLA_DOMAIN;
+    process.env.HOLA_DOMAIN = 'apps.local.hola';
+    try {
+      // A fresh service so it reads the just-set env for its reserved hosts.
+      const r = new RealRoutingService(new MockStorageService(), { baseDomain: 'local.hola' });
+      expect(await r.checkSubdomain('apps')).toMatchObject({ available: false, reason: 'reserved' });
+      expect(await r.checkSubdomain('gitea')).toMatchObject({ available: true });
+    } finally {
+      if (prev === undefined) delete process.env.HOLA_DOMAIN;
+      else process.env.HOLA_DOMAIN = prev;
+    }
+  });
+
   test('base domain comes from option (default local.hola)', () => {
     expect(routing.baseDomain()).toBe('local.hola');
     expect(new RealRoutingService(storage).baseDomain()).toBe('local.hola');

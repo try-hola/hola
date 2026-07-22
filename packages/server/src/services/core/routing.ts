@@ -16,7 +16,8 @@
  */
 
 import { stringify as stringifyYAML } from 'yaml';
-import type { TraefikRoutingRule, TraefikRoutingMap, RoutingConflict } from '@hola/shared';
+import type { TraefikRoutingRule, TraefikRoutingMap, RoutingConflict, GetSubdomainAvailabilityResponse } from '@hola/shared';
+import { slugifySubdomain, isValidSubdomain } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -33,6 +34,12 @@ const DEFAULT_BASE_DOMAIN = 'local.hola';
 export interface GenerateRuleInput {
   deploymentId: string;
   appName: string;
+  /**
+   * DNS label the app is routed under — the host becomes `<subdomain>.<domain>`
+   * (#246). Omitted for pre-multi-instance deployments, which fall back to
+   * `appName` so their host is unchanged.
+   */
+  subdomain?: string;
   /** Internal container/service port Traefik forwards to (defaults to 80). */
   port?: number;
 }
@@ -81,6 +88,8 @@ export interface RoutingService extends HealthCheckable {
   generateRule(input: GenerateRuleInput): TraefikRoutingRule;
   /** Conflicts if the rule's host is already owned by a different deployment. */
   validateRule(rule: TraefikRoutingRule): Promise<RoutingConflict[]>;
+  /** Whether a candidate subdomain (or name to slugify) is free to route (#246). */
+  checkSubdomain(input: string): Promise<GetSubdomainAvailabilityResponse>;
   /** Add/replace a deployment's route and re-emit dynamic config (atomic). */
   activateRoute(rule: TraefikRoutingRule): Promise<void>;
   /** Remove a deployment's route(s) and re-emit dynamic config (atomic). */
@@ -95,7 +104,11 @@ export interface RoutingService extends HealthCheckable {
 
 /** Build a deterministic routing rule (pure; shared by real and mock services). */
 function buildRule(input: GenerateRuleInput, domain: string): TraefikRoutingRule {
-  const host = `${input.appName}.${domain}`;
+  // The public host is derived from the per-deployment subdomain (#246), falling
+  // back to the app id for deployments minted before multi-instance — so an
+  // existing install (and the typical first install, where subdomain == app id)
+  // keeps `<app>.<domain>`.
+  const host = `${input.subdomain || input.appName}.${domain}`;
   // The deployment id is already a compact, unique `<slug>-<hash>` (it embeds the
   // app slug), so use it whole — truncating it would collide between two installs
   // of the same app.
@@ -123,6 +136,32 @@ function conflictsFor(rule: TraefikRoutingRule, map: TraefikRoutingMap): Routing
     }];
   }
   return [];
+}
+
+/**
+ * Resolve whether a candidate subdomain is free (#246). Pure: the caller supplies
+ * the active routing map and the set of reserved core hosts (the dashboard,
+ * Traefik dashboard, Authentik). Slugifies the input, then rejects an invalid DNS
+ * label, a reserved host, or a host already owned by another deployment.
+ */
+function availabilityFor(
+  input: string,
+  map: TraefikRoutingMap,
+  domain: string,
+  reservedHosts: Set<string>,
+): GetSubdomainAvailabilityResponse {
+  const subdomain = slugifySubdomain(input);
+  const host = `${subdomain}.${domain}`;
+  if (!subdomain || !isValidSubdomain(subdomain)) {
+    return { subdomain, host, available: false, reason: 'invalid' };
+  }
+  if (reservedHosts.has(host)) {
+    return { subdomain, host, available: false, reason: 'reserved' };
+  }
+  if (map[host]) {
+    return { subdomain, host, available: false, reason: 'taken' };
+  }
+  return { subdomain, host, available: true };
 }
 
 /** Map keyed by host, in deterministic (sorted) host order. */
@@ -314,6 +353,16 @@ export class RealRoutingService implements RoutingService {
     return conflictsFor(rule, this.map);
   }
 
+  /** Core route hosts that a deployment subdomain must never clobber (#246). */
+  private reservedHosts(): Set<string> {
+    return new Set(coreRoutesFromEnv().map(r => r.host));
+  }
+
+  async checkSubdomain(input: string): Promise<GetSubdomainAvailabilityResponse> {
+    await this.ensureLoaded();
+    return availabilityFor(input, this.map, this.domain, this.reservedHosts());
+  }
+
   async activateRoute(rule: TraefikRoutingRule): Promise<void> {
     await this.ensureLoaded();
     // Drop any prior route owned by this deployment (e.g. a host change), then set.
@@ -395,6 +444,10 @@ export class MockRoutingService implements RoutingService {
 
   async validateRule(rule: TraefikRoutingRule): Promise<RoutingConflict[]> {
     return conflictsFor(rule, this.map);
+  }
+
+  async checkSubdomain(input: string): Promise<GetSubdomainAvailabilityResponse> {
+    return availabilityFor(input, this.map, this.domain, new Set(coreRoutesFromEnv().map(r => r.host)));
   }
 
   async activateRoute(rule: TraefikRoutingRule): Promise<void> {
