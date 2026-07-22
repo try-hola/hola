@@ -185,6 +185,22 @@ export type AppBackupConfig = {
   postHook?: AppBackupHook;
 };
 
+/**
+ * An optional Docker Compose profile an app declares in its bundle manifest
+ * (#162). A profiled compose service (`profiles: [<key>]`) is NOT started unless
+ * its profile is active, so this is how an app offers an *optional* heavy
+ * dependency (e.g. Postiz's Elasticsearch visibility store) that the operator can
+ * turn on at install time. `key` is the compose profile name (the activation
+ * token); `label`/`description` drive the wizard checkbox; `default` pre-selects
+ * it when the caller doesn't specify a set.
+ */
+export type AppProfileConfig = {
+  key: string;
+  label: string;
+  description?: string;
+  default?: boolean;
+};
+
 /** Result of {@link checkUpgradePath}: ok, or a rejection with an actionable next step. */
 export type UpgradePathResult =
   | { ok: true }
@@ -700,6 +716,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // install wizard and relaxes the corresponding platform hardening at deploy
   // time. Optional: apps that don't declare it run fully hardened.
   security?: AppSecurityConfig;
+  // Optional Compose profiles the app declares (#162), each gating an optional
+  // service (e.g. an opt-in heavy dependency). The install wizard renders one
+  // checkbox per profile; the enabled set is threaded into the compose lifecycle
+  // as `COMPOSE_PROFILES`. Absent when the app has no optional services.
+  profiles?: AppProfileConfig[];
 };
 
 // ------------------------------------------------------
@@ -906,6 +927,10 @@ export type Draft = {
   // carried through finalize so the snapshot path can quiesce/dump around the
   // file capture (read-only; not user-editable).
   backup?: AppBackupConfig;
+  // Optional Compose profiles the app declares (#162), seeded from the bundle
+  // manifest so the install wizard can render a checkbox per profile. The
+  // selected keys are sent on create; the declared list itself is read-only.
+  profiles?: AppProfileConfig[];
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
 };
 
@@ -933,6 +958,9 @@ export type CreateDraftResponse = {
   // manifest), so the install wizard can surface each for explicit operator
   // consent. Absent when the app requests none (the fully-hardened default).
   security?: AppSecurityConfig;
+  // Optional Compose profiles the app declares (#162), so the install wizard can
+  // render one opt-in checkbox per profile. Absent when the app has none.
+  profiles?: AppProfileConfig[];
 };
 
 export type GetDraftResponse = Draft;
@@ -1479,6 +1507,12 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // from the name. Absent on deployments created before multi-instance (#246); the
   // routing layer falls back to the app id, so their host is unchanged.
   subdomain?: string;
+  // Compose profiles active for this install (#162): the resolved subset of the
+  // app's declared `profiles` keys that the operator enabled at create time.
+  // Threaded into every compose lifecycle command as `COMPOSE_PROFILES` so the
+  // profiled services `up` starts are the same ones `down` tears down. Absent
+  // when no optional profile is enabled (the default).
+  selectedProfiles?: string[];
   metadata: {
     createdAt: string;
     owner?: string;
@@ -1520,6 +1554,11 @@ export type CreateDeploymentFromDraftRequest = {
   // does not set `multiInstance: true`; this per-install override bypasses that
   // singleton guard (it still requires a distinct subdomain). Client-supplied.
   allowMultiple?: boolean;
+  // Optional Compose profiles to enable for this install (#162): a subset of the
+  // app's manifest-declared profile keys. The server intersects it with the
+  // declared set and persists the result as the deployment's active profiles. When
+  // omitted, the server falls back to the profiles the manifest marks `default`.
+  profiles?: string[];
 };
 
 export type CreateDeploymentFromDraftResponse = {

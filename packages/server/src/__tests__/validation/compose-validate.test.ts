@@ -43,6 +43,26 @@ services:
     expect(validateComposeDocument(yaml)).toEqual([]);
   });
 
+  test('a service gated behind a Compose profile passes clean (#162)', () => {
+    // An optional heavy dependency (e.g. Postiz's Elasticsearch) is gated behind a
+    // `profiles:` key. The validator must not choke on it — it is how the platform
+    // makes a service opt-in. `profiles:` publishes no host port, so it is allowed.
+    const yaml = `
+services:
+  app:
+    image: ghcr.io/acme/app:1.2.3
+    expose:
+      - "3000"
+  elasticsearch:
+    image: elasticsearch:8.15.0
+    profiles:
+      - elasticsearch
+    expose:
+      - "9200"
+`;
+    expect(validateComposeDocument(yaml)).toEqual([]);
+  });
+
   test('a valid multi-service bundle with defined resources passes clean', () => {
     const yaml = `
 services:

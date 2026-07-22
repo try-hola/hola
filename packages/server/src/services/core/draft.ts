@@ -23,7 +23,8 @@ import type {
   AppAuthConfig,
   AppSecurityConfig,
   AppUpgradeMeta,
-  AppBackupConfig
+  AppBackupConfig,
+  AppProfileConfig
 } from '@hola/shared';
 
 import { createHash } from 'crypto';
@@ -91,6 +92,10 @@ export interface FinalizedManifest {
   // Per-app pre/post-backup hooks (#121) carried from the bundle manifest so the
   // snapshot path can run them around the file capture.
   backup?: AppBackupConfig;
+  // Optional Compose profiles (#162) carried from the bundle manifest so
+  // createFromDraft can resolve the operator's enabled set against the declared
+  // keys without re-reading the bundle.
+  profiles?: AppProfileConfig[];
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -470,6 +475,7 @@ export class RealDraftService implements DraftService {
         ingressService: defaults.ingressService,
         upgrade: defaults.upgrade,
         backup: defaults.backup,
+        profiles: defaults.profiles,
         files: [],
       };
 
@@ -506,6 +512,9 @@ export class RealDraftService implements DraftService {
         // Surface any elevated permissions the app requested so the wizard can
         // prompt for consent before install.
         security: defaults.security,
+        // Surface any optional Compose profiles so the wizard can render an opt-in
+        // checkbox per profile (#162).
+        profiles: defaults.profiles,
       };
 
       this.logger.info('Draft created successfully', { draftId, appId: request.appId });
@@ -563,6 +572,7 @@ export class RealDraftService implements DraftService {
         ingressService: detail.ingressService,
         upgrade: detail.upgrade,
         backup: detail.backup,
+        profiles: detail.profiles,
         files: [],
       };
 
@@ -827,6 +837,7 @@ export class RealDraftService implements DraftService {
         ingressService: draft.ingressService,
         upgrade: draft.upgrade,
         backup: draft.backup,
+        profiles: draft.profiles,
         files: specFiles,
       };
 
@@ -910,7 +921,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; profiles?: AppProfileConfig[]; resolvedVersion?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
       return {
@@ -924,6 +935,7 @@ export class RealDraftService implements DraftService {
         ingressService: versionDetail.ingressService,
         upgrade: versionDetail.upgrade,
         backup: versionDetail.backup,
+        profiles: versionDetail.profiles,
         // The concrete version the catalog resolved (e.g. "latest" → "1.4.1"), so
         // the draft persists a real version for display + update detection.
         resolvedVersion: versionDetail.version,

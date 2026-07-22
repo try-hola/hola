@@ -59,11 +59,11 @@ export interface DockerService {
   /** Pull all images for a project ahead of `up`, with a generous timeout.
    *  Image pulls for large multi-service apps (e.g. Postiz) routinely exceed the
    *  short `up` timeout; pulling first means `up` only has to start local images. */
-  composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }>;
-  composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }>;
-  composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }>;
+  composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }>;
+  composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }>;
+  composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
-  composeRestart(projectPath: string, projectName: string, serviceName?: string): Promise<{ success: boolean; output: string }>;
+  composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
   /** Run a command inside a running compose service (no shell). Used for post-deploy
    *  auth setup (e.g. `gitea admin auth add-oauth`). */
   composeExec(
@@ -71,7 +71,7 @@ export interface DockerService {
     projectName: string,
     service: string,
     command: string[],
-    opts?: { user?: string }
+    opts?: { user?: string; profiles?: string[] }
   ): Promise<{ success: boolean; output: string }>;
 
   // Log operations
@@ -178,8 +178,21 @@ export class RealDockerService implements DockerService, HealthCheckable {
     return { env: { ...process.env, DOCKER_CONFIG: dir }, dir };
   }
 
-  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
-    const { env, dir } = this.makeRegistryAuthEnv(registryAuth);
+  /**
+   * Layer the active Compose profiles (#162) onto a base env as `COMPOSE_PROFILES`
+   * (comma-joined). Docker Compose reads it to decide which profiled services to
+   * act on — set identically across up/down/restart/exec so `down` tears down the
+   * profiled services `up` started (a plain `down` leaves them orphaned). Returns
+   * the base unchanged when no profile is active (undefined ⇒ inherit process env).
+   */
+  private withComposeProfiles(base: NodeJS.ProcessEnv | undefined, profiles?: string[]): NodeJS.ProcessEnv | undefined {
+    if (!profiles || profiles.length === 0) return base;
+    return { ...(base ?? process.env), COMPOSE_PROFILES: profiles.join(',') };
+  }
+
+  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    const { env: authEnv, dir } = this.makeRegistryAuthEnv(registryAuth);
+    const env = this.withComposeProfiles(authEnv, profiles);
     try {
       this.logger.info('Pulling compose images', { projectPath, projectName, authenticated: Boolean(dir) });
 
@@ -211,8 +224,9 @@ export class RealDockerService implements DockerService, HealthCheckable {
     }
   }
 
-  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
-    const { env, dir } = this.makeRegistryAuthEnv(registryAuth);
+  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    const { env: authEnv, dir } = this.makeRegistryAuthEnv(registryAuth);
+    const env = this.withComposeProfiles(authEnv, profiles);
     try {
       this.logger.info('Starting compose project', { projectPath, projectName });
 
@@ -250,18 +264,20 @@ export class RealDockerService implements DockerService, HealthCheckable {
     }
   }
 
-  async composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
+  async composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
     try {
       this.logger.info('Stopping compose project', { projectPath, projectName });
-      
+
       const composeFile = join(projectPath, 'docker-compose.yml');
       if (!existsSync(composeFile)) {
         throw new Error(`docker-compose.yml not found at ${composeFile}`);
       }
-      
+
+      // Pass the same profiles `up` used so `down` removes the profiled services
+      // too — without them Compose leaves profiled containers orphaned (#162).
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" down`,
-        { cwd: projectPath, timeout: 60000 } // 1 minute timeout
+        { cwd: projectPath, timeout: 60000, env: this.withComposeProfiles(undefined, profiles) } // 1 minute timeout
       );
       
       const output = [stdout, stderr].filter(Boolean).join('\n');
@@ -334,16 +350,16 @@ export class RealDockerService implements DockerService, HealthCheckable {
     }
   }
 
-  async composeRestart(projectPath: string, projectName: string, serviceName?: string): Promise<{ success: boolean; output: string }> {
+  async composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
     try {
       this.logger.info('Restarting compose service(s)', { projectPath, projectName, serviceName });
-      
+
       const composeFile = join(projectPath, 'docker-compose.yml');
       const serviceArg = serviceName ? ` ${serviceName}` : '';
-      
+
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" restart${serviceArg}`,
-        { cwd: projectPath, timeout: 60000 }
+        { cwd: projectPath, timeout: 60000, env: this.withComposeProfiles(undefined, profiles) }
       );
       
       const output = [stdout, stderr].filter(Boolean).join('\n');
@@ -371,7 +387,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
     projectName: string,
     service: string,
     command: string[],
-    opts?: { user?: string }
+    opts?: { user?: string; profiles?: string[] }
   ): Promise<{ success: boolean; output: string }> {
     const composeFile = join(projectPath, 'docker-compose.yml');
     // Build argv directly (no shell) so provisioned values can't be injected.
@@ -379,7 +395,10 @@ export class RealDockerService implements DockerService, HealthCheckable {
     if (opts?.user) args.push('--user', opts.user);
     args.push(service, ...command);
     try {
-      const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout: 60000 });
+      // Carry active profiles so an exec targeting a profiled service (#162) still
+      // resolves it — Compose treats a service in an inactive profile as unknown.
+      const env = this.withComposeProfiles(undefined, opts?.profiles);
+      const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout: 60000, env });
       const output = [stdout, stderr].filter(Boolean).join('\n');
       this.logger.info('Compose exec succeeded', { projectName, service, output: output.substring(0, 1000) });
       return { success: true, output };
@@ -690,18 +709,18 @@ export class MockDockerService implements DockerService {
     return true;
   }
 
-  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose pull', { projectPath, projectName, authenticated: Boolean(registryAuth?.length) });
+  async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose pull', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles });
     return { success: true, output: `[mock] Project ${projectName} images pulled` };
   }
 
-  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[]): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length) });
+  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles });
     return { success: true, output: `[mock] Project ${projectName} created and started` };
   }
 
-  async composeDown(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose down', { projectPath, projectName });
+  async composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose down', { projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} stopped and removed` };
   }
 
@@ -715,8 +734,8 @@ export class MockDockerService implements DockerService {
     };
   }
 
-  async composeRestart(projectPath: string, projectName: string): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose restart', { projectPath, projectName });
+  async composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose restart', { projectPath, projectName, serviceName, profiles });
     return { success: true, output: `[mock] Project ${projectName} restarted` };
   }
 
@@ -724,9 +743,10 @@ export class MockDockerService implements DockerService {
     projectPath: string,
     projectName: string,
     service: string,
-    command: string[]
+    command: string[],
+    opts?: { user?: string; profiles?: string[] }
   ): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose exec', { projectPath, projectName, service, command });
+    this.logger.debug('Mock compose exec', { projectPath, projectName, service, command, profiles: opts?.profiles });
     return { success: true, output: `[mock] exec ${service}: ${command.join(' ')}` };
   }
 
