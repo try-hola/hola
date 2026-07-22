@@ -220,6 +220,23 @@ function slugify(s: string): string {
 }
 
 /**
+ * The unique, stable disambiguator of a deployment id. Deployment ids are
+ * `<app-slug>-<random-suffix>` (see `makeDeploymentId` in deployment.ts) where
+ * the entropy is the LAST hyphen-delimited segment. Naming Authentik objects off
+ * this suffix keeps them unique per install.
+ *
+ * Do NOT use `deploymentId.slice(0, 8)` here: for `webtop-1c3379a4` that returns
+ * `webtop-1` (the app slug plus a single hex char), so two installs of the same
+ * app collide whenever their random suffixes share a first character — Authentik
+ * rejects the duplicate provider name and the deploy tombstones as `error`
+ * before any container starts (#346).
+ */
+function deploymentSuffix(deploymentId: string): string {
+  const idx = deploymentId.lastIndexOf('-');
+  return idx >= 0 ? deploymentId.slice(idx + 1) : deploymentId;
+}
+
+/**
  * Build the Authentik `redirect_uris` list: the primary URI (from redirectPath)
  * plus any manifest-declared extras, with the `${HOLA_APP_HOST}` token expanded
  * to the app's public host. Extras may be full https URLs or a non-http scheme
@@ -317,7 +334,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
     const redirectUri = `https://${input.host}${oidc.redirectPath}`;
     const redirectUris = buildRedirectUris(input.host, redirectUri, oidc.extraRedirectUris);
-    const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
+    const slug = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`);
 
     // Idempotent re-provision: reuse the existing client, refresh its redirect URIs.
     const existing = input.existingRef;
@@ -374,7 +391,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     // JWKS, and standards-compliant OIDC clients that verify the id_token via JWKS
     // (e.g. authlib — Hangar) fail with `KeyError: 'keys'`. Mirrors the dashboard path.
     const provider = await this.api<AuthentikOAuth2Provider>('POST', '/api/v3/providers/oauth2/', {
-      name: `hola-${input.appName}-${input.deploymentId.slice(0, 8)}`,
+      name: `hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`,
       authorization_flow: authFlow,
       invalidation_flow: invalidationFlow,
       client_type: 'confidential',
@@ -390,7 +407,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     // leave a half-provisioned orphan.
     try {
       await this.api('POST', '/api/v3/core/applications/', {
-        name: `${input.appName} (${input.deploymentId.slice(0, 8)})`,
+        name: `${input.appName} (${deploymentSuffix(input.deploymentId)})`,
         slug,
         provider: provider.pk,
         meta_launch_url: `https://${input.host}/`,
@@ -520,7 +537,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
   private async provisionForwardAuth(input: ProvisionInput): Promise<ProvisionResult> {
     const externalHost = `https://${input.host}`;
-    const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
+    const slug = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`);
 
     // Idempotent re-provision: reuse the existing proxy provider, refresh its host.
     const existing = input.existingRef;
@@ -550,7 +567,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     ]);
 
     const provider = await this.api<{ pk: number }>('POST', '/api/v3/providers/proxy/', {
-      name: `hola-${input.appName}-${input.deploymentId.slice(0, 8)}`,
+      name: `hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`,
       authorization_flow: authFlow,
       invalidation_flow: invalidationFlow,
       mode: 'forward_single',
@@ -560,7 +577,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     let applicationPk: string;
     try {
       const app = await this.api<{ pk: string }>('POST', '/api/v3/core/applications/', {
-        name: `${input.appName} (${input.deploymentId.slice(0, 8)})`,
+        name: `${input.appName} (${deploymentSuffix(input.deploymentId)})`,
         slug,
         provider: provider.pk,
         meta_launch_url: externalHost,
@@ -1062,7 +1079,7 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const ldap = input.ldap;
     if (!ldap) throw new ProvisioningError('native-ldap requires an ldap config block');
 
-    const username = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}-ldap`);
+    const username = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}-ldap`);
     const password = randomBytes(24).toString('hex');
     const baseDn = this.config.ldapBaseDn;
     const bindDn = `cn=${username},ou=users,${baseDn}`;
@@ -1422,9 +1439,9 @@ export class MockProvisionerService implements ProvisionerService {
 
   async provision(input: ProvisionInput): Promise<ProvisionResult> {
     if (input.mode === 'native-oidc' && input.oidc) {
-      const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
-      const clientId = input.existingRef?.clientId ?? `mock-client-${input.deploymentId.slice(0, 8)}`;
-      const clientSecret = `mock-secret-${input.deploymentId.slice(0, 8)}`;
+      const slug = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`);
+      const clientId = input.existingRef?.clientId ?? `mock-client-${deploymentSuffix(input.deploymentId)}`;
+      const clientSecret = `mock-secret-${deploymentSuffix(input.deploymentId)}`;
       const redirectUri = `https://${input.host}${input.oidc.redirectPath}`;
       const issuer = `https://auth.mock/application/o/${slug}/`;
       const names = input.oidc.env;
@@ -1443,7 +1460,7 @@ export class MockProvisionerService implements ProvisionerService {
       };
     }
     if (input.mode === 'forward-auth') {
-      const slug = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}`);
+      const slug = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}`);
       return {
         env: {},
         ref: input.existingRef ?? { mode: 'forward-auth', providerPk: 2, applicationSlug: slug, outpostPk: 1 },
@@ -1451,14 +1468,14 @@ export class MockProvisionerService implements ProvisionerService {
       };
     }
     if (input.mode === 'native-ldap' && input.ldap) {
-      const username = slugify(`hola-${input.appName}-${input.deploymentId.slice(0, 8)}-ldap`);
+      const username = slugify(`hola-${input.appName}-${deploymentSuffix(input.deploymentId)}-ldap`);
       const e = input.ldap.env;
       return {
         env: {
           [e.host]: 'authentik-ldap',
           [e.port]: '3389',
           [e.bindDn]: `cn=${username},ou=users,dc=hola,dc=internal`,
-          [e.bindPassword]: `mock-ldap-pw-${input.deploymentId.slice(0, 8)}`,
+          [e.bindPassword]: `mock-ldap-pw-${deploymentSuffix(input.deploymentId)}`,
           [e.baseDn]: 'dc=hola,dc=internal',
         },
         ref: input.existingRef ?? { mode: 'native-ldap', bindAccountPk: 3 },
