@@ -14,6 +14,22 @@
 # "Private/homelab TLS (DNS-01)".
 services:
   traefik:
+    # Wait for the server to be HEALTHY before starting (merged with the base
+    # `depends_on: traefik-init`). Proactive wildcard issuance is driven by a
+    # ROUTER carrying `tls.domains` (entrypoint-level domains alone are not
+    # proactively resolved — see the note below), and those routers only exist
+    # once the server writes `core.yml` into the file-provider dir. The server
+    # emits `core.yml` synchronously BEFORE it starts listening, so `service_healthy`
+    # (its Dockerfile healthcheck hits `/healthz`) guarantees the wildcard routers
+    # are present the moment Traefik first reads the file provider. Without this,
+    # on a fresh `hola-data` volume Traefik can win the race, boot on an empty dir
+    # with no wildcard router, and get "stuck" serving its default self-signed cert
+    # with an empty `acme.json` (#154). Scoped to this DNS-01 overlay: HTTP-01 mode
+    # issues per-router on demand and the file-watch reload covers plain routing;
+    # only proactive wildcard issuance is fragile to the empty-first-read race.
+    depends_on:
+      server:
+        condition: service_healthy
     # `command` REPLACES the base command (compose does not merge lists), so the
     # full set is restated here with DNS-01 + the wildcard request.
     command:
