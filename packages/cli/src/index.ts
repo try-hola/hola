@@ -258,6 +258,23 @@ prog
     await runUpgrade(deploymentId, streamOpts(opts));
   });
 
+// config — view or edit a deployment's environment variables. Merge-by-key:
+// --set upserts, --unset removes, and vars not mentioned are left untouched.
+prog
+  .command('config <deploymentId>')
+  .describe("View or edit a deployment's environment variables")
+  .example('config gitea-ab12cd34                                  # show current env')
+  .example('config gitea-ab12cd34 --set LOG_LEVEL=debug            # upsert one var')
+  .example('config gitea-ab12cd34 --set A=1 --set B=2 --unset OLD  # combined, one restart')
+  .option('--set', 'Upsert a KEY=VALUE env var (repeatable)')
+  .option('--unset', 'Remove an env var by key (repeatable)')
+  .option('--no-stream', 'Do not watch the restart job', false)
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (deploymentId, opts) => {
+    const { runConfig } = await load(import('./commands/deployments/config'));
+    await runConfig(deploymentId, streamOpts(opts));
+  });
+
 // Fallback banner when no args
 if (process.argv.length <= 2) {
   // Minimal banner when no args. Lead with setup for first-time users, then the

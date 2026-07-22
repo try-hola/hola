@@ -992,7 +992,16 @@ export type DeploymentDetail = {
 export type GetDeploymentResponse = DeploymentDetail;
 
 export type PatchDeploymentRequest = {
+  /**
+   * Env vars to add or update, keyed by `key` (issue #332). This PATCH has
+   * **merge-by-key** semantics: a var listed here is upserted (its `value` is
+   * set; the manifest-declared spec is preserved server-side), and any stored
+   * var NOT listed is left untouched — a partial request never wipes the vars it
+   * omits. To remove a var, list its key in `removeEnvKeys`.
+   */
   env?: AppEnvVar[];
+  /** Keys to delete from the deployment's env. Idempotent (unknown keys are ignored). */
+  removeEnvKeys?: string[];
   systemOverrides?: Record<string, string>;
 };
 // `jobId` is present when the update triggered a real redeploy (a restart job

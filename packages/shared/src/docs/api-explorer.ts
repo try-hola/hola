@@ -545,7 +545,7 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
     method: 'PATCH',
     operationId: 'updateDeployment',
     summary: 'Update Deployment Configuration',
-    description: 'Update configuration of an existing deployment',
+    description: 'Update configuration of an existing deployment. Env changes merge by key: vars in `env` are upserted, vars omitted are left untouched, and keys in `removeEnvKeys` are deleted.',
     tags: ['deployments'],
     parameters: [
       {
@@ -1136,7 +1136,10 @@ export function generateTypeScriptSchemas(): Record<string, string> {
 }`,
 
     PatchDeploymentRequest: `{
+  // Merge-by-key: vars listed are upserted; stored vars omitted here are left
+  // untouched. Use removeEnvKeys to delete. (issue #332)
   env?: AppEnvVar[];
+  removeEnvKeys?: string[];
   systemOverrides?: Record<string, string>;
 }`,
 

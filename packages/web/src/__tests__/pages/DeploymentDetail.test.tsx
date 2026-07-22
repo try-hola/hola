@@ -171,6 +171,30 @@ describe('DeploymentDetail Configuration tab', () => {
     const [calledId, payload] = deploymentsApi.update.mock.calls[0];
     expect(calledId).toBe(deploymentId);
     expect(payload.env.find((e: { key: string }) => e.key === 'ADMIN_USER').value).toBe('root');
+    // A pure edit (nothing deleted) sends no removeEnvKeys — merge-by-key leaves
+    // every omitted var untouched, so there's nothing to delete.
+    expect(payload.removeEnvKeys).toBeUndefined();
+  });
+
+  it('sends removeEnvKeys for a var deleted from the working copy (merge-by-key, #332)', async () => {
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('ADMIN_USER')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit configuration/i }));
+
+    // ADMIN_USER is a specless (custom) row, so it has a remove button. Delete it.
+    const removeBtn = await screen.findByRole('button', { name: /remove custom variable/i });
+    fireEvent.click(removeBtn);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
+    const [, payload] = deploymentsApi.update.mock.calls[0];
+    // The deletion is stated explicitly now, not expressed by omission.
+    expect(payload.removeEnvKeys).toEqual(['ADMIN_USER']);
+    expect(payload.env.some((e: { key: string }) => e.key === 'ADMIN_USER')).toBe(false);
+    // The var still in the form is upserted (and untouched vars survive server-side).
+    expect(payload.env.some((e: { key: string }) => e.key === 'MAX_CONNECTIONS')).toBe(true);
   });
 
   it('blocks saving an out-of-range typed value client-side without calling the API', async () => {
