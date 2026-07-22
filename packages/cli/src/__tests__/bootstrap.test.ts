@@ -288,6 +288,28 @@ describe('hola bootstrap', () => {
     }
   });
 
+  it('ignores a detected .env that is not a Hola config — never offers to reuse it (#345)', async () => {
+    const tmp = await mkdtemp(join(tmpdir(), 'hola-boot-'));
+    const envPath = join(tmp, '.env');
+    // A foreign project's .env: no HOLA_ keys, so it is not a Hola install config.
+    await writeFile(envPath, 'DATABASE_URL=postgres://user:pw@db/other\nPORT=3000\nSECRET=nope\n');
+    const runner = makeRunner();
+    try {
+      // Even if the operator would say "yes" to a reuse prompt, the file must not
+      // be offered: detection is skipped, so the wizard runs and aborts on the
+      // first unanswered required field — the foreign file is never shipped.
+      const res = await runBootstrap(
+        { host: 'me@vm', skipChecks: true },
+        { prompter: scriptedPrompter({ _use_env: 'true' }), runner, findEnvFile: async () => envPath }
+      );
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(runner.calls.some((c) => c.input?.includes('postgres://'))).toBe(false);
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('does NOT reuse a detected .env by default — it runs the wizard instead', async () => {
     const tmp = await mkdtemp(join(tmpdir(), 'hola-boot-'));
     const envPath = join(tmp, '.env');
