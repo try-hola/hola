@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a problem with Hola (server, web, cli, or the compose stack).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out the sections below
+        so we can reproduce and fix the issue quickly.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Install app '...'
+        2. Navigate to '...'
+        3. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - server
+        - web
+        - cli
+        - compose / install
+        - other / not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Hola version or commit (e.g. `cli-v0.7.9`, or `git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste any relevant server/CLI logs. This is automatically formatted as code.
+      render: shell
