@@ -51,6 +51,10 @@ export const API = {
 
   deployments: {
     base: '/api/deployments', // list and POST create-from-draft at /api/deployments
+    // Check whether a candidate subdomain is free (#246). GET with `?subdomain=` (a
+    // raw label or a name to slugify); powers the install wizard's live availability
+    // indicator. Returns GetSubdomainAvailabilityResponse.
+    subdomainAvailable: '/api/deployments/subdomain-available',
     byId: (deploymentId: string) => `/api/deployments/${deploymentId}`,
     history: (deploymentId: string) => `/api/deployments/${deploymentId}/history`,
     logs: (deploymentId: string) => `/api/deployments/${deploymentId}/logs`,
@@ -672,6 +676,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // (e.g. `app-registry`). The server writes the corresponding feed into the
   // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
   consumes?: string[];
+  // Whether the app may be installed more than once, declared in its bundle
+  // manifest (#246). Absent/false ⇒ singleton (the default): the server rejects a
+  // second install unless the operator opts in per-install. `true` (e.g. a browser
+  // desktop) lets a user run N independent instances at distinct subdomains.
+  multiInstance?: boolean;
   // The compose service Traefik should route to and that receives injected auth
   // env, for multi-service apps whose web/ingress service isn't named after the
   // app id (the default heuristic). Sourced from the bundle manifest's
@@ -876,6 +885,10 @@ export type Draft = {
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
+  // Whether the app may be installed more than once (#246), seeded from the bundle
+  // manifest and carried through finalize (read-only; not user-editable). Drives
+  // the server's singleton-by-default guard at create time.
+  multiInstance?: boolean;
   // Elevated container permissions the app requests, seeded from the bundle
   // manifest and carried through finalize (read-only; not user-editable). The
   // install wizard surfaces each for consent; the deploy lifecycle relaxes the
@@ -1459,6 +1472,13 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   previousReleaseId?: string;
   draftId?: string;
   rollbackAvailable: boolean;
+  // The DNS label this deployment is routed under: the app is reachable at
+  // `<subdomain>.<HOLA_BASE_DOMAIN>`. Derived from the user-supplied name at
+  // create time (slug, defaulting to the app id) and then STABLE for the
+  // install's life — routing reconciles from this stored value, never recomputing
+  // from the name. Absent on deployments created before multi-instance (#246); the
+  // routing layer falls back to the app id, so their host is unchanged.
+  subdomain?: string;
   metadata: {
     createdAt: string;
     owner?: string;
@@ -1495,6 +1515,11 @@ export type CreateDeploymentFromDraftRequest = {
   // (not sent by clients). Persisted on the deployment so `${HOLA_USER_EMAIL}` can
   // resolve in the async deploy job, which runs without a request context.
   installedBy?: { email?: string; name?: string };
+  // Install a second instance of an app the catalog marks single-instance (#246).
+  // By default the server rejects a duplicate install of an app whose manifest
+  // does not set `multiInstance: true`; this per-install override bypasses that
+  // singleton guard (it still requires a distinct subdomain). Client-supplied.
+  allowMultiple?: boolean;
 };
 
 export type CreateDeploymentFromDraftResponse = {
@@ -1575,6 +1600,40 @@ export type RoutingConflict = {
 };
 
 export type TraefikRoutingMap = Record<string, TraefikRoutingRule>; // "host" -> routing rule
+
+/**
+ * Slugify a user-supplied instance name into a DNS label (#246): lowercase,
+ * `[a-z0-9-]` only, collapsed/trimmed hyphens, capped at 63 chars (the DNS label
+ * limit) with any trailing hyphen from truncation removed. Returns '' when nothing
+ * usable remains (e.g. a name of only punctuation) — the caller then falls back to
+ * the app id. Shared by the server (create-time derivation) and the web wizard
+ * (live preview) so both agree on the resulting host.
+ */
+export function slugifySubdomain(input: string): string {
+  return (input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 63)
+    .replace(/-+$/g, '');
+}
+
+/** Whether a string is already a valid DNS label (the shape slugifySubdomain emits). */
+export function isValidSubdomain(label: string): boolean {
+  return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(label);
+}
+
+/** Response for the subdomain-availability check (#246). */
+export type GetSubdomainAvailabilityResponse = {
+  // The normalized DNS label the check resolved to (slug of the input).
+  subdomain: string;
+  // The full host the label would route to (`<subdomain>.<baseDomain>`).
+  host: string;
+  // False when the label is reserved (a core route), already taken by another
+  // deployment, or not a valid DNS label. `reason` explains which.
+  available: boolean;
+  reason?: 'reserved' | 'taken' | 'invalid';
+};
 
 // Directory structure metadata
 export type DeploymentDirectoryLayout = {

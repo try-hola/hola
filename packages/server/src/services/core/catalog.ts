@@ -514,6 +514,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         };
         auth?: unknown;
         consumes?: unknown;
+        multiInstance?: unknown;
         security?: unknown;
         upgrade?: unknown;
         backup?: unknown;
@@ -580,6 +581,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
 
+      // Whether the app opts into multiple instances (#246). Kept absent unless the
+      // manifest explicitly sets `true`, so singleton (the default) stays the clean
+      // common case in drafts and deployment records.
+      const multiInstance = manifest.multiInstance === true ? true : undefined;
+
       // Elevated container permissions the app requests (e.g. sudo needs
       // privilege escalation). Coerced narrowly like `auth`; the wizard surfaces
       // each for consent and the deploy lifecycle relaxes the matching hardening.
@@ -603,7 +609,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       // Keep the underlying reason in the message, not just the cause: a missing

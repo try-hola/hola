@@ -22,6 +22,7 @@ import type {
   PostDeploymentActionResponse,
   RollbackRequest,
   RollbackResponse,
+  GetSubdomainAvailabilityResponse,
 } from '@hola/shared';
 import { setupTestServer, teardownTestServer } from '../utils/bun-server';
 import { makeRequest } from '../utils/phase7-helpers';
@@ -233,6 +234,28 @@ describe('Deployment Management', () => {
       const res = await makeRequest({ method: 'DELETE', url: `${baseURL}/api/deployments/${unknownId}` });
       expect(res.success).toBe(false);
       expect(res.error!.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('Subdomain availability (#246)', () => {
+    test('GET /subdomain-available slugifies and reports availability (not swallowed by /:id)', async () => {
+      const res = await makeRequest<GetSubdomainAvailabilityResponse>({
+        method: 'GET',
+        url: `${baseURL}/api/deployments/subdomain-available?subdomain=${encodeURIComponent('My Desktop')}`,
+      });
+      // Reaches the availability handler (a 404 here would mean the /:id GET route
+      // captured "subdomain-available" as a deployment id).
+      expect(res.success).toBe(true);
+      expect(res.data).toMatchObject({ subdomain: 'my-desktop', host: 'my-desktop.local.hola', available: true });
+    });
+
+    test('reports an invalid subdomain for an empty/punctuation-only input', async () => {
+      const res = await makeRequest<GetSubdomainAvailabilityResponse>({
+        method: 'GET',
+        url: `${baseURL}/api/deployments/subdomain-available?subdomain=${encodeURIComponent('!!!')}`,
+      });
+      expect(res.success).toBe(true);
+      expect(res.data).toMatchObject({ available: false, reason: 'invalid' });
     });
   });
 
