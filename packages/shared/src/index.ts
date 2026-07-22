@@ -65,6 +65,10 @@ export const API = {
     // Active release's full config (typed appEnv rows + system overrides), for the
     // DeploymentDetail Configuration tab.
     config: (deploymentId: string) => `/api/deployments/${deploymentId}/config`,
+    // On-demand richer update check for one deployment (#299): pulls the target
+    // bundle to answer safe-bump vs. guided-upgrade. Returns
+    // GetDeploymentUpdateCheckResponse. The list keeps the cheap #284 badge.
+    updateCheck: (deploymentId: string) => `/api/deployments/${deploymentId}/update-check`,
   },
 
   jobs: {
@@ -1031,6 +1035,32 @@ export type DeploymentDetail = {
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
+
+/**
+ * Richer, on-demand update check for a single deployment (#299). The cheap
+ * `latestVersion`/`updateAvailable` signal that rides on every list/detail row
+ * (#284) says only *that* a newer version exists; this says *what kind* of update
+ * it is — a safe one-click bump vs. a guided multi-step upgrade — by pulling the
+ * target bundle's manifest and reading its `upgrade` metadata + `checkUpgradePath`.
+ * That bundle pull is why it's a separate endpoint the detail page calls, not a
+ * field on the list. Everything beyond the cheap signal is absent (fail-safe) when
+ * the catalog/bundle is unavailable or the app declares no upgrade metadata.
+ */
+export type GetDeploymentUpdateCheckResponse = {
+  /** The deployment's current version (absent for a `latest`-pinned install). */
+  installedVersion?: string;
+  /** Newest catalog version for this app (the update target). */
+  latestVersion?: string;
+  updateAvailable: boolean;
+  /** Target release migrates/breaks — surface a "review notes" acknowledgement. */
+  breaking?: boolean;
+  /** Whether the jump is a legal one-shot, or must pass a floor/waypoint first
+   *  (carries the next safe version + message when not). Present only when an
+   *  update is available and the target's upgrade metadata was resolved. */
+  path?: UpgradePathResult;
+  preUpgradeBackup?: 'required' | 'recommended' | 'none';
+  upgradeNotesUrl?: string;
+};
 
 export type PatchDeploymentRequest = {
   /**

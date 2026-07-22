@@ -19,6 +19,7 @@ import type {
   GetDeploymentsRequest,
   GetDeploymentsResponse,
   GetDeploymentResponse,
+  GetDeploymentUpdateCheckResponse,
   PatchDeploymentRequest,
   PatchDeploymentResponse,
   GetDeploymentHistoryResponse,
@@ -165,6 +166,11 @@ export interface DeploymentService extends HealthCheckable {
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
   getDeployment(deploymentId: string): Promise<GetDeploymentResponse>;
+  /** On-demand richer update check for one deployment (#299): the cheap #284
+   *  signal plus, when an update is available, the target's `upgrade` metadata
+   *  (breaking / pre-upgrade backup / notes) and a `checkUpgradePath` verdict —
+   *  the expensive part (a target-bundle pull) the list deliberately skips. */
+  getUpdateCheck(deploymentId: string): Promise<GetDeploymentUpdateCheckResponse>;
   updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse>;
   deleteDeployment(deploymentId: string): Promise<void>;
 
@@ -821,6 +827,32 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     const detail = toDetailResponse(this.requireDeployment(deploymentId));
     await this.enrichUpdateInfo([detail]);
     return detail;
+  }
+
+  async getUpdateCheck(deploymentId: string): Promise<GetDeploymentUpdateCheckResponse> {
+    await this.ensureLoaded();
+    this.logger.info('Update-check for deployment', { deploymentId });
+    const detail = toDetailResponse(this.requireDeployment(deploymentId));
+    // Reuse the cheap #284 signal for installed/latest/updateAvailable, then let
+    // the (real) service layer add the target-bundle richness on top.
+    await this.enrichUpdateInfo([detail]);
+    return this.buildUpdateCheck(detail);
+  }
+
+  /**
+   * Assemble the update-check payload from an already-enriched detail. Base:
+   * the cheap signal only (no bundle pull, so no breaking/path/backup richness —
+   * the mock/in-memory service has no catalog). RealDeploymentService overrides
+   * it to pull the target bundle's `upgrade` metadata.
+   */
+  protected async buildUpdateCheck(
+    detail: GetDeploymentResponse,
+  ): Promise<GetDeploymentUpdateCheckResponse> {
+    return {
+      installedVersion: detail.version,
+      latestVersion: detail.latestVersion,
+      updateAvailable: !!detail.updateAvailable,
+    };
   }
 
   /**
@@ -1706,6 +1738,45 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // latest-install as out-of-date — so report "no update available" instead.
       const installed = item.version;
       item.updateAvailable = !!installed && installed !== 'latest' && isNewerVersion(latest, installed);
+    }
+  }
+
+  /**
+   * Add the on-demand richness (#299) the cheap list signal can't afford: when an
+   * update is available, pull the *target* version's bundle for its `upgrade`
+   * metadata (breaking / pre-upgrade backup / notes) and compute a
+   * `checkUpgradePath` verdict (safe one-shot vs. floor/waypoint required). One
+   * deployment, one bundle pull — fine for a detail-page call, unlike the list.
+   * Fail-safe: any catalog/bundle error falls back to the cheap signal so the
+   * detail page still renders a plain "update available".
+   */
+  protected override async buildUpdateCheck(
+    detail: GetDeploymentResponse,
+  ): Promise<GetDeploymentUpdateCheckResponse> {
+    const base: GetDeploymentUpdateCheckResponse = {
+      installedVersion: detail.version,
+      latestVersion: detail.latestVersion,
+      updateAvailable: !!detail.updateAvailable,
+    };
+    if (!this.catalogService || !detail.updateAvailable || !detail.latestVersion) return base;
+    try {
+      const source = await this.getDeploymentSource(detail.id);
+      const target = await this.catalogService.getVersionDetail(detail.app, detail.latestVersion, source);
+      const upgrade = target.upgrade;
+      return {
+        ...base,
+        path: checkUpgradePath(detail.version, detail.latestVersion, upgrade),
+        ...(upgrade?.breaking !== undefined ? { breaking: upgrade.breaking } : {}),
+        ...(upgrade?.preUpgradeBackup !== undefined ? { preUpgradeBackup: upgrade.preUpgradeBackup } : {}),
+        ...(upgrade?.upgradeNotesUrl !== undefined ? { upgradeNotesUrl: upgrade.upgradeNotesUrl } : {}),
+      };
+    } catch (err) {
+      // Bundle unreachable / app gone from catalog — keep the cheap signal.
+      this.logger.warn('Update-check richness unavailable; returning cheap signal', {
+        deploymentId: detail.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return base;
     }
   }
 

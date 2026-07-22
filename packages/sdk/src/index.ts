@@ -13,6 +13,7 @@ import {
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
   GetDeploymentConfigResponse,
+  GetDeploymentUpdateCheckResponse,
   GetSubdomainAvailabilityResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
@@ -156,6 +157,9 @@ export class HolaSdk {
     promote: (deploymentId: string, promote: PromoteDeploymentRequest = {}) => this.post<PromoteDeploymentResponse>(API.deployments.promote(deploymentId), promote),
     logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
     config: (deploymentId: string) => this.get<GetDeploymentConfigResponse>(API.deployments.config(deploymentId)),
+    // On-demand richer update check for one deployment (#299): safe-bump vs.
+    // guided-upgrade, with the target's breaking/backup/notes + a path verdict.
+    updateCheck: (deploymentId: string) => this.get<GetDeploymentUpdateCheckResponse>(API.deployments.updateCheck(deploymentId)),
   };
 
   jobs = {
