@@ -487,6 +487,33 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });
   });
 
+  test('forward-auth provider name uses the full deployment-id suffix, so two installs of the same app do not collide (#346)', async () => {
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    // Deployment ids are `<slug>-<8 hex>`; these two are distinct installs of the
+    // same app whose random suffixes happen to share a first character. The old
+    // `deploymentId.slice(0, 8)` derived the provider name from `<slug>-<first hex
+    // char>` — both collapsed to "webtop-a", so Authentik (which enforces unique
+    // provider names) rejected the second install with HTTP 400 and tombstoned it
+    // as `error` before any container started.
+    const nameForProxyPost = async (deploymentId: string): Promise<string> => {
+      calls = [];
+      installFetch();
+      await svc.provision({ deploymentId, appName: 'webtop', mode: 'forward-auth', host: 'webtop.example.com' });
+      const post = calls.find(c => c.method === 'POST' && c.path === '/api/v3/providers/proxy/')!;
+      return (post.body as Record<string, unknown>).name as string;
+    };
+
+    const nameA = await nameForProxyPost('webtop-a1111111');
+    const nameB = await nameForProxyPost('webtop-a2222222');
+
+    // The whole 8-hex suffix is carried into the name (not the slug + one char).
+    expect(nameA).toBe('hola-webtop-a1111111');
+    expect(nameB).toBe('hola-webtop-a2222222');
+    // ...so the two installs get distinct names — no collision.
+    expect(nameA).not.toBe(nameB);
+  });
+
   test('forward-auth reuse resends mode on the PATCH (Authentik rejects a mode-less partial update with 400)', async () => {
     // Authentik's ProxyProviderSerializer validates against attrs.get("mode",
     // ProxyMode.PROXY): a partial update that omits `mode` is validated as PROXY,
