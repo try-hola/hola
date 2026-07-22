@@ -33,6 +33,7 @@ import type {
   Job,
   DeploymentListItem,
   ProvisionedAuthRef,
+  AuthMode,
   GetLogsResponse,
   LogEntry,
   GetDeploymentConfigResponse,
@@ -2112,7 +2113,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {
     const auth = deployment.metadata.auth;
-    if (!auth) return;
+    if (!auth) {
+      // No provisioned ref recorded. Provisioning may have created Authentik
+      // objects and then thrown before persisting the ref (#346 Defect 2), which
+      // would otherwise strand them permanently — uninstall couldn't ever remove
+      // them. Best-effort clean up by the deterministic names derived from the
+      // app's DECLARED auth mode (read from the manifest, still available here).
+      const declared = await this.readActiveAuth(deployment);
+      if (!declared) return;
+      const modes: AuthMode[] = [];
+      if (declared.mode !== 'none') modes.push(declared.mode);
+      if (declared.fallback === 'forward-auth' && declared.mode !== 'forward-auth') modes.push('forward-auth');
+      if (modes.length === 0) return;
+      const results = await Promise.allSettled(
+        modes.map(mode => this.provisioner.deprovision({ deploymentId: deployment.id, appName: deployment.app, mode }))
+      );
+      const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failed) throw failed.reason;
+      return;
+    }
     // Tear down both refs independently: a failure deprovisioning the primary
     // must not leave the `fallback: forward-auth` provider (and its outpost
     // binding) orphaned in the auth backend. Surface the first error after both

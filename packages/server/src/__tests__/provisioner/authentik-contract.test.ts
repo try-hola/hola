@@ -677,6 +677,90 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(deletes).toContain('/api/v3/core/applications/grafana-x/');
     expect(deletes).toContain('/api/v3/providers/proxy/55/');
   });
+
+  // ---- #346 Defect 2: best-effort deprovision by deterministic name ----------
+  // When provisioning throws before a ref is persisted, uninstall passes only the
+  // app name + declared mode (no ref). The backend must reconstruct the object
+  // names and clean up the orphan, so it isn't stranded forever.
+
+  test('forward-auth deprovision-by-name cleans up an orphan when no ref was persisted (#346)', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/providers/proxy/?name__iexact=')) {
+        return json({ results: [{ pk: 55, name: 'hola-webtop-1c3379a4' }] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    // No `ref` — mirrors a deploy whose provisioning threw before persisting one.
+    await svc.deprovision({ deploymentId: 'webtop-1c3379a4', appName: 'webtop', mode: 'forward-auth' });
+
+    // Located the orphan by its deterministic name, detached it from the embedded
+    // outpost, then deleted the application (by slug) and the provider.
+    expect(calls.some(c => c.method === 'GET' && c.path === '/api/v3/providers/proxy/?name__iexact=hola-webtop-1c3379a4')).toBe(true);
+    expect(calls.some(c => c.method === 'PATCH' && c.path === '/api/v3/outposts/instances/1/')).toBe(true);
+    const deletes = calls.filter(c => c.method === 'DELETE').map(c => c.path);
+    expect(deletes).toContain('/api/v3/core/applications/hola-webtop-1c3379a4/');
+    expect(deletes).toContain('/api/v3/providers/proxy/55/');
+  });
+
+  test('native-oidc deprovision-by-name deletes the app + provider by deterministic name (#346)', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/providers/oauth2/?name__iexact=')) {
+        return json({ results: [{ pk: 42, name: 'hola-gitea-abcd0000' }] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.deprovision({ deploymentId: 'gitea-abcd0000', appName: 'gitea', mode: 'native-oidc' });
+
+    const deletes = calls.filter(c => c.method === 'DELETE').map(c => c.path);
+    expect(deletes).toContain('/api/v3/core/applications/hola-gitea-abcd0000/');
+    expect(deletes).toContain('/api/v3/providers/oauth2/42/');
+  });
+
+  test('native-ldap deprovision-by-name deletes the bind account by username (#346)', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?username=')) {
+        return json({ results: [{ pk: 88, username: 'hola-nextcloud-abcd0000-ldap' }] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.deprovision({ deploymentId: 'nextcloud-abcd0000', appName: 'nextcloud', mode: 'native-ldap' });
+
+    expect(calls.some(c => c.method === 'DELETE' && c.path === '/api/v3/core/users/88/')).toBe(true);
+  });
+
+  test('deprovision-by-name tolerates a missing orphan (provider not found) and still clears the app', async () => {
+    installFetch((call) => {
+      // No provider matches the name — the orphan hunt finds nothing to delete,
+      // but must not throw and must still attempt the application slug.
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/providers/proxy/?name__iexact=')) {
+        return json({ results: [] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.deprovision({ deploymentId: 'webtop-1c3379a4', appName: 'webtop', mode: 'forward-auth' });
+
+    expect(calls.some(c => c.method === 'DELETE' && c.path === '/api/v3/core/applications/hola-webtop-1c3379a4/')).toBe(true);
+    // No provider pk resolved → no provider DELETE, no outpost detach.
+    expect(calls.some(c => c.method === 'DELETE' && c.path.startsWith('/api/v3/providers/proxy/'))).toBe(false);
+    expect(calls.some(c => c.method === 'PATCH' && c.path.startsWith('/api/v3/outposts/instances/'))).toBe(false);
+  });
+
+  test('deprovision with neither a ref nor app/mode is a no-op (no orphan hunt)', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.deprovision({ deploymentId: 'x' });
+
+    expect(calls.length).toBe(0);
+  });
 });
 
 describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {

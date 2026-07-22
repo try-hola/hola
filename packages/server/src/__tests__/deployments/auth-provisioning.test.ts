@@ -609,6 +609,28 @@ describe('Auth provisioning lifecycle', () => {
     expect(text).toMatch(/action '\w+' failed: simulated provisioning failure/i);
   });
 
+  test('delete of a failed-provisioning deployment cleans up orphaned auth objects by name (#346 Defect 2)', async () => {
+    const spy = new SpyProvisioner();
+    spy.failNext = true;
+    const sys = makeSystem({ auth: OIDC_AUTH, provisioner: spy });
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    await waitForJob(sys.jobs, created.jobId!);
+    expect((await sys.deployments.getDeployment(created.deploymentId)).status).toBe('error');
+
+    // Provisioning threw before a ref was persisted, so any Authentik objects it
+    // created before the throw have no recorded pk. A naive delete (ref-only) would
+    // strand them forever. Delete must instead ask the backend to clean up by the
+    // app's DECLARED mode + deterministic name.
+    await sys.deployments.deleteDeployment(created.deploymentId);
+
+    const byName = spy.deprovisions.find(d => !d.ref);
+    expect(byName).toBeDefined();
+    expect(byName!.mode).toBe('native-oidc');
+    expect(byName!.appName).toBe('gitea');
+    expect(byName!.deploymentId).toBe(created.deploymentId);
+  });
+
   test('forward-auth under HOLA_AUTH_MODE=none is rejected up front, creating no error-state deployment', async () => {
     // The None backend (production with no Authentik) cannot gate a forward-auth
     // route. Installing such an app must fail at create time with the clear,
