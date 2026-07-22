@@ -170,6 +170,38 @@ describe('hola bootstrap', () => {
     expect(runner.calls.some((c) => c.cmd.includes('install.sh'))).toBe(true);
   });
 
+  // --- SSH connection multiplexing (#181) ------------------------------------
+
+  it('shares one multiplexed SSH connection and tears the master down at the end (#181)', async () => {
+    const runner = makeRunner();
+    let extraSshArgs: string[] | undefined;
+    const res = await runBootstrap(
+      { host: 'me@vm', skipChecks: true, json: true, ref: 'cli-v0.2.0' },
+      { prompter: scriptedPrompter(answers), makeRunner: (extra) => { extraSshArgs = extra; return runner; } }
+    );
+    expect(res?.host).toBe('me@vm');
+    // The runner is built with OpenSSH connection-sharing options.
+    expect(extraSshArgs).toContain('ControlMaster=auto');
+    const controlPathArg = extraSshArgs?.find((a) => a.startsWith('ControlPath='));
+    expect(controlPathArg).toBeTruthy();
+    // The master is explicitly closed at the end via `ssh -O exit` (a local spawn).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const exitCall = (runner.local as any).mock.calls.find(
+      (c: unknown[]) => Array.isArray(c[1]) && (c[1] as string[]).includes('-O') && (c[1] as string[]).includes('exit'),
+    );
+    expect(exitCall).toBeTruthy();
+    expect((exitCall[1] as string[]).some((a) => a === controlPathArg)).toBe(true);
+  });
+
+  it('does not multiplex under --dry-run (no connection is made) (#181)', async () => {
+    let extraSshArgs: string[] | undefined;
+    await runBootstrap(
+      { host: 'me@vm', dryRun: true, skipChecks: true, json: true },
+      { prompter: scriptedPrompter(answers), makeRunner: (extra) => { extraSshArgs = extra; return makeRunner(); } }
+    );
+    expect(extraSshArgs).toEqual([]);
+  });
+
   it('requires --host', async () => {
     const res = await runBootstrap({ skipChecks: true, json: true }, { prompter: scriptedPrompter(answers), runner: makeRunner() });
     expect(res).toBeUndefined();

@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
@@ -51,6 +52,28 @@ function versionFromRef(ref: string): string {
   return ref.startsWith('cli-v') ? ref.slice('cli-v'.length) : ref;
 }
 
+/** Per-run OpenSSH control-socket path for connection multiplexing (#181). */
+function sshControlPath(): string {
+  return path.join(os.tmpdir(), `hola-boot-${process.pid}-${Date.now().toString(36)}.sock`);
+}
+
+/**
+ * OpenSSH connection-sharing args so every bootstrap step reuses one
+ * authenticated master connection (#181). `bootstrap` opens ~5 SSH connections
+ * (preflight → fetch → write .env → install → verify); without sharing each
+ * authenticates independently — invisible with keys/agent, but ~5 password
+ * prompts otherwise, plus a full TCP+handshake per step.
+ *
+ * `ControlMaster=auto` degrades gracefully: if a master can't be established
+ * (platform without socket support, `ControlPath` too long), each `ssh` simply
+ * opens its own direct connection instead of failing. `ControlPersist` keeps the
+ * master briefly alive across the short gaps between steps; it is torn down
+ * explicitly at the end of the run (`ssh -O exit`).
+ */
+export function sshMultiplexArgs(controlPath: string): string[] {
+  return ['-o', 'ControlMaster=auto', '-o', `ControlPath=${controlPath}`, '-o', 'ControlPersist=60'];
+}
+
 /** Derive the GitHub release-download base from a clone URL (…/hola.git → …/hola). */
 function releaseBase(repo: string): string {
   return repo.replace(/\.git$/, '');
@@ -98,6 +121,8 @@ export async function runBootstrap(
   injected?: {
     prompter?: Prompter;
     runner?: Runner;
+    /** Build the runner from the SSH-multiplexing args; defaults to `systemRunner`. Injectable for tests. */
+    makeRunner?: (extraSshArgs: string[]) => Runner;
     checks?: (c: ConfigMap) => Promise<CheckResult[]>;
     /** Locate a reusable .env (defaults to the init-produced compose/.env); injectable for tests. */
     findEnvFile?: () => Promise<string | null>;
@@ -106,7 +131,11 @@ export async function runBootstrap(
   }
 ): Promise<BootstrapResult | undefined> {
   const prompter = injected?.prompter ?? clackPrompter();
-  const runner = injected?.runner ?? systemRunner();
+  // Share one authenticated SSH connection across all steps (#181), except when a
+  // runner is injected (tests) or under --dry-run (no connection is ever made).
+  const controlPath = injected?.runner || opts.dryRun ? null : sshControlPath();
+  const runner =
+    injected?.runner ?? (injected?.makeRunner ?? systemRunner)(controlPath ? sshMultiplexArgs(controlPath) : []);
   const out = (msg: string) => { if (!opts.json) console.log(msg); };
 
   const host = opts.host;
@@ -359,6 +388,17 @@ export async function runBootstrap(
     if (/ENOENT|spawn ssh/i.test(msg)) console.error('Hint: the `ssh` client must be installed and on PATH.');
     process.exitCode = 1;
     return undefined;
+  } finally {
+    // Tear down the shared master connection so no control socket lingers past the
+    // run (#181). Best-effort: a missing socket (nothing ever connected) just errors
+    // harmlessly, and ControlPersist would expire it anyway.
+    if (controlPath && host) {
+      try {
+        await runner.local('ssh', ['-O', 'exit', '-o', `ControlPath=${controlPath}`, host]);
+      } catch {
+        // ignore — leaving a persist-expiring socket is harmless
+      }
+    }
   }
 }
 
