@@ -46,7 +46,7 @@ Commands are registered in `src/index.ts` with lazy loaders and implemented unde
 
 ### Catalog & install
 - `hola catalog [query]` — browse/search the app catalog. Options: `--category`, `--limit`, `--json`.
-- `hola install <appId>` — install a catalog app (draft from catalog → validate → finalize → deploy → watch). Pin a version with `--app-version` or inline as `hola install <appId>@<version>` (defaults to the newest release). Options: `--app-version`, `--name`, `--set KEY=VALUE` (repeatable), `--strict`, `--no-stream`, `--json`.
+- `hola install <appId>` — install a catalog app (draft from catalog → validate → finalize → deploy → watch). Pin a version with `--app-version` or inline as `hola install <appId>@<version>` (defaults to the newest release). `--name` sets the deployment name **and** its subdomain (the app is served at `<name>.<base>`; default `<appId>.<base>`). Most apps are single-instance — a second install is rejected unless the catalog marks the app multi-instance; pass `--allow-multiple` with a distinct `--name` to run a second copy on purpose (e.g. `hola install webtop --name desk-2 --allow-multiple`). Options: `--app-version`, `--name`, `--set KEY=VALUE` (repeatable), `--allow-multiple`, `--strict`, `--no-stream`, `--json`.
 
 ### Deployments
 - `hola deployments` — list deployments. Options: `--status`, `--json`.

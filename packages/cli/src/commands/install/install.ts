@@ -25,6 +25,13 @@ export interface InstallOptions {
    * (reproducible/scripted installs).
    */
   noGenerateSecrets?: boolean;
+  /**
+   * From `--allow-multiple`: install a second instance of an app the catalog marks
+   * single-instance (#246). The server rejects a duplicate install by default;
+   * this bypasses that guard. Still needs a distinct `--name` (→ distinct
+   * subdomain), or the install fails with a host conflict.
+   */
+  allowMultiple?: boolean;
 }
 
 /**
@@ -151,7 +158,7 @@ export async function runInstall(
       return undefined;
     }
 
-    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream }, out);
+    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple }, out);
 
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else out(`Done. ${appId} → job status: ${result.status}`);

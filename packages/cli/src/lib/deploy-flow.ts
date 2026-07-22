@@ -23,7 +23,7 @@ export interface DeployResult {
 export async function finalizeAndDeploy(
   sdk: HolaSdk,
   draftId: string,
-  opts: { name?: string; strict?: boolean; noStream?: boolean },
+  opts: { name?: string; strict?: boolean; noStream?: boolean; allowMultiple?: boolean },
   out: (msg: string) => void
 ): Promise<DeployResult> {
   out('Validating…');
@@ -58,7 +58,7 @@ export async function finalizeAndDeploy(
   await sdk.drafts.finalize(draftId);
 
   out('Creating deployment…');
-  const dep = (await sdk.deployments.create({ draftId, name: opts.name })) as CreateDeploymentFromDraftResponse;
+  const dep = (await sdk.deployments.create({ draftId, name: opts.name, allowMultiple: opts.allowMultiple })) as CreateDeploymentFromDraftResponse;
   out(`Deployment ${dep.deploymentId} created (release ${dep.releaseId}).`);
 
   let status = 'created';
@@ -117,6 +117,13 @@ export function reportDeployError(err: unknown): undefined {
   console.error(`Failed: ${msg}`);
   if (/401|unauthor/i.test(msg)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
   if (/fetch failed|ECONNREFUSED|network|connect/i.test(msg)) console.error('Hint: set HOLA_API_URL (default http://localhost:3001).');
+  // #246: a single-instance app already installed — the message already names the
+  // --allow-multiple escape hatch, but pair it with the distinct-name it needs.
+  if (/single-instance/i.test(msg)) console.error('Hint: pass a distinct name too, e.g. --allow-multiple --name myapp-2.');
+  // A taken/reserved/invalid subdomain — the instance name must be distinct.
+  else if (/is already in use|reserved by a core|valid DNS label/i.test(msg)) {
+    console.error('Hint: choose a different instance name with --name (e.g. --name myapp-2).');
+  }
   process.exitCode = 1;
   return undefined;
 }

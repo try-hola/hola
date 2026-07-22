@@ -221,6 +221,60 @@ describe('install', () => {
     expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'uptime-kuma', version: '1.2.1' });
     expect(res?.deploymentId).toBe('dep1');
   });
+
+  it('passes --allow-multiple and the distinct --name through to the deployment create (#246)', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { name: 'gitea-2', allowMultiple: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith({ draftId: 'd1', name: 'gitea-2', allowMultiple: true });
+  });
+
+  it('a plain install does not opt into multiples (#246)', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    // name defaults to the app id; allowMultiple is left unset (singleton).
+    expect(sdk.deployments.create).toHaveBeenCalledWith({ draftId: 'd1', name: 'gitea', allowMultiple: undefined });
+  });
+
+  it('hints at --allow-multiple when a single-instance app is already installed (#246)', async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
+    try {
+      const sdk = makeSdk({
+        drafts: {
+          create: vi.fn(async () => ({ draftId: 'd1' })),
+          byId: vi.fn(async () => ({ draftId: 'd1', appEnv: [] })),
+          validate: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+          preflight: vi.fn(async () => ({ ok: true, checks: [] })),
+          finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
+        },
+      });
+      sdk.deployments.create = vi.fn(async () => {
+        throw new Error("'gitea' is already installed (deployment gitea-abc123de). This app is single-instance; pass --allow-multiple ...");
+      });
+      const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(errors.some(e => /--allow-multiple --name/.test(e))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('hints at a distinct --name when the subdomain is already taken (#246)', async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
+    try {
+      const sdk = makeSdk();
+      sdk.deployments.create = vi.fn(async () => {
+        throw new Error("Host 'gitea.local.hola' is already in use by deployment gitea-abc123de");
+      });
+      await runInstall('gitea', { name: 'gitea', allowMultiple: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(process.exitCode).toBe(1);
+      expect(errors.some(e => /different instance name with --name/.test(e))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('resolveAppAndVersion', () => {
