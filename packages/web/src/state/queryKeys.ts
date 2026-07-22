@@ -30,6 +30,7 @@ export const queryKeys = {
       ['deployments', 'list', normalizeParams(params)] as const,
     detail: (id: string) => ['deployments', 'detail', id] as const,
     config: (id: string) => ['deployments', 'config', id] as const,
+    updateCheck: (id: string) => ['deployments', 'update-check', id] as const,
     history: (id: string, page: number) =>
       ['deployments', 'history', id, page] as const,
   },
