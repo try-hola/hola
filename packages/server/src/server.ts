@@ -1046,6 +1046,21 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // On-demand richer update check (#299): pulls the target bundle for its
+  // upgrade metadata + skip-guard verdict. Matched before the generic `:id` GET
+  // (its `$`-anchored pattern excludes this sub-path anyway).
+  const updateCheckMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/update-check$/);
+  if (updateCheckMatch && req.method === 'GET') {
+    const id = updateCheckMatch[1];
+    try {
+      const services = getServices();
+      const payload = await services.deployments.getUpdateCheck(id);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
