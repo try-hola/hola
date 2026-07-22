@@ -81,6 +81,16 @@ export interface ProvisionResult {
 export interface DeprovisionInput {
   deploymentId: string;
   ref?: ProvisionedAuthRef;
+  /**
+   * For best-effort cleanup of a provisioning failure that threw before a `ref`
+   * was persisted (#346 Defect 2): the app's name and DECLARED auth mode. Only
+   * consulted when `ref` is absent — the backend reconstructs the deterministic
+   * object names `provision()` would have used and removes whatever it finds, so
+   * a mid-provision failure can't strand orphaned objects that uninstall could
+   * otherwise never clean up.
+   */
+  appName?: string;
+  mode?: AuthMode;
 }
 
 /** Input for provisioning the Hola dashboard's OWN OIDC client (not a deployed app). */
@@ -292,7 +302,15 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
 
   async deprovision(input: DeprovisionInput): Promise<void> {
     const ref = input.ref;
-    if (!ref) return;
+    if (!ref) {
+      // No persisted ref: provisioning may have created Authentik objects and then
+      // thrown before the ref was recorded (#346 Defect 2). Best-effort clean them
+      // up by their deterministic names so uninstall isn't left with orphans.
+      if (input.appName && input.mode && input.mode !== 'none') {
+        await this.deprovisionByName(input.deploymentId, input.appName, input.mode);
+      }
+      return;
+    }
     if (ref.mode === 'native-oidc') {
       // Delete the application first (it points at the provider), then the provider.
       if (ref.applicationSlug) {
@@ -323,6 +341,88 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         await this.apiDeleteIgnoreMissing(`/api/v3/core/users/${ref.bindAccountPk}/`);
       }
       this.logger.info('Deprovisioned LDAP bind account', { deploymentId: input.deploymentId, bindAccountPk: ref.bindAccountPk });
+    }
+  }
+
+  /**
+   * Best-effort teardown of Authentik objects by their DETERMINISTIC names, for a
+   * deployment whose provisioning threw before persisting a ref (#346 Defect 2).
+   * Reconstructs the exact names `provision*` would have used (from the deployment
+   * id's unique suffix) and deletes whatever exists. Tolerant of missing objects.
+   */
+  private async deprovisionByName(deploymentId: string, appName: string, mode: AuthMode): Promise<void> {
+    const suffix = deploymentSuffix(deploymentId);
+    const providerName = `hola-${appName}-${suffix}`;
+    const slug = slugify(providerName);
+
+    if (mode === 'native-oidc') {
+      await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(slug)}/`);
+      const pk = await this.findProviderPkByName('oauth2', providerName);
+      if (pk != null) await this.apiDeleteIgnoreMissing(`/api/v3/providers/oauth2/${pk}/`);
+      this.logger.info('Best-effort deprovisioned OIDC client by name', { deploymentId, providerName, providerPk: pk });
+      return;
+    }
+    if (mode === 'forward-auth') {
+      const pk = await this.findProviderPkByName('proxy', providerName);
+      if (pk != null) {
+        const outpostPk = await this.findEmbeddedOutpostPk();
+        if (outpostPk != null) await this.removeProviderFromOutpost(outpostPk, pk);
+      }
+      await this.apiDeleteIgnoreMissing(`/api/v3/core/applications/${encodeURIComponent(slug)}/`);
+      if (pk != null) await this.apiDeleteIgnoreMissing(`/api/v3/providers/proxy/${pk}/`);
+      this.logger.info('Best-effort deprovisioned forward-auth provider by name', { deploymentId, providerName, providerPk: pk });
+      return;
+    }
+    if (mode === 'native-ldap') {
+      const username = slugify(`hola-${appName}-${suffix}-ldap`);
+      const pk = await this.findUserPkByUsername(username);
+      if (pk != null) await this.apiDeleteIgnoreMissing(`/api/v3/core/users/${pk}/`);
+      this.logger.info('Best-effort deprovisioned LDAP bind account by name', { deploymentId, username, bindAccountPk: pk });
+    }
+  }
+
+  /** Look up a provider pk by its exact name, or undefined if none/unreadable. */
+  private async findProviderPkByName(kind: 'oauth2' | 'proxy', name: string): Promise<number | undefined> {
+    try {
+      const list = await this.api<{ results?: Array<{ pk: number; name: string }> }>(
+        'GET', `/api/v3/providers/${kind}/?name__iexact=${encodeURIComponent(name)}`
+      );
+      return list.results?.find(p => p.name === name)?.pk;
+    } catch (error) {
+      this.logger.warn('Failed to look up provider by name; skipping', {
+        kind, name, error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** Look up a user pk by its exact username, or undefined if none/unreadable. */
+  private async findUserPkByUsername(username: string): Promise<number | undefined> {
+    try {
+      const list = await this.api<{ results?: Array<{ pk: number; username: string }> }>(
+        'GET', `/api/v3/core/users/?username=${encodeURIComponent(username)}`
+      );
+      return list.results?.find(u => u.username === username)?.pk;
+    } catch (error) {
+      this.logger.warn('Failed to look up user by username; skipping', {
+        username, error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  /** The embedded outpost's pk, or undefined if not found/unreadable. */
+  private async findEmbeddedOutpostPk(): Promise<number | undefined> {
+    try {
+      const list = await this.api<{ results?: Array<{ pk: number }> }>(
+        'GET', `/api/v3/outposts/instances/?name__iexact=${encodeURIComponent('authentik Embedded Outpost')}`
+      );
+      return list.results?.[0]?.pk;
+    } catch (error) {
+      this.logger.warn('Failed to look up embedded outpost; skipping detach', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
     }
   }
 
