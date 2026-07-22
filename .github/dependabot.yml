@@ -15,6 +15,10 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
+    # Let a new release settle before Dependabot opens a PR for it — avoids churn
+    # from versions that get yanked or immediately patched.
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
@@ -36,6 +40,8 @@ updates:
       day: "monday"
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(ci)"
     groups:
@@ -56,5 +62,7 @@ updates:
       day: "monday"
     labels:
       - "dependencies"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(docker)"
