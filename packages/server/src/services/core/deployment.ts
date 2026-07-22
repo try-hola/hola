@@ -451,23 +451,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   /**
-   * Enforce single-instance-by-default (#246): reject installing an app that
-   * already has a deployment, unless the app's manifest opts into multiples
-   * (`multiInstance: true`) or the caller passes the per-install override. Pure
-   * (operates on the rehydrated in-memory map), so it runs in both the mock and
-   * real services. Global-capability bolt-ons (backup → apps-data, homepage →
-   * app-registry) assume one instance, so the override is "you know what you're
-   * doing" — it still requires a distinct subdomain, validated separately.
+   * Enforce single-instance-by-default (#246) before creating any state. Default
+   * no-op — the real service overrides this. (Like the other create-time guards,
+   * the mock stays permissive: it resolves every draft to one placeholder app, so
+   * enforcing here would spuriously collide unrelated mock-based tests.)
    */
   protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean): void {
-    if (multiInstance || allowMultiple) return;
-    const existing = [...this.deployments.values()].find(d => d.app === appId);
-    if (existing) {
-      throw new ConflictError(
-        `'${appId}' is already installed (deployment ${existing.id}). This app is single-instance; ` +
-          `pass --allow-multiple (CLI) or the "install another" option (dashboard) to run a second copy.`,
-      );
-    }
+    void appId;
+    void multiInstance;
+    void allowMultiple;
   }
 
   /** Public URL the app is reachable at; the real service derives it from routing. */
@@ -2127,6 +2119,26 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await this.routingService.reconcile(rules);
 
     this.logger.info('Rehydrated deployments from storage', { count: this.deployments.size });
+  }
+
+  /**
+   * Enforce single-instance-by-default (#246): reject installing an app that
+   * already has a deployment, unless its manifest opts into multiples
+   * (`multiInstance: true`) or the caller passes the per-install override. Operates
+   * on the rehydrated in-memory map. Global-capability bolt-ons (backup →
+   * apps-data, homepage → app-registry) assume one instance, so the override is
+   * "you know what you're doing" — it still requires a distinct subdomain, which
+   * onBeforeCreate validates separately.
+   */
+  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean): void {
+    if (multiInstance || allowMultiple) return;
+    const existing = [...this.deployments.values()].find(d => d.app === appId);
+    if (existing) {
+      throw new ConflictError(
+        `'${appId}' is already installed (deployment ${existing.id}). This app is single-instance; ` +
+          `pass --allow-multiple (CLI) or the "install another" option (dashboard) to run a second copy.`,
+      );
+    }
   }
 
   protected override async onBeforeCreate(deploymentId: string, app: string, subdomain: string): Promise<void> {

@@ -52,11 +52,7 @@ describe('Deployment Management', () => {
     });
     const draftId = createResponse.data!.draftId;
 
-    // These lifecycle tests spin up several deployments from the same mock app;
-    // opt out of the single-instance-by-default guard (#246) — the mock resolves
-    // every draft to one placeholder app, so distinct installs would otherwise
-    // collide.
-    const deploymentRequest: CreateDeploymentFromDraftRequest = { draftId, name, options, allowMultiple: true };
+    const deploymentRequest: CreateDeploymentFromDraftRequest = { draftId, name, options };
     const deploymentResponse = await makeRequest<CreateDeploymentFromDraftResponse>({
       method: 'POST',
       url: `${baseURL}/api/deployments`,

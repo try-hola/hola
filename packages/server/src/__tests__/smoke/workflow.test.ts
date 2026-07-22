@@ -145,10 +145,7 @@ describe('Smoke: full install workflow (mock mode)', () => {
     const deployment = await makeRequest<CreateDeploymentFromDraftResponse>({
       method: 'POST',
       url: `${baseURL}/api/deployments`,
-      // A prior test in this suite already installed the mock's placeholder app;
-      // opt out of the single-instance guard (#246) since the mock resolves every
-      // draft to one app.
-      body: { draftId, name: 'smoke-stop', allowMultiple: true },
+      body: { draftId, name: 'smoke-stop' },
     });
     const deploymentId = deployment.data!.deploymentId;
 
