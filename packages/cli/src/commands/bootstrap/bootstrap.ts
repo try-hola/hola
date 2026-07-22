@@ -63,6 +63,19 @@ function releaseBase(repo: string): string {
  * pulls the published images), and verify. Returns the result, or undefined on
  * failure (after setting a non-zero exit code).
  */
+/**
+ * Whether a parsed `.env` actually looks like a Hola install config. Detection
+ * finds a file by name/existence alone, so an unrelated project's `.env` sitting
+ * in the cwd (or in `packages/compose/`) would otherwise be offered for reuse —
+ * and, if accepted, streamed to the host as the Hola config (#345). Every Hola
+ * config the wizard writes carries the `HOLA_`-prefixed dashboard/base domain;
+ * that prefix makes a false positive from a foreign `.env` effectively
+ * impossible, while still recognizing a hand-trimmed but genuine Hola file.
+ */
+function looksLikeHolaConfig(config: ConfigMap): boolean {
+  return !!config.HOLA_DOMAIN?.trim() || !!config.HOLA_BASE_DOMAIN?.trim();
+}
+
 /** First existing `.env` a freshly-run `hola init` would have written, or null. */
 async function defaultFindEnvFile(): Promise<string | null> {
   const candidates = [
@@ -120,23 +133,28 @@ export async function runBootstrap(
     if (!reuse && !opts.json) {
       const found = await (injected?.findEnvFile ?? defaultFindEnvFile)();
       if (found) {
-        // Show WHAT the file would deploy (a stale leftover is easy to ship blind),
-        // and default to NO so reuse is a deliberate choice, not an Enter-through.
         const existing = parseEnv(await fs.readFile(found, 'utf8').catch(() => ''));
-        const summary = [
-          existing.HOLA_BASE_DOMAIN ? `domain ${existing.HOLA_BASE_DOMAIN}` : existing.HOLA_DOMAIN ? `dashboard ${existing.HOLA_DOMAIN}` : null,
-          existing.HOLA_ADMIN_EMAIL ? `admin ${existing.HOLA_ADMIN_EMAIL}` : null,
-        ].filter(Boolean).join(' · ');
-        out(`Found an existing config: ${found}`);
-        if (summary) out(`  it would deploy: ${colors.bold(summary)}`);
-        const ans = await prompter.prompt({
-          key: '_use_env',
-          type: 'confirm',
-          message: 'Reuse it and skip the setup questions?',
-          default: 'false',
-        });
-        if (ans === 'true') reuse = found;
-        else out('  Starting fresh — answering the questions below.');
+        // Only offer reuse when the file is actually a Hola config; a foreign
+        // `.env` that merely happens to sit here is silently ignored so the
+        // wizard runs, rather than being shipped to the host as our config (#345).
+        if (looksLikeHolaConfig(existing)) {
+          // Show WHAT the file would deploy (a stale leftover is easy to ship blind),
+          // and default to NO so reuse is a deliberate choice, not an Enter-through.
+          const summary = [
+            existing.HOLA_BASE_DOMAIN ? `domain ${existing.HOLA_BASE_DOMAIN}` : existing.HOLA_DOMAIN ? `dashboard ${existing.HOLA_DOMAIN}` : null,
+            existing.HOLA_ADMIN_EMAIL ? `admin ${existing.HOLA_ADMIN_EMAIL}` : null,
+          ].filter(Boolean).join(' · ');
+          out(`Found an existing config: ${found}`);
+          if (summary) out(`  it would deploy: ${colors.bold(summary)}`);
+          const ans = await prompter.prompt({
+            key: '_use_env',
+            type: 'confirm',
+            message: 'Reuse it and skip the setup questions?',
+            default: 'false',
+          });
+          if (ans === 'true') reuse = found;
+          else out('  Starting fresh — answering the questions below.');
+        }
       }
     }
     if (reuse) {
