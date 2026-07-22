@@ -557,6 +557,42 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55 });
   });
 
+  test('forward-auth reuse re-pins the embedded outpost browser host (#137)', async () => {
+    // A deployment first provisioned before the host-pinning fix hits the reuse
+    // branch on every redeploy. If that branch never touches the outpost, its
+    // `config.authentik_host` stays at Authentik's unroutable `0.0.0.0:9000`
+    // default and forward-auth login 302s to a dead address. The reuse path must
+    // re-bind the provider so the host is re-pinned, healing such deployments.
+    installFetch((call) => {
+      // Existing outpost still carries the broken default host + already has the
+      // provider bound; the reuse re-pin must overwrite the host regardless.
+      if (call.method === 'GET' && call.path === '/api/v3/outposts/instances/') {
+        return json({ results: [{ pk: 1, providers: [55], config: { authentik_host: 'http://0.0.0.0:9000' } }] });
+      }
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.provision({
+      deploymentId: 'dep-abcdef0123456789',
+      appName: 'grafana',
+      mode: 'forward-auth',
+      host: 'grafana.example.com',
+      existingRef: { mode: 'forward-auth', providerPk: 55, applicationSlug: 'grafana-dep-abcd', outpostPk: 1 },
+    });
+
+    // The reuse path PATCHed the outpost, pinning the browser host to the public URL.
+    const outpostPatch = calls.find(c => c.method === 'PATCH' && c.path.startsWith('/api/v3/outposts/instances/'))!;
+    expect(outpostPatch).toBeDefined();
+    const cfg = (outpostPatch.body as { config?: Record<string, unknown>; providers?: number[] });
+    expect(cfg.config?.authentik_host).toBe('https://auth.example.com');
+    expect(cfg.config?.authentik_host_browser).toBe('https://auth.example.com');
+    // Provider stays bound (deduped, not duplicated).
+    expect(cfg.providers).toContain(55);
+    // Still a reuse — no new provider created.
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/v3/providers/proxy/')).toBe(false);
+  });
+
   test('forward-auth reuse with NO declared groups skips the policy-bindings lookup (scoped token can 403 it)', async () => {
     // The reuse/restart path calls reconcileForwardAuthGroups WITHOUT an
     // applicationPk. `GET /api/v3/policies/bindings/` is forbidden for the

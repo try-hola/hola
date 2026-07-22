@@ -654,6 +654,14 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
         mode: 'forward_single',
         external_host: externalHost,
       });
+      // Re-pin the embedded outpost's browser host on every reuse. The fresh-provision
+      // path already pins `authentik_host`, but a deployment first provisioned before
+      // that fix (or on a host whose outpost still carries Authentik's `0.0.0.0:9000`
+      // default) never re-binds the outpost here, so its OAuth `authorize` redirect
+      // stays pointed at an unroutable address. Re-adding the provider is idempotent
+      // (deduped) and rewrites `config.authentik_host`, healing such deployments on the
+      // next redeploy (#137).
+      await this.addProviderToEmbeddedOutpost(existing.providerPk);
       const reuseSlug = existing.applicationSlug ?? slug;
       // Re-reconcile the group restriction so it tracks manifest changes across redeploys.
       await this.reconcileForwardAuthGroups(reuseSlug, input.forwardAuth?.allowedGroups ?? []);
