@@ -11,7 +11,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, access } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -124,6 +124,36 @@ describe('Deployment persistence (real service)', () => {
     // Survives a restart (fresh service over the same data root rehydrates metadata).
     const restarted = makeSystem();
     expect(await restarted.deployments.getDeploymentSource(depCustom.deploymentId)).toBe('get2know');
+  });
+
+  test('deleteDeployment reclaims the host bind-mount data root (#341)', async () => {
+    const bindRoot = await mkdtemp(join(tmpdir(), 'hola-appsbind-'));
+    const prevBindRoot = process.env.HOLA_APPS_BIND_ROOT;
+    process.env.HOLA_APPS_BIND_ROOT = bindRoot;
+    try {
+      const { drafts, deployments } = makeSystem();
+      const draftId = await finalizedDraft(drafts, 'services:\n  gitea:\n    image: gitea/gitea\n');
+      const created = await deployments.createFromDraft({ draftId, name: 'gitea', options: { autoStart: false } });
+
+      // Simulate the app's persistent data written into its bind root by a real
+      // `docker compose up` (Postgres db/, uploaded media/, etc.).
+      const exists = async (p: string) => access(p).then(() => true, () => false);
+      const appRoot = join(bindRoot, created.deploymentId);
+      await mkdir(join(appRoot, 'db'), { recursive: true });
+      await writeFile(join(appRoot, 'db', 'data'), 'rows');
+      expect(await exists(appRoot)).toBe(true);
+
+      await deployments.deleteDeployment(created.deploymentId);
+
+      // The data root is gone — uninstall no longer leaves orphaned data on disk.
+      expect(await exists(appRoot)).toBe(false);
+      // The bind root itself is untouched (guard only deletes strictly within it).
+      expect(await exists(bindRoot)).toBe(true);
+    } finally {
+      if (prevBindRoot === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
+      else process.env.HOLA_APPS_BIND_ROOT = prevBindRoot;
+      await rm(bindRoot, { recursive: true, force: true });
+    }
   });
 
   test('promotes a finalized draft into a deployment with a persisted active release', async () => {
