@@ -19,6 +19,7 @@ import type {
   UploadDraftFileResponse, DeleteDraftFileResponse,
   // Deployment types
   CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
+  GetSubdomainAvailabilityResponse,
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
@@ -436,6 +437,11 @@ export class SdkAdapter {
   deployments = {
     create: (data: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> =>
       this.enhancedRequest('POST', '/api/deployments', () => this.sdk.deployments.create(data), data, true),
+
+    // Live subdomain-availability check for the install wizard (#246). Not cached —
+    // availability changes as deployments come and go.
+    subdomainAvailable: (subdomain: string): Promise<GetSubdomainAvailabilityResponse> =>
+      this.sdk.deployments.subdomainAvailable(subdomain),
 
     // Full teardown: stops containers, deprovisions auth, releases the Traefik
     // route, and removes the record (DELETE /api/deployments/:id). The `delete`

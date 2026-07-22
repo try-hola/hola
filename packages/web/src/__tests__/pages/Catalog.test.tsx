@@ -93,6 +93,16 @@ describe('Catalog', () => {
         .toHaveAttribute('href', '/deployments/webtop-ab12cd34');
     });
 
+    it('offers an "install another" link that opens the wizard with the override (#246)', async () => {
+      mockApi([app()], [deployment()]);
+
+      renderCatalog();
+
+      await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
+      expect(screen.getByRole('link', { name: /another/i }))
+        .toHaveAttribute('href', '/catalog/webtop/install?another=1');
+    });
+
     it('counts a non-running deployment as installed', async () => {
       // The Traefik host is owned by app name regardless of status, so a stopped
       // or errored deployment still blocks a second install server-side.
