@@ -321,6 +321,16 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     void deploymentId;
   }
   /**
+   * Remove a deployment's host bind-mount data root (`<HOLA_APPS_BIND_ROOT>/<id>`
+   * — the app's persistent Postgres/media data). Distinct from {@link removeStorage},
+   * which only covers the internal `/data/deployments/<id>` tree. Base is a no-op
+   * (mock/in-memory has no host data); the real service overrides it. Called on
+   * delete so uninstall doesn't accumulate orphaned data dirs (#341).
+   */
+  protected async removeAppData(deploymentId: string): Promise<void> {
+    void deploymentId;
+  }
+  /**
    * Tear down a deployment's running containers (`docker compose down`).
    * Base is a no-op; the real service overrides it. Called synchronously during
    * delete BEFORE {@link removeStorage} so the compose file still exists on disk.
@@ -825,6 +835,18 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       await this.removeStorage(deploymentId);
     } catch (error) {
       this.logger.warn('Failed to delete deployment storage', {
+        deploymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Reclaim the host bind-mount data root (Postgres/media/etc). Best-effort and
+    // non-fatal, mirroring removeStorage: a failure here must never block delete —
+    // it leaves reclaimable data on disk, logged for manual cleanup (#341).
+    try {
+      await this.removeAppData(deploymentId);
+    } catch (error) {
+      this.logger.warn('Failed to delete deployment app data root', {
         deploymentId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -2247,6 +2269,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   protected override async removeStorage(deploymentId: string): Promise<void> {
     await this.storageService.deleteDir(`deployments/${deploymentId}`, true);
+  }
+
+  /**
+   * Remove the deployment's host bind-mount data root (`<HOLA_APPS_BIND_ROOT>/<id>`).
+   * Guarded to only ever delete strictly *within* the apps bind root — never the
+   * root itself nor any path escaping it — so a malformed id can't widen the blast
+   * radius. No-ops when the dir doesn't exist (apps with no `${HOLA_APP_DATA}` mount
+   * never create one), keeping the delete path quiet for those (#341).
+   */
+  protected override async removeAppData(deploymentId: string): Promise<void> {
+    const base = this.appsBindRoot();
+    const appRoot = this.appRootFor(deploymentId);
+    if (appRoot === base || !appRoot.startsWith(`${base}/`)) {
+      this.logger.warn('Refusing to remove app data outside the apps bind root', { deploymentId, appRoot, base });
+      return;
+    }
+    if (!(await dirHasContents(appRoot))) return;
+    await this.storageService.deleteDir(appRoot, true);
+    this.logger.info('Removed deployment app data root', { deploymentId, appRoot });
   }
 }
 
