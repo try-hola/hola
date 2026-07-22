@@ -201,6 +201,82 @@ describe('Deployment configuration (getConfig + real updateDeployment)', () => {
     expect(dotenv).toContain('ADMIN_USER="root"');
   });
 
+  test('a partial env update leaves omitted vars untouched (merge-by-key, issue #332)', async () => {
+    const { drafts, deployments, jobs } = makeSystem();
+    const deploymentId = await createRunningDeployment(drafts, deployments, jobs);
+
+    // Send ONLY ADMIN_USER. Under the old full-replace this silently wiped
+    // MAX_CONNECTIONS; merge-by-key must leave it (and its spec) intact.
+    const result = await deployments.updateDeployment(deploymentId, {
+      env: [{ key: 'ADMIN_USER', value: 'root', isSecret: false }],
+    });
+    expect(result.ok).toBe(true);
+    await waitForJob(jobs, result.jobId!);
+
+    const config = await deployments.getConfig(deploymentId);
+    expect(config.appEnv.find((e) => e.key === 'ADMIN_USER')?.value).toBe('root');
+    const maxConn = config.appEnv.find((e) => e.key === 'MAX_CONNECTIONS');
+    expect(maxConn?.value).toBe('10'); // NOT dropped
+    expect(maxConn?.type).toBe('integer'); // spec still intact
+  });
+
+  test('adding a new custom var merges it without dropping existing vars', async () => {
+    const { drafts, deployments, jobs } = makeSystem();
+    const deploymentId = await createRunningDeployment(drafts, deployments, jobs);
+
+    const result = await deployments.updateDeployment(deploymentId, {
+      env: [{ key: 'EXTRA_FLAG', value: 'on', isSecret: false }],
+    });
+    await waitForJob(jobs, result.jobId!);
+
+    const config = await deployments.getConfig(deploymentId);
+    expect(config.appEnv.find((e) => e.key === 'EXTRA_FLAG')?.value).toBe('on');
+    expect(config.appEnv.find((e) => e.key === 'MAX_CONNECTIONS')?.value).toBe('10');
+    expect(config.appEnv.find((e) => e.key === 'ADMIN_USER')?.value).toBe('admin');
+  });
+
+  test('removeEnvKeys deletes the named vars (idempotent) and leaves the rest', async () => {
+    const { drafts, deployments, jobs } = makeSystem();
+    const deploymentId = await createRunningDeployment(drafts, deployments, jobs);
+
+    // Seed a custom var, then remove it plus a key that never existed.
+    await waitForJob(
+      jobs,
+      (await deployments.updateDeployment(deploymentId, { env: [{ key: 'EXTRA_FLAG', value: 'on', isSecret: false }] })).jobId!,
+    );
+
+    const result = await deployments.updateDeployment(deploymentId, {
+      removeEnvKeys: ['EXTRA_FLAG', 'NEVER_EXISTED'],
+    });
+    expect(result.ok).toBe(true);
+    await waitForJob(jobs, result.jobId!);
+
+    const config = await deployments.getConfig(deploymentId);
+    expect(config.appEnv.some((e) => e.key === 'EXTRA_FLAG')).toBe(false);
+    expect(config.appEnv.find((e) => e.key === 'MAX_CONNECTIONS')?.value).toBe('10');
+    expect(config.appEnv.find((e) => e.key === 'ADMIN_USER')?.value).toBe('admin');
+  });
+
+  test('a combined set + unset applies in a single update', async () => {
+    const { drafts, deployments, jobs } = makeSystem();
+    const deploymentId = await createRunningDeployment(drafts, deployments, jobs);
+    await waitForJob(
+      jobs,
+      (await deployments.updateDeployment(deploymentId, { env: [{ key: 'OLD', value: '1', isSecret: false }] })).jobId!,
+    );
+
+    const result = await deployments.updateDeployment(deploymentId, {
+      env: [{ key: 'ADMIN_USER', value: 'root', isSecret: false }],
+      removeEnvKeys: ['OLD'],
+    });
+    await waitForJob(jobs, result.jobId!);
+
+    const config = await deployments.getConfig(deploymentId);
+    expect(config.appEnv.find((e) => e.key === 'ADMIN_USER')?.value).toBe('root');
+    expect(config.appEnv.some((e) => e.key === 'OLD')).toBe(false);
+    expect(config.appEnv.find((e) => e.key === 'MAX_CONNECTIONS')?.value).toBe('10');
+  });
+
   test('updateDeployment with systemOverrides persists them and is reflected in getConfig', async () => {
     const { drafts, deployments, jobs } = makeSystem();
     const deploymentId = await createRunningDeployment(drafts, deployments, jobs);

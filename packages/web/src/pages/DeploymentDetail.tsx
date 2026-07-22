@@ -361,9 +361,20 @@ export const DeploymentDetail: React.FC = () => {
     setOperationLoading(prev => ({ ...prev, 'save-config': true }));
 
     try {
+      // The server PATCH merges by key (issue #332): the rows we send are
+      // upserted and any var we omit is left untouched — so a deletion must be
+      // stated explicitly. Derive the removed keys (present in the loaded config,
+      // now gone from the working copy) and drop any half-added blank-key rows
+      // from the upserts.
+      const currentKeys = new Set(envVars.map((e) => e.key));
+      const removeEnvKeys = (configData?.appEnv ?? [])
+        .map((e) => e.key)
+        .filter((k) => k && !currentKeys.has(k));
+
       await updateConfiguration({
-        env: envVars,
-        systemOverrides
+        env: envVars.filter((e) => e.key),
+        ...(removeEnvKeys.length ? { removeEnvKeys } : {}),
+        systemOverrides,
       });
       setIsEditing(false);
       // Force a fresh read: updateConfiguration only invalidates the

@@ -52,7 +52,7 @@ import type { JobService, JobContext } from './jobs';
 import { JobCancelledError } from './jobs';
 import type { DockerService } from './docker';
 import type { DraftService, FinalizedArtifacts, FinalizedManifest } from './draft';
-import { hardenAppEnv } from './draft';
+import { mergeAppEnv } from './draft';
 import type { RegistryCredentialService } from './registry-credentials';
 import type { PullCredentials } from './bundles';
 import type { CatalogService } from './catalog';
@@ -1370,7 +1370,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     this.logger.info('Updating deployment configuration', { deploymentId });
 
-    if (!request.env && !request.systemOverrides) {
+    const hasEnvChange = request.env !== undefined || (request.removeEnvKeys?.length ?? 0) > 0;
+    if (!hasEnvChange && !request.systemOverrides) {
       // Nothing to do — mirror the base class's cheap no-op path (still bumps
       // lastUpdated) rather than requiring an active release for a no-op call.
       deployment.lastUpdated = new Date().toISOString();
@@ -1385,11 +1386,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
     const manifest = JSON.parse(await this.storageService.readFileAsString(manifestPath)) as FinalizedManifest;
 
-    if (request.env) {
-      // Re-impose spec (type/required/pattern/etc.) from the stored manifest
-      // onto the incoming rows — a client only owns `value`, never the spec —
-      // then validate the merged result against that same spec.
-      const merged = hardenAppEnv(manifest.appEnv ?? [], request.env);
+    if (hasEnvChange) {
+      // Merge-by-key (issue #332): `env` rows are upserted (spec re-imposed from
+      // the stored manifest — a client only owns `value`, never the spec),
+      // `removeEnvKeys` are dropped, and any stored var omitted from the request
+      // is left untouched. Then validate the merged result against that spec, so
+      // e.g. removing a required var is rejected rather than silently breaking
+      // the app.
+      const merged = mergeAppEnv(manifest.appEnv ?? [], request.env ?? [], request.removeEnvKeys ?? []);
       const issues = validateParams(merged);
       const errors = issues.filter((i) => i.severity === 'error');
       if (errors.length > 0) {

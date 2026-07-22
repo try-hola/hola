@@ -207,6 +207,41 @@ export function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): 
   });
 }
 
+/**
+ * Merge a PATCH into a deployment's stored env with per-key ("PATCH") semantics
+ * (issue #332), instead of the full-replace `hardenAppEnv` does for the draft
+ * wizard. Keys in `upserts` are added or have their `value` replaced (spec
+ * re-imposed from the stored row, exactly like `hardenAppEnv`); keys in
+ * `removeKeys` are dropped; every other stored key is left untouched — so a
+ * partial request no longer silently wipes the vars it omits.
+ *
+ * Stored order is preserved (with brand-new keys appended in `upserts` order).
+ * A key that appears in both `upserts` and `removeKeys` is removed (delete wins).
+ */
+export function mergeAppEnv(
+  storedEnv: AppEnvVar[],
+  upserts: AppEnvVar[],
+  removeKeys: string[] = [],
+): AppEnvVar[] {
+  const remove = new Set(removeKeys);
+  const upsertByKey = new Map(upserts.map((e) => [e.key, e]));
+  const storedKeys = new Set(storedEnv.map((e) => e.key));
+
+  const result: AppEnvVar[] = [];
+  // Existing rows: drop if removed, else apply an upsert's value (spec preserved).
+  for (const stored of storedEnv) {
+    if (remove.has(stored.key)) continue;
+    const up = upsertByKey.get(stored.key);
+    result.push(up ? { ...stored, value: up.value } : stored);
+  }
+  // Brand-new keys (not already stored), minus any also flagged for removal.
+  for (const up of upserts) {
+    if (storedKeys.has(up.key) || remove.has(up.key)) continue;
+    result.push(up);
+  }
+  return result;
+}
+
 export class RealDraftService implements DraftService {
   private logger = getLogger().child({ service: 'DraftService' });
   private drafts = new Map<string, DraftRecord>();
