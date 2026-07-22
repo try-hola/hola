@@ -13,6 +13,7 @@ import {
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
   GetDeploymentConfigResponse,
+  GetSubdomainAvailabilityResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
   GetCatalogAppVersionsResponse, GetCatalogAppVersionDetailResponse,
@@ -142,6 +143,9 @@ export class HolaSdk {
 
   deployments = {
     create: (data: CreateDeploymentFromDraftRequest) => this.post<CreateDeploymentFromDraftResponse>(API.deployments.base, data),
+    // Live check for the install wizard: is `<subdomain>.<base>` free (#246)?
+    subdomainAvailable: (subdomain: string) =>
+      this.get<GetSubdomainAvailabilityResponse>(`${API.deployments.subdomainAvailable}${buildQuery({ subdomain })}`),
     list: (qs?: GetDeploymentsRequest) => this.get<GetDeploymentsResponse>(`${API.deployments.base}${buildQuery(qs)}`),
     byId: (deploymentId: string) => this.get<GetDeploymentResponse>(API.deployments.byId(deploymentId)),
     update: (deploymentId: string, data: PatchDeploymentRequest) => this.patch<PatchDeploymentResponse>(API.deployments.byId(deploymentId), data),

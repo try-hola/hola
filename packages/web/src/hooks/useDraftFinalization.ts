@@ -17,12 +17,14 @@ export function useDraftFinalization() {
   // Finalize the draft (stage immutable artifacts) and then create + start a
   // deployment from it. Finalize alone produces no running app — creating the
   // deployment is what enqueues the install job that runs `docker compose up`.
-  const finalizeDraft = React.useCallback(async (draftId: string) => {
+  const finalizeDraft = React.useCallback(async (draftId: string, opts?: { name?: string; allowMultiple?: boolean }) => {
     setState(prev => ({ ...prev, loading: true, error: null }));
 
     try {
       await api.drafts.finalize(draftId);
-      const deployment = await api.deployments.create({ draftId });
+      // #246: `name` sets the deployment's subdomain (<name>.<base>); `allowMultiple`
+      // opts past the single-instance guard for a deliberate second install.
+      const deployment = await api.deployments.create({ draftId, name: opts?.name, allowMultiple: opts?.allowMultiple });
 
       setState({
         data: deployment,

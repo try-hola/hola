@@ -336,6 +336,11 @@ export const Catalog: React.FC = () => {
               // multi-instance follow-up), so installed always means manage.
               const installedId = installedByApp.get(app.id);
               const goTo = installedId ? `/deployments/${installedId}` : installTo;
+              // #246: for an already-installed app, offer a deliberate second
+              // install. The wizard passes the allow-multiple override and asks for
+              // a distinct name (→ distinct subdomain); the server rejects it if the
+              // app is single-instance and no distinct host is chosen.
+              const installAnotherTo = `${installTo}${installTo.includes('?') ? '&' : '?'}another=1`;
               return (
                 <div
                   key={`${app.source}/${app.id}`}
@@ -379,6 +384,15 @@ export const Catalog: React.FC = () => {
                           <Check className="w-3.5 h-3.5 text-success" />
                           Installed
                         </span>
+                        <Link
+                          to={installAnotherTo}
+                          onClick={(e) => e.stopPropagation()}
+                          title="Install another instance"
+                          className="h-[34px] px-[12px] flex items-center gap-[5px] bg-surface-2 text-text-muted border border-border rounded-lg text-[13px] font-semibold hover:border-primary hover:text-text-strong transition-colors"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Another
+                        </Link>
                         <Link
                           to={goTo}
                           onClick={(e) => e.stopPropagation()}

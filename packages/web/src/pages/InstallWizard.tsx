@@ -10,7 +10,9 @@ import type {
   PatchDraftRequest,
   ValidationIssue,
   AppSecurityConfig,
+  GetSubdomainAvailabilityResponse,
 } from '@hola/shared';
+import { slugifySubdomain } from '@hola/shared';
 import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
@@ -121,6 +123,16 @@ export const InstallWizard: React.FC = () => {
   const [editMode, setEditMode] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  // #246: the instance name drives the deployment's subdomain (`<slug>.<base>`).
+  // Defaults to the catalog display name once the draft loads; the user can change
+  // it to install a second instance at a distinct host. `?another=1` (from the
+  // catalog's "install another") opts past the single-instance guard.
+  const [instanceName, setInstanceName] = useState('');
+  const [nameTouched, setNameTouched] = useState(false);
+  const [availability, setAvailability] = useState<GetSubdomainAvailabilityResponse | null>(null);
+  const allowMultiple = searchParams.get('another') === '1';
+  const subdomain = slugifySubdomain(instanceName);
+
   // Real app metadata, resolved from the catalog when the draft is created.
   // Falls back to the route's appId for the brief window before the draft loads.
   const app = createDraftHook.data?.app ?? { id: appId ?? ociRef ?? '', name: appId ?? ociRef ?? 'app', icon: '📦' };
@@ -199,6 +211,33 @@ export const InstallWizard: React.FC = () => {
     initializeDraft();
   }, [appId, ociRef, credentialRef, source, createDraftHook]); // Include the whole hook object
 
+  // Seed the instance name from the catalog display name once the draft resolves
+  // (until the user edits it) — so a normal install keeps the app's own name/host.
+  const appName = createDraftHook.data?.app?.name;
+  useEffect(() => {
+    if (!nameTouched && !instanceName && appName) setInstanceName(appName);
+  }, [appName, nameTouched, instanceName]);
+
+  // Live subdomain-availability check (#246), debounced. An empty/invalid slug is
+  // reported locally; otherwise the server says whether the host is free.
+  useEffect(() => {
+    if (!subdomain) {
+      setAvailability({ subdomain: '', host: '', available: false, reason: 'invalid' });
+      return;
+    }
+    let cancelled = false;
+    setAvailability(null); // "checking…" until the debounced call returns
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.deployments.subdomainAvailable(subdomain);
+        if (!cancelled) setAvailability(res);
+      } catch {
+        if (!cancelled) setAvailability(null);
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [subdomain]);
+
   // Update draft data helper function
   const updateDraftData = React.useCallback(async (updates: PatchDraftRequest) => {
     if (!draftId || !draftApi.updateDraft) return;
@@ -241,7 +280,9 @@ export const InstallWizard: React.FC = () => {
     if (!draftId) return false;
     
     try {
-      await draftFinalization.finalizeDraft(draftId);
+      // #246: send the chosen name (→ subdomain) and, for a deliberate second
+      // install of a single-instance app, the allow-multiple override.
+      await draftFinalization.finalizeDraft(draftId, { name: instanceName.trim() || undefined, allowMultiple });
       return true;
     } catch (err) {
       console.error('Failed to finalize draft:', err);
@@ -1313,6 +1354,44 @@ services:
 
             <div className="space-y-4 mb-4">
               <div>
+                <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">Deployment name &amp; address</h4>
+                <input
+                  type="text"
+                  value={instanceName}
+                  onChange={(e) => { setInstanceName(e.target.value); setNameTouched(true); }}
+                  placeholder={app.name}
+                  className="w-full h-[38px] px-3 bg-surface-2 border border-border rounded-[10px] text-sm outline-none focus:border-primary transition"
+                />
+                <div className="mt-2 text-[12.5px] flex items-center gap-1.5 flex-wrap">
+                  <span className="text-text-muted">Address:</span>
+                  {availability ? (
+                    <>
+                      <span className="font-mono text-text-strong">https://{availability.host || `${subdomain || '…'}.…`}</span>
+                      {availability.available ? (
+                        <span className="inline-flex items-center gap-1 text-success"><Check className="w-3.5 h-3.5" /> available</span>
+                      ) : (
+                        <span className="text-danger">
+                          {availability.reason === 'taken'
+                            ? '· already in use — pick a different name'
+                            : availability.reason === 'reserved'
+                              ? '· reserved — pick a different name'
+                              : '· enter a valid name'}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <span className="font-mono text-text-faint">checking {subdomain}.…</span>
+                  )}
+                </div>
+                {allowMultiple && (
+                  <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-[10px] bg-warning/10 text-[12.5px] text-text-muted">
+                    <AlertTriangle className="w-4 h-4 text-warning flex-none mt-px" />
+                    <span>Installing an additional instance. Give it a distinct name so it gets its own address and data.</span>
+                  </div>
+                )}
+              </div>
+
+              <div>
                 <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">System variable overrides</h4>
                 {Object.keys(systemOverrides).length > 0 ? (
                   <div className="bg-surface-2 border border-border-soft rounded-[11px] overflow-hidden">
@@ -1486,7 +1565,7 @@ services:
               {isLastStep ? (
                 <button
                   onClick={handleInstall}
-                  disabled={isLoading}
+                  disabled={isLoading || availability?.available === false}
                   className="h-[42px] px-[22px] flex items-center gap-2 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 disabled:opacity-50 transition"
                 >
                   {isLoading ? (
