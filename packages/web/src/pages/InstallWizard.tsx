@@ -10,6 +10,7 @@ import type {
   PatchDraftRequest,
   ValidationIssue,
   AppSecurityConfig,
+  AppProfileConfig,
   GetSubdomainAvailabilityResponse,
 } from '@hola/shared';
 import { slugifySubdomain } from '@hola/shared';
@@ -118,6 +119,11 @@ export const InstallWizard: React.FC = () => {
   // requested permission is explicitly acknowledged (see canProceed, case 0).
   const [security, setSecurity] = useState<AppSecurityConfig | undefined>();
   const [ackedPermissions, setAckedPermissions] = useState<Set<string>>(new Set());
+  // #162: optional Compose profiles the app declares. `selectedProfiles` is the
+  // set of enabled keys, seeded from each profile's `default` and toggled by the
+  // operator on the summary step. Sent as the deployment's active profile set.
+  const [profiles, setProfiles] = useState<AppProfileConfig[] | undefined>();
+  const [selectedProfiles, setSelectedProfiles] = useState<Set<string>>(new Set());
   const [showSecrets, setShowSecrets] = useState<{[key: string]: boolean}>({});
   const [composeOverride, setComposeOverride] = useState('');
   const [editMode, setEditMode] = useState(false);
@@ -194,6 +200,10 @@ export const InstallWizard: React.FC = () => {
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
         setSecurity(result.security);
+        // #162: surface the app's optional Compose profiles and pre-select the
+        // ones the manifest marks `default`.
+        setProfiles(result.profiles);
+        setSelectedProfiles(new Set((result.profiles ?? []).filter(p => p.default).map(p => p.key)));
 
         // Persist the generated values immediately so a refresh (or abandoning
         // the wizard before clicking Next) doesn't lose them — same durability
@@ -282,7 +292,13 @@ export const InstallWizard: React.FC = () => {
     try {
       // #246: send the chosen name (→ subdomain) and, for a deliberate second
       // install of a single-instance app, the allow-multiple override.
-      await draftFinalization.finalizeDraft(draftId, { name: instanceName.trim() || undefined, allowMultiple });
+      // #162: when the app declares optional profiles, send the enabled set
+      // explicitly (even if empty); otherwise send nothing so defaults apply.
+      await draftFinalization.finalizeDraft(draftId, {
+        name: instanceName.trim() || undefined,
+        allowMultiple,
+        profiles: profiles ? [...selectedProfiles] : undefined,
+      });
       return true;
     } catch (err) {
       console.error('Failed to finalize draft:', err);
@@ -1390,6 +1406,48 @@ services:
                   </div>
                 )}
               </div>
+
+              {/* #162: optional Compose profiles the app declares — each enables an
+                  extra service (e.g. a heavier, opt-in dependency). */}
+              {profiles && profiles.length > 0 && (
+                <div>
+                  <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">Optional services</h4>
+                  <div className="bg-surface-2 border border-border-soft rounded-[11px] overflow-hidden">
+                    {profiles.map((p) => {
+                      const checked = selectedProfiles.has(p.key);
+                      return (
+                        <label
+                          key={p.key}
+                          className="flex items-start gap-3 px-4 py-3 border-b border-border-soft last:border-b-0 cursor-pointer hover:bg-surface-3/40 transition"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              setSelectedProfiles((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(p.key);
+                                else next.delete(p.key);
+                                return next;
+                              });
+                            }}
+                            className="mt-0.5 h-4 w-4 flex-none accent-primary"
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-[13px] text-text-strong">{p.label}</span>
+                            {p.description && (
+                              <span className="block text-[12px] text-text-muted mt-0.5">{p.description}</span>
+                            )}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[12px] text-text-muted">
+                    Enabling an optional service starts extra containers and uses more resources.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">System variable overrides</h4>

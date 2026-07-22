@@ -39,6 +39,16 @@ describe('useDraftFinalization', () => {
       await result.current.finalizeDraft('draft-1');
     });
 
-    expect(create).toHaveBeenCalledWith({ draftId: 'draft-1', name: undefined, allowMultiple: undefined });
+    expect(create).toHaveBeenCalledWith({ draftId: 'draft-1', name: undefined, allowMultiple: undefined, profiles: undefined });
+  });
+
+  it('passes the enabled Compose profiles through to deployments.create (#162)', async () => {
+    const { result } = renderHook(() => useDraftFinalization());
+
+    await act(async () => {
+      await result.current.finalizeDraft('draft-1', { profiles: ['elasticsearch'] });
+    });
+
+    expect(create).toHaveBeenCalledWith({ draftId: 'draft-1', name: undefined, allowMultiple: undefined, profiles: ['elasticsearch'] });
   });
 });
