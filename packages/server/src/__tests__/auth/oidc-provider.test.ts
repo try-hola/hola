@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { SignJWT, exportJWK, generateKeyPair, type KeyLike } from 'jose';
+import { SignJWT, exportJWK, generateKeyPair } from 'jose';
 
 import { OidcAuthProvider } from '../../services/auth/oidc-provider';
 import { clearProvisionedOidc, resolveOidcConfig } from '../../config/oidc';
@@ -9,7 +9,7 @@ const JWKS_URI = 'https://idp.test/jwks';
 const CLIENT_ID = 'dashboard-client-123';
 const KID = 'test-key-1';
 
-let privateKey: KeyLike;
+let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
 let realFetch: typeof globalThis.fetch;
 
