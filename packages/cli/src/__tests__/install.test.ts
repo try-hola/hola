@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { runInstall, resolveAppAndVersion } from '../commands/install/install';
+import { runInstall, resolveAppAndVersion, parseProfiles } from '../commands/install/install';
 import type { HolaSdk } from '@hola/sdk';
 
 function makeSdk(overrides: { drafts?: Record<string, unknown> } = {}) {
@@ -235,6 +235,30 @@ describe('install', () => {
     expect(sdk.deployments.create).toHaveBeenCalledWith({ draftId: 'd1', name: 'gitea', allowMultiple: undefined });
   });
 
+  it('passes repeated --profile keys through to the deployment create (#162)', async () => {
+    const sdk = makeSdk();
+    await runInstall('postiz', { profile: ['elasticsearch', 'metrics'], noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith({
+      draftId: 'd1', name: 'postiz', allowMultiple: undefined, profiles: ['elasticsearch', 'metrics'],
+    });
+  });
+
+  it('splits a comma-separated --profile and dedupes (#162)', async () => {
+    const sdk = makeSdk();
+    await runInstall('postiz', { profile: 'a, b ,a', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ profiles: ['a', 'b'] }),
+    );
+  });
+
+  it('a plain install sends no profiles, so the manifest defaults apply server-side (#162)', async () => {
+    const sdk = makeSdk();
+    await runInstall('postiz', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ profiles: undefined }),
+    );
+  });
+
   it('hints at --allow-multiple when a single-instance app is already installed (#246)', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
@@ -292,5 +316,21 @@ describe('resolveAppAndVersion', () => {
 
   it('splits on the last @ so the version is taken from the suffix', () => {
     expect(resolveAppAndVersion('ns/app@3.1.4')).toEqual({ appId: 'ns/app', version: '3.1.4' });
+  });
+});
+
+describe('parseProfiles', () => {
+  it('returns undefined when no flag is given (so manifest defaults apply)', () => {
+    expect(parseProfiles(undefined)).toBeUndefined();
+  });
+
+  it('wraps a single repeated flag value into an array', () => {
+    expect(parseProfiles('elasticsearch')).toEqual(['elasticsearch']);
+    expect(parseProfiles(['elasticsearch', 'metrics'])).toEqual(['elasticsearch', 'metrics']);
+  });
+
+  it('splits comma-separated values, trims, drops blanks, and dedupes', () => {
+    expect(parseProfiles('a, b , a,')).toEqual(['a', 'b']);
+    expect(parseProfiles(['a,b', 'c , a'])).toEqual(['a', 'b', 'c']);
   });
 });

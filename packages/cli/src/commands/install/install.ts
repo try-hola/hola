@@ -32,6 +32,22 @@ export interface InstallOptions {
    * subdomain), or the install fails with a host conflict.
    */
   allowMultiple?: boolean;
+  /**
+   * From `--profile <key>` (repeatable): Compose profiles to enable for this
+   * install (#162), each activating an optional service the app declares (e.g.
+   * `elasticsearch`). Also accepts a comma-separated list in one flag. When
+   * omitted, the app's manifest-default profiles are used. Unknown keys are
+   * ignored server-side (intersected with the declared set).
+   */
+  profile?: string | string[];
+}
+
+/** Parse repeated/comma-separated `--profile` flags into a deduped key list. */
+export function parseProfiles(profile?: string | string[]): string[] | undefined {
+  if (profile === undefined) return undefined;
+  const raw = Array.isArray(profile) ? profile : [profile];
+  const keys = raw.flatMap(p => String(p).split(',')).map(p => p.trim()).filter(Boolean);
+  return [...new Set(keys)];
 }
 
 /**
@@ -158,7 +174,7 @@ export async function runInstall(
       return undefined;
     }
 
-    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple }, out);
+    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple, profiles: parseProfiles(opts.profile) }, out);
 
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else out(`Done. ${appId} → job status: ${result.status}`);
