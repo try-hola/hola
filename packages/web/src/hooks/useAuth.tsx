@@ -39,6 +39,12 @@ interface AuthContextValue {
   loginError: string | null;
   /** Completes the OIDC redirect; called by the /auth/callback route. */
   completeOidcLogin: () => Promise<void>;
+  /**
+   * Completes a *silent* renewal. oidc-client-ts renews by loading
+   * `silent_redirect_uri` in a hidden iframe and waiting for that page to post
+   * the result back to the opener — which only happens via this call.
+   */
+  completeOidcSilentRenew: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -286,8 +292,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     applyOidcUser(u);
   }, [applyOidcUser]);
 
+  const completeOidcSilentRenew = useCallback(async () => {
+    const m = managerRef.current;
+    if (!m) throw new Error('OIDC is not configured');
+    // Posts the result to the parent frame and resolves its pending signinSilent().
+    // Deliberately does NOT touch this frame's state — we're inside a throwaway iframe.
+    await m.signinSilentCallback();
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ status, mode, user, login, logout, loginError, completeOidcLogin }}>
+    <AuthContext.Provider
+      value={{
+        status,
+        mode,
+        user,
+        login,
+        logout,
+        loginError,
+        completeOidcLogin,
+        completeOidcSilentRenew,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

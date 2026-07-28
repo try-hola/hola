@@ -9,17 +9,39 @@ import { useAuth } from '../hooks/useAuth';
  * its UserManager (mode resolves to 'oidc'), exchange the authorization code and
  * return to the app. Any other mode means we shouldn't be here — go home.
  */
+/**
+ * True when we're running inside oidc-client-ts's hidden silent-renew iframe.
+ * `silent_redirect_uri` defaults to `redirect_uri`, so renewals land on this very
+ * route — but they must be completed with signinSilentCallback(), which posts the
+ * result up to the parent frame. Completing them as a normal redirect instead
+ * leaves the parent's signinSilent() hanging until it times out.
+ */
+function isSilentRenewFrame(): boolean {
+  try {
+    return window.self !== window.top;
+  } catch {
+    // Cross-origin access threw — we're framed.
+    return true;
+  }
+}
+
 export const AuthCallback: React.FC = () => {
-  const { mode, completeOidcLogin } = useAuth();
+  const { mode, completeOidcLogin, completeOidcSilentRenew } = useAuth();
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const silent = isSilentRenewFrame();
 
   useEffect(() => {
     if (mode !== 'oidc') return;
     let cancelled = false;
     (async () => {
       try {
+        if (silent) {
+          // Hand the result to the parent tab; this frame is then discarded.
+          await completeOidcSilentRenew();
+          return;
+        }
         await completeOidcLogin();
         if (!cancelled) { setDone(true); navigate('/', { replace: true }); }
       } catch (e) {
@@ -27,7 +49,10 @@ export const AuthCallback: React.FC = () => {
       }
     })();
     return () => { cancelled = true; };
-  }, [mode, completeOidcLogin, navigate]);
+  }, [mode, completeOidcLogin, completeOidcSilentRenew, navigate, silent]);
+
+  // Nothing renders in the renewal iframe — it exists only to relay the result.
+  if (silent) return null;
 
   // We landed here with an authorization code. If auth resolved to non-OIDC, the
   // boot config likely mis-resolved (e.g. it failed and fell back to apikey) —

@@ -102,6 +102,21 @@ describe('OidcAuthProvider', () => {
     expect(resolveOidcConfig().adminGroup).toBe('custom-admins');
   });
 
+  // The dashboard renews its access token from a refresh token. Without
+  // offline_access the IdP issues none, and renewal falls back to a hidden iframe
+  // that depends on the IdP allowing itself to be framed — when that fails the
+  // session just dies early, with a 401 on the next refetch.
+  it('requests offline_access by default so the IdP issues a refresh token', () => {
+    delete process.env.HOLA_OIDC_SCOPES;
+    expect(resolveOidcConfig().scopes).toEqual(['openid', 'profile', 'email', 'offline_access']);
+  });
+
+  it('HOLA_OIDC_SCOPES overrides the defaults verbatim', () => {
+    process.env.HOLA_OIDC_SCOPES = 'openid, profile';
+    expect(resolveOidcConfig().scopes).toEqual(['openid', 'profile']);
+    delete process.env.HOLA_OIDC_SCOPES;
+  });
+
   it('accepts a valid token (aud = clientId) and maps the principal identity', async () => {
     process.env.HOLA_OIDC_ADMIN_GROUP = 'hola-admins';
     const provider = new OidcAuthProvider();
