@@ -4,7 +4,12 @@ import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts';
 import type { AuthConfigResponse, Principal } from '@hola/shared';
 
 import { getWebBaseUrl } from '../utils/sdk-adapter';
-import { setAuthTokenGetter, setUnauthorizedHandler } from '../utils/auth-token';
+import {
+  refreshAuthToken,
+  setAuthTokenGetter,
+  setTokenRefresher,
+  setUnauthorizedHandler,
+} from '../utils/auth-token';
 
 /**
  * Dashboard authentication. Reads /api/auth/config at boot to learn the mode:
@@ -176,6 +181,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     })();
     return () => { cancelled = true; };
   }, [applyOidcUser]);
+
+  // Let the fetch layer recover a stale access token in place. A backgrounded tab
+  // has its automaticSilentRenew timer throttled (browsers clamp or freeze timers
+  // in hidden tabs), so returning to the tab can fire refetches carrying a token
+  // that expired while we were away — even though the session is still valid.
+  useEffect(() => {
+    if (mode !== 'oidc') {
+      setTokenRefresher(undefined);
+      return;
+    }
+    setTokenRefresher(async () => {
+      const m = managerRef.current;
+      if (!m) return undefined;
+      // The user store is localStorage and therefore shared across tabs: another
+      // tab may have already renewed, in which case no round-trip is needed. This
+      // also re-syncs accessTokenRef, which only tracks this tab's userLoaded events.
+      const existing = await m.getUser();
+      if (existing && !existing.expired) {
+        applyOidcUser(existing);
+        return existing.access_token;
+      }
+      const renewed = await m.signinSilent();
+      if (renewed && !renewed.expired) {
+        applyOidcUser(renewed);
+        return renewed.access_token;
+      }
+      return undefined;
+    });
+    return () => setTokenRefresher(undefined);
+  }, [mode, applyOidcUser]);
+
+  // Belt-and-braces: re-sync the token the moment the tab becomes visible, so the
+  // focus refetch usually goes out with a good token rather than 401-ing first.
+  // Cheap when nothing expired — it only reads the local store.
+  useEffect(() => {
+    if (mode !== 'oidc') return;
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshAuthToken();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [mode]);
 
   // On a 401 from any API call, drop to unauthenticated so the guard shows login.
   useEffect(() => {

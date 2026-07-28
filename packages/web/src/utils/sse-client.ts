@@ -1,6 +1,6 @@
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
 import type { EventSourceFactory, SSEOptions, SSEState } from './sse-types';
-import { getAuthToken, notifyUnauthorized } from './auth-token';
+import { getAuthToken, notifyUnauthorized, refreshAuthToken } from './auth-token';
 
 export interface SSEClient {
   connect(): void;
@@ -216,7 +216,7 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
   // the OIDC Bearer token (and same-origin credentials for the admin-key cookie),
   // so authenticated log streams actually connect instead of 401-looping. Mirrors
   // the REST layer's auth (safeFetchEnhanced).
-  function connectFetch(url: string) {
+  function connectFetch(url: string, authRetried = false) {
     const controller = new AbortController();
     abortController = controller;
     const token = getAuthToken();
@@ -227,6 +227,16 @@ export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
       .then(async response => {
         if (controller.signal.aborted) return;
         if (response.status === 401) {
+          // As in the REST layer: a 401 can just be a token that went stale while
+          // the tab was backgrounded. Refresh once and reconnect before giving up.
+          if (!authRetried) {
+            const fresh = await refreshAuthToken();
+            if (controller.signal.aborted) return;
+            if (fresh) {
+              connectFetch(url, true);
+              return;
+            }
+          }
           notifyUnauthorized();
           handleError('Unauthorized');
           return;
