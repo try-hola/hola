@@ -173,8 +173,14 @@ if [[ "$AUTH_MODE" == "authentik" ]]; then
   ldap_token="$(env_get AUTHENTIK_LDAP_OUTPOST_TOKEN | xargs || true)"
   if [[ -z "$ldap_token" ]]; then
     echo "[install] Waiting for the LDAP outpost token (Authentik first boot can take a few minutes)…"
+    # Address the container by its fixed name rather than `docker compose exec`:
+    # install.sh runs in the caller's cwd and, unlike up.sh, doesn't source
+    # _common.sh — so it has neither the compose file paths nor
+    # COMPOSE_PROJECT_NAME. A bare `docker compose` here would infer the project
+    # from the directory name and find nothing whenever the install dir isn't
+    # literally "hola".
     for _ in $(seq 1 60); do
-      ldap_token="$(docker compose exec -T server cat /data/config/ldap-outpost-token 2>/dev/null | tr -d '\r\n' || true)"
+      ldap_token="$(docker exec hola-server cat /data/config/ldap-outpost-token 2>/dev/null | tr -d '\r\n' || true)"
       [[ -n "$ldap_token" ]] && break
       sleep 5
     done
