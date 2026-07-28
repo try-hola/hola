@@ -146,6 +146,21 @@ export interface ProvisionerService extends HealthCheckable {
    * No-op when no admin email is configured.
    */
   ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }>;
+  /**
+   * Idempotently ensure the platform's shared LDAP directory exists — an LDAP
+   * provider bound to an outpost — and return that outpost's API token.
+   *
+   * The token is what the `authentik-ldap` container authenticates with; without
+   * it the outpost exits immediately and restart-loops. Creating the provider and
+   * outpost used to be a manual one-time click-through in Authentik, which made
+   * LDAP the only part of the stack that didn't come up on its own. Returning the
+   * token here lets install/upgrade wire the container automatically.
+   *
+   * Stable identifiers make this safe to re-run: an existing provider/outpost is
+   * reused and its current token returned, so an upgrade re-syncs a token that was
+   * rotated or lost without disturbing a working directory.
+   */
+  ensureLdapOutpost(): Promise<{ token: string; baseDn: string }>;
   healthCheck(): Promise<ServiceHealth>;
 }
 
@@ -166,6 +181,10 @@ const INVALIDATION_FLOW_SLUG = 'default-provider-invalidation-flow';
 // privilege instead of as the akadmin superuser.
 const PROVISIONER_USERNAME = 'hola-provisioner';
 const PROVISIONER_TOKEN_ID = 'hola-provisioner-token';
+
+// Fixed identifiers for the platform's shared LDAP directory (stable → idempotent).
+const LDAP_PROVIDER_NAME = 'hola-ldap';
+const LDAP_OUTPOST_NAME = 'hola-ldap';
 
 // Global (model-level) permissions the provisioner needs — just enough to manage
 // providers/applications/users/outposts and read flows/scope mappings. NOT superuser.
@@ -1222,6 +1241,109 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     };
   }
 
+  /**
+   * Ensure the shared LDAP provider + outpost, returning the outpost's token.
+   *
+   * Runs against the ADMIN bootstrap token rather than the scoped provisioning
+   * token: reading a token's key (`view_key`) and creating outposts are broader
+   * rights than day-to-day provisioning needs, and this runs once at startup. That
+   * keeps the least-privilege scoped account exactly as narrow as it already is.
+   */
+  async ensureLdapOutpost(): Promise<{ token: string; baseDn: string }> {
+    const bootstrapToken = this.config.authentikBootstrapToken;
+    if (!bootstrapToken) {
+      throw new ProvisioningError(
+        'Cannot provision the LDAP outpost: no Authentik admin bootstrap token is configured',
+      );
+    }
+    const baseDn = this.config.ldapBaseDn;
+    const providerPk = await this.ensureLdapProvider(bootstrapToken, baseDn);
+    const outpost = await this.ensureLdapOutpostInstance(bootstrapToken, providerPk);
+    const token = await this.readTokenKey(bootstrapToken, outpost.tokenIdentifier);
+    this.logger.info('Ensured LDAP outpost', { providerPk, outpostPk: outpost.pk, baseDn });
+    return { token, baseDn };
+  }
+
+  private async ensureLdapProvider(bootstrapToken: string, baseDn: string): Promise<number> {
+    const existing = await this.request<{ results: Array<{ pk: number }> }>(
+      bootstrapToken,
+      'GET',
+      `/api/v3/providers/ldap/?name=${encodeURIComponent(LDAP_PROVIDER_NAME)}`,
+    );
+    if (existing.results?.[0]?.pk != null) return existing.results[0].pk;
+
+    // The LDAP provider binds against the same authorization flow the OIDC
+    // providers resolve, so a version whose default slug differs still works.
+    const authFlow = await this.resolveFlowPkWith(bootstrapToken, AUTHZ_FLOW_SLUG, 'authorization');
+    const created = await this.request<{ pk: number }>(bootstrapToken, 'POST', '/api/v3/providers/ldap/', {
+      name: LDAP_PROVIDER_NAME,
+      authorization_flow: authFlow,
+      base_dn: baseDn,
+    });
+    return created.pk;
+  }
+
+  private async ensureLdapOutpostInstance(
+    bootstrapToken: string,
+    providerPk: number,
+  ): Promise<{ pk: string; tokenIdentifier: string }> {
+    type Outpost = { pk: string; token_identifier: string; providers?: number[] };
+    const existing = await this.request<{ results: Outpost[] }>(
+      bootstrapToken,
+      'GET',
+      `/api/v3/outposts/instances/?name__iexact=${encodeURIComponent(LDAP_OUTPOST_NAME)}`,
+    );
+    const found = existing.results?.[0];
+    if (found) {
+      // Re-attach the provider if a previous run created the outpost but the
+      // binding was later removed — otherwise the outpost serves an empty tree.
+      if (!found.providers?.includes(providerPk)) {
+        await this.request(bootstrapToken, 'PATCH', `/api/v3/outposts/instances/${found.pk}/`, {
+          providers: [...new Set([...(found.providers ?? []), providerPk])],
+        });
+      }
+      return { pk: found.pk, tokenIdentifier: found.token_identifier };
+    }
+
+    // `docker` would have Authentik spawn its own container via the socket; Hola
+    // runs the outpost itself, so the managed connection stays deliberately unset.
+    const created = await this.request<Outpost>(bootstrapToken, 'POST', '/api/v3/outposts/instances/', {
+      name: LDAP_OUTPOST_NAME,
+      type: 'ldap',
+      providers: [providerPk],
+      config: {},
+    });
+    return { pk: created.pk, tokenIdentifier: created.token_identifier };
+  }
+
+  /** Read a token's secret by identifier (Authentik never returns keys on list). */
+  private async readTokenKey(bootstrapToken: string, identifier: string): Promise<string> {
+    if (!identifier) throw new ProvisioningError('LDAP outpost has no token identifier');
+    const res = await this.request<{ key: string }>(
+      bootstrapToken,
+      'GET',
+      `/api/v3/core/tokens/${encodeURIComponent(identifier)}/view_key/`,
+    );
+    if (!res.key) throw new ProvisioningError('Authentik returned an empty LDAP outpost token');
+    return res.key;
+  }
+
+  /** resolveFlowPk against an explicit token (the scoped one may not exist yet). */
+  private async resolveFlowPkWith(token: string, slug: string, designation: string): Promise<string> {
+    try {
+      const flow = await this.request<{ pk: string }>(token, 'GET', `/api/v3/flows/instances/${encodeURIComponent(slug)}/`);
+      return flow.pk;
+    } catch (error) {
+      const list = await this.request<{ results: Array<{ pk: string }> }>(
+        token,
+        'GET',
+        `/api/v3/flows/instances/?designation=${encodeURIComponent(designation)}&ordering=slug`,
+      );
+      if (list.results?.[0]?.pk) return list.results[0].pk;
+      throw error;
+    }
+  }
+
   /** Grant the bind account directory-search rights. Best-effort: the permission
    *  codename can vary by Authentik version, so a failure is logged, not fatal. */
   private async grantLdapSearch(userPk: number): Promise<void> {
@@ -1615,6 +1737,11 @@ export class MockProvisionerService implements ProvisionerService {
     this.logger.debug('Mock ensureBootstrapAdmin', { adminGroup });
     return { created: false };
   }
+
+  async ensureLdapOutpost(): Promise<{ token: string; baseDn: string }> {
+    this.logger.debug('Mock ensureLdapOutpost');
+    return { token: 'mock-ldap-outpost-token', baseDn: 'dc=hola,dc=internal' };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1697,5 +1824,12 @@ export class NoneProvisionerService implements ProvisionerService {
 
   async ensureBootstrapAdmin(): Promise<{ created: boolean; recoveryLink?: string }> {
     return { created: false };
+  }
+
+  /** No auth backend, so there is no directory to serve and nothing to wire. */
+  async ensureLdapOutpost(): Promise<{ token: string; baseDn: string }> {
+    throw new ProvisioningError(
+      'Cannot provision an LDAP outpost without an auth backend (HOLA_AUTH_MODE is not authentik)',
+    );
   }
 }

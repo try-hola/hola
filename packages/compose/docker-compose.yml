@@ -265,15 +265,17 @@ services:
       - authentik-certs:/certs
 
   # LDAP outpost — serves the shared directory that `native-ldap` apps bind to,
-  # reachable internally on the `hola` network at authentik-ldap:3389. Requires a
-  # one-time setup: create an LDAP provider + outpost in Authentik and copy the
-  # outpost token into AUTHENTIK_LDAP_OUTPOST_TOKEN (see README "Authentication & SSO").
+  # reachable internally on the `hola` network at authentik-ldap:3389. The LDAP
+  # provider, the outpost, and its token are all provisioned by the server at
+  # startup (ProvisionerService.ensureLdapOutpost) — no manual Authentik setup.
   #
-  # Deliberately on its OWN profile, not `authentik`: the outpost exits 1 on an
-  # empty AUTHENTIK_TOKEN, so enabling it by default crash-loops on every SSO
-  # install until that manual setup is done. Enable it only once you've created
-  # the outpost AND you're installing an app that declares `auth.mode:
-  # native-ldap` — add `authentik-ldap` to COMPOSE_PROFILES in .env.
+  # Its own `authentik-ldap` profile is a STAGING mechanism, not an operator
+  # switch. The outpost exits 1 on an empty AUTHENTIK_TOKEN, and that token only
+  # exists once Authentik is up and the server has provisioned the outpost — so it
+  # cannot be present on the first `up`. install.sh therefore brings the stack up
+  # without this service, reads the token the server minted, writes it to .env, and
+  # only then activates the profile. Operators never set either by hand; both
+  # install and upgrade converge on a running outpost automatically.
   authentik-ldap:
     image: ghcr.io/goauthentik/ldap:2025.10
     container_name: authentik-ldap

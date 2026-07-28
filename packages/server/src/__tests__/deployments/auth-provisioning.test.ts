@@ -149,6 +149,10 @@ class SpyProvisioner implements ProvisionerService {
   async ensureBootstrapAdmin(): Promise<{ created: boolean; recoveryLink?: string }> {
     return { created: false };
   }
+
+  async ensureLdapOutpost(): Promise<{ token: string; baseDn: string }> {
+    return { token: 'spy-ldap-outpost-token', baseDn: 'dc=hola,dc=internal' };
+  }
 }
 
 async function waitForJob(jobs: RealJobService, id: string, timeoutMs = 5000) {

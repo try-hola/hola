@@ -77,6 +77,23 @@ if [[ "$AUTH_MODE" == "authentik" ]]; then
   fi
 fi
 
+# --- LDAP staging -------------------------------------------------------------
+# The outpost exits 1 on an empty AUTHENTIK_TOKEN, and that token only exists once
+# Authentik is up and the server has provisioned the outpost — so it cannot be set
+# on a first `up`. Hold the service back until we have the token (wired below,
+# after the stack is running); a stale profile with a blank token would otherwise
+# restart-loop indefinitely. Compose can't guard this itself: `${VAR:?}` is
+# evaluated before profile filtering, so it would break every non-LDAP install.
+if [[ "$AUTH_MODE" == "authentik" && -z "$(env_get AUTHENTIK_LDAP_OUTPOST_TOKEN | xargs || true)" ]]; then
+  staged_profiles="$(env_get COMPOSE_PROFILES | xargs || true)"
+  if [[ ",${staged_profiles}," == *",authentik-ldap,"* ]]; then
+    # Strip just this profile, preserving the rest and their order.
+    stripped="$(printf '%s' "$staged_profiles" | tr ',' '\n' | grep -vx 'authentik-ldap' | paste -sd, -)"
+    env_set COMPOSE_PROFILES "$stripped"
+    echo "[install] LDAP outpost token not issued yet — starting without it; will wire it up below."
+  fi
+fi
+
 # --- TLS challenge sanity check ----------------------------------------------
 # DNS-01 (for private/homelab hosts) is opt-in via ACME_DNS_PROVIDER; _common.sh
 # auto-includes the overlay. Warn early if the provider is set but credentials are
@@ -141,6 +158,45 @@ if [[ "${HOLA_BUILD:-}" == "1" || "${HOLA_BUILD:-}" == "true" ]]; then
   "$SCRIPT_DIR/up.sh" --build
 else
   "$SCRIPT_DIR/up.sh"
+fi
+
+# --- LDAP outpost wiring ------------------------------------------------------
+# The server provisions the LDAP provider + outpost against Authentik on startup
+# and writes the outpost's token under its data root. Collect it here and hand it
+# to the container, so LDAP comes up on its own like every other component rather
+# than needing a click-through in the Authentik UI.
+#
+# Authentik's first boot (migrations + worker bootstrap) can take minutes, so poll
+# rather than assume. Never fatal: the rest of the stack is already serving, and a
+# later run (any `hola update`) picks the token up.
+if [[ "$AUTH_MODE" == "authentik" ]]; then
+  ldap_token="$(env_get AUTHENTIK_LDAP_OUTPOST_TOKEN | xargs || true)"
+  if [[ -z "$ldap_token" ]]; then
+    echo "[install] Waiting for the LDAP outpost token (Authentik first boot can take a few minutes)…"
+    for _ in $(seq 1 60); do
+      ldap_token="$(docker compose exec -T server cat /data/config/ldap-outpost-token 2>/dev/null | tr -d '\r\n' || true)"
+      [[ -n "$ldap_token" ]] && break
+      sleep 5
+    done
+  fi
+
+  if [[ -n "$ldap_token" ]]; then
+    if [[ "$(env_get AUTHENTIK_LDAP_OUTPOST_TOKEN | xargs || true)" != "$ldap_token" ]]; then
+      env_set AUTHENTIK_LDAP_OUTPOST_TOKEN "$ldap_token"
+      echo "[install]   stored the LDAP outpost token in .env"
+    fi
+    # Activate the profile now that the token exists, then start just this service.
+    profiles="$(env_get COMPOSE_PROFILES | xargs || true)"
+    if [[ ",$profiles," != *",authentik-ldap,"* ]]; then
+      env_set COMPOSE_PROFILES "${profiles:+${profiles},}authentik-ldap"
+    fi
+    echo "[install] Starting the LDAP outpost"
+    "$SCRIPT_DIR/up.sh" authentik-ldap
+  else
+    echo "[install] WARNING: the LDAP outpost token was not issued in time. The rest of the" >&2
+    echo "[install]   stack is up; LDAP stays off until the next run. Check 'docker compose" >&2
+    echo "[install]   logs server' for LDAP provisioning errors." >&2
+  fi
 fi
 
 # Credential hints. Skipped when invoked by `hola bootstrap` (HOLA_BOOTSTRAP=1):
