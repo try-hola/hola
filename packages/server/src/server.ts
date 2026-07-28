@@ -78,6 +78,7 @@ import { mapErrorToResponse, asPromoteValidationError } from './middleware/error
 // Phase 3: Authentication imports
 import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
 import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
+import { ldapOutpostTokenPath, persistLdapOutpostToken } from './services/auth/ldap-outpost-config';
 import { authConfig } from './config/auth';
 
 
@@ -1977,6 +1978,19 @@ async function initializePlatformAuth(): Promise<void> {
             `=== Hola admin setup: open this one-time link to set your password ===\n${admin.recoveryLink}`,
           );
         }
+      }
+      // Ensure the shared LDAP directory and hand its outpost token to the host.
+      // Separately guarded: LDAP is one component of the stack, and a backend that
+      // can't serve it must not fail (or retry) the dashboard OIDC provisioning
+      // that just succeeded. install.sh picks the token up on this or a later run.
+      try {
+        const ldap = await provisioner.ensureLdapOutpost();
+        persistLdapOutpostToken(ldap.token);
+        logger.info('LDAP outpost ready', { baseDn: ldap.baseDn, path: ldapOutpostTokenPath() });
+      } catch (error) {
+        logger.warn('Could not provision the LDAP outpost; retrying on the next start', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
       return;
     } catch (error) {
