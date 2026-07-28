@@ -76,10 +76,18 @@ export function clearProvisionedOidc(): void {
   provisioned = undefined;
 }
 
+/**
+ * `offline_access` earns its place: it makes the IdP issue a refresh token, which
+ * lets the dashboard renew via a token grant instead of a hidden iframe. The
+ * iframe path depends on the Authentik session cookie surviving a framed,
+ * cross-origin request and on the IdP permitting itself to be framed — brittle,
+ * and invisible when it breaks (the session simply dies early). An operator who
+ * sets HOLA_OIDC_SCOPES explicitly still gets exactly what they asked for.
+ */
 function defaultScopes(): string[] {
   const raw = process.env.HOLA_OIDC_SCOPES?.trim();
   if (raw) return raw.split(/[,\s]+/).filter(Boolean);
-  return ['openid', 'profile', 'email'];
+  return ['openid', 'profile', 'email', 'offline_access'];
 }
 
 /**

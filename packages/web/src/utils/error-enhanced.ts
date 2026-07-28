@@ -3,7 +3,7 @@
 
 import type { ErrorResponse as SharedErrorResponse } from '@hola/shared';
 
-import { getAuthToken, notifyUnauthorized } from './auth-token';
+import { getAuthToken, notifyUnauthorized, refreshAuthToken } from './auth-token';
 
 export type ErrorResponse = SharedErrorResponse;
 
@@ -345,6 +345,22 @@ function isAuthEndpoint(input: RequestInfo | URL): boolean {
   return url.includes('/api/auth/');
 }
 
+/** True when an error (or response) represents a rejected credential. */
+function isUnauthorized(err: unknown): boolean {
+  return (
+    typeof err === 'object' && err !== null && (err as EnhancedError).statusCode === 401
+  );
+}
+
+/**
+ * A request body can only be sent once, so a retry is only safe for bodies we
+ * can replay. Strings/FormData/URLSearchParams/Blob are fine; a stream is not.
+ */
+function isReplayable(init?: RequestInit): boolean {
+  const body = init?.body;
+  return body == null || typeof body === 'string' || !(body instanceof ReadableStream);
+}
+
 // Enhanced safeFetch replacement with retry support
 export async function safeFetchEnhanced(
   input: RequestInfo | URL,
@@ -354,29 +370,48 @@ export async function safeFetchEnhanced(
   // Attach auth: a Bearer access token for the OIDC flow (cookie auth needs none),
   // and always send same-origin credentials so the admin-key session cookie rides
   // along. The token getter is registered by the React AuthProvider.
-  const token = getAuthToken();
-  const withAuth: RequestInit = { credentials: 'include', ...init };
-  if (token) {
-    const headers = new Headers(withAuth.headers);
-    if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
-    withAuth.headers = headers;
-  }
+  const attempt = (token: string | undefined): Promise<Response> => {
+    const withAuth: RequestInit = { credentials: 'include', ...init };
+    if (token) {
+      const headers = new Headers(withAuth.headers);
+      if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+      withAuth.headers = headers;
+    }
+    return enhancedFetch(input, withAuth, retryConfig);
+  };
+
+  const normalize = (err: unknown): unknown =>
+    err instanceof Error && !(err as EnhancedError).type ? createEnhancedError(err) : err;
 
   try {
-    const res = await enhancedFetch(input, withAuth, retryConfig);
-    // A 401 on a real API call means our credential is gone/expired — let the app
-    // drop to login. Ignore the auth endpoints themselves (login returning 401 is
-    // a normal "wrong key", not a session expiry).
+    const res = await attempt(getAuthToken());
+    // Defensive: enhancedFetch throws on !ok, so a 401 normally surfaces via the
+    // catch below rather than here.
     if (res.status === 401 && !isAuthEndpoint(input)) {
       notifyUnauthorized();
     }
     return res;
   } catch (err) {
-    // Ensure we always throw an EnhancedError
-    if (err instanceof Error && !(err as EnhancedError).type) {
-      throw createEnhancedError(err);
+    // A 401 is not necessarily terminal. A backgrounded tab has its renewal timer
+    // throttled, so the token in memory can be stale while a valid session still
+    // exists (another tab may even have renewed it into the shared store). Try one
+    // refresh + replay before dropping the user to the login screen.
+    if (isUnauthorized(err) && !isAuthEndpoint(input) && isReplayable(init)) {
+      const fresh = await refreshAuthToken();
+      if (fresh) {
+        try {
+          return await attempt(fresh);
+        } catch (retryErr) {
+          if (isUnauthorized(retryErr)) notifyUnauthorized();
+          throw normalize(retryErr);
+        }
+      }
+      // No refresh available (cookie mode) or it failed — the session really is gone.
+      notifyUnauthorized();
+    } else if (isUnauthorized(err) && !isAuthEndpoint(input)) {
+      notifyUnauthorized();
     }
-    throw err;
+    throw normalize(err);
   }
 }
 
