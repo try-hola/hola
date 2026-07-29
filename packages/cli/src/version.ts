@@ -2,4 +2,4 @@
 // `hola bootstrap --ref` to the matching release tag (cli-v<version>) so the host
 // pulls the server/web images published for this CLI version. Keep in sync with
 // package.json.
-export const CLI_VERSION = '0.8.3';
+export const CLI_VERSION = '0.8.4';
