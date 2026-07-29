@@ -1268,16 +1268,22 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     const existing = await this.request<{ results: Array<{ pk: number }> }>(
       bootstrapToken,
       'GET',
-      `/api/v3/providers/ldap/?name=${encodeURIComponent(LDAP_PROVIDER_NAME)}`,
+      `/api/v3/providers/ldap/?name__iexact=${encodeURIComponent(LDAP_PROVIDER_NAME)}`,
     );
     if (existing.results?.[0]?.pk != null) return existing.results[0].pk;
 
-    // The LDAP provider binds against the same authorization flow the OIDC
-    // providers resolve, so a version whose default slug differs still works.
-    const authFlow = await this.resolveFlowPkWith(bootstrapToken, AUTHZ_FLOW_SLUG, 'authorization');
+    // Both flows are resolved by slug with a designation fallback, so a version
+    // whose default slugs differ still works. `invalidation_flow` is REQUIRED on
+    // providers from Authentik 2024.10 — omitting it 400s, which is why every
+    // other provider this service creates (oauth2, proxy) passes it too.
+    const [authFlow, invalidationFlow] = await Promise.all([
+      this.resolveFlowPkWith(bootstrapToken, AUTHZ_FLOW_SLUG, 'authorization'),
+      this.resolveFlowPkWith(bootstrapToken, INVALIDATION_FLOW_SLUG, 'invalidation'),
+    ]);
     const created = await this.request<{ pk: number }>(bootstrapToken, 'POST', '/api/v3/providers/ldap/', {
       name: LDAP_PROVIDER_NAME,
       authorization_flow: authFlow,
+      invalidation_flow: invalidationFlow,
       base_dn: baseDn,
     });
     return created.pk;

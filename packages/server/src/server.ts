@@ -1988,8 +1988,13 @@ async function initializePlatformAuth(): Promise<void> {
         persistLdapOutpostToken(ldap.token);
         logger.info('LDAP outpost ready', { baseDn: ldap.baseDn, path: ldapOutpostTokenPath() });
       } catch (error) {
+        // Include Authentik's response body, not just "failed: 400". The status
+        // alone says nothing about WHICH field it rejected, and this runs
+        // unattended during startup — without the body a provisioning failure is
+        // invisible until someone notices LDAP never came up.
         logger.warn('Could not provision the LDAP outpost; retrying on the next start', {
           error: error instanceof Error ? error.message : String(error),
+          detail: (error as { details?: { body?: string } })?.details?.body,
         });
       }
       return;
