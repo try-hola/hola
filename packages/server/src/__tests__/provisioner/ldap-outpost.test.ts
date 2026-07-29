@@ -49,6 +49,7 @@ function json(body: unknown, status = 200): Response {
 function installFetch(opts: {
   existingProvider?: boolean;
   existingOutpost?: { providers: number[] } | null;
+  existingApplication?: { provider: number } | null;
   tokenKey?: string;
 } = {}) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -73,6 +74,17 @@ function installFetch(opts: {
     }
     if (method === 'POST' && url.pathname === '/api/v3/providers/ldap/') {
       return json({ pk: 99 }, 201);
+    }
+    if (url.pathname === '/api/v3/core/applications/hola-ldap/') {
+      if (method === 'GET') {
+        return opts.existingApplication
+          ? json({ pk: 'app-uuid', provider: opts.existingApplication.provider })
+          : json({ detail: 'Not found.' }, 404);
+      }
+      if (method === 'PATCH') return json({ pk: 'app-uuid' });
+    }
+    if (method === 'POST' && url.pathname === '/api/v3/core/applications/') {
+      return json({ pk: 'app-uuid', slug: 'hola-ldap' }, 201);
     }
     if (method === 'GET' && url.pathname === '/api/v3/outposts/instances/') {
       return json({
@@ -135,8 +147,44 @@ describe('ensureLdapOutpost', () => {
     const createOutpost = find('POST', '/api/v3/outposts/instances/');
     expect(createOutpost?.body).toMatchObject({ name: 'hola-ldap', type: 'ldap', providers: [99] });
 
+    // The provider MUST be backed by an application. Authentik only serves an
+    // outpost the providers that have one, so without this the outpost starts,
+    // authenticates, and panics with "no ldap provider defined".
+    const createApp = find('POST', '/api/v3/core/applications/');
+    expect(createApp?.body).toMatchObject({ slug: 'hola-ldap', provider: 99 });
+
     // Token is read back by identifier — Authentik never returns keys on list.
     expect(find('GET', '/api/v3/core/tokens/ak-outpost-id/view_key/')).toBeDefined();
+  });
+
+  test('re-points an application left bound to a stale provider', async () => {
+    installFetch({
+      existingProvider: true,
+      existingApplication: { provider: 7 },
+      existingOutpost: { providers: [99] },
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.ensureLdapOutpost();
+
+    // Otherwise the outpost keeps serving nothing after the provider is recreated.
+    const patch = calls.find((c) => c.method === 'PATCH' && c.path === '/api/v3/core/applications/hola-ldap/');
+    expect(patch?.body).toMatchObject({ provider: 99 });
+    expect(find('POST', '/api/v3/core/applications/')).toBeUndefined();
+  });
+
+  test('leaves a correctly bound application alone', async () => {
+    installFetch({
+      existingProvider: true,
+      existingApplication: { provider: 99 },
+      existingOutpost: { providers: [99] },
+    });
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    await svc.ensureLdapOutpost();
+
+    expect(calls.some((c) => c.path === '/api/v3/core/applications/hola-ldap/' && c.method === 'PATCH')).toBe(false);
+    expect(find('POST', '/api/v3/core/applications/')).toBeUndefined();
   });
 
   test('reuses an existing provider and outpost instead of duplicating them', async () => {

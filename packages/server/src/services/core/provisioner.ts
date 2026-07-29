@@ -185,6 +185,8 @@ const PROVISIONER_TOKEN_ID = 'hola-provisioner-token';
 // Fixed identifiers for the platform's shared LDAP directory (stable → idempotent).
 const LDAP_PROVIDER_NAME = 'hola-ldap';
 const LDAP_OUTPOST_NAME = 'hola-ldap';
+const LDAP_APP_SLUG = 'hola-ldap';
+const LDAP_APP_NAME = 'Hola LDAP Directory';
 
 // Global (model-level) permissions the provisioner needs — just enough to manage
 // providers/applications/users/outposts and read flows/scope mappings. NOT superuser.
@@ -1258,6 +1260,12 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
     const baseDn = this.config.ldapBaseDn;
     const providerPk = await this.ensureLdapProvider(bootstrapToken, baseDn);
+    // Authentik only serves an outpost the providers that are backed by an
+    // application, so a provider bound to the outpost but with no application is
+    // invisible to it — the outpost starts, authenticates, then panics with
+    // "no ldap provider defined". Same provider → application → outpost chain the
+    // forward-auth path builds.
+    await this.ensureLdapApplication(bootstrapToken, providerPk);
     const outpost = await this.ensureLdapOutpostInstance(bootstrapToken, providerPk);
     const token = await this.readTokenKey(bootstrapToken, outpost.tokenIdentifier);
     this.logger.info('Ensured LDAP outpost', { providerPk, outpostPk: outpost.pk, baseDn });
@@ -1287,6 +1295,32 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       base_dn: baseDn,
     });
     return created.pk;
+  }
+
+  /**
+   * Ensure the application that backs the LDAP provider. Applications are
+   * addressed by slug, so a 404 on the lookup is the "doesn't exist yet" signal.
+   * An existing application pointing at a different provider is re-pointed rather
+   * than left stale — otherwise the outpost keeps serving nothing after the
+   * provider is recreated.
+   */
+  private async ensureLdapApplication(bootstrapToken: string, providerPk: number): Promise<void> {
+    const path = `/api/v3/core/applications/${encodeURIComponent(LDAP_APP_SLUG)}/`;
+    try {
+      const app = await this.request<{ provider?: number }>(bootstrapToken, 'GET', path);
+      if (app.provider !== providerPk) {
+        await this.request(bootstrapToken, 'PATCH', path, { provider: providerPk });
+      }
+      return;
+    } catch (error) {
+      const status = error instanceof ProvisioningError ? (error.details as { status?: number })?.status : undefined;
+      if (status !== 404) throw error;
+    }
+    await this.request(bootstrapToken, 'POST', '/api/v3/core/applications/', {
+      name: LDAP_APP_NAME,
+      slug: LDAP_APP_SLUG,
+      provider: providerPk,
+    });
   }
 
   private async ensureLdapOutpostInstance(
