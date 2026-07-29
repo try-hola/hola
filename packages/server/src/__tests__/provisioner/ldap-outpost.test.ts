@@ -67,7 +67,9 @@ function installFetch(opts: {
       return json({ results: opts.existingProvider ? [{ pk: 99 }] : [] });
     }
     if (method === 'GET' && url.pathname.startsWith('/api/v3/flows/instances/')) {
-      return json({ pk: 'flow-authorization' });
+      // Distinct pks per slug so the assertions prove BOTH flows were resolved.
+      const slug = url.pathname.split('/').filter(Boolean).pop() ?? '';
+      return json({ pk: slug.includes('invalidation') ? 'flow-invalidation' : 'flow-authorization' });
     }
     if (method === 'POST' && url.pathname === '/api/v3/providers/ldap/') {
       return json({ pk: 99 }, 201);
@@ -114,13 +116,20 @@ describe('ensureLdapOutpost', () => {
     expect(result.token).toBe('outpost-secret-token');
     expect(result.baseDn).toBe('dc=hola,dc=internal');
 
-    // Provider carries the configured base DN and a resolved authorization flow.
+    // Provider carries the configured base DN and BOTH resolved flows.
+    // invalidation_flow is required on providers from Authentik 2024.10 —
+    // omitting it 400s, which silently leaves the outpost unprovisioned.
     const createProvider = find('POST', '/api/v3/providers/ldap/');
     expect(createProvider?.body).toMatchObject({
       name: 'hola-ldap',
       base_dn: 'dc=hola,dc=internal',
       authorization_flow: 'flow-authorization',
+      invalidation_flow: 'flow-invalidation',
     });
+
+    // Looked up with the same filter every other provider lookup uses; a bare
+    // `?name=` is not a supported filter and would not narrow the list.
+    expect(find('GET', '/api/v3/providers/ldap/')?.search.get('name__iexact')).toBe('hola-ldap');
 
     // Outpost is type ldap and bound to that provider.
     const createOutpost = find('POST', '/api/v3/outposts/instances/');
