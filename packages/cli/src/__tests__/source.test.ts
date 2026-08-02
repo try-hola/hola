@@ -16,11 +16,80 @@ function makeSdk(updated: Partial<CatalogSourceRecord> = {}) {
       update: vi.fn(async () => ({ ...RECORD, ...updated })),
       list: vi.fn(async () => ({ items: [RECORD] })),
       remove: vi.fn(async () => ({ success: true })),
+      preview: vi.fn(async () => ({
+        appCount: 3,
+        appsWithoutRefs: 0,
+        registries: [
+          { glob: 'ghcr.io/pofallon/*', appCount: 2, covered: false },
+          { glob: 'ghcr.io/try-hola/*', appCount: 1, covered: true },
+        ],
+      })),
     },
   };
 }
 
 const asSdk = (s: ReturnType<typeof makeSdk>) => ({ sdk: s as unknown as HolaSdk, args: [] as string[] });
+
+describe('source add registry warning', () => {
+  let logs: string[];
+  beforeEach(() => {
+    process.exitCode = 0;
+    logs = [];
+    vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => { vi.restoreAllMocks(); process.exitCode = 0; });
+
+  it('warns when the new source cannot pull anything, naming the exact fix', async () => {
+    const sdk = makeSdk();
+    await runSource('add', { url: 'https://example.test/catalog.json' }, { ...asSdk(sdk), args: ['pofallon'] });
+
+    const out = logs.join('\n');
+    expect(out).toContain("Added catalog source 'pofallon'");
+    expect(out).toContain('ghcr.io/pofallon/* (2 apps)');
+    // The already-covered baseline registry isn't presented as a problem.
+    expect(out).not.toContain('ghcr.io/try-hola/*');
+    expect(out).toContain('hola source update pofallon --allow-registry ghcr.io/pofallon/*');
+    // Advisory only — the source WAS added.
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('stays quiet when the operator already granted the registries', async () => {
+    const sdk = makeSdk();
+    await runSource('add', { url: 'https://example.test/catalog.json', allowRegistry: 'ghcr.io/pofallon/*' }, { ...asSdk(sdk), args: ['pofallon'] });
+
+    expect(sdk.catalogSources.preview).not.toHaveBeenCalled();
+    expect(logs.join('\n')).not.toMatch(/REF_NOT_ALLOWED/);
+  });
+
+  it('stays quiet when every registry is already covered by the baseline', async () => {
+    const sdk = makeSdk();
+    sdk.catalogSources.preview.mockResolvedValueOnce({
+      appCount: 1, appsWithoutRefs: 0, registries: [{ glob: 'ghcr.io/try-hola/*', appCount: 1, covered: true }],
+    });
+    await runSource('add', { url: 'https://example.test/catalog.json' }, { ...asSdk(sdk), args: ['pofallon'] });
+
+    expect(logs.join('\n')).not.toMatch(/REF_NOT_ALLOWED/);
+  });
+
+  it('an unreadable catalog degrades to a generic hint, never a failed add', async () => {
+    const sdk = makeSdk();
+    sdk.catalogSources.preview.mockRejectedValueOnce(new Error('CATALOG_UNREACHABLE'));
+    await runSource('add', { url: 'https://down.test/catalog.json' }, { ...asSdk(sdk), args: ['pofallon'] });
+
+    expect(logs.join('\n')).toContain("Added catalog source 'pofallon'");
+    expect(logs.join('\n')).toContain('could not read https://down.test/catalog.json');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('--json stays machine-readable: no advisory prose in the output', async () => {
+    const sdk = makeSdk();
+    await runSource('add', { url: 'https://example.test/catalog.json', json: true }, { ...asSdk(sdk), args: ['pofallon'] });
+
+    expect(() => JSON.parse(logs.join('\n'))).not.toThrow();
+    expect(sdk.catalogSources.preview).not.toHaveBeenCalled();
+  });
+});
 
 describe('source update', () => {
   let logs: string[];

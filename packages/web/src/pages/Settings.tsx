@@ -11,13 +11,15 @@ import {
   WifiOff,
   AlertTriangle,
   Activity,
-  Pencil
+  Pencil,
+  RotateCw
 } from 'lucide-react';
 import type {
   SystemEnvVar,
   GetBackupSettingsResponse,
   RegistryCredentialRecord,
-  CatalogSourceRecord
+  CatalogSourceRecord,
+  PreviewCatalogSourceResponse
 } from '@hola/shared';
 import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
@@ -152,8 +154,46 @@ export const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: stri
   const [allowRegistries, setAllowRegistries] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // What the catalog at `url` actually contains, probed as the operator types it.
+  // `null` while idle/in-flight; `error` when the URL isn't a usable catalog.
+  const [preview, setPreview] = useState<PreviewCatalogSourceResponse | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
 
   const editingId = form && form !== 'add' ? form.editing : null;
+
+  /** The globs box, parsed the way the server parses it. */
+  const globList = React.useMemo(
+    () => allowRegistries.split(',').map(s => s.trim()).filter(Boolean),
+    [allowRegistries],
+  );
+
+  const toggleGlob = (glob: string) => {
+    setAllowRegistries(
+      globList.includes(glob)
+        ? globList.filter(g => g !== glob).join(', ')
+        : [...globList, glob].join(', '),
+    );
+  };
+
+  // Probe the URL as it settles. Debounced because it's a real network fetch on
+  // the server's side; nothing is stored, so probing an in-progress URL is safe.
+  React.useEffect(() => {
+    const candidate = url.trim();
+    if (!form || !/^https?:\/\/\S+$/.test(candidate)) {
+      setPreview(null); setPreviewErr(null); setPreviewing(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewing(true); setPreviewErr(null);
+    const t = setTimeout(() => {
+      api.catalogSources.preview(candidate)
+        .then(res => { if (!cancelled) { setPreview(res); setPreviewErr(null); } })
+        .catch(e => { if (!cancelled) { setPreview(null); setPreviewErr(e instanceof Error ? e.message : 'Could not read this catalog'); } })
+        .finally(() => { if (!cancelled) setPreviewing(false); });
+    }, 600);
+    return () => { cancelled = true; clearTimeout(t); setPreviewing(false); };
+  }, [url, form]);
 
   const refresh = React.useCallback(() => {
     api.catalogSources.list().then(r => setItems(r.items)).catch(() => setItems([]));
@@ -164,6 +204,7 @@ export const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: stri
   const closeForm = () => {
     setId(''); setName(''); setUrl(''); setCredentialRef(''); setAllowRegistries('');
     setForm(null); setErr(null);
+    setPreview(null); setPreviewErr(null);
   };
 
   const openAdd = () => { closeForm(); setForm('add'); };
@@ -288,6 +329,67 @@ export const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: stri
           <div className="col-span-2">
             <div className={labelClass}>Catalog URL</div>
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://raw.githubusercontent.com/acme/hola-apps/main/catalog.json" className={inputClass} />
+
+            {/* What the URL actually returned. The registries come from the
+                catalog's own OCI refs, so the operator grants consent from real
+                data instead of guessing a glob — and a bad URL is caught here
+                rather than as an empty source (or a failed install) later. */}
+            {previewing && (
+              <p className="text-[12px] text-text-muted mt-2 flex items-center gap-1.5">
+                <RotateCw className="w-3 h-3 animate-spin" /> Reading catalog…
+              </p>
+            )}
+            {previewErr && !previewing && (
+              <p className="text-[12px] text-warning mt-2 flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 flex-none mt-px" />
+                <span>{previewErr}</span>
+              </p>
+            )}
+            {preview && !previewing && (
+              <div className="mt-2 bg-surface-0 border border-border rounded-lg p-3">
+                <div className="text-[12.5px] text-text-strong">
+                  {preview.appCount} app{preview.appCount === 1 ? '' : 's'}
+                  {preview.registries.length > 0 && <>, published from:</>}
+                </div>
+                {preview.registries.length === 0 ? (
+                  <p className="text-[12px] text-text-muted mt-1">
+                    {preview.appsWithoutRefs > 0
+                      ? 'No app in this catalog points at an installable package yet, so no registry access is needed.'
+                      : 'This catalog lists no apps yet.'}
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-1.5 mt-2">
+                    {preview.registries.map(r => (
+                      <label key={r.glob} className={`flex items-center gap-2 text-[12.5px] ${r.covered ? 'text-text-muted' : 'text-text-strong cursor-pointer'}`}>
+                        <input
+                          type="checkbox"
+                          // Already covered by the server baseline: granting it
+                          // per-source would be a no-op, so it's shown, not asked.
+                          checked={r.covered || globList.includes(r.glob)}
+                          disabled={r.covered}
+                          onChange={() => toggleGlob(r.glob)}
+                          aria-label={`Allow ${r.glob}`}
+                        />
+                        <code>{r.glob}</code>
+                        <span className="text-text-muted">
+                          ({r.appCount} app{r.appCount === 1 ? '' : 's'}{r.covered ? ', already allowed' : ''})
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+                {preview.registries.some(r => !r.covered) && (
+                  <p className="text-[12px] text-text-muted mt-2">
+                    Ticking a registry lets this source pull packages from it. Leave it unticked and installs from those apps will fail until you allow it.
+                  </p>
+                )}
+                {preview.appsWithoutRefs > 0 && preview.registries.length > 0 && (
+                  <p className="text-[12px] text-text-muted mt-1">
+                    {preview.appsWithoutRefs} app{preview.appsWithoutRefs === 1 ? '' : 's'} list no installable package.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
           <div className="col-span-2">
             <div className={labelClass}>Registry credential (for private packages)</div>

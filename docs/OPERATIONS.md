@@ -115,6 +115,12 @@ hola refresh    # web UI refresh button hits the same force-refresh endpoint
 hola install <appId>
 ```
 
+You don't have to know the glob up front. Adding a source in the dashboard reads
+the catalog first and lists the registries its apps actually publish from, with
+a tick box per registry — grant them there and the source works from its first
+install. `hola source add` without `--allow-registry` prints the same finding as
+a note, including the `source update` line that grants it.
+
 The install-by-ref escape hatch (`hola install <ociRef>`) has no source, so it
 still needs either `--registry-cred` or the baseline allowlist to cover the ref.
 

@@ -385,7 +385,13 @@ function registryHost(registry: string): string {
   return registry.trim().split('/')[0];
 }
 
-function matchesAllowlist(pattern: string, ref: string): boolean {
+/**
+ * Does an allowlist pattern permit a ref? Exported so the catalog-source preview
+ * can report which of a catalog's registries the baseline already covers using
+ * the SAME matcher that gates the pull — a second implementation would be free
+ * to drift into telling the operator a ref is allowed when it isn't.
+ */
+export function matchesAllowlist(pattern: string, ref: string): boolean {
   // Convert simple glob like ghcr.io/org/* to regex start match
   const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
   const re = new RegExp('^' + escaped + '(?:$|[:/])');

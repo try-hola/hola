@@ -15,11 +15,21 @@ const SOURCES: CatalogSourceRecord[] = [
   { id: 'pofallon', name: 'Pofallon apps', type: 'index-url', url: 'https://example.test/catalog.json', trust: 'custom', enabled: true },
 ];
 
+const PREVIEW = {
+  appCount: 4,
+  appsWithoutRefs: 1,
+  registries: [
+    { glob: 'ghcr.io/pofallon/*', appCount: 2, covered: false },
+    { glob: 'ghcr.io/try-hola/*', appCount: 1, covered: true },
+  ],
+};
+
 const catalogSources = {
   list: vi.fn(async () => ({ items: SOURCES })),
   add: vi.fn(async () => SOURCES[1]),
   update: vi.fn(async () => SOURCES[1]),
   remove: vi.fn(async () => ({ success: true })),
+  preview: vi.fn(async () => PREVIEW),
 };
 
 const registryCredentials = {
@@ -32,8 +42,17 @@ const { CatalogSourcesCard } = await import('../../pages/Settings');
 
 const renderCard = () => render(<CatalogSourcesCard inputClass="input" labelClass="label" />);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  catalogSources.preview.mockResolvedValue(PREVIEW);
+});
 afterEach(() => cleanup());
+
+/** Fill the URL field and wait out the preview debounce. */
+async function typeUrlAndPreview(url = 'https://example.test/catalog.json') {
+  fireEvent.change(screen.getByPlaceholderText(/raw\.githubusercontent\.com/), { target: { value: url } });
+  await waitFor(() => expect(catalogSources.preview).toHaveBeenCalledWith(url), { timeout: 2000 });
+}
 
 describe('Settings → Catalog Sources editing', () => {
   it('patches an existing source in place rather than recreating it', async () => {
@@ -87,6 +106,75 @@ describe('Settings → Catalog Sources editing', () => {
 
     expect(screen.queryByLabelText('Edit hola')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Remove hola')).not.toBeInTheDocument();
+  });
+
+  it('probes the URL and grants only the registries the operator ticks', async () => {
+    renderCard();
+    await waitFor(() => expect(screen.getByText('pofallon')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add source/i }));
+
+    // Nothing is probed until the URL looks like one — no request per keystroke.
+    fireEvent.change(screen.getByPlaceholderText(/raw\.githubusercontent\.com/), { target: { value: 'not-a-url' } });
+    expect(catalogSources.preview).not.toHaveBeenCalled();
+
+    await typeUrlAndPreview();
+
+    // The catalog's own contents, with app counts for context.
+    await waitFor(() => expect(screen.getByText(/4 apps/)).toBeInTheDocument());
+    expect(screen.getByText('ghcr.io/pofallon/*')).toBeInTheDocument();
+    expect(screen.getByText(/1 app list(s)? no installable package/)).toBeInTheDocument();
+
+    // Consent is opt-IN: discovered registries start unticked, so nothing is
+    // granted by merely pasting a URL.
+    const grantable = screen.getByLabelText('Allow ghcr.io/pofallon/*') as HTMLInputElement;
+    expect(grantable.checked).toBe(false);
+    // A registry the server baseline already covers is shown, not asked for.
+    const covered = screen.getByLabelText('Allow ghcr.io/try-hola/*') as HTMLInputElement;
+    expect(covered.checked).toBe(true);
+    expect(covered.disabled).toBe(true);
+
+    fireEvent.click(grantable);
+    expect((screen.getByPlaceholderText('ghcr.io/myorg/*') as HTMLInputElement).value).toBe('ghcr.io/pofallon/*');
+
+    fireEvent.change(screen.getByPlaceholderText('acme'), { target: { value: 'acme' } });
+    fireEvent.click(screen.getByRole('button', { name: /^add source$/i }));
+
+    await waitFor(() => expect(catalogSources.add).toHaveBeenCalled());
+    // Only the ticked one — never the already-covered baseline registry.
+    expect(catalogSources.add.mock.calls[0][0]).toMatchObject({ allowRegistries: ['ghcr.io/pofallon/*'] });
+  });
+
+  it('unticking a registry withdraws it from the grant', async () => {
+    renderCard();
+    await waitFor(() => expect(screen.getByText('pofallon')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add source/i }));
+    await typeUrlAndPreview();
+
+    const box = await screen.findByLabelText('Allow ghcr.io/pofallon/*');
+    fireEvent.click(box);
+    fireEvent.click(box);
+    expect((screen.getByPlaceholderText('ghcr.io/myorg/*') as HTMLInputElement).value).toBe('');
+  });
+
+  it('reports a URL that is not a usable catalog instead of silently adding it', async () => {
+    catalogSources.preview.mockRejectedValue(new Error('CATALOG_MALFORMED: did not return a catalog.json (no "apps" array).'));
+    renderCard();
+    await waitFor(() => expect(screen.getByText('pofallon')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /add source/i }));
+    await typeUrlAndPreview('https://example.test/README.md');
+
+    await waitFor(() => expect(screen.getByText(/did not return a catalog\.json/)).toBeInTheDocument());
+    // Advisory, not a gate: adding is still allowed (a catalog may be published later).
+    expect(screen.getByRole('button', { name: /^add source$/i })).not.toBeDisabled();
+  });
+
+  it('previews on edit too, so an existing source can be checked against its catalog', async () => {
+    renderCard();
+    await waitFor(() => expect(screen.getByText('pofallon')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Edit pofallon'));
+    await waitFor(() => expect(catalogSources.preview).toHaveBeenCalledWith('https://example.test/catalog.json'), { timeout: 2000 });
+    await waitFor(() => expect(screen.getByText('ghcr.io/pofallon/*')).toBeInTheDocument());
   });
 
   it('still adds a new source, with the id editable and no source id preselected', async () => {

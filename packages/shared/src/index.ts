@@ -37,6 +37,11 @@ export const API = {
   catalogSources: {
     base: '/api/catalog-sources',
     byId: (id: string) => `/api/catalog-sources/${id}`,
+    // Probe a catalog.json before adding it: reports the registries its apps
+    // actually publish from, so the operator grants consent from real data
+    // rather than guessing a glob. Reserved id — `byId('preview')` can't collide
+    // because preview is POST-only and matched first.
+    preview: '/api/catalog-sources/preview',
   },
 
   drafts: {
@@ -596,6 +601,46 @@ export function suggestRegistryGlob(ociRef: string): string {
   const namespace = segments.length >= 3 ? segments[1] : undefined;
   return namespace ? `${host}/${namespace}/*` : `${host}/*`;
 }
+
+/**
+ * Probe a catalog.json before adding it as a source. Read-only: nothing is
+ * stored, so this is safe to call on every keystroke-settled URL.
+ */
+export type PreviewCatalogSourceRequest = {
+  url: string;
+};
+
+/** One registry namespace a previewed catalog's apps publish bundles from. */
+export type CatalogSourcePreviewRegistry = {
+  /** The glob that would permit it — see `suggestRegistryGlob`. */
+  glob: string;
+  /** How many of the catalog's apps publish under it (for "12 apps" context). */
+  appCount: number;
+  /**
+   * True when the server's baseline `HOLA_REGISTRY_ALLOWLIST` already covers it,
+   * so no per-source consent is needed. The UI shows these as already-allowed
+   * rather than asking for a grant that would be a no-op.
+   */
+  covered: boolean;
+};
+
+/**
+ * What a catalog.json turned out to contain. Doubles as URL validation: a
+ * catalog that can't be fetched or parsed fails the request outright rather than
+ * being discovered later as a silently empty source.
+ */
+export type PreviewCatalogSourceResponse = {
+  /** Apps listed in the catalog. */
+  appCount: number;
+  /** Distinct publishing registries, most-used first. */
+  registries: CatalogSourcePreviewRegistry[];
+  /**
+   * Apps whose versions carry no OCI ref at all. They can't be installed from a
+   * bundle, so no registry consent would help them — surfaced so a catalog that
+   * previews as "0 registries" isn't mistaken for a broken probe.
+   */
+  appsWithoutRefs: number;
+};
 
 export type ListCatalogSourcesResponse = {
   items: CatalogSourceRecord[];
