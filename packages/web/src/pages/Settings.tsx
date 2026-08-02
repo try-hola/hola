@@ -10,7 +10,8 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
-  Activity
+  Activity,
+  Pencil
 } from 'lucide-react';
 import type {
   SystemEnvVar,
@@ -135,10 +136,13 @@ const RegistryCredentialsCard: React.FC<{ inputClass: string; labelClass: string
  * stored registry credential for private packages. The built-in `hola` source is
  * always present (verified) and can't be removed.
  */
-const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> = ({ inputClass, labelClass }) => {
+export const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> = ({ inputClass, labelClass }) => {
   const [items, setItems] = useState<CatalogSourceRecord[]>([]);
   const [creds, setCreds] = useState<RegistryCredentialRecord[]>([]);
-  const [adding, setAdding] = useState(false);
+  // The open form, if any: `add` for a new source, or the id of the source being
+  // edited. Editing exists chiefly so `allowRegistries` can be fixed after a
+  // REF_NOT_ALLOWED install failure without deleting and re-adding the source.
+  const [form, setForm] = useState<'add' | { editing: string } | null>(null);
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -149,40 +153,75 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const editingId = form && form !== 'add' ? form.editing : null;
+
   const refresh = React.useCallback(() => {
     api.catalogSources.list().then(r => setItems(r.items)).catch(() => setItems([]));
     api.registryCredentials.list().then(r => setCreds(r.items)).catch(() => setCreds([]));
   }, []);
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  const add = async () => {
-    if (!id.trim() || !url.trim()) { setErr('id and url are required.'); return; }
+  const closeForm = () => {
+    setId(''); setName(''); setUrl(''); setCredentialRef(''); setAllowRegistries('');
+    setForm(null); setErr(null);
+  };
+
+  const openAdd = () => { closeForm(); setForm('add'); };
+
+  const openEdit = (s: CatalogSourceRecord) => {
+    setId(s.id);
+    setName(s.name === s.id ? '' : s.name);
+    setUrl(s.url);
+    setCredentialRef(s.auth?.credentialRef ?? '');
+    setAllowRegistries((s.allowRegistries ?? []).join(', '));
+    setForm({ editing: s.id });
+    setErr(null);
+  };
+
+  const save = async () => {
+    if (!editingId && !id.trim()) { setErr('id and url are required.'); return; }
+    if (!url.trim()) { setErr('id and url are required.'); return; }
     setBusy(true); setErr(null);
     try {
       // Pair the credential with the registry host derived from the credential record.
       const cred = creds.find(c => c.id === credentialRef);
-      const auth = cred ? { registry: cred.registry, credentialRef: cred.id } : undefined;
       // Server accepts comma-separated globs in a single string; no client-side
       // validation beyond non-empty trimming — the server rejects malformed
       // globs with SOURCE_ALLOW_REGISTRY_INVALID and surfaces the message.
       const globs = allowRegistries.split(',').map(s => s.trim()).filter(Boolean);
-      await api.catalogSources.add({
-        id: id.trim(),
-        name: name.trim() || id.trim(),
-        url: url.trim(),
-        auth,
-        allowRegistries: globs.length > 0 ? globs : undefined,
-      });
-      setId(''); setName(''); setUrl(''); setCredentialRef(''); setAllowRegistries(''); setAdding(false);
+      if (editingId) {
+        // Every field is sent, so the form is authoritative: clearing the
+        // credential select or the globs box clears them on the record (`null` /
+        // `[]` are the documented "clear this" values).
+        await api.catalogSources.update(editingId, {
+          name: name.trim() || editingId,
+          url: url.trim(),
+          auth: cred ? { registry: cred.registry, credentialRef: cred.id } : null,
+          allowRegistries: globs,
+        });
+      } else {
+        await api.catalogSources.add({
+          id: id.trim(),
+          name: name.trim() || id.trim(),
+          url: url.trim(),
+          auth: cred ? { registry: cred.registry, credentialRef: cred.id } : undefined,
+          allowRegistries: globs.length > 0 ? globs : undefined,
+        });
+      }
+      closeForm();
       refresh();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Failed to add source');
+      setErr(e instanceof Error ? e.message : `Failed to ${editingId ? 'update' : 'add'} source`);
     } finally { setBusy(false); }
   };
 
   const remove = async (sourceId: string) => {
     setBusy(true); setErr(null);
-    try { await api.catalogSources.remove(sourceId); refresh(); }
+    try {
+      await api.catalogSources.remove(sourceId);
+      if (editingId === sourceId) closeForm();
+      refresh();
+    }
     catch (e) { setErr(e instanceof Error ? e.message : 'Failed to remove source'); }
     finally { setBusy(false); }
   };
@@ -215,19 +254,32 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
               )}
             </div>
             {s.id !== 'hola' && (
-              <button onClick={() => remove(s.id)} disabled={busy} className="text-text-muted hover:text-danger transition-colors disabled:opacity-50 flex-none ml-2" aria-label={`Remove ${s.id}`}>
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1 flex-none ml-2">
+                <button onClick={() => openEdit(s)} disabled={busy} className="text-text-muted hover:text-text-strong transition-colors disabled:opacity-50" aria-label={`Edit ${s.id}`}>
+                  <Pencil className="w-4 h-4" />
+                </button>
+                <button onClick={() => remove(s.id)} disabled={busy} className="text-text-muted hover:text-danger transition-colors disabled:opacity-50" aria-label={`Remove ${s.id}`}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             )}
           </div>
         ))}
       </div>
 
-      {adding ? (
+      {form ? (
         <div className="grid grid-cols-2 gap-3">
           <div>
             <div className={labelClass}>Source id</div>
-            <input value={id} onChange={(e) => setId(e.target.value)} placeholder="acme" className={inputClass} />
+            {/* The id is the record key — patching it would be a different source. */}
+            <input
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              placeholder="acme"
+              readOnly={Boolean(editingId)}
+              aria-readonly={Boolean(editingId)}
+              className={`${inputClass}${editingId ? ' opacity-60 cursor-not-allowed' : ''}`}
+            />
           </div>
           <div>
             <div className={labelClass}>Name (optional)</div>
@@ -257,14 +309,14 @@ const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: string }> =
             </p>
           </div>
           <div className="col-span-2 flex items-center gap-2">
-            <button onClick={add} disabled={busy} className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">
-              <Save className="w-4 h-4" /> Add source
+            <button onClick={save} disabled={busy} className="bg-primary text-primary-contrast px-4 py-2 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2">
+              <Save className="w-4 h-4" /> {editingId ? 'Save changes' : 'Add source'}
             </button>
-            <button onClick={() => { setAdding(false); setErr(null); }} className="px-4 py-2 rounded-lg text-[13px] text-text-muted hover:text-text-strong transition-colors">Cancel</button>
+            <button onClick={closeForm} className="px-4 py-2 rounded-lg text-[13px] text-text-muted hover:text-text-strong transition-colors">Cancel</button>
           </div>
         </div>
       ) : (
-        <button onClick={() => setAdding(true)} className="flex items-center gap-2 text-[13px] font-medium text-primary hover:opacity-80 transition-opacity">
+        <button onClick={openAdd} className="flex items-center gap-2 text-[13px] font-medium text-primary hover:opacity-80 transition-opacity">
           <Plus className="w-4 h-4" /> Add source
         </button>
       )}

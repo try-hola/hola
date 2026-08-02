@@ -555,6 +555,48 @@ export type UpdateCatalogSourceRequest = {
   enabled?: boolean;
 };
 
+/**
+ * `details` on a `REF_NOT_ALLOWED` (403) error. The pull was blocked because the
+ * bundle's registry isn't covered by the effective allowlist.
+ *
+ * Carried as structured data so a client can OFFER the fix — PATCH
+ * `suggestedGlob` into the owning source's `allowRegistries` — instead of asking
+ * the operator to re-read the prose message and retype it. Clients must read
+ * these fields rather than regex the message, which is free to change.
+ */
+export type RefNotAllowedDetails = {
+  /** The blocked OCI reference, e.g. `ghcr.io/acme/hola-cms:0.1.13`. */
+  ref: string;
+  /**
+   * The narrowest glob that would permit `ref` — the registry host plus the
+   * publishing namespace (e.g. `ghcr.io/acme/*`). Valid input for a source's
+   * `allowRegistries` or the `HOLA_REGISTRY_ALLOWLIST` baseline.
+   */
+  suggestedGlob: string;
+  /** The effective allowlist that rejected the ref (baseline + any consents). */
+  allowed: string[];
+};
+
+/**
+ * Narrowest allowlist glob covering an OCI ref: the host plus the publishing
+ * namespace, so allowing one app doesn't silently allow an unrelated org on the
+ * same registry. `ghcr.io/acme/hola-cms:0.1.13` → `ghcr.io/acme/*`; a
+ * namespace-less ref (`registry.example.com/app:1`) → `registry.example.com/*`.
+ *
+ * Output is deliberately restricted to the `host/…/*` shape the server's glob
+ * validator accepts, so a suggestion is always directly submittable.
+ */
+export function suggestRegistryGlob(ociRef: string): string {
+  // Drop any digest/tag before splitting: a tag can't contain `/`, but a digest
+  // (`@sha256:…`) must not be mistaken for a path segment.
+  const withoutDigest = ociRef.split('@')[0];
+  const segments = withoutDigest.split('/').filter(Boolean);
+  const host = segments[0] ?? '';
+  // host + namespace when the ref has one (host/ns/name), else just the host.
+  const namespace = segments.length >= 3 ? segments[1] : undefined;
+  return namespace ? `${host}/${namespace}/*` : `${host}/*`;
+}
+
 export type ListCatalogSourcesResponse = {
   items: CatalogSourceRecord[];
 };

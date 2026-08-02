@@ -12,7 +12,7 @@ import type {
   AddRegistryCredentialRequest, ListRegistryCredentialsResponse, RegistryCredentialRecord,
   InstallFromRefRequest, InstallFromRefResponse,
   // Catalog sources (multi-catalog Slice 2)
-  AddCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
+  AddCatalogSourceRequest, UpdateCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
@@ -363,6 +363,12 @@ export class SdkAdapter {
       this.getWithCache('/api/catalog-sources', () => this.sdk.catalogSources.list()),
     add: async (data: AddCatalogSourceRequest): Promise<CatalogSourceRecord> => {
       const res = await this.sdk.catalogSources.add(data);
+      globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      return res;
+    },
+    update: async (id: string, data: UpdateCatalogSourceRequest): Promise<CatalogSourceRecord> => {
+      const res = await this.sdk.catalogSources.update(id, data);
       globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
       globalCache.deleteByPattern(/^api:.*\/catalog/);
       return res;

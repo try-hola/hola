@@ -3,6 +3,7 @@ import { promisify } from 'util';
 import { mkdirSync, existsSync, rmSync, statSync, mkdtempSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { suggestRegistryGlob, type RefNotAllowedDetails } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
@@ -321,7 +322,17 @@ export class RealBundleService implements BundleService, HealthCheckable {
         'REF_NOT_ALLOWED',
         `REF_NOT_ALLOWED: ${ref} is not covered by the registry allowlist (${allowed.join(', ') || 'empty'}). ` +
           `Add the registry to this catalog source's allowRegistries, or to HOLA_REGISTRY_ALLOWLIST.`,
-        { status: 403 },
+        // Structured detail so a client can OFFER the fix rather than restate the
+        // message: `suggestedGlob` is exactly what a caller would PATCH into the
+        // source's `allowRegistries`. Clients must not regex the prose message.
+        {
+          status: 403,
+          details: {
+            ref,
+            suggestedGlob: suggestRegistryGlob(ref),
+            allowed,
+          } satisfies RefNotAllowedDetails,
+        },
       );
     }
   }

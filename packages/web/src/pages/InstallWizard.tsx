@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronRight, ChevronDown, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2 } from 'lucide-react';
+import { ChevronRight, ChevronDown, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2, ShieldCheck } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
 import { ParamField } from '../components/ui/fields/ParamField';
 import type {
@@ -12,6 +12,7 @@ import type {
   AppSecurityConfig,
   AppProfileConfig,
   GetSubdomainAvailabilityResponse,
+  RefNotAllowedDetails,
 } from '@hola/shared';
 import { slugifySubdomain } from '@hola/shared';
 import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
@@ -50,6 +51,113 @@ function elevatedPermissionRisk(type: AppSecurityConfig['elevated'][number]['typ
       return 'Relaxes this container’s security hardening.';
   }
 }
+
+/** Sources whose `allowRegistries` can't be patched: the built-in catalog and the
+ * synthetic install-by-ref pseudo-source (neither is a stored record). */
+const UNPATCHABLE_SOURCES = new Set(['hola', 'ref', '(ref)']);
+
+/**
+ * Narrow an error payload to REF_NOT_ALLOWED details. A server older than the
+ * structured-details change sends the same code with no payload, so the shape is
+ * checked rather than assumed — without it the panel would offer to grant
+ * `undefined`. Failing the check just falls back to the plain error message.
+ */
+function asRefNotAllowed(code: string | null, details: unknown): RefNotAllowedDetails | null {
+  if (code !== 'REF_NOT_ALLOWED' || typeof details !== 'object' || details === null) return null;
+  const d = details as Partial<RefNotAllowedDetails>;
+  return typeof d.suggestedGlob === 'string' && d.suggestedGlob.length > 0
+    ? (d as RefNotAllowedDetails)
+    : null;
+}
+
+/**
+ * Draft-creation failure banner. Most failures are just reported, but the ones
+ * with a known remedy get a button that applies it — today that's
+ * `REF_NOT_ALLOWED`, where the fix is to add the blocked registry to the owning
+ * catalog source's `allowRegistries` (an explicit grant of pull consent, which is
+ * why it's a click and not something the server does for itself).
+ */
+const DraftErrorPanel: React.FC<{
+  message: string;
+  code: string | null;
+  details: unknown;
+  source?: string;
+  onRetry: () => void;
+}> = ({ message, code, details, source, onRetry }) => {
+  const [busy, setBusy] = useState(false);
+  const [fixErr, setFixErr] = useState<string | null>(null);
+
+  const refDetails = asRefNotAllowed(code, details);
+  const suggestedGlob = refDetails?.suggestedGlob;
+  // Only a stored custom source can be granted the registry; the built-in catalog
+  // and by-ref installs have no record to patch (see UNPATCHABLE_SOURCES).
+  const canAllow = Boolean(suggestedGlob && source && !UNPATCHABLE_SOURCES.has(source));
+
+  const allowRegistry = async () => {
+    if (!suggestedGlob || !source) return;
+    setBusy(true); setFixErr(null);
+    try {
+      // Merge, never replace: this is an additional grant, and clobbering an
+      // existing allowlist would silently revoke consent the operator gave before.
+      const { items } = await api.catalogSources.list();
+      const existing = items.find(s => s.id === source)?.allowRegistries ?? [];
+      await api.catalogSources.update(source, {
+        allowRegistries: Array.from(new Set([...existing, suggestedGlob])),
+      });
+      onRetry();
+    } catch (e) {
+      setFixErr(e instanceof Error ? e.message : 'Failed to update the catalog source');
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm mt-4">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="w-5 h-5 flex-none mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold">{refDetails ? 'Registry not allowed' : 'Error'}</div>
+          <div className="text-text-muted mt-1 break-words">{message}</div>
+
+          {refDetails && !canAllow && (
+            <div className="text-text-muted mt-2">
+              This package came from a source Hola can’t grant registries for. Add{' '}
+              <code className="text-text-strong">{suggestedGlob}</code> to <code>HOLA_REGISTRY_ALLOWLIST</code> on the server and restart it.
+            </div>
+          )}
+
+          {fixErr && <div className="text-danger mt-2">{fixErr}</div>}
+
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            {canAllow && (
+              <button
+                onClick={allowRegistry}
+                disabled={busy}
+                className="bg-primary text-primary-contrast px-3 py-1.5 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Allow <code className="font-mono">{suggestedGlob}</code> for “{source}”
+              </button>
+            )}
+            <button
+              onClick={onRetry}
+              disabled={busy}
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              <RotateCw className="w-4 h-4" /> Try again
+            </button>
+          </div>
+
+          {canAllow && (
+            <p className="text-[12px] text-text-muted mt-2">
+              Grants the “{source}” catalog source permission to pull packages from{' '}
+              <code>{suggestedGlob}</code>. You can change this later in Settings → Catalog Sources.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const InstallWizard: React.FC = () => {
   const { appId } = useParams();
@@ -165,6 +273,8 @@ export const InstallWizard: React.FC = () => {
   // draft is created exactly once (without it, the in-flight window before
   // `data` is set races dozens of duplicate createDraft calls).
   const creatingDraftRef = React.useRef(false);
+  // Bumped to ask for one more attempt after a failure (see `retryDraft`).
+  const [draftAttempt, setDraftAttempt] = useState(0);
   useEffect(() => {
     if ((!appId && !ociRef) || createDraftHook.data || creatingDraftRef.current) return;
     creatingDraftRef.current = true;
@@ -213,13 +323,26 @@ export const InstallWizard: React.FC = () => {
         }
 
       } catch (err) {
-        creatingDraftRef.current = false; // allow a retry on failure
+        // Deliberately leave the guard SET. This effect re-runs on every render
+        // (the hook object is a fresh reference each time) and the failure itself
+        // sets error state, so clearing the guard here spun the wizard into an
+        // unbounded retry loop against a request that keeps failing. Retrying is
+        // now explicit — see `retryDraft`, which the error banner drives.
         console.error('Failed to create draft:', err);
       }
     };
 
     initializeDraft();
-  }, [appId, ociRef, credentialRef, source, createDraftHook]); // Include the whole hook object
+    // `draftAttempt` is the explicit retry signal; the hook object is included
+    // as-is (it's a new reference each render, so the ref guard above — not this
+    // list — is what keeps the draft created exactly once).
+  }, [appId, ociRef, credentialRef, source, draftAttempt, createDraftHook]);
+
+  /** Re-run draft creation after a failure the operator has just fixed. */
+  const retryDraft = React.useCallback(() => {
+    creatingDraftRef.current = false;
+    setDraftAttempt(n => n + 1);
+  }, []);
 
   // Seed the instance name from the catalog display name once the draft resolves
   // (until the user edits it) — so a normal install keeps the app's own name/host.
@@ -1560,15 +1683,13 @@ services:
 
       {/* Error State */}
       {error && !draftId && (
-        <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm mt-4">
-          <div className="flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 flex-none mt-0.5" />
-            <div>
-              <div className="font-semibold">Error</div>
-              <div className="text-text-muted mt-1">{error}</div>
-            </div>
-          </div>
-        </div>
+        <DraftErrorPanel
+          message={error}
+          code={createDraftHook.errorCode}
+          details={createDraftHook.errorDetails}
+          source={source}
+          onRetry={retryDraft}
+        />
       )}
 
       {/* Wizard Content - only show when draft is ready */}

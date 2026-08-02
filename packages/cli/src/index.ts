@@ -117,11 +117,12 @@ prog
 // source — manage catalog sources (the Homebrew-tap model)
 prog
   .command('source <action> [id]')
-  .describe('Manage catalog sources: add | list | rm')
+  .describe('Manage catalog sources: add | list | update | rm')
   .example('source add acme --url https://raw.githubusercontent.com/acme/hola-apps/main/catalog.json')
   .example('source add acme --url <catalog.json> --registry ghcr.io --cred acme')
   .example('source add acme --url <catalog.json> --allow-registry ghcr.io/acme/*')
   .example('source list')
+  .example('source update acme --allow-registry ghcr.io/acme/*')
   .example('source rm acme')
   .option('--id', 'Source id (alternative to the positional id)')
   .option('--name', 'Human-readable source name')
@@ -129,6 +130,11 @@ prog
   .option('--registry', 'Registry host for private packages (with --cred)')
   .option('--cred', 'Stored registry credential id (with --registry)')
   .option('--allow-registry', 'Registry glob to permit for this source (repeatable or comma-separated; e.g. ghcr.io/acme/*)')
+  // update-only: `--clear-allow-registry` is how you empty the list, since an
+  // omitted --allow-registry means "leave it alone" (a patch, not a replace).
+  .option('--clear-allow-registry', 'On update: clear this source\'s allowed registries', false)
+  .option('--enable', 'On update: re-enable a disabled source', false)
+  .option('--disable', 'On update: stop aggregating this source\'s apps', false)
   .option('--json', 'Print raw JSON output', false)
   .action(async (action, id, opts) => {
     const { runSource } = await load(import('./commands/source/source'));
