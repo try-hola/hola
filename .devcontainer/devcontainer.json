@@ -21,7 +21,13 @@
     "ghcr.io/get2knowio/devcontainer-features/github-actions-tools:2": {}
   },
   "mounts": [
-    "source=${localWorkspaceFolder}/../apps,target=/workspaces/apps,type=bind,consistency=cached"
+    "source=${localWorkspaceFolder}/../apps,target=/workspaces/apps,type=bind,consistency=cached",
+      // Shared Claude Code + gh CLI credentials from the host, so auth survives
+      // container rebuilds and is consistent across every devcontainer on this
+      // machine. Both are read-WRITE: token refresh writes .credentials.json
+      // and hosts.yml respectively.
+      "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached",
+      "source=${localEnv:HOME}/.config/gh,target=/home/vscode/.config/gh,type=bind,consistency=cached"
   ],
   "//mcp": "MCP / disposable-VM testing config — see docs/MCP_VM_TESTING.md. These forward MCP + Proxmox secrets from the HOST environment into the container (empty if unset on the host). The committed-but-secretless alternative is .devcontainer/mcp.env. NEVER commit real values.",
   "containerEnv": {
