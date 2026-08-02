@@ -53,6 +53,7 @@ import {
   type InstallFromRefResponse,
   type AddCatalogSourceRequest,
   type UpdateCatalogSourceRequest,
+  type PreviewCatalogSourceRequest,
   type ListCatalogSourcesResponse,
   type RefreshCatalogResponse,
   type GetSubdomainAvailabilityResponse,
@@ -577,6 +578,24 @@ async function route(url: URL, req: Request): Promise<Response> {
       const status = message === 'SOURCE_ID_EXISTS' ? 409 : 400;
       logger.warn('Failed to add catalog source', { error: message });
       return json({ error: { code: 'SOURCE_ADD_FAILED', message } }, { status });
+    }
+  }
+
+  // Probe a catalog.json before it's added: reports the registries its apps
+  // publish from so the operator grants consent from real data. Read-only —
+  // nothing is stored, and it MUST be matched before the `/:id` regex below.
+  if (pathname === API.catalogSources.preview && req.method === 'POST') {
+    try {
+      const body = (await req.json().catch(() => ({}))) as Partial<PreviewCatalogSourceRequest>;
+      if (!body.url || typeof body.url !== 'string') {
+        return json({ error: { code: 'SOURCE_URL_INVALID', message: 'url is required' } }, { status: 400 });
+      }
+      return json(await getServices().catalog.previewSource(body.url));
+    } catch (error) {
+      logger.warn('Catalog source preview failed', { error: error instanceof Error ? error.message : String(error) });
+      // Typed BundleErrors carry their own status (502 unreachable, 422 malformed)
+      // and message — the operator needs the real reason to fix the URL.
+      return errorResponse(req, error);
     }
   }
 

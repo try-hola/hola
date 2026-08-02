@@ -22,7 +22,8 @@ import {
   RegistryCredentialRecord, AddRegistryCredentialRequest, ListRegistryCredentialsResponse,
   InstallFromRefRequest, InstallFromRefResponse,
   // Catalog sources (multi-catalog Slice 2)
-  CatalogSourceRecord, AddCatalogSourceRequest, ListCatalogSourcesResponse,
+  CatalogSourceRecord, AddCatalogSourceRequest, UpdateCatalogSourceRequest, ListCatalogSourcesResponse,
+  PreviewCatalogSourceRequest, PreviewCatalogSourceResponse,
   RefreshCatalogResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
@@ -112,7 +113,15 @@ export class HolaSdk {
   catalogSources = {
     list: () => this.get<ListCatalogSourcesResponse>(API.catalogSources.base),
     add: (data: AddCatalogSourceRequest) => this.post<CatalogSourceRecord>(API.catalogSources.base, data),
+    // Patch a source in place — chiefly to add `allowRegistries` after a
+    // REF_NOT_ALLOWED pull, without deleting and re-adding the source.
+    update: (id: string, data: UpdateCatalogSourceRequest) =>
+      this.patch<CatalogSourceRecord>(API.catalogSources.byId(id), data),
     remove: (id: string) => this.delete<{ success: boolean }>(API.catalogSources.byId(id)),
+    // Probe a catalog.json before adding it: what apps it lists and which
+    // registries they publish from. Stores nothing.
+    preview: (url: string) =>
+      this.post<PreviewCatalogSourceResponse>(API.catalogSources.preview, { url } satisfies PreviewCatalogSourceRequest),
   };
 
   // Registry credentials for private OCI pulls. The token is write-only: `add`

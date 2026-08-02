@@ -29,6 +29,14 @@ export interface EnhancedError extends Error {
   statusCode?: number;
   timestamp: number;
   suggestion?: string;
+  /**
+   * The server's machine-readable `error.code` and `error.details`, preserved
+   * verbatim. Callers that can OFFER a fix (e.g. REF_NOT_ALLOWED → PATCH the
+   * source's allowRegistries) discriminate on these rather than regexing the
+   * human-facing message, which is free to change.
+   */
+  code?: string;
+  details?: unknown;
 }
 
 // Retry configuration with exponential backoff
@@ -175,14 +183,22 @@ export function createEnhancedError(
   return enhancedError;
 }
 
-// Enhanced error message extraction with better parsing
-export async function toEnhancedErrorMessage(res: Response): Promise<string> {
+/**
+ * Parse an error response body once, returning both the human-facing message and
+ * the server's machine-readable `code`/`details`. The body is a stream that can
+ * only be read once, so callers that want both must go through here.
+ */
+export async function parseErrorBody(
+  res: Response
+): Promise<{ message: string; code?: string; details?: unknown }> {
   try {
     const data = (await res.json()) as Partial<ErrorResponse> | unknown;
-    
+
     // Try to extract detailed error message
     let serverMessage = '';
-    
+    let code: string | undefined;
+    let details: unknown;
+
     if (typeof data === 'object' && data !== null) {
       // Check for nested error structure
       if ('error' in data) {
@@ -191,6 +207,12 @@ export async function toEnhancedErrorMessage(res: Response): Promise<string> {
           if ('message' in errorObj && typeof (errorObj as { message?: unknown }).message === 'string') {
             serverMessage = (errorObj as { message: string }).message;
           }
+          if ('code' in errorObj && typeof (errorObj as { code?: unknown }).code === 'string') {
+            code = (errorObj as { code: string }).code;
+          }
+          // Preserve `details` verbatim for callers that act on it (the
+          // validation-issue flattening below only shapes the MESSAGE).
+          if ('details' in errorObj) details = (errorObj as { details?: unknown }).details;
           // Check for validation errors. The server sends these either as a
           // bare `details` array or, for DraftValidationError (the finalize /
           // promote / deployment-config 422s), as `details: { issues: [...] }`.
@@ -226,18 +248,23 @@ export async function toEnhancedErrorMessage(res: Response): Promise<string> {
 
     // Return server message if available and meaningful
     if (serverMessage && serverMessage.trim().length > 0) {
-      return serverMessage;
+      return { message: serverMessage, code, details };
     }
 
     // Fallback to status-based message
     const errorType = classifyError(res);
-    return ERROR_MESSAGES[errorType].message;
-    
+    return { message: ERROR_MESSAGES[errorType].message, code, details };
+
   } catch {
     // If JSON parsing fails, use status-based message
     const errorType = classifyError(res);
-    return ERROR_MESSAGES[errorType].message;
+    return { message: ERROR_MESSAGES[errorType].message };
   }
+}
+
+// Enhanced error message extraction with better parsing
+export async function toEnhancedErrorMessage(res: Response): Promise<string> {
+  return (await parseErrorBody(res)).message;
 }
 
 // Calculate delay for exponential backoff with jitter
@@ -271,9 +298,11 @@ export async function enhancedFetch(
       const response = await fetch(input, init);
       
       if (!response.ok) {
-        const errorMessage = await toEnhancedErrorMessage(response);
-        const error = new Error(errorMessage);
-        throw createEnhancedError(error, response);
+        // Read the body once: the message for display, plus code/details so a
+        // caller can act on the failure (see EnhancedError.code).
+        const { message, code, details } = await parseErrorBody(response);
+        const error = new Error(message);
+        throw Object.assign(createEnhancedError(error, response), { code, details });
       }
       
       return response;

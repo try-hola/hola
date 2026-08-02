@@ -1,6 +1,7 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
 import { globalCache } from '../utils/cache';
+import type { EnhancedError } from '../utils/error-enhanced';
 import type { 
   CreateDraftRequest, 
   CreateDraftResponse, 
@@ -15,34 +16,46 @@ export function useCreateDraft() {
     data: CreateDraftResponse | null;
     loading: boolean;
     error: string | null;
+    // The server's machine-readable failure code + payload, kept alongside the
+    // display message so the wizard can offer a fix for the failures that have
+    // one (e.g. REF_NOT_ALLOWED → allow the registry on the catalog source).
+    errorCode: string | null;
+    errorDetails: unknown;
   }>({
     data: null,
     loading: false,
     error: null,
+    errorCode: null,
+    errorDetails: null,
   });
 
   const createDraft = React.useCallback(async (request: CreateDraftRequest) => {
-    setState(prev => ({ ...prev, loading: true, error: null }));
-    
+    setState(prev => ({ ...prev, loading: true, error: null, errorCode: null, errorDetails: null }));
+
     try {
       const result = await api.drafts.create(request) as CreateDraftResponse;
-      
+
       // Cache the result for immediate retrieval
       const cacheKey = `draft-${result.draftId}`;
       globalCache.set(cacheKey, { data: result, timestamp: Date.now() });
-      
+
       setState({
         data: result,
         loading: false,
         error: null,
+        errorCode: null,
+        errorDetails: null,
       });
-      
+
       return result;
     } catch (error) {
+      const enhanced = error as Partial<EnhancedError>;
       setState({
         data: null,
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to create draft',
+        errorCode: typeof enhanced?.code === 'string' ? enhanced.code : null,
+        errorDetails: enhanced?.details ?? null,
       });
       throw error;
     }

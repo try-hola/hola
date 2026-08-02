@@ -4,6 +4,7 @@ import { getLogger } from '../../lib/logger';
 import type { Logger } from '../../lib/logger';
 import type { ServiceHealth, HealthCheckable } from './types';
 import type { PullCredentials, BundleService } from './bundles';
+import { matchesAllowlist } from './bundles';
 import { catalogConfig } from '../../config/catalog';
 import { parseComposeDefaults, mergeDefaults } from './compose-parser';
 import type {
@@ -20,7 +21,9 @@ import type {
   ParamType,
   ParamGenerate,
   ParamEnumOption,
+  PreviewCatalogSourceResponse,
 } from '@hola/shared';
+import { suggestRegistryGlob } from '@hola/shared';
 import type { CatalogSourceService } from './catalog-sources';
 import type { RegistryCredentialService } from './registry-credentials';
 import { coerceManifestAuth } from './manifest-auth';
@@ -214,6 +217,13 @@ export interface CatalogService {
   getVersionDetailByRef(ociRef: string, credentials?: PullCredentials): Promise<GetCatalogAppVersionDetailResponse & { appId: string }>;
   /** Per-source outcome, so one bad source doesn't silently mask the others. */
   refresh(force?: boolean): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>>;
+  /**
+   * Probe a catalog.json without storing anything: what apps it lists and which
+   * registries they publish bundles from. Lets the operator grant registry
+   * consent from the catalog's own contents at add time, instead of discovering
+   * a missing `allowRegistries` as a REF_NOT_ALLOWED install failure later.
+   */
+  previewSource(url: string): Promise<PreviewCatalogSourceResponse>;
 }
 
 /**
@@ -640,6 +650,60 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     });
   }
 
+  async previewSource(url: string): Promise<PreviewCatalogSourceResponse> {
+    // A THROWAWAY fetcher: a preview must not seed (or be served by) the shared
+    // per-source cache — the URL isn't a source yet, and a stale hit would report
+    // a different catalog than the one about to be added.
+    let data: RemoteCatalog;
+    try {
+      data = await new SourceCatalog(url).ensureLoaded();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new BundleError('CATALOG_UNREACHABLE', `CATALOG_UNREACHABLE: ${url}: ${detail}`, { status: 502 });
+    }
+
+    // The fetcher casts the parsed JSON straight to RemoteCatalog without
+    // checking it, so a non-catalog URL (an HTML page, someone's repo root)
+    // parses "fine" and only fails much later. Preview is the one place that can
+    // tell the operator now, while they're still looking at the URL field.
+    if (!data || !Array.isArray(data.apps)) {
+      throw new BundleError(
+        'CATALOG_MALFORMED',
+        `CATALOG_MALFORMED: ${url} did not return a catalog.json (no "apps" array).`,
+        { status: 422 },
+      );
+    }
+
+    // Count DISTINCT APPS per registry, not versions: "12 apps" is the number an
+    // operator can reason about, where "137 versions" is noise.
+    const appsByGlob = new Map<string, Set<string>>();
+    let appsWithoutRefs = 0;
+    for (const app of data.apps) {
+      const refs = (app.versions ?? []).map(v => v.refs?.oci).filter((r): r is string => Boolean(r));
+      if (refs.length === 0) { appsWithoutRefs++; continue; }
+      for (const ref of refs) {
+        const glob = suggestRegistryGlob(ref);
+        const seen = appsByGlob.get(glob) ?? new Set<string>();
+        seen.add(app.id);
+        appsByGlob.set(glob, seen);
+      }
+    }
+
+    const registries = [...appsByGlob.entries()]
+      .map(([glob, apps]) => ({
+        glob,
+        appCount: apps.size,
+        // Report coverage with the same matcher that gates the pull, against a
+        // representative ref for the glob — never a second opinion about what the
+        // allowlist permits.
+        covered: catalogConfig.registryAllowlist.some(p => matchesAllowlist(p, glob.replace(/\*$/, 'probe'))),
+      }))
+      .sort((a, b) => b.appCount - a.appCount || a.glob.localeCompare(b.glob));
+
+    this.logger.info('Catalog source previewed', { url, appCount: data.apps.length, registries: registries.map(r => r.glob) });
+    return { appCount: data.apps.length, registries, appsWithoutRefs };
+  }
+
   private mapApp(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord): CatalogApp {
     return {
       id: app.id,
@@ -683,4 +747,7 @@ export class MockCatalogService implements CatalogService {
     throw new BundleUnavailableError('VERSION_NOT_FOUND', 'VERSION_NOT_FOUND');
   }
   async refresh(): Promise<Array<{ id: string; name: string; ok: boolean; error?: string }>> { return []; }
+  async previewSource(): Promise<PreviewCatalogSourceResponse> {
+    return { appCount: 0, registries: [], appsWithoutRefs: 0 };
+  }
 }

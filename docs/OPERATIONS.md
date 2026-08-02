@@ -115,8 +115,39 @@ hola refresh    # web UI refresh button hits the same force-refresh endpoint
 hola install <appId>
 ```
 
+You don't have to know the glob up front. Adding a source in the dashboard reads
+the catalog first and lists the registries its apps actually publish from, with
+a tick box per registry — grant them there and the source works from its first
+install. `hola source add` without `--allow-registry` prints the same finding as
+a note, including the `source update` line that grants it.
+
 The install-by-ref escape hatch (`hola install <ociRef>`) has no source, so it
 still needs either `--registry-cred` or the baseline allowlist to cover the ref.
+
+##### Fixing `REF_NOT_ALLOWED` after the fact
+
+A source added *without* `allowRegistries` fails every install from it with a 403:
+
+```
+REF_NOT_ALLOWED: ghcr.io/myorg/hola-cms:0.1.13 is not covered by the registry
+allowlist (ghcr.io/try-hola/*).
+```
+
+The source doesn't need recreating — patch it in place:
+
+```bash
+hola source update myorg --allow-registry ghcr.io/myorg/*
+```
+
+`source update` is a patch: an omitted flag leaves that field alone,
+`--allow-registry` replaces the stored glob list, and `--clear-allow-registry`
+empties it back to the baseline. In the dashboard the same fix is offered on the
+failure itself ("Allow `ghcr.io/myorg/*` for …", which grants it and retries the
+install), or by editing the source under **Settings → Catalog Sources**.
+
+Prefer the narrowest glob that covers the package — `ghcr.io/myorg/*`, not
+`ghcr.io/*` — so consenting to one publisher doesn't consent to every other
+namespace on that registry.
 
 Through the web dashboard (or the SDK/CLI against the API), an app moves through:
 

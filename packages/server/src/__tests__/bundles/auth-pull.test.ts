@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'fs/promises';
 import { readFileSync, statSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { suggestRegistryGlob } from '@hola/shared';
 import { RealBundleService, bundleCacheKey, type CommandRunner } from '../../services/core/bundles';
+import { BundleError } from '../../middleware/error-mapping';
 
 describe('bundleCacheKey (cross-source collision guard)', () => {
   test('the built-in hola source keeps the bare appId; others are namespaced', () => {
@@ -99,6 +101,54 @@ describe('RealBundleService authenticated pull', () => {
       credentials: { registry: 'registry.example.com', username: 'u', password: 'p' },
     });
     expect(ok.localPath).toBe(join(base, 'acme__app', '1.0'));
+  });
+
+  test('REF_NOT_ALLOWED carries the fix as structured details', async () => {
+    // The web install wizard offers "allow this registry" straight from the
+    // failure, so the remedy has to travel as DATA. If it only existed in the
+    // prose message, the client would be back to regexing English.
+    const base = await makeCache();
+    const svc = new RealBundleService(base, async () => ({ stdout: '', stderr: '' }));
+
+    let err: unknown;
+    try {
+      await svc.ensurePulled({ appId: 'cms', version: '0.1.13', source: 'pofallon', ociRef: 'ghcr.io/pofallon/hola-get2know-cms:0.1.13' });
+    } catch (e) { err = e; }
+
+    expect(err).toBeInstanceOf(BundleError);
+    expect((err as BundleError).status).toBe(403);
+    expect((err as BundleError).details).toEqual({
+      ref: 'ghcr.io/pofallon/hola-get2know-cms:0.1.13',
+      suggestedGlob: 'ghcr.io/pofallon/*',
+      allowed: ['ghcr.io/try-hola/*'],
+    });
+  });
+
+  test('the suggested glob is narrow, submittable, and actually unblocks the ref', async () => {
+    // Namespace-scoped, never bare-host: allowing one publisher's package must
+    // not silently allow every other org on the same registry.
+    expect(suggestRegistryGlob('ghcr.io/pofallon/hola-get2know-cms:0.1.13')).toBe('ghcr.io/pofallon/*');
+    expect(suggestRegistryGlob('ghcr.io/acme/app@sha256:abc')).toBe('ghcr.io/acme/*');
+    // A namespace-less ref has no org to scope to — the host is as narrow as it gets.
+    expect(suggestRegistryGlob('registry.example.com/app:1')).toBe('registry.example.com/*');
+
+    // End to end: feeding the suggestion back as a source consent unblocks the pull.
+    const base = await makeCache();
+    const svc = new RealBundleService(base, async () => ({ stdout: '', stderr: '' }));
+    const ref = 'ghcr.io/pofallon/hola-get2know-cms:0.1.13';
+    const ok = await svc.ensurePulled({
+      appId: 'cms', version: '0.1.13', source: 'pofallon', ociRef: ref,
+      extraAllowlist: [suggestRegistryGlob(ref)],
+    });
+    expect(ok.localPath).toBe(join(base, 'pofallon__cms', '0.1.13'));
+
+    // ...and does NOT unblock a different namespace on the same registry.
+    await expect(
+      svc.ensurePulled({
+        appId: 'other', version: '1.0', source: 'pofallon', ociRef: 'ghcr.io/someone-else/app:1.0',
+        extraAllowlist: [suggestRegistryGlob(ref)],
+      }),
+    ).rejects.toThrow('REF_NOT_ALLOWED');
   });
 });
 

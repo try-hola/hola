@@ -12,7 +12,8 @@ import type {
   AddRegistryCredentialRequest, ListRegistryCredentialsResponse, RegistryCredentialRecord,
   InstallFromRefRequest, InstallFromRefResponse,
   // Catalog sources (multi-catalog Slice 2)
-  AddCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
+  AddCatalogSourceRequest, UpdateCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
+  PreviewCatalogSourceResponse,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
@@ -367,12 +368,21 @@ export class SdkAdapter {
       globalCache.deleteByPattern(/^api:.*\/catalog/);
       return res;
     },
+    update: async (id: string, data: UpdateCatalogSourceRequest): Promise<CatalogSourceRecord> => {
+      const res = await this.sdk.catalogSources.update(id, data);
+      globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
+      globalCache.deleteByPattern(/^api:.*\/catalog/);
+      return res;
+    },
     remove: async (id: string): Promise<{ success: boolean }> => {
       const res = await this.sdk.catalogSources.remove(id);
       globalCache.deleteByPattern(/^api:.*\/catalog-sources/);
       globalCache.deleteByPattern(/^api:.*\/catalog/);
       return res;
     },
+    // Read-only probe: stores nothing, so it neither invalidates nor is cached
+    // (the operator editing a URL expects each probe to actually hit the URL).
+    preview: (url: string): Promise<PreviewCatalogSourceResponse> => this.sdk.catalogSources.preview(url),
   };
 
   // Drafts (Install Wizard) with cache invalidation
