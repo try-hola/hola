@@ -20,6 +20,8 @@ import type {
   GetDeploymentsResponse,
   GetDeploymentResponse,
   GetDeploymentUpdateCheckResponse,
+  GetDeploymentPushTargetsResponse,
+  PostDeploymentPushHookResponse,
   PatchDeploymentRequest,
   PatchDeploymentResponse,
   GetDeploymentHistoryResponse,
@@ -43,6 +45,7 @@ import type {
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
+import { resolveContainedDir } from './path-containment';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
@@ -171,6 +174,15 @@ export interface DeploymentService extends HealthCheckable {
    *  (breaking / pre-upgrade backup / notes) and a `checkUpgradePath` verdict —
    *  the expensive part (a target-bundle pull) the list deliberately skips. */
   getUpdateCheck(deploymentId: string): Promise<GetDeploymentUpdateCheckResponse>;
+  /** The active release's manifest-declared push targets (#409), each resolved to
+   *  an absolute host path and proven to sit inside this deployment's data root.
+   *  A target whose declared path escapes containment is omitted, not an error. */
+  getPushTargets(deploymentId: string): Promise<GetDeploymentPushTargetsResponse>;
+  /** Run a push target's manifest-declared postHook in the app's own containers
+   *  (#409), after the CLI has landed the bytes. A target with no hook is a
+   *  no-op success; a hook that fails reports `ok: false` rather than throwing —
+   *  the data is already on disk. */
+  runPushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse>;
   updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse>;
   deleteDeployment(deploymentId: string): Promise<void>;
 
@@ -853,6 +865,41 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       latestVersion: detail.latestVersion,
       updateAvailable: !!detail.updateAvailable,
     };
+  }
+
+  async getPushTargets(deploymentId: string): Promise<GetDeploymentPushTargetsResponse> {
+    await this.ensureLoaded();
+    this.requireDeployment(deploymentId);
+    return this.buildPushTargets(deploymentId);
+  }
+
+  /**
+   * Resolve the active release's `push` block against the deployment's data
+   * root. Base: no targets — the in-memory/mock service has no releases on disk
+   * and no app data root. RealDeploymentService overrides it.
+   */
+  protected async buildPushTargets(deploymentId: string): Promise<GetDeploymentPushTargetsResponse> {
+    void deploymentId;
+    return { targets: [] };
+  }
+
+  async runPushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse> {
+    await this.ensureLoaded();
+    this.requireDeployment(deploymentId);
+    const { targets } = await this.getPushTargets(deploymentId);
+    // An unknown target id is a client error, not a failed hook — the CLI
+    // resolved it from this same listing, so a mismatch means stale input.
+    if (!targets.some((t) => t.id === targetId)) {
+      throw new NotFoundError(`Push target '${targetId}' is not declared by deployment ${deploymentId}`);
+    }
+    return this.executePushHook(deploymentId, targetId);
+  }
+
+  /** Base: nothing to exec against. RealDeploymentService overrides it. */
+  protected async executePushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse> {
+    void deploymentId;
+    void targetId;
+    return { ok: true };
   }
 
   /**
@@ -1644,6 +1691,79 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** Read the per-app backup hooks (#121) from a release's finalized manifest. */
   private async readReleaseBackupConfig(deploymentId: string, releaseId: string): Promise<FinalizedManifest['backup']> {
     return (await this.readReleaseManifest(deploymentId, releaseId))?.backup;
+  }
+
+  /**
+   * Resolve the active release's declared push targets (#409) against this
+   * deployment's data root.
+   *
+   * The `path` comes from a catalog manifest, so every one is put through
+   * `resolveContainedDir` before it leaves the server — a target that resolves
+   * outside `<HOLA_APPS_BIND_ROOT>/<deploymentId>/` (via `..`, an absolute path,
+   * or a symlink planted in the data root) is **dropped and logged**, not
+   * returned. Dropping rather than throwing keeps `--list` useful when one
+   * target of several is bad; the loud `logger.error` is what surfaces it,
+   * because a manifest that tries to escape is a catalog problem, not an
+   * operator one.
+   */
+  protected override async buildPushTargets(deploymentId: string): Promise<GetDeploymentPushTargetsResponse> {
+    const deployment = this.requireDeployment(deploymentId);
+    const declared = (await this.readActiveManifest(deployment))?.push ?? [];
+    const appRoot = this.appRootFor(deploymentId);
+
+    const targets: GetDeploymentPushTargetsResponse['targets'] = [];
+    for (const target of declared) {
+      const destPath = resolveContainedDir(appRoot, target.path);
+      if (!destPath) {
+        this.logger.error('Push target escapes the app data root — dropping', new Error('push target containment violation'), {
+          deploymentId,
+          app: deployment.app,
+          targetId: target.id,
+          path: target.path,
+        });
+        continue;
+      }
+      targets.push({
+        id: target.id,
+        label: target.label,
+        ...(target.description ? { description: target.description } : {}),
+        destPath,
+        // Echo the defaults applied so the CLI never has to know them.
+        mode: target.mode ?? 'additive',
+        quiesce: target.quiesce ?? 'none',
+        hasPostHook: !!target.postHook,
+      });
+    }
+    return { targets };
+  }
+
+  /**
+   * Run a push target's postHook in the app's own containers (#409) — the same
+   * `docker compose exec` mechanism as the #121 backup hooks. The command is
+   * read from the server-side manifest, so this endpoint is not an
+   * arbitrary-exec surface: the CLI names a target, not a command.
+   *
+   * Failure is reported, not thrown: the bytes are already on disk, so the
+   * operator needs to know the reindex/reconnect didn't happen — there is
+   * nothing to roll back.
+   */
+  protected override async executePushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse> {
+    const deployment = this.requireDeployment(deploymentId);
+    const hook = (await this.readActiveManifest(deployment))?.push?.find((t) => t.id === targetId)?.postHook;
+    if (!hook) return { ok: true };
+
+    const dir = this.runtimeDir(deploymentId);
+    const projectName = this.projectName(deploymentId);
+    // A hook may target a profiled service (#162); carry the active profiles so
+    // Compose can resolve it.
+    const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
+
+    this.logger.info('Running push postHook', { deploymentId, targetId, service: hook.service });
+    const res = await this.dockerService.composeExec(dir, projectName, hook.service, hook.command, { profiles });
+    if (!res.success) {
+      this.logger.warn('push postHook failed', { deploymentId, targetId, output: res.output });
+    }
+    return { ok: res.success, ...(res.output ? { output: res.output } : {}) };
   }
 
   /** Snapshot metadata for a deployment, newest first. */

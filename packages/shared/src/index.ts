@@ -74,6 +74,13 @@ export const API = {
     // bundle to answer safe-bump vs. guided-upgrade. Returns
     // GetDeploymentUpdateCheckResponse. The list keeps the cheap #284 badge.
     updateCheck: (deploymentId: string) => `/api/deployments/${deploymentId}/update-check`,
+    // Manifest-declared push targets for this deployment (#409), each resolved to
+    // an absolute, containment-checked host path the CLI can rsync into. Returns
+    // GetDeploymentPushTargetsResponse.
+    pushTargets: (deploymentId: string) => `/api/deployments/${deploymentId}/push-targets`,
+    // Run a push target's manifest-declared postHook after the bytes have landed
+    // (#409). Returns PostDeploymentPushHookResponse.
+    pushHook: (deploymentId: string) => `/api/deployments/${deploymentId}/push-hooks`,
   },
 
   jobs: {
@@ -191,6 +198,55 @@ export type AppBackupHook = {
  */
 export type AppBackupConfig = {
   preHook?: AppBackupHook;
+  postHook?: AppBackupHook;
+};
+
+/**
+ * How a push overwrites the target directory (#409). `mirror` is rsync
+ * `--delete` — the local tree becomes the server tree, so files only on the
+ * server are removed. `additive` (the default) copies in without deleting.
+ * Declared per target rather than as a CLI flag: mirror semantics are a property
+ * of what the directory *is*, and a stray `--delete` against an additive target
+ * would silently destroy data.
+ */
+export type AppPushMode = 'mirror' | 'additive';
+
+/**
+ * Whether the app is stopped for the duration of a push (#409). `stop` for apps
+ * that hold open handles on the data being replaced (Calibre-Web and
+ * `metadata.db`); `none` (the default) leaves it running.
+ */
+export type AppPushQuiesce = 'stop' | 'none';
+
+/**
+ * A directory an app declares as pushable in its bundle manifest's `push` block
+ * (#409), so `hola app data push` can bulk-load data (an ebook library, a media
+ * tree, a document archive) that's too big or too structured for the app's own
+ * web upload.
+ *
+ * `path` is **relative to the app's data root** — never a container path and
+ * never absolute. The server resolves it against `<HOLA_APPS_BIND_ROOT>/<id>/`
+ * and verifies containment before handing it out, so a manifest can't declare
+ * its way into another app's data (see `resolveContainedDir`).
+ */
+export type AppPushTarget = {
+  /** Stable identifier the CLI takes as an argument. */
+  id: string;
+  /** Human-friendly name shown by `--list`. */
+  label: string;
+  /** Help text — what the operator should point at it. */
+  description?: string;
+  /** Directory relative to the app's data root. */
+  path: string;
+  /** Defaults to `additive`. */
+  mode?: AppPushMode;
+  /** Defaults to `none`. */
+  quiesce?: AppPushQuiesce;
+  /**
+   * Run inside one of the app's own compose services after the bytes land — for
+   * apps that want a reindex/reconnect instead of a `quiesce: stop` bounce. Same
+   * exec-form shape as a backup hook.
+   */
   postHook?: AppBackupHook;
 };
 
@@ -802,6 +858,10 @@ export type GetCatalogAppVersionDetailResponse = {
   // (e.g. pg_dump before a file-level capture). Optional: most apps (and SQLite)
   // are fine with crash-consistent file snapshots and omit it.
   backup?: AppBackupConfig;
+  // Directories the app declares as pushable (#409), each a data-root-relative
+  // path `hola app data push` can bulk-load into. Optional: most apps take their
+  // data through their own UI and omit it.
+  push?: AppPushTarget[];
   // Elevated container permissions the app requests (e.g. a browser desktop that
   // needs `sudo`). Each entry is surfaced for explicit operator consent in the
   // install wizard and relaxes the corresponding platform hardening at deploy
@@ -1018,6 +1078,10 @@ export type Draft = {
   // carried through finalize so the snapshot path can quiesce/dump around the
   // file capture (read-only; not user-editable).
   backup?: AppBackupConfig;
+  // Pushable directories seeded from the bundle manifest (#409) and carried
+  // through finalize so `push-targets` can resolve them against the deployment's
+  // data root (read-only; not user-editable).
+  push?: AppPushTarget[];
   // Optional Compose profiles the app declares (#162), seeded from the bundle
   // manifest so the install wizard can render a checkbox per profile. The
   // selected keys are sent on create; the declared list itself is read-only.
@@ -1147,6 +1211,48 @@ export type GetDeploymentUpdateCheckResponse = {
   path?: UpgradePathResult;
   preUpgradeBackup?: 'required' | 'recommended' | 'none';
   upgradeNotesUrl?: string;
+};
+
+/**
+ * The deployment's manifest-declared push targets (#409), resolved for the CLI.
+ *
+ * Every `destPath` is absolute on the Hola host and has been verified to sit
+ * inside the deployment's data root — the CLI never joins host paths itself,
+ * because only the server knows the real `HOLA_APPS_BIND_ROOT`. A target whose
+ * declared path escapes containment is **omitted** from this list (and logged),
+ * so a bad manifest degrades one target rather than the whole listing.
+ *
+ * `mode`/`quiesce` are echoed with their defaults already applied, and
+ * `hasPostHook` says whether the CLI should call `push-hooks` afterwards — one
+ * GET is everything a push needs.
+ */
+export type GetDeploymentPushTargetsResponse = {
+  targets: Array<{
+    id: string;
+    label: string;
+    description?: string;
+    /** Absolute host path, containment-checked against the app's data root. */
+    destPath: string;
+    mode: AppPushMode;
+    quiesce: AppPushQuiesce;
+    hasPostHook: boolean;
+  }>;
+};
+
+export type PostDeploymentPushHookRequest = {
+  /** The `push[].id` whose postHook to run. */
+  targetId: string;
+};
+
+/**
+ * `ok: false` means the hook ran and failed (or timed out) — the bytes are
+ * already on disk, so this is reported rather than rolled back. A target with no
+ * declared postHook is a no-op `{ ok: true }`.
+ */
+export type PostDeploymentPushHookResponse = {
+  ok: boolean;
+  /** Combined stdout/stderr from the hook, when it produced any. */
+  output?: string;
 };
 
 export type PatchDeploymentRequest = {

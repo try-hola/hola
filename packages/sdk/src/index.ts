@@ -14,6 +14,9 @@ import {
   PromoteDeploymentRequest, PromoteDeploymentResponse,
   GetDeploymentConfigResponse,
   GetDeploymentUpdateCheckResponse,
+  GetDeploymentPushTargetsResponse,
+  PostDeploymentPushHookRequest,
+  PostDeploymentPushHookResponse,
   GetSubdomainAvailabilityResponse,
   // Catalog types
   GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppResponse,
@@ -169,6 +172,13 @@ export class HolaSdk {
     // On-demand richer update check for one deployment (#299): safe-bump vs.
     // guided-upgrade, with the target's breaking/backup/notes + a path verdict.
     updateCheck: (deploymentId: string) => this.get<GetDeploymentUpdateCheckResponse>(API.deployments.updateCheck(deploymentId)),
+    // Manifest-declared push targets (#409), each resolved to an absolute host
+    // path already proven to sit inside the app's data root — the client rsyncs
+    // to `destPath` verbatim rather than joining paths itself.
+    pushTargets: (deploymentId: string) => this.get<GetDeploymentPushTargetsResponse>(API.deployments.pushTargets(deploymentId)),
+    // Run a push target's manifest-declared postHook after the push (#409).
+    pushHook: (deploymentId: string, data: PostDeploymentPushHookRequest) =>
+      this.post<PostDeploymentPushHookResponse>(API.deployments.pushHook(deploymentId), data),
   };
 
   jobs = {

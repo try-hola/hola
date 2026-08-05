@@ -20,6 +20,7 @@ import {
   type GetDeploymentConfigResponse,
   type PostDeploymentActionRequest,
   type PostDeploymentActionResponse,
+  type PostDeploymentPushHookRequest,
   type GetJobsResponse,
   type DeleteJobsResponse,
   type GetBackupsResponse,
@@ -74,7 +75,7 @@ import { coreRoutesFromEnv } from './services/core/routing';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
-import { mapErrorToResponse, asPromoteValidationError } from './middleware/error-mapping';
+import { mapErrorToResponse, asPromoteValidationError, ValidationError } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
 import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
@@ -1075,6 +1076,39 @@ async function route(url: URL, req: Request): Promise<Response> {
     try {
       const services = getServices();
       const payload = await services.deployments.getUpdateCheck(id);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  // Manifest-declared push targets (#409), resolved to absolute host paths the
+  // CLI can rsync into. Same placement rationale as update-check above.
+  const pushTargetsMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/push-targets$/);
+  if (pushTargetsMatch && req.method === 'GET') {
+    const id = pushTargetsMatch[1];
+    try {
+      const services = getServices();
+      const payload = await services.deployments.getPushTargets(id);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  // Run a push target's manifest-declared postHook after the bytes have landed
+  // (#409). The command comes from the server-side manifest — the body names a
+  // target, never a command.
+  const pushHookMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/push-hooks$/);
+  if (pushHookMatch && req.method === 'POST') {
+    const id = pushHookMatch[1];
+    try {
+      const body = (await req.json().catch(() => ({}))) as PostDeploymentPushHookRequest;
+      if (!body?.targetId || typeof body.targetId !== 'string') {
+        throw new ValidationError('targetId is required');
+      }
+      const services = getServices();
+      const payload = await services.deployments.runPushHook(id, body.targetId);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);

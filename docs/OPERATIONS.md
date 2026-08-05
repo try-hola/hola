@@ -209,6 +209,52 @@ mounted at `/data` in the stack:
 
 This tree is the single thing to back up.
 
+App data itself lives outside it, under `HOLA_APPS_BIND_ROOT`
+(default `/srv/hola/apps/<deploymentId>/`) — see below for the supported way to
+get bulk data into it.
+
+## Pushing bulk data into an app
+
+Some apps need data that's too big or too structured to go through their own web
+upload: a Calibre library, a media tree, a document archive to seed Paperless.
+Apps declare which of their directories accept that in their bundle manifest's
+`push` block, and the CLI pushes to them:
+
+```bash
+hola app data push calibre-web-ab12cd34 --list          # what does this app accept?
+hola app data push calibre-web-ab12cd34 library ~/Calibre\ Library --host me@server
+```
+
+What the command does, in order: resolve the named target to an absolute path
+inside the deployment's data root (server-side — the client never has to know
+Hola's on-disk layout), read the target directory's current ownership, stop the
+app if the target declares `quiesce: stop`, rsync, restore ownership, run the
+app's declared post-push hook, and start the app again.
+
+Things worth knowing before you run it:
+
+- **It's rsync, so re-pushing is cheap.** Fix some metadata locally, push again,
+  and only the changed files cross the wire. This is the intended workflow, not
+  a one-time seed.
+- **It is one-way.** Your machine is the source of truth and the app's data root
+  is a replica. Nothing is merged back, and changes made *in the app* to a
+  pushed directory are not protected.
+- **`mode: mirror` deletes.** A mirror target (rsync `--delete`) makes the server
+  copy match yours exactly — files only on the server are removed. The CLI
+  confirms before doing it unless you pass `--yes`. Mode is a property of the
+  target, declared by the app, not a flag you choose.
+- **`additive` is not add-only.** It doesn't delete, but a local file overwrites
+  a same-named server file.
+- **Passwordless sudo is required.** App data is written by containers as root,
+  so the SSH user needs `sudo -n` on the server (both for the ownership fix and
+  for the receiving rsync). The command probes for this and fails before moving
+  any bytes if it's missing.
+- **The target directory must already exist** — install the app first. The
+  command will not create it, because the ownership it copies is the ownership
+  the server established.
+
+`--dry-run` prints the exact commands without connecting.
+
 ## Restart recovery
 
 Hola is stateless in memory: all deployment, release, routing, and job state is

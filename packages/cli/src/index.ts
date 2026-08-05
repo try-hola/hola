@@ -283,6 +283,24 @@ prog
     await runConfig(deploymentId, streamOpts(opts));
   });
 
+// app data push — bulk-load a local directory into a directory the app declares
+// as pushable in its manifest (#409). rsync over SSH, so a re-push after local
+// edits transfers only the delta. Multi-word so `app data pull` can join it later.
+prog
+  .command('app data push <deploymentId> [target] [localPath]')
+  .describe('Push a local directory into an app data directory the app declares as pushable')
+  .example('app data push calibre-web-ab12cd34 --list')
+  .example('app data push calibre-web-ab12cd34 library ~/Calibre\\ Library --host user@server')
+  .option('--list', 'List the push targets the app declares and exit', false)
+  .option('--host', 'SSH target for the Hola server, e.g. user@server')
+  .option('--dry-run', 'Print the plan without connecting', false)
+  .option('--yes, -y', 'Skip the confirmation a mirror push requires', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, target, localPath, opts) => {
+    const { runAppDataPush } = await load(import('./commands/deployments/data-push'));
+    await runAppDataPush(deploymentId, target, localPath, camelKeys(opts));
+  });
+
 // Fallback banner when no args
 if (process.argv.length <= 2) {
   // Minimal banner when no args. Lead with setup for first-time users, then the
