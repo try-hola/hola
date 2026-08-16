@@ -32,6 +32,7 @@ import { coerceManifestProfiles } from './manifest-profiles';
 import { coerceConsumes } from './app-registry';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
+import { coerceManifestPush } from './manifest-push';
 import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
 import { BundleError, BundleUnavailableError } from '../../middleware/error-mapping';
 
@@ -529,6 +530,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         security?: unknown;
         upgrade?: unknown;
         backup?: unknown;
+        push?: unknown;
         profiles?: unknown;
         ingress?: { service?: unknown; port?: unknown };
       };
@@ -612,6 +614,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // transaction-consistent backups. Coerced narrowly like `auth`.
       const backup = coerceManifestBackup(manifest.backup);
 
+      // Directories the app declares as pushable (#409). Coerced narrowly like
+      // `auth`; the server resolves each `path` against the deployment's data
+      // root (and proves containment) at push time.
+      const push = coerceManifestPush(manifest.push);
+
       // Optional Compose profiles the app declares (#162): each gates an opt-in
       // service (e.g. a heavy dependency). Coerced narrowly like `auth`; the
       // wizard renders a checkbox per profile and the enabled set is threaded into
@@ -627,7 +634,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, push, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       // Keep the underlying reason in the message, not just the cause: a missing
