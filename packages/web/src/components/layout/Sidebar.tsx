@@ -11,6 +11,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import { SidebarVersion } from './SidebarVersion';
 
 const navigationItems = [
   { name: 'Apps', path: '/apps', icon: LayoutGrid },
@@ -84,8 +85,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isCollapsed, onToggleCollapse 
         })}
       </nav>
 
-      {/* Collapse */}
-      <div className="flex-none p-3 border-t border-border-soft">
+      {/* Version + collapse */}
+      <div className="flex-none p-3 border-t border-border-soft flex flex-col gap-px">
+        <SidebarVersion isCollapsed={isCollapsed} />
         <button
           onClick={onToggleCollapse}
           className="w-full flex items-center gap-3 px-[11px] py-[9px] rounded-[9px] cursor-pointer text-text-muted text-[13.5px] hover:bg-surface-2 hover:text-text-strong transition-colors"
