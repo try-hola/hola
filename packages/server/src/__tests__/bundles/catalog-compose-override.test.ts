@@ -36,6 +36,11 @@ const MANIFEST = JSON.stringify({
   ingress: { service: 'fixtureapp', port: 80 },
   // #246: this fixture app opts into multiple instances.
   multiInstance: true,
+  // ADR 0004 capability contract roles. `auth@1` is platform-provided (no app can
+  // claim it) and `telemetry@1` is a vocabulary word this build doesn't know —
+  // both must be dropped without rejecting the bundle.
+  provides: ['backup@1', 'auth@1'],
+  accepts: ['backup@1', 'telemetry@1'],
   // #162: an optional Compose profile the operator can enable at install time.
   profiles: [
     { key: 'elasticsearch', label: 'Elasticsearch advanced visibility', default: false },
@@ -126,6 +131,17 @@ describe('RealCatalogService composeOverride (#82)', () => {
     expect(detail.profiles).toEqual([
       { key: 'elasticsearch', label: 'Elasticsearch advanced visibility' },
     ]);
+  });
+
+  test('carries capability contract roles through, dropping unknown and platform-provided refs (ADR 0004)', async () => {
+    const svc = new RealCatalogService();
+    const detail = await svc.getVersionDetail(APP_ID, VERSION);
+
+    // `auth@1` is provided by the platform's Authentik stack, never by a catalog
+    // app; `telemetry@1` is a newer vocabulary word. Both degrade to "not
+    // declared" so a stale server still loads the bundle (ADR 0003 rule).
+    expect(detail.provides).toEqual(['backup@1']);
+    expect(detail.accepts).toEqual(['backup@1']);
   });
 
   test('defaultEnv carries typed-spec fields through and degrades an unknown type without rejecting the bundle (ADR 0003)', async () => {
