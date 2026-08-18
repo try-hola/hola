@@ -96,6 +96,13 @@ export const API = {
     restore: (backupId: string) => `/api/backups/${backupId}/restore`,
   },
 
+  // Capability contract broker (ADR 0004 §6). Called by a provider app's own
+  // container with its contract-scoped token — not by the dashboard or the CLI.
+  contracts: {
+    backupPrepare: '/api/contracts/backup/prepare',
+    backupFinalize: '/api/contracts/backup/finalize',
+  },
+
   notifications: {
     base: '/api/notifications',
     byId: (id: string) => `/api/notifications/${id}`,
@@ -1784,6 +1791,36 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     // provider when `auth.fallback: forward-auth` gates a native-oidc/none app too.
     auth?: { mode: AuthMode; ref: ProvisionedAuthRef; middleware?: ForwardAuthMiddleware; fallbackRef?: ProvisionedAuthRef };
   };
+};
+
+/**
+ * Capability contract broker (ADR 0004 §6). A provider app announces the start
+ * and end of its work so the server can run every accepting app's hooks — the
+ * provider never touches another app itself.
+ *
+ * `prepare` is job-backed: a `pg_dump` of a large database can take minutes, and
+ * bounding that by one HTTP request would leave the provider unable to tell a
+ * slow dump from a dead server. The provider polls `/api/jobs/:jobId` and starts
+ * its capture only once the job completes.
+ */
+export type ContractBackupPrepareResponse = {
+  /** Job running the acceptors' preHooks. Absent when no app needs one. */
+  jobId?: string;
+  /** Deployment ids whose preHook will run, so the provider can log/report them. */
+  apps: string[];
+};
+
+/**
+ * Result of running the acceptors' postHooks (cleanup — e.g. removing the dump
+ * the preHook wrote). Synchronous: cleanup is fast, and the provider is finished
+ * with the files by the time it calls this.
+ *
+ * `ok: false` never throws — the capture already happened, so a failed cleanup is
+ * something to report, not a reason to fail the caller.
+ */
+export type ContractBackupFinalizeResponse = {
+  ok: boolean;
+  results: Array<{ deploymentId: string; ok: boolean; output?: string }>;
 };
 
 // Deployment creation request 

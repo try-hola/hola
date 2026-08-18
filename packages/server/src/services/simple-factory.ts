@@ -13,6 +13,7 @@ import { RealDatabaseService, MockDatabaseService, type DatabaseService } from '
 import { RealDatabaseConfigService, type DatabaseConfigService } from './core/database-config';
 import { RealAuthService, MockAuthService, type AuthService } from './auth/auth-service';
 import { resolveAdminApiKey, createAdminApiKeyProvider } from './auth/api-key-config';
+import { RealContractTokenService, createContractTokenAuthProvider } from './auth/contract-tokens';
 import { createOidcAuthProvider } from './auth/oidc-provider';
 import { RealDockerService, MockDockerService, type DockerService } from './core/docker';
 import { RealSystemMonitoringService, MockSystemMonitoringService, type SystemMonitoringService } from './core/system-monitoring';
@@ -187,6 +188,11 @@ export function createServices(env: ServiceEnvironment): Services {
   // startup self-provisioning), so registering it unconditionally is safe.
   authService.registerProvider(createAdminApiKeyProvider(resolveAdminApiKey()));
   authService.registerProvider(createOidcAuthProvider());
+  // Contract-scoped tokens (ADR 0004 §6): a provider app calling its own contract
+  // endpoints. Registered last — it only ever matches its own `hct_` prefix, so it
+  // costs nothing for the admin/dashboard paths that resolve above it.
+  const contractTokens = new RealContractTokenService(storage);
+  authService.registerProvider(createContractTokenAuthProvider(contractTokens));
   
   // Shared routing service owns Traefik rule generation/validation/emission.
   const routing = new RealRoutingService(storage);
@@ -230,7 +236,7 @@ export function createServices(env: ServiceEnvironment): Services {
     validation,
     routing,
     provisioner,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials),
+    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, contractTokens),
   };
 }
 

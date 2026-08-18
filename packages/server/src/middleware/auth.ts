@@ -105,9 +105,14 @@ function isPublicEndpoint(path: string, method: string): boolean {
 }
 
 /**
- * Check if endpoint requires specific capabilities
+ * Check if endpoint requires specific capabilities.
+ *
+ * Exported for tests: the fall-through default below (`write:deployments` for any
+ * unmatched mutation) means a missing rule silently escalates what a route asks
+ * for, which for the contract endpoints would be the difference between "announce
+ * a backup" and "install and delete apps". That's worth asserting directly.
  */
-function getRequiredCapability(path: string, method: string): Capability | null {
+export function getRequiredCapability(path: string, method: string): Capability | null {
   // Define capability requirements for different endpoints
   const capabilityMap: Array<{ 
     pattern: RegExp; 
@@ -129,6 +134,13 @@ function getRequiredCapability(path: string, method: string): Capability | null 
     { pattern: /^\/api\/drafts/, method: 'PATCH', capability: 'write:deployments' },
     { pattern: /^\/api\/drafts/, method: 'DELETE', capability: 'write:deployments' },
     
+    // Capability contract broker (ADR 0004 §6). MUST be listed before the generic
+    // fallback below: an unmatched POST defaults to `write:deployments`, which a
+    // contract token deliberately does not have — without this rule the provider
+    // could never call its own endpoint, and granting it the default would hand a
+    // catalog container the ability to install and delete apps.
+    { pattern: /^\/api\/contracts\/backup\//, method: 'POST', capability: 'contract:backup' },
+
     // Backup operations
     { pattern: /^\/api\/backups/, method: 'POST', capability: 'write:backups' },
     { pattern: /^\/api\/backups/, method: 'DELETE', capability: 'write:backups' },

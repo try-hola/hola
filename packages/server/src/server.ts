@@ -1521,6 +1521,34 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Capability contract broker (ADR 0004 §6, closing #298). A backup provider
+  // (backrest) announces the start and end of its run; the server runs every
+  // accepting app's hooks in that app's own containers. The provider never
+  // touches another app — it asks, and the orchestrator acts.
+  //
+  // Authenticated with the provider's contract-scoped token (`contract:backup`),
+  // minted for its deployment at install and revoked when it's uninstalled. The
+  // middleware maps these paths to that capability explicitly; without the rule
+  // they'd fall through to the `write:deployments` default, which no contract
+  // token has — and which would be far too much to hand a catalog container.
+  if (pathname === API.contracts.backupPrepare && req.method === 'POST') {
+    try {
+      const payload = await getServices().deployments.prepareContractBackup();
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  if (pathname === API.contracts.backupFinalize && req.method === 'POST') {
+    try {
+      const payload = await getServices().deployments.finalizeContractBackup();
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
   // Backups. There is no platform backup engine yet (per-app backup is provided
   // by the `backrest` catalog app), so the list is genuinely empty rather than
   // seeded with sample backups. The mutation routes remain as no-op stubs.
