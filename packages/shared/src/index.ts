@@ -101,6 +101,9 @@ export const API = {
   contracts: {
     backupPrepare: '/api/contracts/backup/prepare',
     backupFinalize: '/api/contracts/backup/finalize',
+    // Status of a prepare job, so a provider's hook script polls inside the
+    // contract surface rather than reaching into the platform's job API.
+    backupStatus: (jobId: string) => `/api/contracts/backup/status/${jobId}`,
   },
 
   notifications: {

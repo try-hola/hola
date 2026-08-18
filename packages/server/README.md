@@ -29,7 +29,7 @@ See `README-TESTING.md` for the contract testing strategy and test-server utilit
 - Drafts: create/get/update, uploads, validate/preflight/finalize
 - Catalog: apps list/query, versions, version detail, refresh
 - Settings & Backups: get/patch settings, backup CRUD (mocked by default)
-- Contracts (ADR 0004): `POST /api/contracts/backup/prepare` (enqueues every accepting app's `preHook`; poll the returned `jobId`) and `POST /api/contracts/backup/finalize` (runs their `postHook`s). Called by a **provider app's own container** with its contract-scoped token, never by the dashboard or CLI — the token authorizes `contract:backup` and nothing else.
+- Contracts (ADR 0004): `POST /api/contracts/backup/prepare` (enqueues every accepting app's `preHook`; poll the returned `jobId`) `GET /api/contracts/backup/status/:jobId` (what the provider polls) and `POST /api/contracts/backup/finalize` (runs their `postHook`s). Called by a **provider app's own container** with its contract-scoped token, never by the dashboard or CLI — the token authorizes `contract:backup` and nothing else.
 - Docs: `/api/openapi.json`, `/docs`, `/redoc`, `/docs/types`, `/docs/examples`, `/docs/changelog`
 
 All routes follow types defined in `@hola/shared`.

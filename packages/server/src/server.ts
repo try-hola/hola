@@ -1549,6 +1549,16 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Prepare-job status. A thin projection of the job record so the provider's
+  // hook script has one thing to poll: `queued|running` → keep waiting,
+  // `completed` → capture, anything else → abort (fail closed).
+  const contractStatusMatch = pathname.match(/^\/api\/contracts\/backup\/status\/([^/]+)$/);
+  if (contractStatusMatch && req.method === 'GET') {
+    const job = await getServices().jobs.getJob(contractStatusMatch[1]!);
+    if (!job) return notFound();
+    return json({ jobId: job.id, status: job.status });
+  }
+
   // Backups. There is no platform backup engine yet (per-app backup is provided
   // by the `backrest` catalog app), so the list is genuinely empty rather than
   // seeded with sample backups. The mutation routes remain as no-op stubs.
