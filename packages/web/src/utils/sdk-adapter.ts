@@ -14,6 +14,7 @@ import type {
   // Catalog sources (multi-catalog Slice 2)
   AddCatalogSourceRequest, UpdateCatalogSourceRequest, ListCatalogSourcesResponse, CatalogSourceRecord,
   PreviewCatalogSourceResponse,
+  GetContractsResponse,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
   PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
@@ -233,6 +234,10 @@ export class SdkAdapter {
     if (path.includes('/deployments/')) {
       globalCache.deleteByPattern(/^api:.*\/deployments/);
       globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on deployments
+      // Contract coverage is derived from the installed set (ADR 0004 Phase 4):
+      // installing a backup provider or removing a covered app changes it, and a
+      // coverage view that lags behind an install is worse than none.
+      globalCache.deleteByPattern(/^api:.*\/contracts/);
     } else if (path.includes('/jobs/')) {
       globalCache.deleteByPattern(/^api:.*\/jobs/);
       globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on jobs
@@ -383,6 +388,15 @@ export class SdkAdapter {
     // Read-only probe: stores nothing, so it neither invalidates nor is cached
     // (the operator editing a URL expects each probe to actually hit the URL).
     preview: (url: string): Promise<PreviewCatalogSourceResponse> => this.sdk.catalogSources.preview(url),
+  };
+
+  // Capability contract rollup (ADR 0004 Phase 4). Read-only and derived from the
+  // installed set, so it rides the same cache as the rest and is dropped whenever
+  // a deployment changes — installing a backup provider has to show up as coverage
+  // immediately, not after a TTL.
+  contracts = {
+    list: (): Promise<GetContractsResponse> =>
+      this.getWithCache('/api/contracts', () => this.sdk.contracts.list()),
   };
 
   // Drafts (Install Wizard) with cache invalidation

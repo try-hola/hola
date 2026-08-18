@@ -296,6 +296,21 @@ docker run --rm -v hola-data:/data -v "$PWD":/backup alpine \
 > Scheduled/automatic backups and restore orchestration through the UI are
 > **roadmap**; today backup/restore is the manual volume snapshot above.
 
+### App backups and coverage
+
+Hola takes no app backups of its own. A **provider** app from the catalog does
+(Backrest today), and Hola brokers it: before the provider captures, the server
+runs the pre-backup hook of every app that **accepts** the `backup@1` contract —
+a `pg_dump` for a database-backed app — and the post-backup hook after (ADR
+0004). An app that accepts the contract and declares no hook is already safe to
+copy as it sits (SQLite, flat files).
+
+The **Backups** page is the view over that: which app provides backups, whether
+it's running, and which installed apps it covers. An app listed as *not covered*
+is still captured as raw files, but nothing quiesces it first — a database there
+may be copied mid-write and only reveal itself as unusable during a restore.
+Each app's own detail page shows the same fact under its **Backups** tab.
+
 ## Upgrade
 
 The supported upgrade path is `hola update` — it brings an existing install up to

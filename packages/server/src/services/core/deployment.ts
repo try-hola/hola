@@ -44,6 +44,8 @@ import type {
   AppProfileConfig,
   ContractBackupPrepareResponse,
   ContractBackupFinalizeResponse,
+  DeploymentContracts,
+  GetContractsResponse,
   AppBackupHook
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
@@ -75,6 +77,7 @@ import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
 import { APPS_DATA_CAPABILITY, injectReadonlyMount } from './compose-mounts';
 import { BACKUP_CONTRACT_REF, grantsInclude, missingGrantConsents } from '@hola/shared/contracts';
+import { acceptorBlocksPresent, buildContractRollup } from './contracts';
 import type { ContractTokenService } from '../auth/contract-tokens';
 
 /**
@@ -221,6 +224,10 @@ export interface DeploymentService extends HealthCheckable {
    *  see ContractBackupPrepareResponse for why. */
   prepareContractBackup(): Promise<ContractBackupPrepareResponse>;
   finalizeContractBackup(): Promise<ContractBackupFinalizeResponse>;
+  /** Who fills which side of every capability contract, across all installs
+   *  (ADR 0004 Phase 4) — the platform-wide answer to "is a backup provider
+   *  installed, and which apps does it cover?". */
+  getContracts(): Promise<GetContractsResponse>;
   updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse>;
   deleteDeployment(deploymentId: string): Promise<void>;
 
@@ -900,9 +907,44 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async getDeployment(deploymentId: string): Promise<GetDeploymentResponse> {
     await this.ensureLoaded();
     this.logger.info('Getting deployment', { deploymentId });
-    const detail = toDetailResponse(this.requireDeployment(deploymentId));
+    const deployment = this.requireDeployment(deploymentId);
+    const detail = toDetailResponse(deployment);
+    const contracts = await this.readDeploymentContracts(deployment);
+    if (Object.keys(contracts).length > 0) detail.contracts = contracts;
     await this.enrichUpdateInfo([detail]);
     return detail;
+  }
+
+  /**
+   * The contract roles one install fills, read from its active release.
+   *
+   * Base: none — the in-memory service has no releases on disk. RealDeploymentService
+   * overrides it. Kept as a seam (rather than reading the manifest inline) so the
+   * rollup below is one implementation both services share.
+   */
+  protected async readDeploymentContracts(
+    deployment: EnhancedDeploymentDetail,
+  ): Promise<DeploymentContracts> {
+    void deployment;
+    return {};
+  }
+
+  async getContracts(): Promise<GetContractsResponse> {
+    await this.ensureLoaded();
+    const entries = [];
+    for (const deployment of this.deployments.values()) {
+      entries.push({
+        deployment: {
+          deploymentId: deployment.id,
+          name: deployment.name,
+          app: deployment.app,
+          icon: deployment.icon,
+          status: deployment.status,
+        },
+        contracts: await this.readDeploymentContracts(deployment),
+      });
+    }
+    return { items: buildContractRollup(entries) };
   }
 
   async getUpdateCheck(deploymentId: string): Promise<GetDeploymentUpdateCheckResponse> {
@@ -1581,6 +1623,48 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return {
       HOLA_CONTRACT_TOKEN: token,
       HOLA_API_URL: process.env.HOLA_INTERNAL_API_URL?.trim() || DEFAULT_INTERNAL_API_URL,
+    };
+  }
+
+  /**
+   * The contract roles this install fills, for the API's read side (ADR 0004
+   * Phase 4).
+   *
+   * Degrades to "no roles" on an unreadable manifest instead of throwing, unlike
+   * every path that *operates* on a deployment: refusing to act on a corrupt
+   * manifest is a safety property, but refusing to render the page that would show
+   * the operator something is wrong is just a broken dashboard. The failure is
+   * logged, and the acting paths still fail loudly.
+   */
+  protected override async readDeploymentContracts(
+    deployment: EnhancedDeploymentDetail,
+  ): Promise<DeploymentContracts> {
+    let manifest: FinalizedManifest | undefined;
+    try {
+      manifest = await this.readActiveManifest(deployment);
+    } catch (err) {
+      this.logger.warn('Cannot read contract roles; the active release manifest is unreadable', {
+        deploymentId: deployment.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return {};
+    }
+    if (!manifest) return {};
+
+    const accepts = manifest.accepts;
+    // Only blocks for contracts the app actually accepts: a leftover block on an
+    // app that doesn't accept isn't participation, and reporting it as such would
+    // re-introduce the derivation ADR 0004 §2 rejected.
+    const hooks = accepts
+      ? acceptorBlocksPresent(manifest as unknown as Record<string, unknown>).filter((ref) => accepts.includes(ref))
+      : undefined;
+    const granted = resolveGrantedContracts(manifest.provides, deployment.grantedContracts);
+
+    return {
+      ...(manifest.provides ? { provides: manifest.provides } : {}),
+      ...(accepts ? { accepts } : {}),
+      ...(hooks?.length ? { hooks } : {}),
+      ...(granted.length ? { granted } : {}),
     };
   }
 

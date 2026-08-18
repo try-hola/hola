@@ -10,6 +10,7 @@
  */
 
 import { CONTRACTS, formatContractRef, parseContractRef } from '@hola/shared/contracts';
+import type { ContractParticipant, ContractRollup, DeploymentContracts } from '@hola/shared';
 
 import type { Logger } from '../../lib/logger';
 
@@ -79,7 +80,80 @@ export function findUndeclaredAcceptorBlocks(
   accepts: string[] | undefined,
 ): string[] {
   const declared = new Set(accepts ?? []);
+  return acceptorBlocksPresent(manifest).filter((ref) => !declared.has(ref));
+}
+
+/**
+ * Contract refs whose typed acceptor block is present in the manifest, whether or
+ * not the contract is declared in `accepts`.
+ *
+ * Presence of the block is *not* acceptance — that's the derivation ADR 0004 §2
+ * rejects. It's the answer to a different question: among the apps that DO accept,
+ * which ones need work done around the operation (a `pg_dump` before the copy) and
+ * which are already safe to copy as they sit. The rollup shows that difference, so
+ * "covered, no hooks needed" doesn't read as "hooks are missing".
+ */
+export function acceptorBlocksPresent(manifest: Record<string, unknown>): string[] {
   return CONTRACTS.filter(
-    (c) => c.acceptorBlock !== undefined && manifest[c.acceptorBlock] !== undefined && !declared.has(formatContractRef(c)),
+    (c) => c.acceptorBlock !== undefined && manifest[c.acceptorBlock] !== undefined,
   ).map(formatContractRef);
+}
+
+/** One install as the rollup builder takes it: its identity plus the roles it fills. */
+export type ContractRollupEntry = {
+  deployment: Omit<ContractParticipant, 'hooks' | 'granted'>;
+  contracts: DeploymentContracts;
+};
+
+/**
+ * Sort every install into provider / acceptor / unaffiliated for each contract in
+ * the table (ADR 0004 Phase 4).
+ *
+ * Pure, and it enumerates the *contract table* rather than the roles it happens to
+ * find: a contract nobody fills still comes back, with three empty buckets. That
+ * is what lets a client say "no backup provider installed" — an answer it cannot
+ * give from a list that simply omits the contract.
+ *
+ * Every install lands in exactly one bucket per contract. An app doing both jobs
+ * (backrest backs itself up) is a provider AND an acceptor; the buckets aren't
+ * exclusive of each other, only `unaffiliated` is exclusive of both.
+ */
+export function buildContractRollup(entries: readonly ContractRollupEntry[]): ContractRollup[] {
+  return CONTRACTS.map((def) => {
+    const ref = formatContractRef(def);
+    const providers: ContractParticipant[] = [];
+    const acceptors: ContractParticipant[] = [];
+    const unaffiliated: ContractParticipant[] = [];
+
+    for (const { deployment, contracts } of entries) {
+      const provides = contracts.provides?.includes(ref) ?? false;
+      const accepts = contracts.accepts?.includes(ref) ?? false;
+
+      if (provides) {
+        // `granted` is deliberately separate from `provides`: an app can declare
+        // the role and hold no grant (consent not given, or a role added by an
+        // upgrade the operator hasn't consented to), and an operator debugging
+        // "why did nothing back up?" needs to see that difference.
+        providers.push({ ...deployment, granted: contracts.granted?.includes(ref) ?? false });
+      }
+      if (accepts) {
+        acceptors.push({ ...deployment, hooks: contracts.hooks?.includes(ref) ?? false });
+      }
+      if (!provides && !accepts) {
+        unaffiliated.push({ ...deployment });
+      }
+    }
+
+    return {
+      ref,
+      id: def.id,
+      version: def.version,
+      shape: def.shape,
+      providerKind: def.providerKind,
+      summary: def.summary,
+      providers,
+      acceptors,
+      unaffiliated,
+    };
+  });
 }

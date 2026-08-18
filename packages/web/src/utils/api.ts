@@ -259,6 +259,10 @@ export class ApiClient {
       // Deployments page) leaves another page that lists deployments (e.g. Apps)
       // serving the stale cached rows until the TTL lapses or a full reload.
       globalCache.deleteByPattern(/^deployments-/);
+      // Contract coverage is derived from the installed set (ADR 0004 Phase 4):
+      // installing a backup provider or removing a covered app changes it, and a
+      // coverage view that lags behind an install is worse than none.
+      globalCache.deleteByPattern(/^api:.*\/contracts/);
     } else if (path.includes('/jobs/')) {
       globalCache.deleteByPattern(/^api:.*\/jobs/);
       globalCache.deleteByPattern(/^api:.*\/summary/); // Dashboard depends on jobs

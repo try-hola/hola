@@ -16,7 +16,16 @@ import {
   providerGrantsFor,
 } from '@hola/shared/contracts';
 
-import { coerceAccepts, coerceProvides, findUndeclaredAcceptorBlocks } from '../../services/core/contracts';
+import type { ContractParticipant, ContractRollup } from '@hola/shared';
+
+import {
+  acceptorBlocksPresent,
+  buildContractRollup,
+  coerceAccepts,
+  coerceProvides,
+  findUndeclaredAcceptorBlocks,
+} from '../../services/core/contracts';
+import type { ContractRollupEntry } from '../../services/core/contracts';
 import type { Logger, LogContext } from '../../lib/logger';
 
 /** Captures warn() calls so tests can assert on forward-compat degrade logging. */
@@ -179,5 +188,96 @@ describe('provider grants (ADR 0004 §4)', () => {
     expect(grantsInclude(['backup@1'], 'apps-data')).toBe(true);
     expect(grantsInclude(['auth@1', 'push@1'], 'apps-data')).toBe(false);
     expect(grantsInclude(['telemetry@1'], 'apps-data')).toBe(false);
+  });
+});
+
+describe('acceptorBlocksPresent', () => {
+  test('reports every typed block present, regardless of what is accepted', () => {
+    // Deliberately independent of `accepts` — this answers "does work need to run
+    // around the operation?", not "does the app participate?". The rollup pairs the
+    // two so "covered, nothing to run" doesn't read as "hooks are missing".
+    expect(acceptorBlocksPresent({ backup: { preHook: {} } })).toEqual(['backup@1']);
+    expect(acceptorBlocksPresent({})).toEqual([]);
+  });
+});
+
+describe('buildContractRollup (ADR 0004 Phase 4)', () => {
+  const app = (id: string, over: Partial<ContractParticipant> = {}): ContractRollupEntry['deployment'] => ({
+    deploymentId: id,
+    name: id,
+    app: id,
+    icon: '📦',
+    status: 'running',
+    ...over,
+  });
+  const backup = (items: ContractRollup[]) => items.find((i) => i.ref === 'backup@1')!;
+
+  test('returns every contract in the table, even one nobody fills', () => {
+    // The empty buckets are the feature: "no backup provider is installed" is an
+    // answer a client can render, where a missing row is just absence of data.
+    const items = buildContractRollup([]);
+    expect(items.map((i) => i.ref)).toEqual(CONTRACTS.map(formatContractRef));
+    expect(backup(items)).toMatchObject({ providers: [], acceptors: [], unaffiliated: [], shape: 'brokered' });
+  });
+
+  test('sorts installs into provider, acceptor, and neither', () => {
+    const items = buildContractRollup([
+      { deployment: app('backrest'), contracts: { provides: ['backup@1'], granted: ['backup@1'] } },
+      { deployment: app('paperless'), contracts: { accepts: ['backup@1'], hooks: ['backup@1'] } },
+      { deployment: app('immich'), contracts: {} },
+    ]);
+
+    expect(backup(items).providers).toEqual([expect.objectContaining({ deploymentId: 'backrest', granted: true })]);
+    expect(backup(items).acceptors).toEqual([expect.objectContaining({ deploymentId: 'paperless', hooks: true })]);
+    // The whole point of the third bucket: immich is *not covered*, and saying so
+    // takes a list of the apps filling no role — not the absence of a row.
+    expect(backup(items).unaffiliated.map((p) => p.deploymentId)).toEqual(['immich']);
+  });
+
+  test('an accepting app with no typed block is covered as-is, not missing hooks', () => {
+    const items = buildContractRollup([
+      { deployment: app('uptime-kuma'), contracts: { accepts: ['backup@1'] } },
+    ]);
+    expect(backup(items).acceptors).toEqual([expect.objectContaining({ deploymentId: 'uptime-kuma', hooks: false })]);
+    expect(backup(items).unaffiliated).toEqual([]);
+  });
+
+  test('an app doing both jobs fills both roles and neither bucket calls it uninvolved', () => {
+    const items = buildContractRollup([
+      { deployment: app('backrest'), contracts: { provides: ['backup@1'], accepts: ['backup@1'], granted: ['backup@1'] } },
+    ]);
+    expect(backup(items).providers).toHaveLength(1);
+    expect(backup(items).acceptors).toHaveLength(1);
+    expect(backup(items).unaffiliated).toEqual([]);
+  });
+
+  test('a declared provider role the operator never consented to reads as ungranted', () => {
+    // The case an upgrade creates: a new release declares a role the old consent
+    // never covered, so the app performs nothing. An operator asking "why did
+    // nothing back up?" has to be able to see that, which is why `granted` is
+    // reported separately from `provides` rather than filtering the row out.
+    const items = buildContractRollup([
+      { deployment: app('backrest'), contracts: { provides: ['backup@1'] } },
+    ]);
+    expect(backup(items).providers).toEqual([expect.objectContaining({ deploymentId: 'backrest', granted: false })]);
+  });
+
+  test('a role in a contract this build does not know about is simply absent', () => {
+    // Coercion already dropped the unknown ref; the rollup enumerates the table, so
+    // there is no way for a bundle to invent a row here either.
+    const items = buildContractRollup([
+      { deployment: app('mystery'), contracts: { provides: ['telemetry@1'], accepts: ['telemetry@1'] } },
+    ]);
+    expect(items.some((i) => i.ref === 'telemetry@1')).toBe(false);
+    expect(backup(items).unaffiliated.map((p) => p.deploymentId)).toEqual(['mystery']);
+  });
+
+  test('carries each contract\'s shape and provider kind through to the client', () => {
+    // A platform-provided contract has no app provider by definition; a client that
+    // knows this renders "provided by Hola" instead of "none installed".
+    const items = buildContractRollup([{ deployment: app('mealie'), contracts: { accepts: ['auth@1'] } }]);
+    const auth = items.find((i) => i.ref === 'auth@1')!;
+    expect(auth).toMatchObject({ shape: 'provisioned', providerKind: 'platform', providers: [] });
+    expect(auth.acceptors.map((p) => p.deploymentId)).toEqual(['mealie']);
   });
 });

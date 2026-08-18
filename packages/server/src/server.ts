@@ -1521,6 +1521,18 @@ async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Contract rollup (ADR 0004 Phase 4): who fills which role, across every
+  // install. The read side of the contracts surface — this is what lets the
+  // dashboard answer "is a backup provider installed, and which apps does it
+  // cover?" without an operator reading manifests by hand.
+  if (pathname === API.contracts.base && req.method === 'GET') {
+    try {
+      return json(await getServices().deployments.getContracts());
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
   // Capability contract broker (ADR 0004 §6, closing #298). A backup provider
   // (backrest) announces the start and end of its run; the server runs every
   // accepting app's hooks in that app's own containers. The provider never

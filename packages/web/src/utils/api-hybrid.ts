@@ -51,6 +51,9 @@ export const api = {
     ? sdkAdapter.drafts
     : originalApi.drafts,
 
+  // Capability contract rollup (ADR 0004 Phase 4) — SDK-only, read-only.
+  contracts: sdkAdapter.contracts,
+
   // Registry credentials + install-by-ref (multi-catalog Slice 1) — SDK-only.
   registryCredentials: sdkAdapter.registryCredentials,
   installFromRef: sdkAdapter.installFromRef,
