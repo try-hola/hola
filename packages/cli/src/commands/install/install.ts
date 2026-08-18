@@ -40,6 +40,17 @@ export interface InstallOptions {
    * ignored server-side (intersected with the declared set).
    */
   profile?: string | string[];
+  /**
+   * From `--grant <contract>` (repeatable): consent to a privileged capability
+   * contract the app declares in its manifest `provides` — e.g. `backup@1`,
+   * which lets a backup app read every other app's data (ADR 0004 §4).
+   *
+   * Required, not optional: the server refuses to install an app whose declared
+   * grant nobody consented to, rather than installing it without the access it
+   * needs. A backup tool that silently protects nothing is the failure this
+   * prevents. The error names the exact flag to re-run with.
+   */
+  grant?: string | string[];
 }
 
 /** Parse repeated/comma-separated `--profile` flags into a deduped key list. */
@@ -48,6 +59,20 @@ export function parseProfiles(profile?: string | string[]): string[] | undefined
   const raw = Array.isArray(profile) ? profile : [profile];
   const keys = raw.flatMap(p => String(p).split(',')).map(p => p.trim()).filter(Boolean);
   return [...new Set(keys)];
+}
+
+/**
+ * Parse repeated/comma-separated `--grant` flags into a deduped contract-ref
+ * list. Same shape as `parseProfiles`, but the values are `id@version` refs and
+ * are NOT validated here: the server owns the contract table, so an unknown ref
+ * simply doesn't match a declared grant and the install fails with a message
+ * naming what the app actually asked for.
+ */
+export function parseGrants(grant?: string | string[]): string[] | undefined {
+  if (grant === undefined) return undefined;
+  const raw = Array.isArray(grant) ? grant : [grant];
+  const refs = raw.flatMap(g => String(g).split(',')).map(g => g.trim()).filter(Boolean);
+  return [...new Set(refs)];
 }
 
 /**
@@ -174,7 +199,7 @@ export async function runInstall(
       return undefined;
     }
 
-    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple, profiles: parseProfiles(opts.profile) }, out);
+    const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple, profiles: parseProfiles(opts.profile), grants: parseGrants(opts.grant) }, out);
 
     if (opts.json) console.log(JSON.stringify(result, null, 2));
     else out(`Done. ${appId} → job status: ${result.status}`);

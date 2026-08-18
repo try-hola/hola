@@ -154,6 +154,7 @@ prog
   .option('--name', 'Deployment name (default: the app id); sets the subdomain <name>.<base>')
   .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
   .option('--profile', 'Enable an optional Compose profile the app declares, e.g. elasticsearch (repeatable, or comma-separated)')
+  .option('--grant', 'Consent to a privileged capability contract the app declares, e.g. backup@1 (repeatable, or comma-separated)')
   .option('--allow-multiple', 'Install a second instance of a single-instance app (needs a distinct --name)', false)
   .option('--source', 'Catalog source id to install from (default: hola)')
   .option('--registry-cred', 'Stored registry credential id for a private OCI reference install')

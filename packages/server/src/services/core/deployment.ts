@@ -71,6 +71,7 @@ import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
 import { APPS_DATA_CAPABILITY, injectReadonlyMount } from './compose-mounts';
+import { grantsInclude, missingGrantConsents } from '@hola/shared/contracts';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
@@ -118,6 +119,19 @@ function resolveSelectedProfiles(
     return declared.filter(p => want.has(p.key)).map(p => p.key);
   }
   return declared.filter(p => p.default === true).map(p => p.key);
+}
+
+/**
+ * Resolve the capability contract grants (ADR 0004 §4) this install actually
+ * holds: what the manifest declares in `provides` intersected with what the
+ * operator consented to. Consent can never widen the manifest — it answers a
+ * declaration, it doesn't request privilege — so a ref the app never declared is
+ * dropped rather than honored.
+ */
+function resolveGrantedContracts(provides: string[] | undefined, consented: string[] | undefined): string[] {
+  if (!provides || provides.length === 0) return [];
+  const ok = new Set(consented ?? []);
+  return provides.filter(ref => ok.has(ref));
 }
 
 type ProvisionCredentials = NonNullable<ProvisionResult['credentials']>;
@@ -634,6 +648,28 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // routing guards. The override still requires a distinct subdomain (below).
       this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple);
 
+      // Capability contract grants (ADR 0004 §4). A `provides` role can carry
+      // privilege — `backup@1`'s provider gets a read-only view of EVERY app's
+      // data — and that privilege is granted here, from the role, rather than from
+      // a `consumes` line reviewed once at bundle-publish time by someone who
+      // isn't the operator. So the operator has to have said yes.
+      //
+      // Fail closed, up front with the other create-time guards: installing a
+      // backup app without the access it needs produces a tool that appears to
+      // work and silently protects nothing — a failure discovered at restore time.
+      // A clear error naming the flag is strictly kinder.
+      const ungranted = missingGrantConsents(artifacts?.manifest.provides, request.grants);
+      if (ungranted.length > 0) {
+        throw new ValidationError(
+          `'${app}' requires consent for privileged access it declares: ${ungranted.join(', ')}. ` +
+            `Approve it in the install wizard, or pass --grant ${ungranted.join(' --grant ')} (CLI).`,
+          { code: 'GRANT_CONSENT_REQUIRED', contracts: ungranted },
+        );
+      }
+      // What this install actually holds: declared ∩ consented. Consent answers a
+      // declaration, so it can never widen what the manifest asked for.
+      const grantedContracts = resolveGrantedContracts(artifacts?.manifest.provides, request.grants);
+
       // The DNS label this deployment routes under; stable for the install's life.
       const subdomain = deriveSubdomain(request.name, app);
 
@@ -667,6 +703,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // Active Compose profiles (#162); empty for the common no-optional-service
         // case, so it stays absent in the persisted record rather than `[]`.
         ...(selectedProfiles.length ? { selectedProfiles } : {}),
+        // Privileged contract grants consented to for THIS install (ADR 0004 §4),
+        // persisted so the grant is an auditable property of the install and a
+        // later manifest can't quietly widen it. Absent for apps that ask for none.
+        ...(grantedContracts.length ? { grantedContracts } : {}),
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
         // icon without a live catalog lookup. Falls back to a generic glyph.
@@ -1343,11 +1383,29 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const allowPrivilegeEscalationServices = requestsPrivilegeEscalation(security) ? [ingressService] : [];
     content = applyPlatformDefaults(content, composeDefaultsConfig, { allowPrivilegeEscalationServices });
 
-    // Grant a trusted app (e.g. a backup tool) read-only access to ALL apps'
-    // data when its manifest declares `consumes: apps-data`. Identity-mapped so
-    // absolute host paths resolve unchanged. Read-only; gated by the capability.
-    const consumes = await this.readActiveConsumes(deployment);
-    if (consumes.includes(APPS_DATA_CAPABILITY)) {
+    // Grant a trusted app (a backup tool) read-only access to ALL apps' data.
+    // Identity-mapped so absolute host paths resolve unchanged inside the
+    // container. Read-only, and gated on the operator's consent at install.
+    //
+    // ADR 0004 §4 moved this from a self-declared capability (`consumes:
+    // apps-data`) to the provider grant of `backup@1`: privilege now follows the
+    // role the app fills, is disclosed to the operator, and is recorded per
+    // install — rather than living in a manifest line the person bearing the risk
+    // never sees. The grant must be BOTH declared (manifest `provides`) and
+    // consented to (`deployment.grantedContracts`); either alone grants nothing.
+    if (grantsInclude(await this.readActiveGrantedContracts(deployment), 'apps-data')) {
+      content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
+    } else if ((await this.readActiveConsumes(deployment)).includes(APPS_DATA_CAPABILITY)) {
+      // Compatibility shim, one release only (#418 Phase 2). A backrest installed
+      // before this change — or a bundle published before the catalog declared
+      // `provides` — still asks the old way, and breaking a working backup on
+      // upgrade is worse than honoring a grant the operator implicitly accepted
+      // when they installed it. Warns so the remaining users are visible, and is
+      // deleted once the catalog has shipped `provides: backup@1`.
+      this.logger.warn(
+        'Granting apps-data via the legacy `consumes` declaration; migrate this app to `provides: backup@1` (ADR 0004)',
+        { deploymentId: deployment.id, app: deployment.app },
+      );
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
     }
 
@@ -1440,6 +1498,20 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** Read the active release's declared auth config (if any). */
   private async readActiveAuth(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest['auth']> {
     return (await this.readActiveManifest(deployment))?.auth;
+  }
+
+  /**
+   * Contract grants this install actually holds: the active release's declared
+   * `provides` intersected with what the operator consented to at create time.
+   *
+   * Re-intersecting on every materialize (rather than trusting the persisted list
+   * alone) is what stops an upgrade from widening privilege: a new release that
+   * declares a grant the operator never saw gets nothing until they consent, and a
+   * release that drops a `provides` role loses the mount immediately.
+   */
+  private async readActiveGrantedContracts(deployment: EnhancedDeploymentDetail): Promise<string[]> {
+    const provides = (await this.readActiveManifest(deployment))?.provides;
+    return resolveGrantedContracts(provides, deployment.grantedContracts);
   }
 
   /** Cross-app capabilities the active release declares it consumes (ADR 0002). */

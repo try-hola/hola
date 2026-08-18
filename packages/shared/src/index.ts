@@ -1131,6 +1131,11 @@ export type CreateDraftResponse = {
   // Optional Compose profiles the app declares (#162), so the install wizard can
   // render one opt-in checkbox per profile. Absent when the app has none.
   profiles?: AppProfileConfig[];
+  // Capability contract roles the app performs (ADR 0004), so the wizard can
+  // render a consent row for each privileged grant a role carries — the consent
+  // the server then requires as `grants` on create. Absent for the overwhelming
+  // majority of apps, which perform no capability for other apps.
+  provides?: string[];
 };
 
 export type GetDraftResponse = Draft;
@@ -1751,6 +1756,13 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // profiled services `up` starts are the same ones `down` tears down. Absent
   // when no optional profile is enabled (the default).
   selectedProfiles?: string[];
+  // Capability contract grants the operator consented to at install (ADR 0004
+  // §4), as `id@version` refs. Persisted rather than re-derived so the privilege
+  // a running app holds is an auditable fact about THIS install, and so a later
+  // release of the same app can't quietly widen it — a new grant in an upgraded
+  // manifest is not covered by an old consent. Absent for the overwhelming
+  // majority of apps, which request no cross-app privilege at all.
+  grantedContracts?: string[];
   metadata: {
     createdAt: string;
     owner?: string;
@@ -1797,6 +1809,16 @@ export type CreateDeploymentFromDraftRequest = {
   // declared set and persists the result as the deployment's active profiles. When
   // omitted, the server falls back to the profiles the manifest marks `default`.
   profiles?: string[];
+  // Capability contract grants the operator consents to (ADR 0004 §4), as
+  // `id@version` refs — e.g. `["backup@1"]` for a backup app, which is what
+  // authorizes the server to hand it a read-only view of every app's data. The
+  // server intersects this with what the manifest actually declares in `provides`
+  // (consent can't ask for privilege the app didn't request) and REJECTS the
+  // install when a declared grant is missing: an app whose job is acting on other
+  // apps' data, installed without the access to do it, fails silently at the worst
+  // possible moment. Client-supplied — the wizard's consent checkboxes, the CLI's
+  // `--grant`.
+  grants?: string[];
 };
 
 export type CreateDeploymentFromDraftResponse = {

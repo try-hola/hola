@@ -51,7 +51,7 @@ const OIDC_AUTH: AppAuthConfig = {
   },
 };
 
-function makeCatalog(auth?: AppAuthConfig, consumes?: string[]): CatalogArg {
+function makeCatalog(auth?: AppAuthConfig, consumes?: string[], provides?: string[]): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Gitea', icon: '🍵' }),
     getVersionDetail: async () => ({
@@ -59,6 +59,7 @@ function makeCatalog(auth?: AppAuthConfig, consumes?: string[]): CatalogArg {
       defaults: { ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }], volumes: [] },
       auth,
       consumes,
+      provides,
     }),
   } as unknown as CatalogArg;
 }
@@ -176,13 +177,13 @@ describe('Auth provisioning lifecycle', () => {
     await rm(dataRoot, { recursive: true, force: true });
   });
 
-  function makeSystem(opts: { auth?: AppAuthConfig; consumes?: string[]; provisioner?: ProvisionerService; docker?: DockerService } = {}) {
+  function makeSystem(opts: { auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; provisioner?: ProvisionerService; docker?: DockerService } = {}) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
     const jobs = new RealJobService(database, logging);
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
-    const drafts = new RealDraftService(storage, makeCatalog(opts.auth, opts.consumes), makeValidation());
+    const drafts = new RealDraftService(storage, makeCatalog(opts.auth, opts.consumes, opts.provides), makeValidation());
     const provisioner = opts.provisioner ?? new SpyProvisioner();
     const docker = opts.docker ?? new MockDockerService();
     const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner);
@@ -502,7 +503,7 @@ describe('Auth provisioning lifecycle', () => {
     }
   });
 
-  test('consumes: apps-data injects a read-only mount of the apps root', async () => {
+  test('legacy shim: `consumes: apps-data` still injects the mount for an app installed before ADR 0004', async () => {
     const prev = process.env.HOLA_APPS_BIND_ROOT;
     const base = join(dataRoot, 'apps');
     process.env.HOLA_APPS_BIND_ROOT = base;
@@ -526,6 +527,62 @@ describe('Auth provisioning lifecycle', () => {
     expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
     const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
     expect(raw).not.toContain(':ro');
+  });
+
+  test('provides: backup@1 + consent injects the apps-data mount and records the grant (ADR 0004)', async () => {
+    const prev = process.env.HOLA_APPS_BIND_ROOT;
+    const base = join(dataRoot, 'apps');
+    process.env.HOLA_APPS_BIND_ROOT = base;
+    try {
+      const sys = makeSystem({ auth: undefined, provides: ['backup@1'] });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { volumes?: string[] }> };
+      expect(doc.services.gitea.volumes).toContain(`${base}:${base}:ro`);
+
+      // The consent is persisted on the install, not re-derived from the manifest —
+      // so what this app is allowed to read stays auditable after the fact.
+      const stored = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`);
+      expect(JSON.parse(stored).grantedContracts).toEqual(['backup@1']);
+    } finally {
+      if (prev === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
+      else process.env.HOLA_APPS_BIND_ROOT = prev;
+    }
+  });
+
+  test('provides: backup@1 without consent is refused before any state is created', async () => {
+    // Fail closed: a backup app installed without the access it needs looks
+    // healthy and protects nothing, which the operator finds out at restore time.
+    const sys = makeSystem({ auth: undefined, provides: ['backup@1'] });
+    const draftId = await finalizedDraft(sys.drafts);
+
+    await expect(sys.deployments.createFromDraft({ draftId, name: 'gitea' })).rejects.toThrow(/backup@1/);
+
+    expect((await sys.deployments.listDeployments({})).items).toHaveLength(0);
+  });
+
+  test('consenting to a grant the manifest never declared grants nothing', async () => {
+    // Consent answers a declaration; it can't request privilege on the app's
+    // behalf. An app that declares no provider role gets no mount, whatever the
+    // caller sends.
+    const sys = makeSystem({ auth: undefined });
+    const created = await sys.deployments.createFromDraft({
+      draftId: await finalizedDraft(sys.drafts),
+      name: 'gitea',
+      grants: ['backup@1'],
+    });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    expect(raw).not.toContain(':ro');
+    const stored = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`);
+    expect(JSON.parse(stored).grantedContracts).toBeUndefined();
   });
 
   test('no auth block: deploys normally with no provisioning and no injected env', async () => {

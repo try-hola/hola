@@ -15,6 +15,10 @@
     "./param-validate": {
       "types": "./src/param-validate.ts",
       "default": "./src/param-validate.ts"
+    },
+    "./contracts": {
+      "types": "./src/contracts.ts",
+      "default": "./src/contracts.ts"
     }
   },
   "scripts": {
