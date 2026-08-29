@@ -28,6 +28,8 @@ import {
   CatalogSourceRecord, AddCatalogSourceRequest, UpdateCatalogSourceRequest, ListCatalogSourcesResponse,
   PreviewCatalogSourceRequest, PreviewCatalogSourceResponse,
   RefreshCatalogResponse,
+  // Capability contracts (ADR 0004)
+  GetContractsResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
   // System types
@@ -125,6 +127,14 @@ export class HolaSdk {
     // registries they publish from. Stores nothing.
     preview: (url: string) =>
       this.post<PreviewCatalogSourceResponse>(API.catalogSources.preview, { url } satisfies PreviewCatalogSourceRequest),
+  };
+
+  // Capability contracts (ADR 0004). The read side only: who provides and who
+  // accepts each contract, across every install. The broker routes in the same
+  // API block are called by provider *containers* with a contract-scoped token,
+  // never by an SDK client.
+  contracts = {
+    list: () => this.get<GetContractsResponse>(API.contracts.base),
   };
 
   // Registry credentials for private OCI pulls. The token is write-only: `add`

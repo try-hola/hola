@@ -32,10 +32,13 @@ import type {
   ValidationIssue
 } from '@hola/shared';
 import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/param-validate';
+import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi, useDeploymentUpdateCheckApi } from '../hooks/useDeploymentDetailApi';
+import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
+import { AppBackupCoverage } from '../components/BackupCoverage';
 import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 
 // `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
@@ -111,6 +114,11 @@ export const DeploymentDetail: React.FC = () => {
   // (breaking / pre-upgrade backup / notes) and, for a guided upgrade, the next
   // safe waypoint version instead of a bare "update available".
   const { data: updateCheck } = useDeploymentUpdateCheckApi(deploymentId, !!deployment?.updateAvailable);
+
+  // Backup coverage for the Backups tab: this app's own declared role comes from
+  // the deployment detail, but "is anything actually taking backups?" is a
+  // property of the install as a whole, so the rollup answers it here too.
+  const { data: contractsData, loading: contractsLoading } = useContractsApi();
   // A non-ok path (waypoint/floor) means the server would reject a one-shot jump
   // to latest, so the dialog steers to the suggested version rather than offering
   // a promote that fails.
@@ -568,26 +576,15 @@ export const DeploymentDetail: React.FC = () => {
         );
 
       case 'backups':
+        // What this app's role in the backup contract actually is (ADR 0004 Phase
+        // 4), not an empty list waiting on an engine Hola doesn't have. The
+        // previous panel offered a "Create backup" button that only switched tabs.
         return (
-          <div className="animate-fadein bg-surface-1 border border-border rounded-card overflow-hidden">
-            <div className="flex items-center justify-between px-[18px] py-4 border-b border-border-soft">
-              <div className="font-semibold text-[15px]">Backups for this app</div>
-              <button
-                onClick={() => setActiveTab('history')}
-                className="h-[34px] px-[13px] flex items-center gap-[7px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Create backup
-              </button>
-            </div>
-            <div className="flex flex-col items-center justify-center text-center px-5 py-16">
-              <Shield className="w-10 h-10 text-text-faint mb-4" />
-              <h3 className="text-[15px] font-semibold mb-1">No backups yet</h3>
-              <p className="text-text-muted text-sm max-w-[360px]">
-                Backups for this app will appear here once they have been created.
-              </p>
-            </div>
-          </div>
+          <AppBackupCoverage
+            contracts={deployment.contracts}
+            rollup={contractByRef(contractsData, BACKUP_CONTRACT_REF)}
+            loading={contractsLoading}
+          />
         );
 
       case 'configuration': {

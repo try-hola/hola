@@ -71,8 +71,11 @@ describe('Backups Error Handling', () => {
 
     render(<BackupsWithRouter />);
 
+    // Two independent reads fail here — the backup list and the coverage rollup
+    // (ADR 0004 Phase 4) — and each reports its own failure rather than one
+    // swallowing the other, so a working half is never hidden by a broken half.
     await waitFor(() => {
-      expect(screen.getByText(/network request failed/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/network request failed/i).length).toBeGreaterThan(0);
     });
   });
 

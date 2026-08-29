@@ -1,5 +1,11 @@
 // Shared types and utilities for web and server
 
+// The capability-contract vocabulary (ADR 0004) lives in its own module because
+// the CLI and the install wizard consume it without the rest of this file; the
+// rollup response types below are API shapes, so they belong here and reference
+// it. Type-only, so nothing is pulled in at runtime.
+import type { ContractProviderKind, ContractShape } from './contracts';
+
 // ------------------------------------------------------
 // API route constants to prevent drift between client/server
 // ------------------------------------------------------
@@ -96,9 +102,13 @@ export const API = {
     restore: (backupId: string) => `/api/backups/${backupId}/restore`,
   },
 
-  // Capability contract broker (ADR 0004 §6). Called by a provider app's own
-  // container with its contract-scoped token — not by the dashboard or the CLI.
+  // Capability contracts (ADR 0004). The `backup*` routes are the broker: called
+  // by a provider app's own container with its contract-scoped token, not by the
+  // dashboard or the CLI. `base` is the read side, for the dashboard.
   contracts: {
+    // The one dashboard-facing route in this block: who fills which contract
+    // role across the whole install (ADR 0004 Phase 4).
+    base: '/api/contracts',
     backupPrepare: '/api/contracts/backup/prepare',
     backupFinalize: '/api/contracts/backup/finalize',
     // Status of a prepare job, so a provider's hook script polls inside the
@@ -1213,6 +1223,9 @@ export type DeploymentDetail = {
   resources: { cpu: string; memory: string; disk?: string };
   ports: string[];
   lastUpdated: string;
+  // Capability contract roles this install fills (ADR 0004). Absent when the
+  // active release declares none, which is the overwhelming majority of apps.
+  contracts?: DeploymentContracts;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
@@ -1825,6 +1838,75 @@ export type ContractBackupFinalizeResponse = {
   ok: boolean;
   results: Array<{ deploymentId: string; ok: boolean; output?: string }>;
 };
+
+/**
+ * The contract roles ONE install fills (ADR 0004 Phase 4), read from the release
+ * it is actually running rather than the app's newest catalog version — what an
+ * install does is a property of its active release, and an upgrade that adds a
+ * role doesn't apply until it's installed.
+ */
+export type DeploymentContracts = {
+  /** Contracts this app performs for others (`backup@1` → it runs backups). */
+  provides?: string[];
+  /** Contracts this app opts in to being a subject of. */
+  accepts?: string[];
+  /**
+   * Accepted contracts whose typed block is filled in (`backup` → pre/post hooks).
+   * The difference between "covered by quiescing" and "covered as-is": an app that
+   * accepts and declares no hook is safe to copy exactly as it sits, which is a
+   * different fact from an app nobody has looked at (ADR 0004 §2).
+   */
+  hooks?: string[];
+  /**
+   * Provider grants this install actually holds — what it declared, intersected
+   * with what the operator consented to. Not the same as `provides`: an install
+   * whose consent predates a newly declared role performs nothing until the
+   * operator consents again.
+   */
+  granted?: string[];
+};
+
+/** One install's appearance in a contract rollup, with the role-specific facts. */
+export type ContractParticipant = {
+  deploymentId: string;
+  name: string;
+  app: string;
+  icon?: string;
+  status: DeploymentStatus;
+  /** Acceptors: the typed block is filled in, so hooks run around the operation. */
+  hooks?: boolean;
+  /** Providers: the grant this role carries is consented, so the app can do the work. */
+  granted?: boolean;
+};
+
+/**
+ * Who fills which side of one contract, across every install (ADR 0004 Phase 4).
+ *
+ * Every installed app lands in exactly one of the three buckets, which is the
+ * point: the question "which apps are covered?" is only answerable if the apps
+ * that are NOT is a list the platform can produce, rather than the absence of a
+ * row. For `backup@1`, `unaffiliated` reads as "not covered".
+ */
+export type ContractRollup = {
+  /** Canonical `id@version`. */
+  ref: string;
+  id: string;
+  version: number;
+  shape: ContractShape;
+  providerKind: ContractProviderKind;
+  summary: string;
+  /**
+   * Installs performing the capability. Always empty for a platform-provided
+   * contract (nothing in the catalog provides `auth@1` — Hola does), which is what
+   * `providerKind` tells a client so it can say so rather than render "none".
+   */
+  providers: ContractParticipant[];
+  acceptors: ContractParticipant[];
+  /** Installs filling neither role. */
+  unaffiliated: ContractParticipant[];
+};
+
+export type GetContractsResponse = { items: ContractRollup[] };
 
 // Deployment creation request 
 export type CreateDeploymentFromDraftRequest = {

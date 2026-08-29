@@ -52,6 +52,10 @@ describe('contract-scoped tokens', () => {
     expect(getRequiredCapability('/api/contracts/backup/prepare', 'POST')).toBe('contract:backup');
     expect(getRequiredCapability('/api/contracts/backup/finalize', 'POST')).toBe('contract:backup');
     expect(getRequiredCapability('/api/deployments', 'POST')).toBe('write:deployments');
+    // The Phase 4 read side is an ordinary authenticated GET, like every other
+    // dashboard read: it discloses the installed app set and who covers what, which
+    // any signed-in operator can already see on the Apps page.
+    expect(getRequiredCapability('/api/contracts', 'GET')).toBeNull();
   });
 
   test('the provider adapter refuses a capability the token was not minted for', async () => {

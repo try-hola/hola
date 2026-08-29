@@ -1,8 +1,6 @@
 import React, { useState } from 'react';
 import {
-  Plus,
   Box,
-  Archive,
   History,
   Download,
   Trash2,
@@ -10,7 +8,10 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import type { BackupStatus } from '@hola/shared';
+import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
 import { useBackupsApi } from '../hooks/useBackupsApi';
+import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
+import { BackupCoverage } from '../components/BackupCoverage';
 
 const formatBytes = (bytes: number): string => {
   if (bytes === 0) return '0 Bytes';
@@ -40,11 +41,17 @@ export const Backups: React.FC = () => {
     data: backupsData,
     loading,
     error,
-    createBackup,
     restoreBackup,
     deleteBackup,
     downloadBackup,
   } = useBackupsApi();
+
+  // Who provides backup, and which installed apps the provider actually covers
+  // (ADR 0004 Phase 4). This is the page's primary content: Hola brokers backups,
+  // it doesn't perform them, so "what is protected right now" is the question it
+  // can answer — and the one an operator otherwise answers by reading manifests.
+  const { data: contractsData, loading: contractsLoading, error: contractsError } = useContractsApi();
+  const backupContract = contractByRef(contractsData, BACKUP_CONTRACT_REF);
 
   // Local UI state
   const [currentPage, setCurrentPage] = useState(1);
@@ -52,20 +59,6 @@ export const Backups: React.FC = () => {
 
   // Operations state
   const [operationLoading, setOperationLoading] = useState<{ [key: string]: boolean }>({});
-
-  // Handlers for backup operations
-  const handleCreateBackup = async (appId?: string) => {
-    const operationKey = `create-${appId || 'all'}`;
-    setOperationLoading((prev) => ({ ...prev, [operationKey]: true }));
-
-    try {
-      await createBackup(appId);
-    } catch (err) {
-      console.error('Failed to create backup:', err);
-    } finally {
-      setOperationLoading((prev) => ({ ...prev, [operationKey]: false }));
-    }
-  };
 
   const handleRestoreBackup = async (backupId: string) => {
     const operationKey = `restore-${backupId}`;
@@ -120,16 +113,20 @@ export const Backups: React.FC = () => {
 
   return (
     <div className="animate-fadein">
-      {/* Header */}
+      {/* Header. No "Create backup" action: Hola has no backup engine of its own —
+          the provider app runs on its own schedule and Hola quiesces apps around it
+          (ADR 0004). A button that posted to a stub and reported success was worse
+          than no button, because it read as a backup that had been taken. */}
       <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
         <div>
           <h1 className="m-0 text-2xl font-semibold tracking-[-0.02em]">Backups</h1>
           <p className="mt-1.5 text-text-muted text-sm">
-            Snapshot app data and the whole platform. Restoring overwrites current data.
+            Backups are taken by an installed provider app. Hola quiesces every app that
+            accepts the backup contract before each run.
           </p>
         </div>
         <div className="flex-1" />
-        <div className="flex items-center gap-2">
+        {items.length > 0 && (
           <select
             value={statusFilter}
             onChange={(e) => handleStatusFilterChange(e.target.value as BackupStatus | 'all')}
@@ -140,15 +137,7 @@ export const Backups: React.FC = () => {
             <option value="running">Running</option>
             <option value="failed">Failed</option>
           </select>
-          <button
-            onClick={() => handleCreateBackup()}
-            disabled={operationLoading['create-all']}
-            className="flex items-center gap-2 h-10 px-4 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus className="w-[18px] h-[18px]" />
-            <span>{operationLoading['create-all'] ? 'Creating…' : 'Create backup'}</span>
-          </button>
-        </div>
+        )}
       </div>
 
       {/* Error Display */}
@@ -158,25 +147,17 @@ export const Backups: React.FC = () => {
         </div>
       )}
 
-      {loading && items.length === 0 && (
-        <div className="text-text-muted text-sm">Loading backups…</div>
-      )}
+      <BackupCoverage
+        rollup={backupContract}
+        loading={contractsLoading}
+        error={contractsError}
+      />
 
-      {/* Empty state */}
-      {!loading && items.length === 0 ? (
-        <div className="px-5 py-20 text-center bg-surface-1 border border-dashed border-border rounded-[14px]">
-          <div className="w-[60px] h-[60px] rounded-[15px] bg-primary-weak text-primary flex items-center justify-center mx-auto mb-4">
-            <Archive className="w-7 h-7" />
-          </div>
-          <h2 className="text-[18px] font-semibold m-0">No backups yet</h2>
-          <p className="mt-2 mb-[18px] text-text-muted text-sm">
-            {statusFilter === 'all'
-              ? 'Create your first backup to safeguard app data. Backups run as background jobs.'
-              : `No backups with status "${statusFilter}".`}
-          </p>
-        </div>
-      ) : items.length > 0 ? (
-        <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+      {/* Backup history. Empty until the provider's own snapshots are surfaced
+          here (#160); the coverage view above is what the page answers today, so
+          this stays out of the way rather than showing an empty table. */}
+      {items.length > 0 ? (
+        <div className="mt-[18px] bg-surface-1 border border-border rounded-card overflow-hidden">
           {/* Header row */}
           <div
             className={`${GRID} py-3 border-b border-border text-[11.5px] font-semibold text-text-faint uppercase tracking-[0.04em]`}
