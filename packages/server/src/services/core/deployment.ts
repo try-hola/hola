@@ -41,7 +41,10 @@ import type {
   LogEntry,
   GetDeploymentConfigResponse,
   AppSecurityConfig,
-  AppProfileConfig
+  AppProfileConfig,
+  ContractBackupPrepareResponse,
+  ContractBackupFinalizeResponse,
+  AppBackupHook
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
@@ -71,7 +74,22 @@ import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
 import { APPS_DATA_CAPABILITY, injectReadonlyMount } from './compose-mounts';
-import { grantsInclude, missingGrantConsents } from '@hola/shared/contracts';
+import { BACKUP_CONTRACT_REF, grantsInclude, missingGrantConsents } from '@hola/shared/contracts';
+import type { ContractTokenService } from '../auth/contract-tokens';
+
+/**
+ * Payload marker for a contract-broker job. It carries no deploymentId (it spans
+ * every accepting app), so `runLifecycleJob` dispatches on this before its
+ * deployment lookup.
+ */
+const CONTRACT_BACKUP_PREPARE_ACTION = 'contract-backup-prepare';
+
+/**
+ * Where a provider app reaches the server from inside the `hola` network. Not the
+ * public URL: that would send an in-cluster call out through Traefik and the
+ * forward-auth gate for no reason. Overridable for non-standard stacks.
+ */
+const DEFAULT_INTERNAL_API_URL = 'http://hola-server:3001';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
@@ -197,6 +215,12 @@ export interface DeploymentService extends HealthCheckable {
    *  no-op success; a hook that fails reports `ok: false` rather than throwing —
    *  the data is already on disk. */
   runPushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse>;
+  /** Capability contract broker (ADR 0004 §6, #298): a backup provider announces
+   *  its run so every accepting app's `preHook` (e.g. `pg_dump`) executes before
+   *  the provider reads the files, and its `postHook` after. Enqueued as a job —
+   *  see ContractBackupPrepareResponse for why. */
+  prepareContractBackup(): Promise<ContractBackupPrepareResponse>;
+  finalizeContractBackup(): Promise<ContractBackupFinalizeResponse>;
   updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse>;
   deleteDeployment(deploymentId: string): Promise<void>;
 
@@ -942,6 +966,16 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return { ok: true };
   }
 
+  /** Base: no containers to exec in, so no app participates. Real overrides. */
+  async prepareContractBackup(): Promise<ContractBackupPrepareResponse> {
+    return { apps: [] };
+  }
+
+  /** Base: nothing was prepared, so there is nothing to clean up. Real overrides. */
+  async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
+    return { ok: true, results: [] };
+  }
+
   /**
    * Annotate deployment responses with catalog update availability (#284):
    * `latestVersion` + `updateAvailable` from the catalog. Default no-op (the
@@ -1215,6 +1249,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Optional; resolves a release's credentialRef → registry secret so a private
     // app's runtime image can be pulled at deploy time. Absent ⇒ anonymous pulls.
     private registryCredentials?: RegistryCredentialService,
+    // Optional; mints/revokes the contract-scoped token a provider app uses to
+    // call its own broker endpoints (ADR 0004 §6). Absent ⇒ no token is injected,
+    // so a provider simply can't announce its runs.
+    private contractTokens?: ContractTokenService,
   ) {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
@@ -1337,12 +1375,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       );
     }
 
+    // A provider app needs a credential to call its own contract endpoints
+    // (ADR 0004 §6) — brokered contracts run provider→server, so the app has to
+    // authenticate. Minted per materialize (so a re-deploy rotates it) and scoped
+    // to the contracts this install actually holds; a re-mint invalidates the old
+    // token, which is what stops a narrowed grant from leaving a wider credential
+    // valid. Merged with the auth env so both land in one injection.
+    const contractEnv = await this.mintContractEnv(deployment);
+
     // Inject provisioned auth env into the ingress service. NOT swallowed: a
     // failure here must fail the deploy rather than silently ship an app whose
     // auth was never wired (a security-relevant bypass).
-    const hasSecret = Object.keys(injectedEnv).length > 0;
+    const envToInject = { ...injectedEnv, ...contractEnv };
+    const hasSecret = Object.keys(envToInject).length > 0;
     if (hasSecret) {
-      content = injectEnvironment(content, injectedEnv, { ingressService });
+      content = injectEnvironment(content, envToInject, { ingressService });
     }
 
     // Resolve the per-app data root: apps declare persistent storage under the
@@ -1433,7 +1480,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // additionally text-substituted in the compose/env above.) The `.env` is
     // interpolation-only — Compose won't inject it into a container that doesn't
     // reference it — so this doesn't leak the operator's email into every app.
-    const interp: Record<string, string> = { HOLA_USER_EMAIL: userEmail, ...appEnv, ...injectedEnv };
+    const interp: Record<string, string> = { HOLA_USER_EMAIL: userEmail, ...appEnv, ...injectedEnv, ...contractEnv };
     const interpKeys = Object.keys(interp);
     if (interpKeys.length > 0) {
       // Also resolve `${HOLA_USER_EMAIL}` inside env VALUES, so an app can set it as a
@@ -1512,6 +1559,29 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   private async readActiveGrantedContracts(deployment: EnhancedDeploymentDetail): Promise<string[]> {
     const provides = (await this.readActiveManifest(deployment))?.provides;
     return resolveGrantedContracts(provides, deployment.grantedContracts);
+  }
+
+  /**
+   * Mint this install's contract-scoped token and the API base to reach the
+   * server, as compose env for the provider app's bolt-on to use.
+   *
+   * `HOLA_API_URL` is the server's in-network address: the app's ingress service
+   * is already on the `hola` network for Traefik, so the bolt-on talks to the
+   * server directly rather than back out through the public hostname (no TLS, no
+   * forward-auth gate, no dependence on DNS resolving from inside the host).
+   *
+   * Returns `{}` for the overwhelming majority of apps — those holding no
+   * consented provider grant get no token at all, not an unusable one.
+   */
+  private async mintContractEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
+    const contracts = await this.readActiveGrantedContracts(deployment);
+    if (contracts.length === 0 || !this.contractTokens) return {};
+
+    const token = await this.contractTokens.mint(deployment.id, contracts);
+    return {
+      HOLA_CONTRACT_TOKEN: token,
+      HOLA_API_URL: process.env.HOLA_INTERNAL_API_URL?.trim() || DEFAULT_INTERNAL_API_URL,
+    };
   }
 
   /** Cross-app capabilities the active release declares it consumes (ADR 0002). */
@@ -1711,19 +1781,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // containers around the capture (ADR 0002 post-deploy command mechanism). Read
     // from the OUTGOING release's manifest — that's the app currently running.
     const backup = await this.readReleaseBackupConfig(deploymentId, fromReleaseId);
-    const dir = this.runtimeDir(deploymentId);
-    const projectName = this.projectName(deploymentId);
-    // A backup hook may target a profiled service (#162); carry the active profiles
-    // so Compose can resolve it.
-    const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
 
     // preHook failure propagates — `promote` decides fail-closed (when the target
     // declares `preUpgradeBackup: required`) vs. best-effort. A consistent dump is
     // worthless if we snapshot anyway.
     if (backup?.preHook) {
-      this.logger.info('Running backup preHook before snapshot', { deploymentId, service: backup.preHook.service });
-      const res = await this.dockerService.composeExec(dir, projectName, backup.preHook.service, backup.preHook.command, { profiles });
-      if (!res.success) throw new Error(`backup preHook failed: ${res.output}`);
+      const res = await this.runBackupHook(deploymentId, backup.preHook, 'preHook');
+      if (!res.ok) throw new Error(`backup preHook failed: ${res.output}`);
     }
 
     try {
@@ -1750,14 +1814,180 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // postHook always runs (clean up the dump), even if the capture threw.
       // Best-effort — a cleanup failure must not fail the upgrade.
       if (backup?.postHook) {
-        try {
-          const res = await this.dockerService.composeExec(dir, projectName, backup.postHook.service, backup.postHook.command, { profiles });
-          if (!res.success) this.logger.warn('backup postHook failed', { deploymentId, output: res.output });
-        } catch (err) {
-          this.logger.warn('backup postHook errored', { deploymentId, error: err instanceof Error ? err.message : String(err) });
-        }
+        const res = await this.runBackupHook(deploymentId, backup.postHook, 'postHook');
+        if (!res.ok) this.logger.warn('backup postHook failed', { deploymentId, output: res.output });
       }
     }
+  }
+
+  // ---- Backup hooks + the contract broker (#121, #298, ADR 0004 §6) --------
+
+  /**
+   * Run one app's backup hook in its own containers.
+   *
+   * The single place a `preHook`/`postHook` is executed, shared by both callers
+   * #121 named: the pre-upgrade snapshot below, and the contract broker further
+   * down. Two implementations of "exec this hook" would drift on exactly the
+   * details that matter — profile resolution, error shape, what gets logged.
+   *
+   * Never throws: a hook failure is data the caller acts on, and the two callers
+   * act differently (the snapshot fails closed; the broker collects and reports).
+   */
+  private async runBackupHook(
+    deploymentId: string,
+    hook: AppBackupHook,
+    phase: 'preHook' | 'postHook',
+  ): Promise<{ ok: boolean; output?: string }> {
+    // A backup hook may target a profiled service (#162); carry the active
+    // profiles so Compose can resolve it.
+    const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
+    this.logger.info(`Running backup ${phase}`, { deploymentId, service: hook.service });
+    try {
+      const res = await this.dockerService.composeExec(
+        this.runtimeDir(deploymentId),
+        this.projectName(deploymentId),
+        hook.service,
+        hook.command,
+        { profiles },
+      );
+      return { ok: res.success, output: res.output };
+    } catch (err) {
+      return { ok: false, output: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Running deployments that accept `backup@1` and declare a hook for this phase.
+   *
+   * Two exclusions, both deliberate:
+   * - An app that accepts the contract but declares no hook is *covered already* —
+   *   a plain file copy of SQLite or flat files is consistent. It participates by
+   *   needing nothing, which is exactly why acceptance is declared and not derived
+   *   from the presence of a block (ADR 0004 §2).
+   * - A stopped app has no containers to exec in, and its files aren't changing
+   *   underneath the provider anyway, so a crash-consistent copy of it is fine.
+   *   Skipping is logged rather than silent — "no hook ran" should never be a
+   *   thing the operator has to infer.
+   */
+  private async backupAcceptors(
+    phase: 'preHook' | 'postHook',
+  ): Promise<Array<{ deploymentId: string; hook: AppBackupHook }>> {
+    await this.ensureLoaded();
+    const out: Array<{ deploymentId: string; hook: AppBackupHook }> = [];
+
+    for (const deployment of this.deployments.values()) {
+      let manifest: FinalizedManifest | undefined;
+      try {
+        manifest = await this.readActiveManifest(deployment);
+      } catch (err) {
+        // One unreadable manifest must not stop every other app's dump.
+        this.logger.warn('Skipping deployment in backup broker; its manifest is unreadable', {
+          deploymentId: deployment.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      if (!manifest?.accepts?.includes(BACKUP_CONTRACT_REF)) continue;
+
+      const hook = manifest.backup?.[phase];
+      if (!hook) continue;
+
+      if (deployment.status !== 'running') {
+        this.logger.info('Skipping backup hook for a stopped app (its files are static)', {
+          deploymentId: deployment.id,
+          phase,
+        });
+        continue;
+      }
+      out.push({ deploymentId: deployment.id, hook });
+    }
+    return out;
+  }
+
+  /**
+   * Broker entry point: a backup provider announcing it is about to capture.
+   *
+   * Enqueues a job that runs every acceptor's `preHook`, and returns immediately
+   * with the handle — a `pg_dump` of a large database can run for minutes, and
+   * holding an HTTP request open for it leaves the provider unable to tell a slow
+   * dump from a dead server. It polls `/api/jobs/:id` and starts its capture when
+   * the job completes.
+   *
+   * The job FAILS if any hook fails, and cleans up the dumps that did get written
+   * before failing. That is the fail-closed half of ADR 0004 §6: a backup the
+   * operator believes is transaction-consistent, but isn't, is worse than one that
+   * visibly didn't run.
+   */
+  override async prepareContractBackup(): Promise<ContractBackupPrepareResponse> {
+    const acceptors = await this.backupAcceptors('preHook');
+    if (acceptors.length === 0) {
+      // Nothing to quiesce — every installed app is already safe to copy as-is.
+      // No job, so the provider proceeds straight to its capture.
+      this.logger.info('Backup prepare: no app declares a preHook; nothing to run');
+      return { apps: [] };
+    }
+
+    const job = await this.jobService.createJob({
+      type: 'backup',
+      payload: { action: CONTRACT_BACKUP_PREPARE_ACTION, apps: acceptors.map(a => a.deploymentId) },
+    });
+    this.logger.info('Backup prepare enqueued', { jobId: job.id, apps: acceptors.length });
+    return { jobId: job.id, apps: acceptors.map(a => a.deploymentId) };
+  }
+
+  /** Job body for {@link prepareContractBackup}. Throws to fail the job. */
+  private async runContractBackupPrepare(ctx: JobContext): Promise<void> {
+    const acceptors = await this.backupAcceptors('preHook');
+    const done: string[] = [];
+    const failed: Array<{ deploymentId: string; output?: string }> = [];
+
+    for (const [index, acceptor] of acceptors.entries()) {
+      if (ctx.isCancelled()) throw new JobCancelledError();
+      const res = await this.runBackupHook(acceptor.deploymentId, acceptor.hook, 'preHook');
+      if (res.ok) {
+        done.push(acceptor.deploymentId);
+        await ctx.log('info', `preHook ok: ${acceptor.deploymentId}`);
+      } else {
+        failed.push({ deploymentId: acceptor.deploymentId, output: res.output });
+        await ctx.log('error', `preHook failed: ${acceptor.deploymentId}: ${res.output ?? 'no output'}`);
+      }
+      await ctx.setProgress(Math.round(((index + 1) / acceptors.length) * 100));
+    }
+
+    if (failed.length > 0) {
+      // Clean up after the apps that DID dump — the provider is about to abort, so
+      // nothing else will call finalize, and leaving stale dumps in every app's
+      // data root would inflate the next backup and confuse a later restore.
+      await this.finalizeContractBackup();
+      throw new Error(
+        `backup preHook failed for ${failed.length} of ${acceptors.length} app(s): ` +
+          failed.map(f => f.deploymentId).join(', '),
+      );
+    }
+
+    await ctx.log('info', `All ${done.length} preHook(s) completed; safe to capture`);
+  }
+
+  /**
+   * Broker exit point: run every acceptor's `postHook` (cleanup).
+   *
+   * Synchronous, unlike prepare — a `postHook` removes a dump file, and the
+   * provider has already finished reading. Never throws: the capture happened, so
+   * a failed cleanup is something to report, not a reason to fail the caller.
+   */
+  override async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
+    const acceptors = await this.backupAcceptors('postHook');
+    const results: ContractBackupFinalizeResponse['results'] = [];
+
+    for (const acceptor of acceptors) {
+      const res = await this.runBackupHook(acceptor.deploymentId, acceptor.hook, 'postHook');
+      if (!res.ok) {
+        this.logger.warn('Backup postHook failed', { deploymentId: acceptor.deploymentId, output: res.output });
+      }
+      results.push({ deploymentId: acceptor.deploymentId, ok: res.ok, output: res.output });
+    }
+
+    return { ok: results.every(r => r.ok), results };
   }
 
   /** Read the per-app backup hooks (#121) from a release's finalized manifest. */
@@ -2227,6 +2457,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * fallback). Throws on Compose failure so the job is marked failed.
    */
   private async runLifecycleJob(ctx: JobContext): Promise<boolean> {
+    // The contract broker's prepare job spans every accepting app rather than
+    // belonging to one deployment, so it dispatches before the lookup below.
+    if (ctx.payload.action === CONTRACT_BACKUP_PREPARE_ACTION) {
+      await this.runContractBackupPrepare(ctx);
+      return true;
+    }
+
     const deploymentId = ctx.job.deploymentId;
     if (!deploymentId) return false;
     await this.ensureLoaded();
@@ -2478,6 +2715,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   protected override async onDeploymentRemoved(deploymentId: string): Promise<void> {
     await this.routingService.deactivateRoute(deploymentId);
+    // The contract-scoped token's lifetime is the install's (ADR 0004 §6). Revoke
+    // before anything else can fail: a credential that outlives the app it was
+    // minted for is the one thing here that stays dangerous after the containers
+    // are gone.
+    await this.contractTokens?.revoke(deploymentId);
     // The removed app drops out of the registry feed for remaining consumers.
     await this.reconcileAppRegistry();
     // Deletion has no further `deployment_update` (the record is gone), so it

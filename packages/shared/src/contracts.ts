@@ -155,6 +155,13 @@ export const CONTRACTS: readonly ContractDefinition[] = [
   },
 ] as const;
 
+/**
+ * The backup contract's canonical ref. Named rather than inlined because the
+ * server matches on it in three places (broker, acceptor lookup, grant) and a
+ * typo would silently mean "no app participates".
+ */
+export const BACKUP_CONTRACT_REF = 'backup@1';
+
 /** Canonical ref for a definition (`backup@1`). */
 export function formatContractRef(def: ContractDefinition): string {
   return `${def.id}@${def.version}`;

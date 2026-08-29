@@ -356,6 +356,13 @@ export const CAPABILITIES = {
   MANAGE_SYSTEM: 'manage:system',
   MANAGE_USERS: 'manage:users',
   
+  // Capability contract endpoints (ADR 0004 §6). Held ONLY by a provider app's
+  // contract-scoped token: it authorizes announcing a backup so the server can run
+  // other apps' hooks, and nothing else. Deliberately not implied by `admin`'s
+  // wildcard semantics being absent here — `*` still matches it, which is what
+  // lets an operator exercise the endpoint by hand.
+  CONTRACT_BACKUP: 'contract:backup',
+
   // Special capabilities
   ADMIN: 'admin',
   ALL: '*',
