@@ -30,6 +30,7 @@ import { coerceManifestAuth } from './manifest-auth';
 import { coerceManifestSecurity } from './manifest-security';
 import { coerceManifestProfiles } from './manifest-profiles';
 import { coerceConsumes } from './app-registry';
+import { coerceProvides, coerceAccepts, findUndeclaredAcceptorBlocks } from './contracts';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
 import { coerceManifestPush } from './manifest-push';
@@ -526,6 +527,8 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         };
         auth?: unknown;
         consumes?: unknown;
+        provides?: unknown;
+        accepts?: unknown;
         multiInstance?: unknown;
         security?: unknown;
         upgrade?: unknown;
@@ -595,6 +598,18 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // so new capability names need no server change (ADR 0002).
       const consumes = coerceConsumes(manifest.consumes);
 
+      // Capability contract roles (ADR 0004): `provides` = this app performs the
+      // capability for others, `accepts` = this app opts in to being a subject of
+      // it. Unknown refs are dropped with a warning (forward-compat), never
+      // fatal. Acceptance is NOT inferred from the presence of the typed block —
+      // an app that needs no hooks must stay distinguishable from one nobody
+      // considered — so a block without its declaration is only reported.
+      const provides = coerceProvides(manifest.provides, this.logger, { appId, version });
+      const accepts = coerceAccepts(manifest.accepts, this.logger, { appId, version });
+      for (const ref of findUndeclaredAcceptorBlocks(manifest as Record<string, unknown>, accepts)) {
+        this.logger.warn('Manifest declares a contract block without accepting the contract', { appId, version, ref });
+      }
+
       // Whether the app opts into multiple instances (#246). Kept absent unless the
       // manifest explicitly sets `true`, so singleton (the default) stays the clean
       // common case in drafts and deployment records.
@@ -634,7 +649,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, multiInstance, security, upgrade, backup, push, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, provides, accepts, multiInstance, security, upgrade, backup, push, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       // Keep the underlying reason in the message, not just the cause: a missing

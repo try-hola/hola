@@ -839,6 +839,15 @@ export type GetCatalogAppVersionDetailResponse = {
   // (e.g. `app-registry`). The server writes the corresponding feed into the
   // app's data root on app-set change; rendering is a bundle bolt-on (ADR 0002).
   consumes?: string[];
+  // Capability contracts the app fills a role in, declared in its bundle
+  // manifest (ADR 0004). `provides` is the performing side (backrest performs
+  // `backup@1`); `accepts` is the subject side (a database-backed app accepts
+  // `backup@1`, exposing its pre/post hooks in the `backup` block). Both are
+  // canonical `id@version` refs against the server's closed contract table;
+  // unknown refs are dropped at coercion time. Absent ⇒ fills no role, which is
+  // reported as "not covered" rather than assumed fine.
+  provides?: string[];
+  accepts?: string[];
   // Whether the app may be installed more than once, declared in its bundle
   // manifest (#246). Absent/false ⇒ singleton (the default): the server rejects a
   // second install unless the operator opts in per-install. `true` (e.g. a browser
@@ -1057,6 +1066,12 @@ export type Draft = {
   // Cross-app capabilities consumed (e.g. `app-registry`), seeded from the bundle
   // manifest and carried through finalize (ADR 0002).
   consumes?: string[];
+  // Capability contract roles (ADR 0004) seeded from the bundle manifest and
+  // carried through finalize (read-only; not user-editable), so the deploy
+  // lifecycle can grant a provider's privilege and broker acceptors' hooks
+  // without re-reading the bundle.
+  provides?: string[];
+  accepts?: string[];
   // Whether the app may be installed more than once (#246), seeded from the bundle
   // manifest and carried through finalize (read-only; not user-editable). Drives
   // the server's singleton-by-default guard at create time.

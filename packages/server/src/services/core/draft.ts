@@ -76,6 +76,13 @@ export interface FinalizedManifest {
   // Cross-app capabilities consumed (e.g. `app-registry`); carried so the
   // deploy lifecycle can publish the right feeds without re-reading the bundle.
   consumes?: string[];
+  // Capability contract roles (ADR 0004) carried from the bundle manifest:
+  // `provides` (this app performs the capability for others) drives the
+  // provider's grant + scoped token, `accepts` (this app is a subject of it)
+  // drives what the broker runs. Canonical `id@version` refs, already coerced
+  // against the server's contract table.
+  provides?: string[];
+  accepts?: string[];
   // Whether the app may be installed more than once (#246); carried so
   // createFromDraft can enforce the singleton-by-default guard without re-reading
   // the bundle.
@@ -474,6 +481,8 @@ export class RealDraftService implements DraftService {
         composeOverride,
         auth: defaults.auth,
         consumes: defaults.consumes,
+        provides: defaults.provides,
+        accepts: defaults.accepts,
         multiInstance: defaults.multiInstance,
         security: defaults.security,
         ingressService: defaults.ingressService,
@@ -572,6 +581,8 @@ export class RealDraftService implements DraftService {
         composeOverride,
         auth: detail.auth,
         consumes: detail.consumes,
+        provides: detail.provides,
+        accepts: detail.accepts,
         multiInstance: detail.multiInstance,
         security: detail.security,
         ingressService: detail.ingressService,
@@ -838,6 +849,8 @@ export class RealDraftService implements DraftService {
         composeOverride: draft.composeOverride ?? '',
         auth: draft.auth,
         consumes: draft.consumes,
+        provides: draft.provides,
+        accepts: draft.accepts,
         multiInstance: draft.multiInstance,
         security: draft.security,
         ingressService: draft.ingressService,
@@ -928,7 +941,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
       return {
@@ -937,6 +950,8 @@ export class RealDraftService implements DraftService {
         composeOverride: versionDetail.composeOverride ?? '',
         auth: versionDetail.auth,
         consumes: versionDetail.consumes,
+        provides: versionDetail.provides,
+        accepts: versionDetail.accepts,
         multiInstance: versionDetail.multiInstance,
         security: versionDetail.security,
         ingressService: versionDetail.ingressService,
