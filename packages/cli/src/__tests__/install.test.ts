@@ -259,6 +259,32 @@ describe('install', () => {
     );
   });
 
+  it('passes repeated --grant refs through to the deployment create (ADR 0004)', async () => {
+    const sdk = makeSdk();
+    await runInstall('backrest', { grant: ['backup@1'], noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ grants: ['backup@1'] }),
+    );
+  });
+
+  it('splits a comma-separated --grant and dedupes', async () => {
+    const sdk = makeSdk();
+    await runInstall('backrest', { grant: 'backup@1, backup@1 ,logs@1', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ grants: ['backup@1', 'logs@1'] }),
+    );
+  });
+
+  it('a plain install sends no grants, so an app that declares one is refused server-side', async () => {
+    // Consent is never implied by silence: the CLI sends nothing and the server
+    // rejects, rather than the CLI guessing on the operator's behalf.
+    const sdk = makeSdk();
+    await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ grants: undefined }),
+    );
+  });
+
   it('hints at --allow-multiple when a single-instance app is already installed (#246)', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });

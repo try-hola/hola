@@ -17,7 +17,7 @@ export function useDraftFinalization() {
   // Finalize the draft (stage immutable artifacts) and then create + start a
   // deployment from it. Finalize alone produces no running app — creating the
   // deployment is what enqueues the install job that runs `docker compose up`.
-  const finalizeDraft = React.useCallback(async (draftId: string, opts?: { name?: string; allowMultiple?: boolean; profiles?: string[] }) => {
+  const finalizeDraft = React.useCallback(async (draftId: string, opts?: { name?: string; allowMultiple?: boolean; profiles?: string[]; grants?: string[] }) => {
     setState(prev => ({ ...prev, loading: true, error: null }));
 
     try {
@@ -25,7 +25,10 @@ export function useDraftFinalization() {
       // #246: `name` sets the deployment's subdomain (<name>.<base>); `allowMultiple`
       // opts past the single-instance guard for a deliberate second install.
       // #162: `profiles` is the set of optional Compose profiles to enable.
-      const deployment = await api.deployments.create({ draftId, name: opts?.name, allowMultiple: opts?.allowMultiple, profiles: opts?.profiles });
+      // ADR 0004: `grants` carries the operator's consent to the privileged
+      // contract roles the app declares. The server refuses the install without
+      // it, so this is the wizard's consent checkboxes made binding.
+      const deployment = await api.deployments.create({ draftId, name: opts?.name, allowMultiple: opts?.allowMultiple, profiles: opts?.profiles, grants: opts?.grants });
 
       setState({
         data: deployment,

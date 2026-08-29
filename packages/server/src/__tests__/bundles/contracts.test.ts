@@ -9,12 +9,14 @@ import { describe, test, expect } from 'bun:test';
 
 import {
   CONTRACTS,
-  coerceAccepts,
-  coerceProvides,
-  findUndeclaredAcceptorBlocks,
   formatContractRef,
+  grantsInclude,
+  missingGrantConsents,
   parseContractRef,
-} from '../../services/core/contracts';
+  providerGrantsFor,
+} from '@hola/shared/contracts';
+
+import { coerceAccepts, coerceProvides, findUndeclaredAcceptorBlocks } from '../../services/core/contracts';
 import type { Logger, LogContext } from '../../lib/logger';
 
 /** Captures warn() calls so tests can assert on forward-compat degrade logging. */
@@ -137,5 +139,45 @@ describe('findUndeclaredAcceptorBlocks', () => {
       'backup@1',
       'push@1',
     ]);
+  });
+});
+
+describe('provider grants (ADR 0004 §4)', () => {
+  test('backup@1 carries the apps-data grant; the other contracts carry none', () => {
+    expect(providerGrantsFor(['backup@1'])).toEqual([
+      { ref: 'backup@1', grant: expect.objectContaining({ kind: 'apps-data' }) },
+    ]);
+    expect(providerGrantsFor(['auth@1', 'push@1'])).toEqual([]);
+    expect(providerGrantsFor(undefined)).toEqual([]);
+  });
+
+  test('every grant states a risk the operator can actually act on', () => {
+    // The consent row is only meaningful if it says what is being handed over —
+    // the same rule the `security` block enforces by dropping a permission with
+    // no `reason`.
+    for (const def of CONTRACTS) {
+      if (!def.providerGrant) continue;
+      expect(def.providerGrant.label.length).toBeGreaterThan(0);
+      expect(def.providerGrant.risk.length).toBeGreaterThan(20);
+    }
+  });
+
+  test('missingGrantConsents names exactly what was declared but not consented to', () => {
+    expect(missingGrantConsents(['backup@1'], undefined)).toEqual(['backup@1']);
+    expect(missingGrantConsents(['backup@1'], [])).toEqual(['backup@1']);
+    expect(missingGrantConsents(['backup@1'], ['backup@1'])).toEqual([]);
+  });
+
+  test('consenting to a contract the app never declared grants nothing', () => {
+    // Consent is an answer to a declaration, not a way to ask for privilege: the
+    // manifest is what bounds the grant.
+    expect(missingGrantConsents(undefined, ['backup@1'])).toEqual([]);
+    expect(grantsInclude([], 'apps-data')).toBe(false);
+  });
+
+  test('grantsInclude keys off the contract, not the ref string', () => {
+    expect(grantsInclude(['backup@1'], 'apps-data')).toBe(true);
+    expect(grantsInclude(['auth@1', 'push@1'], 'apps-data')).toBe(false);
+    expect(grantsInclude(['telemetry@1'], 'apps-data')).toBe(false);
   });
 });

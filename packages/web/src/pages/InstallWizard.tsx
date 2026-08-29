@@ -14,6 +14,7 @@ import type {
   GetSubdomainAvailabilityResponse,
   RefNotAllowedDetails,
 } from '@hola/shared';
+import { providerGrantsFor } from '@hola/shared/contracts';
 import { slugifySubdomain } from '@hola/shared';
 import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
@@ -227,6 +228,12 @@ export const InstallWizard: React.FC = () => {
   // requested permission is explicitly acknowledged (see canProceed, case 0).
   const [security, setSecurity] = useState<AppSecurityConfig | undefined>();
   const [ackedPermissions, setAckedPermissions] = useState<Set<string>>(new Set());
+  // ADR 0004: capability contract roles the app declares. A role can carry
+  // privilege — a backup app reads every other app's data — and unlike the
+  // `security` block above, this consent is BINDING: it's sent as `grants` on
+  // create and the server refuses the install without it.
+  const [provides, setProvides] = useState<string[] | undefined>();
+  const [ackedGrants, setAckedGrants] = useState<Set<string>>(new Set());
   // #162: optional Compose profiles the app declares. `selectedProfiles` is the
   // set of enabled keys, seeded from each profile's `default` and toggled by the
   // operator on the summary step. Sent as the deployment's active profile set.
@@ -310,6 +317,7 @@ export const InstallWizard: React.FC = () => {
         setPorts(result.defaults.ports);
         setVolumes(result.defaults.volumes);
         setSecurity(result.security);
+        setProvides(result.provides);
         // #162: surface the app's optional Compose profiles and pre-select the
         // ones the manifest marks `default`.
         setProfiles(result.profiles);
@@ -421,6 +429,10 @@ export const InstallWizard: React.FC = () => {
         name: instanceName.trim() || undefined,
         allowMultiple,
         profiles: profiles ? [...selectedProfiles] : undefined,
+        // ADR 0004: the consent the operator gave for each privileged role the
+        // app declares. Sending only what was actually checked is the point —
+        // the server treats a missing grant as a refusal, not a default.
+        grants: [...ackedGrants],
       });
       return true;
     } catch (err) {
@@ -461,7 +473,11 @@ export const InstallWizard: React.FC = () => {
         // before install can proceed — informed consent for relaxing container
         // hardening (see the elevated-permissions block below).
         const permissionsAcked = (security?.elevated ?? []).every(p => ackedPermissions.has(p.type));
-        return !isLoading && requiredOk && noBlockingIssues && permissionsAcked;
+        // Privileged contract grants (ADR 0004) must each be consented to as
+        // well — the server rejects the install otherwise, so blocking here
+        // turns a late 400 into an obvious checkbox.
+        const grantsAcked = providerGrantsFor(provides).every(g => ackedGrants.has(g.ref));
+        return !isLoading && requiredOk && noBlockingIssues && permissionsAcked && grantsAcked;
       }
       case 4: // Validate & Preflight
         // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
@@ -875,6 +891,50 @@ services:
                         </span>
                         <span className="block text-[12.5px] text-text-muted mt-[2px]">{perm.reason}</span>
                         <span className="block text-[12px] text-danger mt-[3px]">{elevatedPermissionRisk(perm.type)}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Privileged capability contract grants (ADR 0004). The app declares a
+                role — e.g. performing backups — that only works if the platform
+                hands it access across app boundaries. Unlike the hardening
+                relaxations above, this consent is sent to the server as `grants`
+                and the install is refused without it. */}
+            {providerGrantsFor(provides).length > 0 && (
+              <div className="mb-6 border border-danger/50 bg-danger-weak rounded-[10px] p-[14px]">
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-danger" />
+                  <h4 className="text-[13.5px] font-semibold text-danger">This app requests access to other apps</h4>
+                </div>
+                <p className="text-[12.5px] text-text-muted mb-3">
+                  It can&apos;t do its job without this. Grant it only to an app you trust with the data named below.
+                </p>
+                <div className="space-y-2">
+                  {providerGrantsFor(provides).map(({ ref, grant }) => (
+                    <label
+                      key={ref}
+                      className="flex items-start gap-3 p-[12px] border border-danger/40 rounded-[8px] bg-surface-1 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-[3px] accent-danger"
+                        checked={ackedGrants.has(ref)}
+                        onChange={(e) => {
+                          setAckedGrants((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(ref);
+                            else next.delete(ref);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>
+                        <span className="block text-[13px] font-semibold text-text-strong">{grant.label}</span>
+                        <span className="block text-[12.5px] text-text-muted mt-[2px]">{grant.risk}</span>
+                        <span className="block text-[12px] text-text-muted mt-[3px] font-mono">{ref}</span>
                       </span>
                     </label>
                   ))}

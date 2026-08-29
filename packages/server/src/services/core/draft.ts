@@ -529,6 +529,11 @@ export class RealDraftService implements DraftService {
         // Surface any optional Compose profiles so the wizard can render an opt-in
         // checkbox per profile (#162).
         profiles: defaults.profiles,
+        // Surface the app's provider roles (ADR 0004) so the wizard can prompt for
+        // consent to whatever privilege they carry. Without this the wizard can't
+        // render the consent step, and the install would fail server-side with an
+        // error no checkbox in the UI could resolve.
+        provides: defaults.provides,
       };
 
       this.logger.info('Draft created successfully', { draftId, appId: request.appId });
@@ -616,6 +621,7 @@ export class RealDraftService implements DraftService {
         appEnv,
         defaults: detail.defaults,
         security: detail.security,
+        provides: detail.provides,
       };
     } catch (error) {
       this.logger.error('Failed to create draft from ref', error as Error, { draftId, ociRef });

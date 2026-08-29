@@ -23,7 +23,7 @@ export interface DeployResult {
 export async function finalizeAndDeploy(
   sdk: HolaSdk,
   draftId: string,
-  opts: { name?: string; strict?: boolean; noStream?: boolean; allowMultiple?: boolean; profiles?: string[] },
+  opts: { name?: string; strict?: boolean; noStream?: boolean; allowMultiple?: boolean; profiles?: string[]; grants?: string[] },
   out: (msg: string) => void
 ): Promise<DeployResult> {
   out('Validating…');
@@ -58,7 +58,7 @@ export async function finalizeAndDeploy(
   await sdk.drafts.finalize(draftId);
 
   out('Creating deployment…');
-  const dep = (await sdk.deployments.create({ draftId, name: opts.name, allowMultiple: opts.allowMultiple, profiles: opts.profiles })) as CreateDeploymentFromDraftResponse;
+  const dep = (await sdk.deployments.create({ draftId, name: opts.name, allowMultiple: opts.allowMultiple, profiles: opts.profiles, grants: opts.grants })) as CreateDeploymentFromDraftResponse;
   out(`Deployment ${dep.deploymentId} created (release ${dep.releaseId}).`);
 
   let status = 'created';
