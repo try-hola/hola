@@ -1203,8 +1203,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       // Resolve the target version + the deployment's channel (#428): default
       // is the channel-filtered `latestVersion`; an explicit `body.version` is
       // validated for channel eligibility here (VERSION_NOT_ON_CHANNEL) before
-      // any draft is built.
-      const { version: targetVersion, channel } = await services.deployments.resolveUpgradeTarget(deploymentId, body.version);
+      // any draft is built. The detail read above is handed over (#432) so the
+      // resolution reuses it rather than re-reading the deployment and
+      // re-fetching the catalog version list.
+      const { version: targetVersion, channel } = await services.deployments.resolveUpgradeTarget(deploymentId, body.version, { detail });
       if (!targetVersion) {
         return json(
           {

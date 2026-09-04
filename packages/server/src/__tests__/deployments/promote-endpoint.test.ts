@@ -65,8 +65,13 @@ type JobArg2 = ConstructorParameters<typeof RealDeploymentService>[1];
 
 type ChannelVersionEntry = { version: string; channel: string; upgrade?: AppUpgradeMeta };
 
-function makeChannelCatalog(entries: ChannelVersionEntry[]): CatalogArg2 {
-  return {
+/** The stub counts its `getVersions` calls so a test can pin how many
+ *  catalog version-list fetches one promote resolution costs (#432). */
+type CountingCatalog = CatalogArg2 & { getVersionsCalls: number };
+
+function makeChannelCatalog(entries: ChannelVersionEntry[]): CountingCatalog {
+  const catalog = {
+    getVersionsCalls: 0,
     getApp: async (appId: string) => ({ id: appId, name: 'Demo', icon: '📦' }),
     getVersionDetail: async (_appId: string, version: string) => {
       const entry = entries.find((e) => e.version === version);
@@ -78,11 +83,15 @@ function makeChannelCatalog(entries: ChannelVersionEntry[]): CatalogArg2 {
         ...(entry?.upgrade ? { upgrade: entry.upgrade } : {}),
       };
     },
-    getVersions: async () => ({
-      items: entries.map((e) => ({ version: e.version, createdAt: '2020-01-01', channel: e.channel })),
-      total: entries.length,
-    }),
-  } as unknown as CatalogArg2;
+    getVersions: async () => {
+      catalog.getVersionsCalls++;
+      return {
+        items: entries.map((e) => ({ version: e.version, createdAt: '2020-01-01', channel: e.channel })),
+        total: entries.length,
+      };
+    },
+  };
+  return catalog as unknown as CountingCatalog;
 }
 
 function makeValidation2() {
@@ -130,7 +139,7 @@ describe('Promote target resolution + draft channel (#428, US3)', () => {
       storage, makeJobs2(), new MockDockerService(), drafts, routing, noLogging2, new MockProvisionerService(),
       catalog as unknown as CatalogService,
     );
-    return { drafts, deployments };
+    return { drafts, deployments, catalog };
   }
 
   async function finalizedDraft(drafts: RealDraftService, version: string, channel?: string): Promise<string> {
@@ -152,6 +161,40 @@ describe('Promote target resolution + draft channel (#428, US3)', () => {
       status: 400,
       message: expect.stringContaining(`PATCH /api/deployments/${dep.deploymentId}`),
     });
+  });
+
+  test('the promote route\'s resolution costs a single catalog version-list fetch (#432)', async () => {
+    const { drafts, deployments, catalog } = makeSystem([
+      { version: '1.3.0-rc.1', channel: 'rc' },
+      { version: '1.3.0-rc.2', channel: 'rc' },
+    ]);
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.3.0-rc.1', 'rc'), name: 'demo', options: { autoStart: false } });
+    catalog.getVersionsCalls = 0;
+
+    // Exactly the promote route's shape: one getDeployment, whose detail is
+    // handed to resolveUpgradeTarget — so the only version-list fetch is the
+    // one enrichUpdateInfo already makes for `latestVersion`.
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    const target = await deployments.resolveUpgradeTarget(dep.deploymentId, undefined, { detail });
+
+    expect(target).toEqual({ version: '1.3.0-rc.2', channel: 'rc' });
+    expect(catalog.getVersionsCalls).toBe(1);
+  });
+
+  test('an explicit target adds exactly one eligibility fetch, never a third (#432)', async () => {
+    const { drafts, deployments, catalog } = makeSystem([
+      { version: '1.3.0-rc.1', channel: 'rc' },
+      { version: '1.3.0-rc.2', channel: 'rc' },
+    ]);
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.3.0-rc.1', 'rc'), name: 'demo', options: { autoStart: false } });
+    catalog.getVersionsCalls = 0;
+
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    const target = await deployments.resolveUpgradeTarget(dep.deploymentId, '1.3.0-rc.2', { detail });
+
+    expect(target).toEqual({ version: '1.3.0-rc.2', channel: 'rc' });
+    // The detail's own enrichment fetch + the channel-eligibility lookup.
+    expect(catalog.getVersionsCalls).toBe(2);
   });
 
   test('with no explicit version, an rc deployment resolves the rc-eligible newest as the target', async () => {

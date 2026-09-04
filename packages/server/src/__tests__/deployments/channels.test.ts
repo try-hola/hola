@@ -33,9 +33,17 @@ type ChannelVersionEntry = { version: string; channel: string };
  * helpers — so this test exercises draft.ts's channel plumbing against a
  * faithful (if duck-typed) catalog contract, not a stub that always succeeds.
  */
-function makeChannelCatalog(entries: ChannelVersionEntry[]): CatalogArg {
-  return {
+type CountingCatalog = CatalogArg & { getVersionsCalls: number };
+
+function makeChannelCatalog(entries: ChannelVersionEntry[]): CountingCatalog {
+  const catalog = {
+    // Counts the catalog version-list fetches one resolution costs (#432).
+    getVersionsCalls: 0,
     getApp: async (appId: string) => ({ id: appId, name: 'Demo', icon: '📦' }),
+    getVersions: async () => {
+      catalog.getVersionsCalls++;
+      return { items: entries.map((e) => ({ version: e.version, createdAt: '2020-01-01', channel: e.channel })), total: entries.length };
+    },
     // `channel` is deliberately NOT defaulted here (matches RealCatalogService,
     // FR-009): a pinned version's eligibility is enforced only when the caller
     // EXPLICITLY passed a channel; `latest`/no version defaults to `stable`.
@@ -66,7 +74,8 @@ function makeChannelCatalog(entries: ChannelVersionEntry[]): CatalogArg {
       }
       return { version: v.version, channel: v.channel, defaultEnv: [], defaults: { ports: [], volumes: [] } };
     },
-  } as unknown as CatalogArg;
+  };
+  return catalog as unknown as CountingCatalog;
 }
 
 function makeValidation(): ValidationArg {
@@ -193,11 +202,15 @@ describe('Release channels: PATCH channel change (#428, US4)', () => {
 
   function makeSystem() {
     const storage = new RealStorageService({ holaDir: dataRoot });
-    const drafts = new RealDraftService(storage, makeChannelCatalog(ENTRIES), makeValidation());
+    const catalog = makeChannelCatalog(ENTRIES);
+    const drafts = new RealDraftService(storage, catalog, makeValidation());
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
     const jobs = makeJobs();
-    const deployments = new RealDeploymentService(storage, jobs, new MockDockerService(), drafts, routing, noLogging, new MockProvisionerService());
-    return { drafts, deployments, jobs };
+    const deployments = new RealDeploymentService(
+      storage, jobs, new MockDockerService(), drafts, routing, noLogging, new MockProvisionerService(),
+      catalog as unknown as ConstructorParameters<typeof RealDeploymentService>[7],
+    );
+    return { drafts, deployments, jobs, catalog };
   }
 
   async function deploy(drafts: RealDraftService, deployments: RealDeploymentService, name: string, channel?: string) {
@@ -259,6 +272,21 @@ describe('Release channels: PATCH channel change (#428, US4)', () => {
     expect(res.ok).toBe(true);
     const after = await deployments.getDeployment(dep.deploymentId);
     expect(after.channel).toBe('rc');
+  });
+
+  test('after a channel change the promote target follows the new channel, on one version-list fetch (#432)', async () => {
+    const { drafts, deployments, catalog } = makeSystem();
+    const dep = await deploy(drafts, deployments, 'demo');
+    await deployments.updateDeployment(dep.deploymentId, { channel: 'rc' });
+    catalog.getVersionsCalls = 0;
+
+    // The promote route's shape: one deployment read, its detail handed to the
+    // target resolution — one catalog version-list fetch for the pair.
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    const target = await deployments.resolveUpgradeTarget(dep.deploymentId, undefined, { detail });
+
+    expect(target).toEqual({ version: '1.3.0-rc.1', channel: 'rc' });
+    expect(catalog.getVersionsCalls).toBe(1);
   });
 
   test('instanceReason is unchanged after a channel change', async () => {

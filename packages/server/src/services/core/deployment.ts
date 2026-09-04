@@ -186,6 +186,17 @@ interface SnapshotMeta {
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
 const SNAPSHOT_RETENTION = 5;
 
+/** What a caller of `resolveUpgradeTarget` has already fetched (#432), so the
+ *  resolution reuses it instead of re-reading the deployment and re-fetching the
+ *  catalog version list. */
+export interface ResolveUpgradeTargetOptions {
+  /** The deployment detail the caller just read (`getDeployment`). Its
+   *  `latestVersion` is the channel-filtered default target — already resolved
+   *  by `enrichUpdateInfo` from the catalog version list — so passing it spares
+   *  both a second read and a second version-list fetch. */
+  detail?: GetDeploymentResponse;
+}
+
 export interface DeploymentService extends HealthCheckable {
   // Deployment lifecycle
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
@@ -211,8 +222,16 @@ export interface DeploymentService extends HealthCheckable {
    * `VERSION_NOT_ON_CHANNEL` with a hint to change the deployment's channel
    * first; an unrecognized version passes through unchanged so the existing
    * `VERSION_NOT_FOUND` path (draft creation) still reports it.
+   *
+   * A caller that has already read the deployment passes it as `options.detail`
+   * (#432) so the resolution costs no second read and no second catalog
+   * version-list fetch.
    */
-  resolveUpgradeTarget(deploymentId: string, requested?: string): Promise<{ version?: string; channel: string }>;
+  resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -619,10 +638,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * catalog — so `version` stays `undefined` with no explicit `requested`,
    * matching today's `NO_TARGET_VERSION` behaviour for mock-based tests).
    * RealDeploymentService overrides this to add channel-eligibility validation
-   * for an explicit `requested` version.
+   * for an explicit `requested` version. Permissive by design: a caller-supplied
+   * `options.detail` is simply used in place of the read (#432).
    */
-  async resolveUpgradeTarget(deploymentId: string, requested?: string): Promise<{ version?: string; channel: string }> {
-    const detail = await this.getDeployment(deploymentId);
+  async resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }> {
+    const detail = options?.detail ?? (await this.getDeployment(deploymentId));
     return { version: requested ?? detail.latestVersion, channel: detail.channel ?? STABLE_CHANNEL };
   }
 
@@ -2407,27 +2431,39 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * Real (#428): the default target (base's channel-filtered `latestVersion`,
-   * via `super`) is unchanged; an EXPLICIT `requested` version is additionally
-   * validated for channel eligibility, so an operator can't be upgraded onto a
-   * version their deployment's channel doesn't cover by a typo'd
-   * `--app-version`. Looks the version up in the catalog to learn its channel;
-   * an unknown version, or a catalog/lookup failure, passes through unchanged —
-   * the draft-creation path the promote route runs next is what reports
-   * `VERSION_NOT_FOUND`/bundle errors, this is only a channel pre-check.
+   * Real (#428): the default target (the channel-filtered `latestVersion` the
+   * detail already carries) is unchanged; an EXPLICIT `requested` version is
+   * additionally validated for channel eligibility, so an operator can't be
+   * upgraded onto a version their deployment's channel doesn't cover by a
+   * typo'd `--app-version`. Looks the version up in the catalog to learn its
+   * channel; an unknown version, or a catalog/lookup failure, passes through
+   * unchanged — the draft-creation path the promote route runs next is what
+   * reports `VERSION_NOT_FOUND`/bundle errors, this is only a channel pre-check.
+   *
+   * One deployment read and at most one catalog version-list fetch (#432): a
+   * caller-supplied `options.detail` replaces the read, its `latestVersion`
+   * (resolved by `enrichUpdateInfo` with the same `newestEligibleVersion` rule
+   * over this deployment's channel) IS the default target, and the single
+   * `getVersions` call happens only for the explicit-version eligibility check.
    */
-  override async resolveUpgradeTarget(deploymentId: string, requested?: string): Promise<{ version?: string; channel: string }> {
-    const base = await super.resolveUpgradeTarget(deploymentId, requested);
-    if (requested === undefined || !this.catalogService) return base;
+  override async resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }> {
+    const detail = options?.detail ?? (await this.getDeployment(deploymentId));
+    const channel = detail.channel ?? STABLE_CHANNEL;
+    if (requested === undefined || !this.catalogService) {
+      return { version: requested ?? detail.latestVersion, channel };
+    }
     try {
-      const deployment = this.requireDeployment(deploymentId);
       const source = await this.getDeploymentSource(deploymentId);
-      const { items: versions } = await this.catalogService.getVersions(deployment.app, source);
+      const { items: versions } = await this.catalogService.getVersions(detail.app, source);
       const entry = versions.find((v) => v.version === requested);
       const entryChannel = entry?.channel ?? STABLE_CHANNEL;
-      if (entry && !isEligibleOnChannel(entryChannel, base.channel)) {
+      if (entry && !isEligibleOnChannel(entryChannel, channel)) {
         const err = new ValidationError(
-          `Version ${requested} is on channel '${entryChannel}'; deployment ${deploymentId} follows '${base.channel}'. ` +
+          `Version ${requested} is on channel '${entryChannel}'; deployment ${deploymentId} follows '${channel}'. ` +
             `Change the deployment's channel first (dashboard → Channel, or PATCH /api/deployments/${deploymentId} {"channel":"${entryChannel}"}), then upgrade.`,
         );
         err.code = 'VERSION_NOT_ON_CHANNEL';
@@ -2438,7 +2474,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // getVersions failed (catalog down, app not found, …) — not this
       // method's concern; let the caller's next step report the real problem.
     }
-    return base;
+    return { version: requested, channel };
   }
 
   /**
