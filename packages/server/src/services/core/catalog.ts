@@ -182,6 +182,25 @@ function coerceChannel(value: unknown): string | undefined {
 }
 
 /**
+ * The distinct channels an app has well-formed versions on — `stable` first
+ * (when present), then alphabetical. This is the app's set of PUBLISHED
+ * channels: a channel absent from it has no versions of its own and is only
+ * ever served the stable floor.
+ *
+ * Two callers share it so they can never disagree: the app summary's
+ * `channels[]` (#428, FR-006, so a client can decide whether to offer a channel
+ * choice without a versions drill-down) and the version detail (#431, so the
+ * draft can record whether the channel it resolved is published).
+ */
+function distinctChannels(versions: CatalogVersionEntry[]): string[] {
+  return [...new Set(versions.map(v => v.channel))].sort((a, b) => {
+    if (a === STABLE_CHANNEL) return -1;
+    if (b === STABLE_CHANNEL) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+/**
  * Derive an appId slug + version from an OCI package reference. e.g.
  * `ghcr.io/acme/hola-cms:0.1.0` → `{ appId: 'hola-cms', version: '0.1.0' }`.
  * A digest-only ref (`…@sha256:…`) yields version `latest`; an untagged ref too.
@@ -212,6 +231,11 @@ export interface CatalogService {
    * eligible on. `latest` finding nothing eligible throws `BundleUnavailableError`
    * code `NO_VERSION_ON_CHANNEL`; a pinned version that exists but isn't
    * eligible on `channel` throws `ValidationError` code `VERSION_NOT_ON_CHANNEL`.
+   *
+   * The response also reports the app's published `channels` (#431) — the
+   * channels the catalog actually lists a well-formed version on — so the draft
+   * can record whether the channel it resolved is published without a second
+   * catalog call at deployment-create time.
    */
   getVersionDetail(appId: string, version: string, source?: string, channel?: string): Promise<GetCatalogAppVersionDetailResponse>;
   /**
@@ -466,7 +490,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           'NO_VERSION_ON_CHANNEL',
         );
       }
-      return this.resolveVersionEntry(appId, newest, record);
+      return { ...(await this.resolveVersionEntry(appId, newest, record)), channels: distinctChannels(versions) };
     }
 
     const v = versions.find(x => x.version === version);
@@ -485,7 +509,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       err.code = 'VERSION_NOT_ON_CHANNEL';
       throw err;
     }
-    return this.resolveVersionEntry(appId, v, record);
+    return { ...(await this.resolveVersionEntry(appId, v, record)), channels: distinctChannels(versions) };
   }
 
   /** Pull/validate/build the bundle for a resolved catalog version entry and stamp its channel onto the response. */
@@ -826,15 +850,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
    * once per request rather than once per caller.
    */
   private mapAppFromVersions(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord, versions: CatalogVersionEntry[]): CatalogApp {
-    // Distinct well-formed channels, `stable` first (when present) then
-    // alphabetical — so a client can decide whether to offer a channel choice
-    // without a versions drill-down (#428, FR-006).
-    const channelSet = new Set(versions.map(v => v.channel));
-    const channels = [...channelSet].sort((a, b) => {
-      if (a === STABLE_CHANNEL) return -1;
-      if (b === STABLE_CHANNEL) return 1;
-      return a.localeCompare(b);
-    });
+    const channels = distinctChannels(versions);
     return {
       id: app.id,
       name: app.name,

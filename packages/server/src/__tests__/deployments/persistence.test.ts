@@ -20,30 +20,42 @@ import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
 import { RealStorageService } from '../../services/core/storage';
 import { RealRoutingService } from '../../services/core/routing';
-import { NotFoundError, ConflictError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, BundleUnavailableError } from '../../middleware/error-mapping';
 import type { DockerService } from '../../services/core/docker';
 
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
 type JobArg = ConstructorParameters<typeof RealDeploymentService>[1];
 
-function makeCatalog(opts?: { multiInstance?: boolean }): CatalogArg {
+/**
+ * `unavailable`: the catalog has no bundle for this app, so `getVersionDetail`
+ * throws `VERSION_NOT_FOUND` and the draft falls back to placeholder defaults —
+ * the path where no `channels` fact can be established (#431, fail-closed).
+ */
+function makeCatalog(opts?: { multiInstance?: boolean; unavailable?: boolean }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Test App', icon: '📦' }),
-    getVersionDetail: async (_appId: string, _version: string, _source?: string, channel?: string) => ({
-      defaultEnv: [{ key: 'APP_PORT', value: '3000', isSecret: false, description: 'port' }],
-      defaults: {
-        ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }],
-        volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
-      },
-      // #246: a catalog app that declares it supports multiple instances.
-      ...(opts?.multiInstance ? { multiInstance: true } : {}),
-      // #428: echo the requested channel back as the resolved version's channel
-      // (this stub isn't exercising catalog eligibility — that's
-      // catalog-channels.test.ts / channels.test.ts) so a draft/deployment
-      // created through it follows the channel it asked for.
-      channel: channel ?? 'stable',
-    }),
+    getVersionDetail: async (_appId: string, _version: string, _source?: string, channel?: string) => {
+      if (opts?.unavailable) throw new BundleUnavailableError('VERSION_NOT_FOUND', 'VERSION_NOT_FOUND');
+      return {
+        defaultEnv: [{ key: 'APP_PORT', value: '3000', isSecret: false, description: 'port' }],
+        defaults: {
+          ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }],
+          volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
+        },
+        // #246: a catalog app that declares it supports multiple instances.
+        ...(opts?.multiInstance ? { multiInstance: true } : {}),
+        // #428: echo the requested channel back as the resolved version's channel
+        // (this stub isn't exercising catalog eligibility — that's
+        // catalog-channels.test.ts / channels.test.ts) so a draft/deployment
+        // created through it follows the channel it asked for.
+        channel: channel ?? 'stable',
+        // #431: the channels this app is actually PUBLISHED on. `rc` is published
+        // (so it differentiates a second copy); anything else the caller invents
+        // (e.g. `banana`) resolves via the stable floor but is not published.
+        channels: ['stable', 'rc'],
+      };
+    },
   } as unknown as CatalogArg;
 }
 
@@ -94,7 +106,7 @@ describe('Deployment persistence (real service)', () => {
   });
 
   /** A fresh service set over the same data root simulates a restart. */
-  function makeSystem(opts?: { multiInstance?: boolean }) {
+  function makeSystem(opts?: { multiInstance?: boolean; unavailable?: boolean }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const drafts = new RealDraftService(storage, makeCatalog(opts), makeValidation());
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
@@ -486,6 +498,68 @@ describe('Deployment persistence (real service)', () => {
     ).rejects.toThrow(/already in use/);
 
     expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
+  });
+
+  // --- #431: only a PUBLISHED channel differentiates a second copy ---
+
+  test('a second copy on an UNPUBLISHED channel is rejected, saying the channel has no versions (#431)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // `banana` is not in the catalog's published channels, so the install
+    // resolves the newest STABLE version through the floor (FR-003) — it is not
+    // a distinct release track and must not buy a free second copy.
+    await expect(
+      deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'banana'), name: 'gitea-banana', options: { autoStart: false } })
+    ).rejects.toThrow(/Channel 'banana' has no versions published for this app/);
+
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
+  });
+
+  test('the same unpublished-channel install succeeds with the override, recording "operator-override" (#431)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    const second = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'banana'),
+      name: 'gitea-banana',
+      allowMultiple: true,
+      options: { autoStart: false },
+    });
+    const detail = await deployments.getDeployment(second.deploymentId);
+    expect(detail.channel).toBe('banana');
+    // The channel did NOT permit this install; the operator's override did.
+    expect(detail.instanceReason).toBe('operator-override');
+  });
+
+  test('a FIRST copy may still follow an unpublished channel, with no instance reason (#431)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const only = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'banana'),
+      name: 'gitea',
+      options: { autoStart: false },
+    });
+    const detail = await deployments.getDeployment(only.deploymentId);
+    // Following a channel the catalog hasn't published yet stays legal (it just
+    // receives stable-floor offers); it is only the second-copy differentiation
+    // that requires a published channel.
+    expect(detail.channel).toBe('banana');
+    expect(detail.instanceReason).toBeUndefined();
+  });
+
+  test('a draft built from placeholder defaults records channelPublished=false and gets no channel copy (#431, fail-closed)', async () => {
+    // The catalog can't resolve a bundle at all, so `getDraftDefaults` falls back
+    // to placeholders and reports no `channels` — the published-ness of `rc`
+    // cannot be established, so it is treated as unpublished.
+    const compose = 'services:\n  gitea:\n    image: gitea:1\n';
+    const { drafts, deployments } = makeSystem({ unavailable: true });
+    const draftId = await finalizedDraft(drafts, compose, 'rc');
+    expect((await drafts.getDraft(draftId)).channelPublished).toBe(false);
+
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, compose), name: 'gitea', options: { autoStart: false } });
+    await expect(
+      deployments.createFromDraft({ draftId, name: 'gitea-rc', options: { autoStart: false } })
+    ).rejects.toThrow(/Channel 'rc' has no versions published for this app/);
   });
 
   test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {

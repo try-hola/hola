@@ -1005,6 +1005,13 @@ export type GetCatalogAppVersionDetailResponse = {
   // Release channel of the resolved version (#428) — `stable` unless a
   // non-default channel was requested/pinned. The server always emits it.
   channel?: string;
+  // The channels the catalog lists at least one well-formed version of this app
+  // on (#431), `stable` first then alphabetical — the app's PUBLISHED channels.
+  // A channel absent from this list exists only as a label the operator typed:
+  // it receives the stable floor, but it does not differentiate a second copy of
+  // a single-instance app. Absent on the install-by-ref path (no catalog index
+  // to read), which the single-instance guard reads as "not published".
+  channels?: string[];
 };
 
 // ------------------------------------------------------
@@ -1231,6 +1238,14 @@ export type Draft = {
   // `stable`. Carried through finalize onto the deployment record (read-only;
   // not user-editable). The server always writes it.
   channel?: string;
+  // Whether the catalog lists at least one well-formed version of this app on
+  // `channel` (#431), decided once here, at draft-create time, from the same
+  // catalog read that resolved the version. Only a PUBLISHED channel
+  // differentiates a second copy of a single-instance app, so an invented
+  // channel name can't be used as an unlimited `--allow-multiple`. Fail-closed:
+  // absent/false whenever it could not be established (catalog unavailable,
+  // install-by-ref, a pre-#431 draft).
+  channelPublished?: boolean;
 };
 
 export type CreateDraftRequest = {
@@ -1353,9 +1368,9 @@ export type DeploymentDetail = {
   // Channel of `latestVersion`, when present (#428).
   latestVersionChannel?: string;
   // Why this is a permitted second copy of a single-instance app (#428):
-  // `channel` when it follows a channel no existing copy did at install time,
-  // `operator-override` when the allow-multiple override was needed instead.
-  // Absent for a first copy or a multi-instance app.
+  // `channel` when it follows a PUBLISHED channel no existing copy did at
+  // install time (#431), `operator-override` when the allow-multiple override
+  // was needed instead. Absent for a first copy or a multi-instance app.
   instanceReason?: InstanceReason;
 };
 

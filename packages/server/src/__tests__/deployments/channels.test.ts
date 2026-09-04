@@ -36,6 +36,10 @@ type ChannelVersionEntry = { version: string; channel: string };
 type CountingCatalog = CatalogArg & { getVersionsCalls: number };
 
 function makeChannelCatalog(entries: ChannelVersionEntry[]): CountingCatalog {
+  // The channels this catalog PUBLISHES versions on (#431) — reported on every
+  // version detail so a draft can record whether the channel it resolved is a
+  // real release track or just a name the operator typed.
+  const publishedChannels = [...new Set(entries.map((e) => e.channel))];
   const catalog = {
     // Counts the catalog version-list fetches one resolution costs (#432).
     getVersionsCalls: 0,
@@ -63,7 +67,7 @@ function makeChannelCatalog(entries: ChannelVersionEntry[]): CountingCatalog {
             'NO_VERSION_ON_CHANNEL',
           );
         }
-        return { version: newest.version, channel: newest.channel, defaultEnv: [], defaults: { ports: [], volumes: [] } };
+        return { version: newest.version, channel: newest.channel, channels: publishedChannels, defaultEnv: [], defaults: { ports: [], volumes: [] } };
       }
       const v = entries.find((e) => e.version === version);
       if (!v) throw new BundleUnavailableError(`VERSION_NOT_FOUND: ${appId}@${version}`, 'VERSION_NOT_FOUND');
@@ -72,7 +76,7 @@ function makeChannelCatalog(entries: ChannelVersionEntry[]): CountingCatalog {
         err.code = 'VERSION_NOT_ON_CHANNEL';
         throw err;
       }
-      return { version: v.version, channel: v.channel, defaultEnv: [], defaults: { ports: [], volumes: [] } };
+      return { version: v.version, channel: v.channel, channels: publishedChannels, defaultEnv: [], defaults: { ports: [], volumes: [] } };
     },
   };
   return catalog as unknown as CountingCatalog;
@@ -123,6 +127,17 @@ describe('Release channels: draft resolution (#428)', () => {
     const draft = await drafts.getDraft(draftId);
     expect(draft.version).toBe('1.2.0');
     expect(draft.channel).toBe('beta');
+    // …but the catalog publishes nothing on `beta`, so it is not a channel that
+    // can differentiate a second copy of a single-instance app (#431).
+    expect(draft.channelPublished).toBe(false);
+  });
+
+  test('the draft records whether the resolved channel is published (#431)', async () => {
+    const published = await drafts.getDraft((await drafts.createDraft({ appId: 'demo', channel: 'rc' })).draftId);
+    expect(published.channelPublished).toBe(true);
+
+    const stable = await drafts.getDraft((await drafts.createDraft({ appId: 'demo' })).draftId);
+    expect(stable.channelPublished).toBe(true);
   });
 
   test('an app with no stable version at all → a default (implicit stable) install is rejected naming the channels that do have versions', async () => {
@@ -162,6 +177,9 @@ describe('Release channels: draft resolution (#428)', () => {
     await drafts.updateDraft(draftId, { composeOverride: 'services:\n  demo:\n    image: demo:1\n' });
     const { spec } = await drafts.finalizeDraft(draftId);
     expect((spec as { channel?: string }).channel).toBe('rc');
+    // …and the published-ness of that channel travels with it (#431), so the
+    // single-instance guard needs no catalog call at create time.
+    expect((spec as { channelPublished?: boolean }).channelPublished).toBe(true);
   });
 });
 

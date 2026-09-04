@@ -58,6 +58,11 @@ follow. Nothing on the `stable` channel changes for operators who never opt in.
 
 ## Clarifications
 
+### Session 2026-09-04
+
+- Q: `stable` is eligible on every channel (FR-003), so `--channel <anything-well-formed>` resolved a stable version and counted as channel-differentiated — an unlimited bypass of the single-instance guard ([#431](https://github.com/try-hola/hola/issues/431)). Which channels differentiate a second copy? → A: Only a **published** channel: one the catalog lists at least one well-formed version of that app on. An unpublished channel may still be *followed* (it receives the stable floor's offers, unchanged), but a second copy of a single-instance app on it needs the operator override, which is then recorded as `operator-override`. FR-015 amended.
+- Q: What happens when the channel's published-ness cannot be established at install time (catalog unreachable so the draft fell back to placeholder defaults, an install-by-ref draft, a deployment record written before this change)? → A: **Fail closed** — treat the channel as unpublished. A second copy of a singleton app is never urgent, and the operator override is always available; the alternative (fail open) restores the bypass exactly when the catalog can't contradict it. The fact is decided once, at draft creation, from the catalog read that already resolved the version, and carried on the finalized manifest like `channel` and `multiInstance` — no catalog call at deployment-create time.
+
 ### Session 2026-09-03
 
 - Q: When an operator passes both the allow-multiple override and a channel that no existing copy follows, which instance reason is recorded? → A: The reason that actually permitted the install, with the channel difference taking precedence; `operator-override` is recorded only when the override was necessary. A first (or multi-instance) copy records no reason.
@@ -231,7 +236,16 @@ for an app with only stable versions and see no such choice.
   instance reason is `channel`, not `operator-override`.
 - **Unknown channel names** (not `stable` or `rc`) are accepted when well-formed;
   the catalog decides what channels exist. A deployment on a channel with no
-  versions simply receives no offers.
+  versions simply receives the stable floor's offers.
+- **An unpublished channel as a second copy** (#431): a well-formed channel the
+  catalog publishes no version of the app on is still installable and followable,
+  but it does not differentiate a second copy of a single-instance app — otherwise
+  any invented name would be an unlimited operator override with a nicer label.
+  The second install is rejected naming the unpublished channel, and the operator
+  override still forces it (recording `operator-override`). Fail-closed: when the
+  channel's published-ness cannot be established at install time (the catalog was
+  unavailable and the draft fell back to placeholder defaults, an install-by-ref
+  draft, or a record written before #431), it is treated as unpublished.
 
 ## Requirements *(mandatory)*
 
@@ -243,7 +257,7 @@ for an app with only stable versions and see no such choice.
 - **FR-002**: A channel name MUST be a lowercase identifier of 1 to 32 characters, starting with a letter and containing only letters, digits and hyphens. Entries with any other value MUST be excluded from offering on every channel and reported in the server log with app, version and value.
 - **FR-003**: A version is **eligible** on channel C when its own channel is C or `stable`. Consequently `stable` is eligible everywhere and a `stable` deployment is offered only `stable` versions.
 - **FR-004**: Wherever the platform resolves a "newest" version (catalog card version, the `latest` alias, the update offering), it MUST choose the newest eligible version by version precedence, where a release outranks a pre-release of the same number, and MUST NOT fall back to list position because a version string carries a pre-release suffix.
-- **FR-005**: The app version list MUST report the channel of every version, and the version detail MUST report the resolved version's channel.
+- **FR-005** *(amended 2026-09-04, [#431](https://github.com/try-hola/hola/issues/431))*: The app version list MUST report the channel of every version, and the version detail MUST report the resolved version's channel and the channels the app has well-formed versions on (the same set as FR-006), so the install path can record whether the channel it resolved is published.
 - **FR-006**: The app summary shown in the catalog list MUST additionally report the set of channels the app has well-formed versions on, so clients can decide whether to show a channel choice. An app with no `stable` version is still listed, with no version shown and its channels reported.
 
 **Deployments**
@@ -259,8 +273,8 @@ for an app with only stable versions and see no such choice.
 
 **Single-instance guard**
 
-- **FR-015**: The single-instance guard MUST be evaluated per app **and channel**: a second copy of a single-instance app is permitted without the operator override when no existing copy of that app follows the channel resolved by FR-008 (explicit or implied by a pinned version).
-- **FR-016**: A second copy of a single-instance app MUST record the **instance reason** that permitted it: `channel` when no existing copy followed its channel (this takes precedence even if the override was also supplied), otherwise `operator-override`. First copies and copies of multi-instance apps record no reason. The reason MUST be exposed on the deployment detail.
+- **FR-015** *(amended 2026-09-04, [#431](https://github.com/try-hola/hola/issues/431))*: The single-instance guard MUST be evaluated per app **and channel**: a second copy of a single-instance app is permitted without the operator override when no existing copy of that app follows the channel resolved by FR-008 (explicit or implied by a pinned version) **and that channel is published for the app** — the catalog lists at least one well-formed version on it. A channel that is not published (or whose published-ness cannot be established) MUST NOT differentiate a second copy; the operator override remains available and the rejection MUST say the channel has no versions published for the app. A deployment may still *follow* an unpublished channel (FR-003's stable floor still applies).
+- **FR-016** *(amended 2026-09-04, [#431](https://github.com/try-hola/hola/issues/431))*: A second copy of a single-instance app MUST record the **instance reason** that permitted it: `channel` when FR-015's channel rule is what permitted it — no existing copy followed its channel *and* that channel is published (this takes precedence even if the override was also supplied) — otherwise `operator-override`. First copies and copies of multi-instance apps record no reason. The reason MUST be exposed on the deployment detail.
 - **FR-017**: A second copy still MUST have a distinct name and subdomain; all existing subdomain validation applies unchanged.
 - **FR-018**: The operator override remains available and keeps its current meaning; a copy created with it records the override reason.
 

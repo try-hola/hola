@@ -1046,6 +1046,10 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   // Channel of the resolved version (#428); 'stable' unless a non-default
   // channel was requested/pinned.
   channel?: string;
+  // The channels this app has well-formed versions on (#431), same set as the
+  // app summary's — a channel absent from it receives the stable floor but does
+  // not differentiate a second copy of a single-instance app.
+  channels?: string[];
 }`,
 
     // Draft schemas

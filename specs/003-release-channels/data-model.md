@@ -92,18 +92,31 @@ appears twice: first occurrence wins, later ones dropped with a `warn`.
 
 ## Instance reason (derivation)
 
-Evaluated in `assertInstanceAllowed(appId, multiInstance, allowMultiple, channel)`:
+Evaluated in `assertInstanceAllowed(appId, multiInstance, allowMultiple, channel, channelPublished)`
+(amended 2026-09-04, [#431](https://github.com/try-hola/hola/issues/431)):
 
 ```
 if multiInstance                         → undefined
 existing = deployments where app == appId
 if existing is empty                     → undefined
-if none of existing has (channel ?? 'stable') == channel → 'channel'
+if none of existing has (channel ?? 'stable') == channel
+   AND channelPublished === true         → 'channel'
 if allowMultiple                         → 'operator-override'
 else                                     → ConflictError (409)
 ```
 
 `'channel'` takes precedence over `'operator-override'` (clarification Q1).
+
+`channelPublished` is a draft-time fact carried on the finalized manifest (like
+`channel` and `multiInstance`): true when the catalog's `channels[]` for the app
+contained the resolved channel at draft-create time. It is **fail-closed** —
+absent/false whenever it could not be established (catalog unavailable and the
+draft fell back to placeholder defaults, install-by-ref, a pre-#431 record) — so
+a channel the catalog publishes nothing on never differentiates a second copy of
+a single-instance app, even though a deployment may still *follow* it and receive
+stable-floor offers. The 409 for that case names the unpublished channel and
+points at `--allow-multiple`, rather than the same-channel message that points at
+`--channel`.
 
 ## State and transitions
 

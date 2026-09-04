@@ -378,9 +378,17 @@ hola install remo --channel rc --as remo-beta   # a new, channel-differentiated 
 hola install remo@0.11.0-rc.1 --name remo-beta  # channel implied by the pinned version
 ```
 
-For a single-instance app, a channel that no existing copy of that app follows
-is a permitted second install without `--allow-multiple` (it still needs a
-distinct `--name`/`--as`, since every copy needs its own subdomain). The
+For a single-instance app, a **published** channel that no existing copy of that
+app follows is a permitted second install without `--allow-multiple` (it still
+needs a distinct `--name`/`--as`, since every copy needs its own subdomain).
+"Published" means the catalog lists at least one version of that app on the
+channel — `hola catalog` shows those as `(channels: rc)`. Any other well-formed
+channel name is still installable and followable (it simply tracks the stable
+releases), but it does **not** buy a second copy of a single-instance app: that
+install is rejected saying the channel has no versions published for the app,
+and `--allow-multiple` is what forces it. The same applies whenever the channel's
+published-ness can't be established at install time (the catalog was unreachable,
+or the app was installed by OCI reference) — the platform fails closed. The
 dashboard's deployment detail shows *why* the second copy exists (it follows
 `rc`, or an operator forced it with `--allow-multiple`); `hola deployments`
 tags the row with its channel (`gitea-rc [rc]`). Once

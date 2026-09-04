@@ -102,6 +102,21 @@ describe('Release channels: catalog parsing (#428)', () => {
     expect(detail.version).toBe('1.2.0');
   });
 
+  test('getVersionDetail reports the app\'s published channels, matching the app summary (#431)', async () => {
+    const svc = makeService();
+    // Same set as listApps' `channels[]` — one shared derivation, so the draft's
+    // published-ness fact can never disagree with what the client was shown. The
+    // malformed `RC` entry contributes nothing.
+    expect((await svc.getVersionDetail('demo', 'latest')).channels).toEqual(['stable', 'rc']);
+    // A pinned version reports the same app-level set, not just its own channel.
+    expect((await svc.getVersionDetail('demo', '1.3.0-rc.1')).channels).toEqual(['stable', 'rc']);
+    // An unpublished channel resolves via the stable floor and still reports the
+    // published set — which does not contain it (#431, fail-closed at the draft).
+    const floor = await svc.getVersionDetail('demo', 'latest', 'hola', 'banana');
+    expect(floor.version).toBe('1.2.0');
+    expect(floor.channels).toEqual(['stable', 'rc']);
+  });
+
   test('an app with only non-numeric version strings falls back to list position (last listed wins)', async () => {
     const svc = makeService();
     const app = await svc.getApp('stringy');
