@@ -562,6 +562,59 @@ describe('Deployment persistence (real service)', () => {
     ).rejects.toThrow(/Channel 'rc' has no versions published for this app/);
   });
 
+  // --- #433: the detail carries its app's live siblings, so the dashboard's
+  // instance label is derived from current state instead of from the
+  // install-time `instanceReason` (which always lands on the second copy). ---
+
+  test('both copies expose each other as siblings, stable installed first (#433)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const stable = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    const rc = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      options: { autoStart: false },
+    });
+
+    const stableDetail = await deployments.getDeployment(stable.deploymentId);
+    const rcDetail = await deployments.getDeployment(rc.deploymentId);
+
+    // The copy installed FIRST records no reason, but still names its sibling.
+    expect(stableDetail.instanceReason).toBeUndefined();
+    expect(stableDetail.siblings).toEqual([{ id: rc.deploymentId, name: 'gitea-rc', channel: 'rc' }]);
+
+    expect(rcDetail.instanceReason).toBe('channel');
+    expect(rcDetail.siblings).toEqual([{ id: stable.deploymentId, name: 'gitea', channel: 'stable' }]);
+  });
+
+  test('both copies expose each other as siblings, rc installed first (#433)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const rc = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      options: { autoStart: false },
+    });
+    const stable = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    const rcDetail = await deployments.getDeployment(rc.deploymentId);
+    const stableDetail = await deployments.getDeployment(stable.deploymentId);
+
+    // In THIS order the audit fact lands on the stable copy — the wart in #433 —
+    // but each detail still carries the other copy, so both can be labelled.
+    expect(rcDetail.instanceReason).toBeUndefined();
+    expect(rcDetail.channel).toBe('rc');
+    expect(rcDetail.siblings).toEqual([{ id: stable.deploymentId, name: 'gitea', channel: 'stable' }]);
+
+    expect(stableDetail.instanceReason).toBe('channel');
+    expect(stableDetail.channel).toBe('stable');
+    expect(stableDetail.siblings).toEqual([{ id: rc.deploymentId, name: 'gitea-rc', channel: 'rc' }]);
+  });
+
+  test('a lone deployment has no siblings (#433)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const only = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    expect((await deployments.getDeployment(only.deploymentId)).siblings).toBeUndefined();
+  });
+
   test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {
     const { drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), options: { autoStart: false } });

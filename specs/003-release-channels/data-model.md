@@ -71,7 +71,8 @@ appears twice: first occurrence wins, later ones dropped with a `warn`.
 |---|---|
 | `channel?: string` | NEW — optional in the type so existing typed fixtures compile (SC-004); the server always emits it; clients read absent as `stable` |
 | `latestVersionChannel?: string` | NEW — channel of `latestVersion` when present |
-| `instanceReason?` | NEW on `DeploymentDetail` only |
+| `instanceReason?` | NEW on `DeploymentDetail` only — the install-time audit fact, not a display string |
+| `siblings?: Array<{ id: string; name: string; channel: string }>` | NEW on `DeploymentDetail` only (amended 2026-09-04, [#433](https://github.com/try-hola/hola/issues/433)) — the app's other live deployments (`app` equal, `id` different), each with `channel ?? 'stable'`. Derived in the detail mapper from the in-memory deployment map (no catalog call, no job), absent when there are none, never persisted |
 
 ### `GetDeploymentUpdateCheckResponse`
 | Field | Change |
@@ -106,6 +107,13 @@ else                                     → ConflictError (409)
 ```
 
 `'channel'` takes precedence over `'operator-override'` (clarification Q1).
+
+The reason is an **install-time audit fact** and is always recorded on whichever
+copy was installed second — so it can never be the whole instance label
+(amended 2026-09-04, [#433](https://github.com/try-hola/hola/issues/433)). The
+displayed label is **derived at read time** from the deployment's own `channel`
+and its `siblings`; the reason, when present, only adds a trailing
+"permitted by …" phrase. Nothing about the persisted record changes.
 
 `channelPublished` is a draft-time fact carried on the finalized manifest (like
 `channel` and `multiInstance`): true when the catalog's `channels[]` for the app

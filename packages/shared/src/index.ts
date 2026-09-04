@@ -1371,7 +1371,16 @@ export type DeploymentDetail = {
   // `channel` when it follows a PUBLISHED channel no existing copy did at
   // install time (#431), `operator-override` when the allow-multiple override
   // was needed instead. Absent for a first copy or a multi-instance app.
+  // An install-time AUDIT fact: it is recorded on whichever copy was installed
+  // second and never recomputed. Clients that want to describe *this* copy's
+  // place among the app's copies should read `siblings` instead (#433).
   instanceReason?: InstanceReason;
+  // The app's other live deployments — `app` equal, `id` different — each with
+  // the channel it follows (#433). Derived at read time from the current
+  // deployment set, never persisted, so both copies of an app can be labelled
+  // accurately whichever order they were installed in. Absent when this is the
+  // only copy of the app.
+  siblings?: Array<{ id: string; name: string; channel: string }>;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;

@@ -1147,6 +1147,16 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   resources: { cpu: string; memory: string; disk?: string };
   ports: string[];
   lastUpdated: string;
+  // Release channel this deployment follows (#428); absent reads as 'stable'.
+  channel?: string;
+  // Why the single-instance guard permitted this copy (#428) — an install-time
+  // AUDIT fact, recorded on whichever copy was installed second and never
+  // recomputed. To describe a copy's place among the app's copies, read
+  // 'siblings' (#433).
+  instanceReason?: 'channel' | 'operator-override';
+  // The app's other live deployments, each with the channel it follows (#433).
+  // Derived at read time, never persisted; absent when this is the only copy.
+  siblings?: Array<{ id: string; name: string; channel: string }>;
 }`,
 
     CreateDeploymentRequest: `{

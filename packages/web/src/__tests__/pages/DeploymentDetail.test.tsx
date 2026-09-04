@@ -440,20 +440,64 @@ describe('DeploymentDetail release channels (#428)', () => {
     expect(screen.queryByText('Instance')).not.toBeInTheDocument();
   });
 
-  it('shows Channel: rc and Instance: rc copy of <app> for instanceReason "channel"', async () => {
+  // #433: the Instance fact is derived from the deployment's own channel and its
+  // live siblings, so it is accurate on BOTH copies whichever went in first. The
+  // persisted `instanceReason` (always on the copy installed second) only adds a
+  // trailing "permitted by …" phrase.
+  it('labels a copy with no instanceReason from its channel and siblings (#433)', async () => {
+    deploymentsApi.byId.mockResolvedValue({
+      ...deployment,
+      channel: 'rc',
+      siblings: [{ id: 'gitea-1', name: 'gitea', channel: 'stable' }],
+    });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
+    expect(
+      screen.getByText(`rc instance of ${deployment.app} · also installed: gitea (stable)`)
+    ).toBeInTheDocument();
+    // Nothing permitted *this* copy — it was installed first.
+    expect(screen.queryByText(/permitted by/)).not.toBeInTheDocument();
+  });
+
+  it('appends "permitted by channel" for instanceReason "channel" (#433)', async () => {
+    deploymentsApi.byId.mockResolvedValue({
+      ...deployment,
+      channel: 'stable',
+      instanceReason: 'channel',
+      siblings: [{ id: 'gitea-2', name: 'gitea-beta', channel: 'rc' }],
+    });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
+    expect(
+      screen.getByText(
+        `stable instance of ${deployment.app} · also installed: gitea-beta (rc) · permitted by channel`
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('appends "permitted by operator override" for instanceReason "operator-override" (#433)', async () => {
+    deploymentsApi.byId.mockResolvedValue({
+      ...deployment,
+      channel: 'rc',
+      instanceReason: 'operator-override',
+      siblings: [{ id: 'gitea-1', name: 'gitea', channel: 'rc' }],
+    });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
+    expect(
+      screen.getByText(
+        `rc instance of ${deployment.app} · also installed: gitea (rc) · permitted by operator override`
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows no Instance fact when the app has no other copies (#433)', async () => {
+    // Even with an audit reason on the record: with the sibling gone (uninstalled),
+    // there is no second copy left to explain.
     deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', instanceReason: 'channel' });
     renderOverview();
     await waitFor(() => expect(screen.getByText('Channel')).toBeInTheDocument());
-    expect(screen.getByText('rc')).toBeInTheDocument();
-    expect(screen.getByText('Instance')).toBeInTheDocument();
-    expect(screen.getByText(`rc copy of ${deployment.app}`)).toBeInTheDocument();
-  });
-
-  it('shows "additional copy (operator override)" for instanceReason "operator-override"', async () => {
-    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', instanceReason: 'operator-override' });
-    renderOverview();
-    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
-    expect(screen.getByText('additional copy (operator override)')).toBeInTheDocument();
+    expect(screen.queryByText('Instance')).not.toBeInTheDocument();
   });
 
   it('appends the target channel to the upgrade dialog title when non-stable', async () => {
