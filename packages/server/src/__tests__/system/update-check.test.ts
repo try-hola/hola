@@ -34,6 +34,17 @@ describe('compareVersions / isNewerVersion', () => {
     expect(isNewerVersion('1.2.0-rc.1', '1.2.0')).toBe(false);
   });
 
+  it('orders prerelease identifiers per semver: numeric ones compare numerically', () => {
+    // A plain string compare puts 'rc.10' < 'rc.9', which would leave an rc
+    // deployment stuck at rc.9 forever (#428 relies on this ordering).
+    expect(isNewerVersion('1.3.0-rc.10', '1.3.0-rc.9')).toBe(true);
+    expect(isNewerVersion('1.3.0-rc.9', '1.3.0-rc.10')).toBe(false);
+    // Numeric identifiers rank below alphanumeric ones; a shorter list ranks lower.
+    expect(compareVersions('1.0.0-alpha', '1.0.0-alpha.1')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-alpha.1', '1.0.0-alpha.beta')).toBeLessThan(0);
+    expect(compareVersions('1.0.0-beta.2', '1.0.0-beta.11')).toBeLessThan(0);
+  });
+
   it('tolerates leading v / cli-v and differing segment counts', () => {
     expect(compareVersions('cli-v0.6.23', 'v0.6.23')).toBe(0);
     expect(compareVersions('1.2', '1.2.0')).toBe(0);

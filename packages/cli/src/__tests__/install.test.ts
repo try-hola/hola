@@ -325,6 +325,88 @@ describe('install', () => {
       spy.mockRestore();
     }
   });
+
+  // --- Release channels (#428) ---
+
+  it('--channel reaches drafts.create', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { channel: 'rc', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'gitea', version: 'latest', channel: 'rc' });
+  });
+
+  it('--as maps to name', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { as: 'gitea-beta', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'gitea-beta' }));
+  });
+
+  it('when both --name and --as are given, --name wins and a note is printed', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      const sdk = makeSdk();
+      await runInstall('gitea', { name: 'gitea-1', as: 'gitea-2', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(sdk.deployments.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'gitea-1' }));
+      expect(logs.some(l => /--name overrides --as/.test(l))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('prints "Following channel" when the create response channel is non-stable', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      const sdk = makeSdk({
+        drafts: {
+          create: vi.fn(async () => ({ draftId: 'd1' })),
+          byId: vi.fn(async () => ({ draftId: 'd1', appEnv: [] })),
+          update: vi.fn(async () => ({ ok: true })),
+          validate: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+          preflight: vi.fn(async () => ({ ok: true, checks: [] })),
+          finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
+        },
+      });
+      sdk.deployments.create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1', channel: 'rc' }));
+      await runInstall('gitea', { channel: 'rc', name: 'gitea-rc', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(logs.some(l => l === 'Following channel: rc')).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not print "Following channel" for a plain stable install', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      const sdk = makeSdk();
+      sdk.deployments.create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1', channel: 'stable' }));
+      await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(logs.some(l => /Following channel/.test(l))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('prints "Following channel" when a pinned version implies a non-stable channel (no explicit --channel)', async () => {
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      const sdk = makeSdk();
+      sdk.deployments.create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1', channel: 'rc' }));
+      await runInstall('gitea@1.3.0-rc.1', { name: 'gitea-rc', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(logs.some(l => l === 'Following channel: rc')).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('--json output includes channel', async () => {
+    const sdk = makeSdk();
+    sdk.deployments.create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1', channel: 'rc' }));
+    const res = await runInstall('gitea', { channel: 'rc', json: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res?.channel).toBe('rc');
+  });
 });
 
 describe('resolveAppAndVersion', () => {

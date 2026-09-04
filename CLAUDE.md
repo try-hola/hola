@@ -74,6 +74,13 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   token. Authentik is the **default** — `hola init` always sets
   `HOLA_AUTH_MODE=authentik` (a compose profile); `none` remains an internal
   dev/test mode, not an install-time choice.
+- **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
+  `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
+  A version is eligible on channel `c` iff its own channel is `c` or `stable`
+  (`stable` is the floor every channel includes). The channel enters at draft
+  creation and rides the finalized manifest onto the deployment; the
+  single-instance guard (#246) is per app **and** channel, with the permitting
+  reason (`channel` vs `operator-override`) recorded and shown.
 
 ## Conventions
 
@@ -132,5 +139,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/001-web-state-freshness/plan.md`
+`specs/003-release-channels/plan.md`
 <!-- SPECKIT END -->

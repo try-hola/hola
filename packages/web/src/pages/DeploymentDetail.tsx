@@ -31,12 +31,15 @@ import type {
   AppEnvVar,
   ValidationIssue
 } from '@hola/shared';
+import { STABLE_CHANNEL } from '@hola/shared';
 import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/param-validate';
 import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi, useDeploymentUpdateCheckApi } from '../hooks/useDeploymentDetailApi';
+import { useCatalogAppApi } from '../hooks/useCatalogApi';
+import { TransientNotice } from '../components/ui/TransientNotice';
 import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
 import { AppBackupCoverage } from '../components/BackupCoverage';
 import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
@@ -152,6 +155,15 @@ export const DeploymentDetail: React.FC = () => {
     loading: historyLoading,
     refetch: refetchHistory
   } = useDeploymentHistoryApi(deploymentId, historyPage);
+
+  // #428: the app's declared channels, for the Configuration tab's Channel
+  // select. Fails soft (see the hook) — falls back to just the deployment's
+  // current channel when the catalog is unavailable, so the select still
+  // renders with something sensible rather than breaking the page.
+  const { data: catalogApp } = useCatalogAppApi(deployment?.app ?? '');
+  const [channelSaving, setChannelSaving] = useState(false);
+  const [channelError, setChannelError] = useState<string | null>(null);
+  const [channelWarning, setChannelWarning] = useState<string | null>(null);
 
   // Form state
   const [isEditing, setIsEditing] = useState(false);
@@ -412,6 +424,25 @@ export const DeploymentDetail: React.FC = () => {
     }
   };
 
+  // #428: change the channel this deployment follows. A metadata write only —
+  // the running version is untouched, and `updateConfiguration`'s onSuccess
+  // already invalidates the detail/list/update-check queries so badges and
+  // offered updates refresh. A returned `warnings` entry (e.g. another
+  // single-instance copy already follows the target channel) is surfaced as a
+  // transient notice rather than blocking the change — the server applied it.
+  const handleChannelChange = async (channel: string) => {
+    setChannelSaving(true);
+    setChannelError(null);
+    try {
+      const res = await updateConfiguration({ channel });
+      setChannelWarning(res?.warnings?.[0] ?? null);
+    } catch (error) {
+      setChannelError(error instanceof Error ? error.message : 'Failed to change channel');
+    } finally {
+      setChannelSaving(false);
+    }
+  };
+
   const isRunning = deployment.status === 'running';
 
   // Real facts for the Overview "Details" card.
@@ -424,12 +455,29 @@ export const DeploymentDetail: React.FC = () => {
       ? [{
           label: 'Latest',
           // #299: at-a-glance kind of update, not just "available".
-          value: `${deployment.latestVersion} ${
+          // #428: name the target's channel too when it's not stable, so
+          // e.g. an rc deployment's offer reads "1.3.0-rc.2 (rc)".
+          value: `${deployment.latestVersion}${
+            deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''
+          } ${
             guidedPath ? `(upgrade via ${guidedPath.suggestedVersion} first)`
               : updateCheck?.breaking ? '(breaking update)'
               : '(update available)'
           }`,
           mono: true,
+        }]
+      : []),
+    // #428: the channel this deployment follows — always shown (defaults to
+    // `stable` for a pre-feature record with none).
+    { label: 'Channel', value: deployment.channel ?? STABLE_CHANNEL },
+    // #428: why this is a permitted second copy of a single-instance app.
+    // Absent for a first copy or a multi-instance app.
+    ...(deployment.instanceReason
+      ? [{
+          label: 'Instance',
+          value: deployment.instanceReason === 'channel'
+            ? `${deployment.channel ?? STABLE_CHANNEL} copy of ${deployment.app}`
+            : 'additional copy (operator override)',
         }]
       : []),
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
@@ -817,6 +865,44 @@ export const DeploymentDetail: React.FC = () => {
               </div>
             )}
 
+            {/* Release channel (#428): which versions this deployment is
+                offered on upgrade. A metadata write, applied immediately on
+                change — no Edit/Save step, unlike env/system overrides above. */}
+            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
+              <div className="flex items-center justify-between px-[18px] py-[14px]">
+                <div>
+                  <div className="font-semibold text-[15px]">Release channel</div>
+                  <div className="text-xs text-text-faint mt-0.5">
+                    Which versions this deployment is offered on upgrade. Changing it never changes the running version.
+                  </div>
+                </div>
+                <select
+                  value={deployment.channel ?? STABLE_CHANNEL}
+                  disabled={channelSaving}
+                  onChange={(e) => handleChannelChange(e.target.value)}
+                  className="h-[34px] px-3 bg-surface-2 border border-border rounded-lg text-[13px] font-mono outline-none focus:border-primary disabled:opacity-50"
+                >
+                  {/* The deployment's own channel is always an option, even when
+                      the catalog no longer lists it (the publisher pruned that
+                      channel, or the catalog is unreachable) — otherwise the
+                      select's value matches no option and the browser renders the
+                      FIRST one, silently misreporting what this deployment follows. */}
+                  {[...new Set([...(catalogApp?.channels ?? []), deployment.channel ?? STABLE_CHANNEL])].map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              {channelError && (
+                <div className="flex items-start gap-2 text-sm text-danger bg-danger-weak px-[18px] py-3">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>{channelError}</span>
+                </div>
+              )}
+            </div>
+            {channelWarning && (
+              <TransientNotice message={channelWarning} onDismiss={() => setChannelWarning(null)} />
+            )}
+
             {/* Materialized Compose · read-only */}
             <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
               <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
@@ -984,7 +1070,9 @@ export const DeploymentDetail: React.FC = () => {
                   <h2 id="upgrade-dialog-title" className="text-lg font-semibold m-0">
                     {guidedPath
                       ? `Upgrade ${deployment.name} to ${guidedPath.suggestedVersion} first`
-                      : `Upgrade ${deployment.name} to ${deployment.latestVersion}?`}
+                      : `Upgrade ${deployment.name} to ${deployment.latestVersion}${
+                          deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''
+                        }?`}
                   </h2>
                   <p className="mt-1.5 text-sm text-text-muted">
                     Your settings and secrets carry forward.

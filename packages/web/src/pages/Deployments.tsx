@@ -19,6 +19,7 @@ import type {
   PostDeploymentActionResponse,
   GetDeploymentsRequest
 } from '@hola/shared';
+import { STABLE_CHANNEL } from '@hola/shared';
 import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
@@ -375,14 +376,24 @@ export const Deployments: React.FC = () => {
                 <StatusBadge status={deployment.status} />
               </div>
               <div className="font-mono text-[12.5px] text-text-muted flex items-center gap-1.5 min-w-0">
+                {/* #428: channel pill for a non-stable deployment. */}
+                {deployment.channel && deployment.channel !== STABLE_CHANNEL && (
+                  <span
+                    title={`Follows the ${deployment.channel} channel`}
+                    className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-surface-2 text-text-muted text-[10.5px] font-semibold whitespace-nowrap flex-none"
+                  >
+                    {deployment.channel}
+                  </span>
+                )}
                 <span className="whitespace-nowrap">{deployment.version || '—'}</span>
                 {deployment.updateAvailable && deployment.latestVersion && (
                   <span
-                    title={`Update available: ${deployment.latestVersion}`}
+                    title={`Update available: ${deployment.latestVersion}${deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''}`}
                     className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-primary-weak text-primary text-[10.5px] font-semibold whitespace-nowrap flex-none"
                   >
                     <ArrowUp className="w-3 h-3" />
                     {deployment.latestVersion}
+                    {deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''}
                   </span>
                 )}
               </div>

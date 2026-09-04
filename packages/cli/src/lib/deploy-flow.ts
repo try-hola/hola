@@ -12,6 +12,9 @@ export interface DeployResult {
   releaseId: string;
   jobId?: string;
   status: string;
+  /** Release channel the new deployment follows (#428); `stable` when absent
+   *  on the create response (older server, or the deployment is on stable). */
+  channel?: string;
 }
 
 /**
@@ -69,7 +72,7 @@ export async function finalizeAndDeploy(
     status = job.status ?? 'queued';
   }
 
-  return { deploymentId: dep.deploymentId, releaseId: dep.releaseId, jobId: dep.jobId, status };
+  return { deploymentId: dep.deploymentId, releaseId: dep.releaseId, jobId: dep.jobId, status, channel: dep.channel };
 }
 
 /** Stream job logs and poll until the job reaches a terminal state. */

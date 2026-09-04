@@ -15,9 +15,10 @@ import type {
   RefNotAllowedDetails,
 } from '@hola/shared';
 import { providerGrantsFor } from '@hola/shared/contracts';
-import { slugifySubdomain } from '@hola/shared';
+import { slugifySubdomain, STABLE_CHANNEL } from '@hola/shared';
 import { validateParams, generateSecretValue, isEffectivelyRequired } from '@hola/shared/param-validate';
 import { useCreateDraft, useDraftApi } from '../hooks/useDraftApi';
+import { useCatalogAppApi } from '../hooks/useCatalogApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
 import { useDraftUpload } from '../hooks/useDraftUpload';
 import { useDraftFinalization } from '../hooks/useDraftFinalization';
@@ -172,6 +173,13 @@ export const InstallWizard: React.FC = () => {
   const credentialRef = searchParams.get('cred') || undefined;
   // Catalog source the app comes from (Slice 2); defaults to the built-in `hola`.
   const source = searchParams.get('source') || undefined;
+  // Release channel to follow (#428), e.g. from the catalog's "Install on rc"
+  // link. Forwarded to draft creation so `latest` resolves on this channel;
+  // the resulting deployment's channel is `channel ?? draft's own channel ?? stable`.
+  // State (not derived fresh from `searchParams` on every render) because the
+  // in-wizard Channel select changes it after mount — the URL value is only
+  // ever the INITIAL one.
+  const [channel, setChannel] = useState<string | undefined>(() => searchParams.get('channel') || undefined);
   const [currentStep, setCurrentStep] = useState(0);
   
   // Draft API hooks
@@ -259,6 +267,21 @@ export const InstallWizard: React.FC = () => {
   const app = createDraftHook.data?.app ?? { id: appId ?? ociRef ?? '', name: appId ?? ociRef ?? 'app', icon: '📦' };
   // The catalog version this draft pins (defaults to 'latest' when unversioned).
   const version = draftApi.data?.version ?? 'latest';
+  // The channel the resulting deployment will follow (#428): the draft already
+  // resolved it (explicit ?? the pinned version's own channel ?? `stable`).
+  // Prefer the explicitly-requested `channel` (state) when one was made —
+  // an explicit channel is always honored exactly (FR-008), so this is
+  // correct immediately rather than waiting on a round-trip; it also sidesteps
+  // `useDraftApi`'s cache occasionally being primed by `useCreateDraft`'s own
+  // (channel-less) create response before a fuller draft fetch lands. Only an
+  // IMPLIED channel (a pinned pre-release with no explicit choice) needs the
+  // resolved draft's own `channel`.
+  const followedChannel = channel ?? draftApi.data?.channel ?? STABLE_CHANNEL;
+  // The app's declared channels (#428), for the Channel select below — only
+  // rendered when there's an actual choice (more than one channel with
+  // versions). Install-by-ref has no catalog entry to ask, so it never offers one.
+  const { data: catalogAppData } = useCatalogAppApi(ociRef ? '' : app.id, source);
+  const availableChannels = catalogAppData?.channels ?? [];
 
   // Track the active draft + whether it was installed, so an abandoned wizard
   // can clean up its orphaned draft on unmount without deleting an installed one.
@@ -282,69 +305,124 @@ export const InstallWizard: React.FC = () => {
   const creatingDraftRef = React.useRef(false);
   // Bumped to ask for one more attempt after a failure (see `retryDraft`).
   const [draftAttempt, setDraftAttempt] = useState(0);
+
+  // Create a draft on `channelArg` and seed all the per-draft wizard state from
+  // it. Shared by the mount effect below and the Channel select's change
+  // handler (#428) — a different channel means a different resolved version,
+  // hence different env/port/security/profile defaults, so "changing channel"
+  // is "create a fresh draft", not a patch.
+  const createAndSeedDraft = async (channelArg: string | undefined) => {
+    const result = ociRef
+      ? await createDraftHook.createDraft({ ociRef, credentialRef })
+      : await createDraftHook.createDraft({ appId, source, channel: channelArg });
+
+    // Auto-fill empty secrets that carry a manifest `generate` recipe —
+    // these are machine tokens (runner registration keys, app secret
+    // keys) nobody types or remembers, same class as an internal DB
+    // password the app generates for itself. Requiring a manual wand
+    // click here bought nothing; mirrors the CLI's install.ts, which
+    // already auto-fills these non-interactively.
+    let generatedCount = 0;
+    const seededEnv = result.appEnv.map((e) => {
+      if (!(e.isSecret && e.generate && !e.value)) return e;
+      generatedCount++;
+      return { ...e, value: generateSecretValue(e.generate) };
+    });
+
+    // Update state with draft data. Row order is preserved exactly as the
+    // catalog declares it (env order doesn't affect deployment) — the
+    // Basic section below floats required-and-empty rows to the top for
+    // display without reordering this underlying array. Record which keys
+    // were present right now ("seeded", manifest-declared) vs. added later
+    // via "Add app variable" (free-form "Custom" rows with no spec).
+    setSystemEnvVars(result.systemEnv);
+    seededKeysRef.current = new Set(seededEnv.map((e) => e.key));
+    setEnvVars(seededEnv);
+    setPorts(result.defaults.ports);
+    setVolumes(result.defaults.volumes);
+    setSecurity(result.security);
+    setProvides(result.provides);
+    // #162: surface the app's optional Compose profiles and pre-select the
+    // ones the manifest marks `default`.
+    setProfiles(result.profiles);
+    setSelectedProfiles(new Set((result.profiles ?? []).filter(p => p.default).map(p => p.key)));
+
+    // Persist the generated values immediately so a refresh (or abandoning
+    // the wizard before clicking Next) doesn't lose them — same durability
+    // the manual wand-click path already gets via `updateEnvVar`.
+    if (generatedCount > 0) {
+      await api.drafts.update(result.draftId, { appEnv: seededEnv }).catch(() => {});
+    }
+    return result;
+  };
+
   useEffect(() => {
     if ((!appId && !ociRef) || createDraftHook.data || creatingDraftRef.current) return;
     creatingDraftRef.current = true;
 
-    const initializeDraft = async () => {
-      try {
-        const result = ociRef
-          ? await createDraftHook.createDraft({ ociRef, credentialRef })
-          : await createDraftHook.createDraft({ appId, source });
-
-        // Auto-fill empty secrets that carry a manifest `generate` recipe —
-        // these are machine tokens (runner registration keys, app secret
-        // keys) nobody types or remembers, same class as an internal DB
-        // password the app generates for itself. Requiring a manual wand
-        // click here bought nothing; mirrors the CLI's install.ts, which
-        // already auto-fills these non-interactively.
-        let generatedCount = 0;
-        const seededEnv = result.appEnv.map((e) => {
-          if (!(e.isSecret && e.generate && !e.value)) return e;
-          generatedCount++;
-          return { ...e, value: generateSecretValue(e.generate) };
-        });
-
-        // Update state with draft data. Row order is preserved exactly as the
-        // catalog declares it (env order doesn't affect deployment) — the
-        // Basic section below floats required-and-empty rows to the top for
-        // display without reordering this underlying array. Record which keys
-        // were present right now ("seeded", manifest-declared) vs. added later
-        // via "Add app variable" (free-form "Custom" rows with no spec).
-        setSystemEnvVars(result.systemEnv);
-        seededKeysRef.current = new Set(seededEnv.map((e) => e.key));
-        setEnvVars(seededEnv);
-        setPorts(result.defaults.ports);
-        setVolumes(result.defaults.volumes);
-        setSecurity(result.security);
-        setProvides(result.provides);
-        // #162: surface the app's optional Compose profiles and pre-select the
-        // ones the manifest marks `default`.
-        setProfiles(result.profiles);
-        setSelectedProfiles(new Set((result.profiles ?? []).filter(p => p.default).map(p => p.key)));
-
-        // Persist the generated values immediately so a refresh (or abandoning
-        // the wizard before clicking Next) doesn't lose them — same durability
-        // the manual wand-click path already gets via `updateEnvVar`.
-        if (generatedCount > 0) {
-          await api.drafts.update(result.draftId, { appEnv: seededEnv }).catch(() => {});
-        }
-
-      } catch (err) {
-        // Deliberately leave the guard SET. This effect re-runs on every render
-        // (the hook object is a fresh reference each time) and the failure itself
-        // sets error state, so clearing the guard here spun the wizard into an
-        // unbounded retry loop against a request that keeps failing. Retrying is
-        // now explicit — see `retryDraft`, which the error banner drives.
-        console.error('Failed to create draft:', err);
-      }
-    };
-
-    initializeDraft();
+    createAndSeedDraft(channel).catch((err) => {
+      // Deliberately leave the guard SET. This effect re-runs on every render
+      // (the hook object is a fresh reference each time) and the failure itself
+      // sets error state, so clearing the guard here spun the wizard into an
+      // unbounded retry loop against a request that keeps failing. Retrying is
+      // now explicit — see `retryDraft`, which the error banner drives.
+      console.error('Failed to create draft:', err);
+    });
     // `draftAttempt` is the explicit retry signal; the hook object is included
     // as-is (it's a new reference each render, so the ref guard above — not this
     // list — is what keeps the draft created exactly once).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appId, ociRef, credentialRef, source, draftAttempt, createDraftHook]);
+
+  // #428: the operator picked a different channel on the summary step. Drop
+  // the current (now-wrong-version) draft, reset the per-draft state, and
+  // create a fresh one on the new channel — reusing the exact seeding path
+  // the mount effect uses via `createAndSeedDraft`.
+  const [channelSwitching, setChannelSwitching] = useState(false);
+  const [channelSwitchError, setChannelSwitchError] = useState<string | null>(null);
+  const switchChannel = async (nextChannel: string) => {
+    const oldDraftId = createDraftHook.data?.draftId;
+    // The channel that currently has a working draft, to fall back to if the
+    // switch fails (see the catch below).
+    const previousChannel = channel;
+    setChannelSwitching(true);
+    setChannelSwitchError(null);
+    try {
+      if (oldDraftId) await api.drafts.remove(oldDraftId).catch(() => {});
+      // Reset per-draft state so the new draft's defaults populate cleanly
+      // rather than merging with the old channel's rows.
+      setEnvVars([]);
+      setSystemEnvVars([]);
+      setPorts([]);
+      setVolumes([]);
+      setSecurity(undefined);
+      setProvides(undefined);
+      setProfiles(undefined);
+      setSelectedProfiles(new Set());
+      seededKeysRef.current = new Set();
+      setTouchedKeys(new Set());
+      // Contract consent (ADR 0004) and a hand-edited compose are BOTH properties
+      // of the version being installed, not of the app: the other channel's
+      // manifest may declare different privileged roles, and silence must stay a
+      // refusal. Carrying either across would pre-ack the new version's grants
+      // and re-apply an override written against the old one.
+      setAckedGrants(new Set());
+      setComposeOverride('');
+      setChannel(nextChannel);
+      await createAndSeedDraft(nextChannel);
+    } catch (err) {
+      // The old draft is already deleted and `useCreateDraft` clears `data` on
+      // failure, so `draftId` goes falsy and the whole wizard body — the Channel
+      // select included — unmounts behind the DraftErrorPanel. Its Retry re-runs
+      // the mount path, which reads THIS state: leaving `channel` on the one that
+      // just failed strands the operator on a permanently-failing retry with no
+      // way back to a working channel. Put it back to the last one that worked.
+      setChannel(previousChannel);
+      setChannelSwitchError(err instanceof Error ? err.message : 'Failed to switch channel');
+    } finally {
+      setChannelSwitching(false);
+    }
+  };
 
   /** Re-run draft creation after a failure the operator has just fixed. */
   const retryDraft = React.useCallback(() => {
@@ -1552,6 +1630,27 @@ services:
             </p>
 
             <div className="space-y-4 mb-4">
+              {/* #428: only offered when the app actually has more than one
+                  channel with versions — otherwise there's no real choice to make. */}
+              {availableChannels.length > 1 && (
+                <div>
+                  <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">Channel</h4>
+                  <select
+                    value={followedChannel}
+                    disabled={channelSwitching}
+                    onChange={(e) => void switchChannel(e.target.value)}
+                    className="w-full h-[38px] px-3 bg-surface-2 border border-border rounded-[10px] text-sm outline-none focus:border-primary disabled:opacity-50"
+                  >
+                    {availableChannels.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  {channelSwitchError && (
+                    <div className="mt-1.5 text-[12.5px] text-danger">{channelSwitchError}</div>
+                  )}
+                </div>
+              )}
+
               <div>
                 <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">Deployment name &amp; address</h4>
                 <input
@@ -1582,10 +1681,30 @@ services:
                     <span className="font-mono text-text-faint">checking {subdomain}.…</span>
                   )}
                 </div>
-                {allowMultiple && (
+                {/* #428: a channel-differentiated second copy explains ITSELF —
+                    swap the blunt "additional instance" warning for a note
+                    naming the channel and the (empty-data) starting point. */}
+                {channel && channel !== STABLE_CHANNEL ? (
+                  <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-[10px] bg-info/10 text-[12.5px] text-text-muted">
+                    <AlertTriangle className="w-4 h-4 text-info flex-none mt-px" />
+                    <span>
+                      This copy follows the {channel} channel and starts with empty data.
+                      Give it a distinct name so it gets its own address — the channel
+                      doesn&apos;t exempt it from the one-app-per-subdomain rule.
+                    </span>
+                  </div>
+                ) : allowMultiple && (
                   <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-[10px] bg-warning/10 text-[12.5px] text-text-muted">
                     <AlertTriangle className="w-4 h-4 text-warning flex-none mt-px" />
                     <span>Installing an additional instance. Give it a distinct name so it gets its own address and data.</span>
+                  </div>
+                )}
+                {/* Following channel (#428): shown whenever the resolved channel
+                    isn't stable — covers an explicit ?channel= and one implied
+                    by a pinned pre-release version. */}
+                {followedChannel !== STABLE_CHANNEL && (
+                  <div className="mt-2 text-[12.5px] text-text-muted">
+                    Following channel: <span className="font-mono text-text-strong">{followedChannel}</span>
                   </div>
                 )}
               </div>

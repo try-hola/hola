@@ -1,4 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import React from 'react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, cleanup } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
+import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { sdkAdapter } from '../../utils/sdk-adapter';
 import { mockFetch, createMockResponse } from '../../setupTests';
 import type { GetDeploymentsResponse, GetDeploymentsRequest, DeploymentListItem } from '@hola/shared';
@@ -142,5 +146,65 @@ describe('Deployments - SDK Adapter', () => {
       expect.stringContaining('/api/deployments?page=2&limit=5&q=nextcloud&status=running'),
       expect.any(Object)
     );
+  });
+});
+
+// #428: the deployments list renders a channel pill for a non-stable row.
+// `vi.mock` factories are hoisted above the module's own top-level code, so a
+// mock that needs a per-test-controllable return value must route through
+// `vi.hoisted` — a bare closure over a later `const` would see it as
+// undefined at hoist time.
+const { listApi } = vi.hoisted(() => ({ listApi: vi.fn() }));
+vi.mock('../../utils/api-hybrid', () => ({
+  api: { deployments: { list: (...args: unknown[]) => listApi(...args) } },
+}));
+
+describe('Deployments - channel pill (#428)', () => {
+  async function renderList(items: DeploymentListItem[]) {
+    listApi.mockResolvedValueOnce({ items, page: 1, limit: 100, total: items.length });
+    const { Deployments } = await import('../../pages/Deployments');
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <Deployments />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  beforeEach(() => {
+    listApi.mockClear();
+  });
+
+  it('renders a pill for a non-stable channel', async () => {
+    await renderList([{ ...mockDeployments[0], channel: 'rc' }]);
+    expect(await screen.findByText('rc')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('renders no pill for a stable channel', async () => {
+    await renderList([{ ...mockDeployments[0], channel: 'stable' }]);
+    await screen.findByText(mockDeployments[0].name);
+    expect(screen.queryByText('stable')).not.toBeInTheDocument();
+    cleanup();
+  });
+
+  it('renders no pill when channel is absent (pre-feature record)', async () => {
+    await renderList([{ ...mockDeployments[0], channel: undefined }]);
+    await screen.findByText(mockDeployments[0].name);
+    expect(screen.queryByText('stable')).not.toBeInTheDocument();
+    cleanup();
+  });
+
+  it('the update pill names a non-stable target channel (#428, US3)', async () => {
+    await renderList([{
+      ...mockDeployments[0],
+      channel: 'rc',
+      updateAvailable: true,
+      latestVersion: '1.3.0-rc.2',
+      latestVersionChannel: 'rc',
+    }]);
+    expect(await screen.findByText(/1\.3\.0-rc\.2 \(rc\)/)).toBeInTheDocument();
+    cleanup();
   });
 });

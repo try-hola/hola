@@ -8,6 +8,7 @@
 import { getLogger } from '../lib/logger';
 import { recordErrorMetric } from '../lib/metrics';
 import { getRequestContext } from './request';
+import { isValidChannelName, invalidChannelMessage } from '@hola/shared';
 import type { ValidationIssue } from '@hola/shared';
 
 export interface ErrorResponse {
@@ -38,6 +39,23 @@ export class ValidationError extends Error implements ApiError {
     this.name = 'ValidationError';
     this.details = details;
   }
+}
+
+/**
+ * Release-channel name guard (#428). `undefined` passes through (no channel was
+ * requested); anything else must match the shared channel grammar or this
+ * throws `400 INVALID_CHANNEL`. The single raise site for that code — the
+ * catalog, draft and deployment services all call this rather than each
+ * re-typing the same message.
+ */
+export function assertValidChannelName(channel: string | undefined): string | undefined {
+  if (channel === undefined) return undefined;
+  if (!isValidChannelName(channel)) {
+    const err = new ValidationError(invalidChannelMessage(channel));
+    err.code = 'INVALID_CHANNEL';
+    throw err;
+  }
+  return channel;
 }
 
 /**

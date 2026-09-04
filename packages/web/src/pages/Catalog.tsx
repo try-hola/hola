@@ -17,6 +17,7 @@ import type {
   GetDeploymentsRequest,
   RegistryCredentialRecord,
 } from '@hola/shared';
+import { STABLE_CHANNEL } from '@hola/shared';
 import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
@@ -184,10 +185,16 @@ export const Catalog: React.FC = () => {
   // catalog sources therefore reads as installed in both — acceptable while a
   // second install is impossible anyway, and it goes away with multi-instance
   // support (see the follow-up issue).
+  // #428: also track which channel(s) an app's existing deployment(s) follow,
+  // so the card can offer "Install on <channel>" only for a channel none of
+  // them already covers.
   const installedByApp = useMemo(() => {
-    const m = new Map<string, string>();
+    const m = new Map<string, { id: string; channels: Set<string> }>();
     for (const d of deploymentsData?.items ?? []) {
-      if (!m.has(d.app)) m.set(d.app, d.id);
+      const channel = d.channel ?? STABLE_CHANNEL;
+      const existing = m.get(d.app);
+      if (existing) existing.channels.add(channel);
+      else m.set(d.app, { id: d.id, channels: new Set([channel]) });
     }
     return m;
   }, [deploymentsData?.items]);
@@ -330,21 +337,38 @@ export const Catalog: React.FC = () => {
             {apps.map((app: CatalogApp) => {
               const custom = app.source && app.source !== 'hola';
               const installTo = `/catalog/${app.id}/install${custom ? `?source=${app.source}` : ''}`;
+              const installToWithChannel = (channel: string) =>
+                `${installTo}${installTo.includes('?') ? '&' : '?'}channel=${channel}`;
               // An installed app has no install path — the card manages the
               // existing deployment instead. Apps that support running more than
               // one instance would offer "Add" here; nothing does yet (see the
               // multi-instance follow-up), so installed always means manage.
-              const installedId = installedByApp.get(app.id);
+              const installedInfo = installedByApp.get(app.id);
+              const installedId = installedInfo?.id;
               const goTo = installedId ? `/deployments/${installedId}` : installTo;
               // #246: for an already-installed app, offer a deliberate second
               // install. The wizard passes the allow-multiple override and asks for
               // a distinct name (→ distinct subdomain); the server rejects it if the
               // app is single-instance and no distinct host is chosen.
               const installAnotherTo = `${installTo}${installTo.includes('?') ? '&' : '?'}another=1`;
+              // #428: channels beyond stable this app has versions on, and
+              // (for an installed app) which of those no existing deployment
+              // already follows — those get their own "Install on <channel>"
+              // affordance instead of the blunt "install another".
+              const nonStableChannels = (app.channels ?? []).filter((c) => c !== STABLE_CHANNEL);
+              const installOnChannels = nonStableChannels.filter((c) => !installedInfo?.channels.has(c));
+              // An app with no stable version at all has no `app.version` to
+              // show; route its primary install straight to the first channel
+              // that does have one (the install flow's own channel choice, if
+              // it renders, still lists every channel with versions).
+              const primaryInstallTo = !app.version && nonStableChannels.length > 0
+                ? installToWithChannel(nonStableChannels[0])
+                : installTo;
+              const primaryGoTo = installedId ? `/deployments/${installedId}` : primaryInstallTo;
               return (
                 <div
                   key={`${app.source}/${app.id}`}
-                  onClick={() => navigate(goTo)}
+                  onClick={() => navigate(primaryGoTo)}
                   className="bg-surface-1 border border-border rounded-card p-[18px] flex flex-col cursor-pointer transition hover:border-primary hover:-translate-y-[2px]"
                 >
                   <div className="flex items-start gap-[13px] mb-[13px]">
@@ -360,6 +384,13 @@ export const Catalog: React.FC = () => {
                         {app.category}
                         {app.version && <span className="font-mono ml-1.5">· v{app.version}</span>}
                         {custom && <span className="ml-1.5 text-warning">· {app.source} ({app.trust})</span>}
+                        {/* #428: a hint that this app has more than the stable
+                            release, e.g. "rc available" (one channel per app
+                            with no `beta`-includes-`rc` hierarchy — see
+                            data-model.md). */}
+                        {nonStableChannels.length > 0 && (
+                          <span className="ml-1.5">{nonStableChannels.join(', ')} available</span>
+                        )}
                       </div>
                     </div>
                     <span className="font-mono text-[11px] text-text-faint flex items-center gap-1 flex-none">
@@ -400,10 +431,26 @@ export const Catalog: React.FC = () => {
                         >
                           Manage
                         </Link>
+                        {/* #428: a channel none of this app's existing copies
+                            follows — a targeted second install, distinct from
+                            the blunt "Another" (which needs the allow-multiple
+                            override the channel difference makes unnecessary). */}
+                        {installOnChannels.map((c) => (
+                          <Link
+                            key={c}
+                            to={installToWithChannel(c)}
+                            onClick={(e) => e.stopPropagation()}
+                            title={`Install on the ${c} channel`}
+                            className="h-[34px] px-[12px] flex items-center gap-[5px] bg-surface-2 text-text-muted border border-border rounded-lg text-[13px] font-semibold hover:border-primary hover:text-text-strong transition-colors"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Install on {c}
+                          </Link>
+                        ))}
                       </>
                     ) : (
                       <Link
-                        to={installTo}
+                        to={primaryInstallTo}
                         onClick={(e) => e.stopPropagation()}
                         className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition"
                       >

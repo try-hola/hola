@@ -364,6 +364,54 @@ command that talks to the server (both read one cached server-side check against
 the newest published release). Run `hola update --check` for the discrete report,
 or set `HOLA_NO_UPDATE_NOTICE=1` to silence the per-command notice.
 
+### Release channels
+
+Per-app releases (distinct from the *platform* upgrade above) can follow a
+release **channel** other than the default `stable` — e.g. `rc` for a
+pre-release build the catalog publishes alongside its stable release. See
+[ADR 0005](adr/0005-release-channels.md) for the full model.
+
+**Installing on a channel:**
+
+```bash
+hola install remo --channel rc --as remo-beta   # a new, channel-differentiated copy
+hola install remo@0.11.0-rc.1 --name remo-beta  # channel implied by the pinned version
+```
+
+For a single-instance app, a channel that no existing copy of that app follows
+is a permitted second install without `--allow-multiple` (it still needs a
+distinct `--name`/`--as`, since every copy needs its own subdomain). The
+dashboard's deployment detail shows *why* the second copy exists (it follows
+`rc`, or an operator forced it with `--allow-multiple`); `hola deployments`
+tags the row with its channel (`gitea-rc [rc]`). Once
+installed, `hola upgrade <deploymentId>` (no explicit `--app-version`) always
+offers the newest version eligible on the deployment's own channel — its own
+channel or `stable`, never an unrelated channel. The channel is **sticky**:
+promoting or rolling back never changes it, even when an rc deployment takes a
+stable release.
+
+**What a channel copy tests — and doesn't.** A channel deployment installed
+from the catalog starts with **empty data**. It proves the new version boots,
+routes, and authenticates — it does **not** prove it migrates your existing
+data, because there is none to migrate. Rehearsing an actual data migration on
+a real volume needs the deployment seeded from an existing one's snapshot,
+which is tracked as a follow-up
+([try-hola/hola#429](https://github.com/try-hola/hola/issues/429)) and not
+built yet.
+
+**Changing the channel a deployment follows** is a metadata-only change — it
+never touches the running version, and never enqueues a job:
+
+```bash
+curl -X PATCH $HOLA_API_URL/api/deployments/<id> \
+  -H "Authorization: Bearer $HOLA_TOKEN" -H 'content-type: application/json' \
+  -d '{"channel":"rc"}'
+```
+
+(or from the dashboard: Deployment detail → Configuration → Channel). The next
+update check is computed against the new channel immediately; the currently
+running version is unaffected until you explicitly upgrade.
+
 ## Troubleshooting
 
 The [compose README](../packages/compose/README.md#troubleshooting) has the full

@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runCatalog } from '../commands/catalog/catalog';
 import type { HolaSdk } from '@hola/sdk';
 
-function makeSdk(items: Array<{ id: string; name: string; description: string; icon: string }>) {
+function makeSdk(items: Array<{ id: string; name: string; description: string; icon: string; channels?: string[] }>) {
   return {
     catalog: {
       apps: vi.fn(async () => ({ items, page: 1, limit: 100, total: items.length })),
@@ -40,5 +40,18 @@ describe('catalog', () => {
     const sdk = makeSdk([]);
     await runCatalog(undefined, {}, { sdk: sdk as unknown as HolaSdk });
     expect(logs.join('\n')).toMatch(/No apps found/i);
+  });
+
+  // #428
+  it('shows a (channels: rc) suffix for an app with a non-stable channel', async () => {
+    const sdk = makeSdk([{ id: 'demo', name: 'Demo', description: 'Demo app', icon: '📦', channels: ['stable', 'rc'] }]);
+    await runCatalog(undefined, {}, { sdk: sdk as unknown as HolaSdk });
+    expect(logs.join('\n')).toContain('(channels: rc)');
+  });
+
+  it('shows no channels suffix for an app on stable only', async () => {
+    const sdk = makeSdk([{ id: 'demo', name: 'Demo', description: 'Demo app', icon: '📦', channels: ['stable'] }]);
+    await runCatalog(undefined, {}, { sdk: sdk as unknown as HolaSdk });
+    expect(logs.join('\n')).not.toContain('channels:');
   });
 });

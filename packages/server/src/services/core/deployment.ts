@@ -48,13 +48,13 @@ import type {
   GetContractsResponse,
   AppBackupHook
 } from '@hola/shared';
-import { checkUpgradePath, isNewerVersion, slugifySubdomain } from '@hola/shared';
+import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
 import { resolveContainedDir } from './path-containment';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError, DraftValidationError, ServiceError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto } from './snapshot-fs';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
@@ -186,6 +186,17 @@ interface SnapshotMeta {
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
 const SNAPSHOT_RETENTION = 5;
 
+/** What a caller of `resolveUpgradeTarget` has already fetched (#432), so the
+ *  resolution reuses it instead of re-reading the deployment and re-fetching the
+ *  catalog version list. */
+export interface ResolveUpgradeTargetOptions {
+  /** The deployment detail the caller just read (`getDeployment`). Its
+   *  `latestVersion` is the channel-filtered default target — already resolved
+   *  by `enrichUpdateInfo` from the catalog version list — so passing it spares
+   *  both a second read and a second version-list fetch. */
+  detail?: GetDeploymentResponse;
+}
+
 export interface DeploymentService extends HealthCheckable {
   // Deployment lifecycle
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
@@ -200,6 +211,27 @@ export interface DeploymentService extends HealthCheckable {
    *  Not surfaced on the public DeploymentDetail; the promote/upgrade flow needs
    *  it to rebuild the draft from the same source the app came from (#340). */
   getDeploymentSource(deploymentId: string): Promise<string>;
+  /**
+   * Resolve the upgrade target version + the deployment's channel (#428).
+   * Default target (`requested` omitted) is the channel-filtered
+   * `latestVersion` (the same cheap #284 signal every list/detail row
+   * carries). `version` is `undefined` when there is nothing to promote to —
+   * the promote route keeps owning the `NO_TARGET_VERSION` 400. An explicit
+   * `requested` version is validated for channel eligibility when the catalog
+   * can identify its channel, throwing `ValidationError` code
+   * `VERSION_NOT_ON_CHANNEL` with a hint to change the deployment's channel
+   * first; an unrecognized version passes through unchanged so the existing
+   * `VERSION_NOT_FOUND` path (draft creation) still reports it.
+   *
+   * A caller that has already read the deployment passes it as `options.detail`
+   * (#432) so the resolution costs no second read and no second catalog
+   * version-list fetch.
+   */
+  resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }>;
 
   // Deployment management
   listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse>;
@@ -269,6 +301,9 @@ function toListItem(d: EnhancedDeploymentDetail): DeploymentListItem {
     ports: d.ports,
     lastUpdated: d.lastUpdated,
     url: d.url,
+    // Release channel this deployment follows (#428); a record written before
+    // this feature carries no `channel` and reads as `stable` (no migration).
+    channel: d.channel ?? STABLE_CHANNEL,
   };
 }
 
@@ -286,6 +321,9 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     resources: d.resources,
     ports: d.ports,
     lastUpdated: d.lastUpdated,
+    // Release channel (#428); see toListItem.
+    channel: d.channel ?? STABLE_CHANNEL,
+    ...(d.instanceReason ? { instanceReason: d.instanceReason } : {}),
   };
 }
 
@@ -541,10 +579,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * the mock stays permissive: it resolves every draft to one placeholder app, so
    * enforcing here would spuriously collide unrelated mock-based tests.)
    */
-  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean): void {
+  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL): InstanceReason | undefined {
     void appId;
     void multiInstance;
     void allowMultiple;
+    void channel;
+    return undefined;
   }
 
   /** Public URL the app is reachable at; the real service derives it from routing. */
@@ -590,6 +630,24 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async getDeploymentSource(deploymentId: string): Promise<string> {
     await this.ensureLoaded();
     return this.requireDeployment(deploymentId).metadata?.source ?? 'hola';
+  }
+
+  /**
+   * Base (#428): the default target is whatever the cheap #284 signal already
+   * resolved onto the detail (a no-op in the base/mock service, which has no
+   * catalog — so `version` stays `undefined` with no explicit `requested`,
+   * matching today's `NO_TARGET_VERSION` behaviour for mock-based tests).
+   * RealDeploymentService overrides this to add channel-eligibility validation
+   * for an explicit `requested` version. Permissive by design: a caller-supplied
+   * `options.detail` is simply used in place of the read (#432).
+   */
+  async resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }> {
+    const detail = options?.detail ?? (await this.getDeployment(deploymentId));
+    return { version: requested ?? detail.latestVersion, channel: detail.channel ?? STABLE_CHANNEL };
   }
 
   private countReleases(deploymentId: string): number {
@@ -673,11 +731,22 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // hit, but up front so the user gets the clear error instead of a tombstone.
       this.assertAuthProvisionable(artifacts?.manifest.auth, app);
 
-      // Singleton-by-default (#246): reject a second install of an app whose
-      // manifest doesn't opt into multiples, unless the operator overrides it per
-      // install. Checked up front, before any state is created — like the auth and
-      // routing guards. The override still requires a distinct subdomain (below).
-      this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple);
+      // Release channel this deployment follows (#428): copied from the
+      // finalized manifest, which already resolved it (explicit request,
+      // implied by a pinned version, or `stable`) at draft-create time — no
+      // second resolution here, so the deployment can never disagree with the
+      // version it's actually running.
+      const channel = artifacts?.manifest.channel ?? STABLE_CHANNEL;
+
+      // Singleton-by-default (#246), now per app AND channel (#428): reject a
+      // second install of an app whose manifest doesn't opt into multiples
+      // unless it follows a channel no existing copy does, or the operator
+      // overrides it per install. Checked up front, before any state is
+      // created — like the auth and routing guards. The override still
+      // requires a distinct subdomain (below). The return value records WHY a
+      // second copy was permitted (`channel` takes precedence over
+      // `operator-override` — clarification Q1), so the dashboard can explain it.
+      const instanceReason = this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple, channel);
 
       // Capability contract grants (ADR 0004 §4). A `provides` role can carry
       // privilege — `backup@1`'s provider gets a read-only view of EVERY app's
@@ -738,6 +807,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // persisted so the grant is an auditable property of the install and a
         // later manifest can't quietly widen it. Absent for apps that ask for none.
         ...(grantedContracts.length ? { grantedContracts } : {}),
+        // Release channel this deployment follows (#428); always written for a
+        // new record (read as `stable` for pre-feature records with none).
+        channel,
+        // Why this is a permitted second copy of a single-instance app (#428);
+        // absent for a first copy or a multi-instance app.
+        ...(instanceReason ? { instanceReason } : {}),
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
         // icon without a live catalog lookup. Falls back to a generic glyph.
@@ -775,7 +850,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
-      return { deploymentId, releaseId, jobId };
+      // `channel` (#428) so the CLI can print "Following channel: <c>" without a
+      // further lookup — covers both an explicit --channel and one implied by a
+      // pinned pre-release version.
+      return { deploymentId, releaseId, jobId, channel };
     } catch (error) {
       this.logger.error('Failed to create deployment from draft', error as Error, {
         deploymentId,
@@ -970,6 +1048,8 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       installedVersion: detail.version,
       latestVersion: detail.latestVersion,
       updateAvailable: !!detail.updateAvailable,
+      channel: detail.channel,
+      latestVersionChannel: detail.latestVersionChannel,
     };
   }
 
@@ -1024,7 +1104,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * in-memory/mock service has no catalog); RealDeploymentService overrides it.
    */
   protected async enrichUpdateInfo(
-    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string }>,
   ): Promise<void> {
     void items;
   }
@@ -1044,11 +1124,29 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       this.logger.info('System overrides updated', { deploymentId, overrides: request.systemOverrides });
     }
 
+    // #428: change the channel this deployment follows. A metadata write
+    // only — never a job (Constitution III) — and the running version is
+    // untouched. Warn (don't block) when it makes two copies of the app share
+    // a channel; the base/mock service has no manifest to check
+    // `multiInstance` against, so it assumes single-instance (permissive: a
+    // false-positive warning here never blocks the change).
+    let warnings: string[] | undefined;
+    if (request.channel !== undefined) {
+      assertValidChannelName(request.channel);
+      const already = [...this.deployments.values()].some(
+        (d) => d.id !== deploymentId && d.app === deployment.app && (d.channel ?? STABLE_CHANNEL) === request.channel,
+      );
+      if (already) {
+        warnings = [`Another single-instance copy of '${deployment.app}' already follows channel '${request.channel}'.`];
+      }
+      deployment.channel = request.channel;
+    }
+
     deployment.lastUpdated = new Date().toISOString();
     this.deployments.set(deploymentId, deployment);
     await this.persistDeployment(deployment);
 
-    return { ok: true };
+    return { ok: true, ...(warnings ? { warnings } : {}) };
   }
 
   async deleteDeployment(deploymentId: string): Promise<void> {
@@ -1766,14 +1864,42 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     this.logger.info('Updating deployment configuration', { deploymentId });
 
+    // #428: a channel change is a metadata write only — validated up front,
+    // independent of the env/systemOverrides path below (Constitution III:
+    // never a job). Warn (don't block) when it makes two single-instance
+    // copies of the app share a channel — unlike the create-time guard this is
+    // advisory only, the change proceeds either way (it doesn't retroactively
+    // violate anything). Degrades to no warning on an unreadable manifest
+    // (best-effort UX, not a gate).
+    //
+    // The record itself is only mutated at each persist site below: the
+    // env/systemOverrides path can still reject (validation failure, no active
+    // release), and assigning here would leave the in-memory record following a
+    // channel that never reached disk — a silent divergence until restart.
+    let warnings: string[] | undefined;
+    if (request.channel !== undefined) {
+      assertValidChannelName(request.channel);
+      const manifest = await this.readActiveManifest(deployment).catch(() => undefined);
+      if (manifest?.multiInstance !== true) {
+        const already = [...this.deployments.values()].some(
+          (d) => d.id !== deploymentId && d.app === deployment.app && (d.channel ?? STABLE_CHANNEL) === request.channel,
+        );
+        if (already) {
+          warnings = [`Another single-instance copy of '${deployment.app}' already follows channel '${request.channel}'.`];
+        }
+      }
+    }
+
     const hasEnvChange = request.env !== undefined || (request.removeEnvKeys?.length ?? 0) > 0;
     if (!hasEnvChange && !request.systemOverrides) {
-      // Nothing to do — mirror the base class's cheap no-op path (still bumps
-      // lastUpdated) rather than requiring an active release for a no-op call.
+      // Nothing else to do — mirror the base class's cheap no-op path (still
+      // bumps lastUpdated) rather than requiring an active release for a
+      // channel-only (or otherwise empty) PATCH.
+      if (request.channel !== undefined) deployment.channel = request.channel;
       deployment.lastUpdated = new Date().toISOString();
       this.deployments.set(deploymentId, deployment);
       await this.persistDeployment(deployment);
-      return { ok: true };
+      return { ok: true, ...(warnings ? { warnings } : {}) };
     }
 
     const manifestPath = this.activeManifestPath(deployment);
@@ -1806,6 +1932,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     await this.storageService.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
+    // Everything that could reject has passed — now the channel change is safe
+    // to apply alongside the env rewrite in the same persist.
+    if (request.channel !== undefined) deployment.channel = request.channel;
     deployment.lastUpdated = new Date().toISOString();
     this.deployments.set(deploymentId, deployment);
     await this.persistDeployment(deployment);
@@ -1816,7 +1945,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // (see `readActiveAppEnv` above), so it picks up the rewrite just persisted
     // and runs a real `docker compose up` against it.
     const { jobId } = await this.executeAction(deploymentId, { action: 'restart' });
-    return { ok: true, jobId };
+    return { ok: true, jobId, ...(warnings ? { warnings } : {}) };
   }
 
   /** The active release's declared ingress/web compose service, if any. */
@@ -2210,40 +2339,49 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * fields unset rather than failing the list/detail request.
    */
   protected override async enrichUpdateInfo(
-    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string }>,
   ): Promise<void> {
     if (!this.catalogService || items.length === 0) return;
     // The source an item was installed from (default `hola`), so update detection
-    // queries the right catalog. Keyed per (source, app) since two sources could
-    // publish the same appId. `(ref)` installs have no index to check → skipped.
+    // queries the right catalog. Keyed per (source, app, channel) — #428: two
+    // deployments of the same app can follow different channels and must be
+    // offered different "newest" versions, and two sources could publish the
+    // same appId. `(ref)` installs have no index to check → skipped. `channel`
+    // is already set on every item by toListItem/toDetailResponse before this
+    // runs (defaults to `stable` for a pre-feature record).
     const sourceOf = (item: { id?: string; app: string }) =>
       (item.id ? this.deployments.get(item.id)?.metadata?.source : undefined) ?? 'hola';
-    const latestByKey = new Map<string, string | undefined>();
+    const newestByKey = new Map<string, { version: string; channel: string } | undefined>();
     for (const item of items) {
       const source = sourceOf(item);
-      const key = `${source}::${item.app}`;
-      if (latestByKey.has(key)) continue;
-      if (source === '(ref)') { latestByKey.set(key, undefined); continue; }
+      const channel = item.channel ?? STABLE_CHANNEL;
+      const key = `${source}::${item.app}::${channel}`;
+      if (newestByKey.has(key)) continue;
+      if (source === '(ref)') { newestByKey.set(key, undefined); continue; }
       try {
         const { items: versions } = await this.catalogService.getVersions(item.app, source);
-        const newest = versions
-          .map((v) => v.version)
-          .reduce<string | undefined>((best, v) => (!best || isNewerVersion(v, best) ? v : best), undefined);
-        latestByKey.set(key, newest);
+        // Newest version ELIGIBLE on this deployment's channel (own channel or
+        // `stable` — #428), by version precedence, never by list position.
+        const newest = newestEligibleVersion(versions, channel);
+        newestByKey.set(key, newest ? { version: newest.version, channel: newest.channel ?? STABLE_CHANNEL } : undefined);
       } catch {
-        latestByKey.set(key, undefined); // app not in catalog / catalog down — skip
+        newestByKey.set(key, undefined); // app not in catalog / catalog down — skip
       }
     }
     for (const item of items) {
-      const latest = latestByKey.get(`${sourceOf(item)}::${item.app}`);
-      if (!latest) continue;
-      item.latestVersion = latest;
+      const source = sourceOf(item);
+      const channel = item.channel ?? STABLE_CHANNEL;
+      item.channel = channel;
+      const newest = newestByKey.get(`${source}::${item.app}::${channel}`);
+      if (!newest) continue;
+      item.latestVersion = newest.version;
+      item.latestVersionChannel = newest.channel;
       // Only flag an update when the installed version is a concrete, comparable
       // one. A deployment pinned to the literal "latest" has no known concrete
       // version to compare against — treating it as 0.0.0 would mark *every*
       // latest-install as out-of-date — so report "no update available" instead.
       const installed = item.version;
-      item.updateAvailable = !!installed && installed !== 'latest' && isNewerVersion(latest, installed);
+      item.updateAvailable = !!installed && installed !== 'latest' && isNewerVersion(newest.version, installed);
     }
   }
 
@@ -2263,11 +2401,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       installedVersion: detail.version,
       latestVersion: detail.latestVersion,
       updateAvailable: !!detail.updateAvailable,
+      channel: detail.channel,
+      latestVersionChannel: detail.latestVersionChannel,
     };
     if (!this.catalogService || !detail.updateAvailable || !detail.latestVersion) return base;
     try {
       const source = await this.getDeploymentSource(detail.id);
-      const target = await this.catalogService.getVersionDetail(detail.app, detail.latestVersion, source);
+      // Pass the deployment's channel (#428) — `latestVersion` may be an
+      // rc-channel version for an rc deployment, and getVersionDetail's default
+      // channel is `stable`; without this a pinned rc target would spuriously
+      // 400 VERSION_NOT_ON_CHANNEL instead of returning its upgrade metadata.
+      const target = await this.catalogService.getVersionDetail(detail.app, detail.latestVersion, source, detail.channel);
       const upgrade = target.upgrade;
       return {
         ...base,
@@ -2284,6 +2428,53 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       });
       return base;
     }
+  }
+
+  /**
+   * Real (#428): the default target (the channel-filtered `latestVersion` the
+   * detail already carries) is unchanged; an EXPLICIT `requested` version is
+   * additionally validated for channel eligibility, so an operator can't be
+   * upgraded onto a version their deployment's channel doesn't cover by a
+   * typo'd `--app-version`. Looks the version up in the catalog to learn its
+   * channel; an unknown version, or a catalog/lookup failure, passes through
+   * unchanged — the draft-creation path the promote route runs next is what
+   * reports `VERSION_NOT_FOUND`/bundle errors, this is only a channel pre-check.
+   *
+   * One deployment read and at most one catalog version-list fetch (#432): a
+   * caller-supplied `options.detail` replaces the read, its `latestVersion`
+   * (resolved by `enrichUpdateInfo` with the same `newestEligibleVersion` rule
+   * over this deployment's channel) IS the default target, and the single
+   * `getVersions` call happens only for the explicit-version eligibility check.
+   */
+  override async resolveUpgradeTarget(
+    deploymentId: string,
+    requested?: string,
+    options?: ResolveUpgradeTargetOptions,
+  ): Promise<{ version?: string; channel: string }> {
+    const detail = options?.detail ?? (await this.getDeployment(deploymentId));
+    const channel = detail.channel ?? STABLE_CHANNEL;
+    if (requested === undefined || !this.catalogService) {
+      return { version: requested ?? detail.latestVersion, channel };
+    }
+    try {
+      const source = await this.getDeploymentSource(deploymentId);
+      const { items: versions } = await this.catalogService.getVersions(detail.app, source);
+      const entry = versions.find((v) => v.version === requested);
+      const entryChannel = entry?.channel ?? STABLE_CHANNEL;
+      if (entry && !isEligibleOnChannel(entryChannel, channel)) {
+        const err = new ValidationError(
+          `Version ${requested} is on channel '${entryChannel}'; deployment ${deploymentId} follows '${channel}'. ` +
+            `Change the deployment's channel first (dashboard → Channel, or PATCH /api/deployments/${deploymentId} {"channel":"${entryChannel}"}), then upgrade.`,
+        );
+        err.code = 'VERSION_NOT_ON_CHANNEL';
+        throw err;
+      }
+    } catch (err) {
+      if (err instanceof ValidationError) throw err;
+      // getVersions failed (catalog down, app not found, …) — not this
+      // method's concern; let the caller's next step report the real problem.
+    }
+    return { version: requested, channel };
   }
 
   /**
@@ -2740,23 +2931,31 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * Enforce single-instance-by-default (#246): reject installing an app that
-   * already has a deployment, unless its manifest opts into multiples
-   * (`multiInstance: true`) or the caller passes the per-install override. Operates
-   * on the rehydrated in-memory map. Global-capability bolt-ons (backup →
-   * apps-data, homepage → app-registry) assume one instance, so the override is
-   * "you know what you're doing" — it still requires a distinct subdomain, which
-   * onBeforeCreate validates separately.
+   * Enforce single-instance-by-default (#246), now per app AND channel (#428):
+   * reject installing an app that already has a deployment ON THIS CHANNEL,
+   * unless its manifest opts into multiples (`multiInstance: true`), no
+   * existing copy follows this channel, or the caller passes the per-install
+   * override. Operates on the rehydrated in-memory map. Global-capability
+   * bolt-ons (backup → apps-data, homepage → app-registry) assume one
+   * instance, so the override is "you know what you're doing" — it still
+   * requires a distinct subdomain, which onBeforeCreate validates separately.
+   *
+   * Returns the reason a second copy was permitted (data-model.md "Instance
+   * reason"): `channel` takes precedence over `operator-override` even when
+   * both would have worked (clarification Q1) — the channel difference is
+   * what actually permitted it, so that's what's recorded.
    */
-  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean): void {
-    if (multiInstance || allowMultiple) return;
-    const existing = [...this.deployments.values()].find(d => d.app === appId);
-    if (existing) {
-      throw new ConflictError(
-        `'${appId}' is already installed (deployment ${existing.id}). This app is single-instance; ` +
-          `pass --allow-multiple (CLI) or the "install another" option (dashboard) to run a second copy.`,
-      );
-    }
+  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL): InstanceReason | undefined {
+    if (multiInstance) return undefined;
+    const existing = [...this.deployments.values()].filter(d => d.app === appId);
+    if (existing.length === 0) return undefined;
+    const sameChannelCopy = existing.find(d => (d.channel ?? STABLE_CHANNEL) === channel);
+    if (!sameChannelCopy) return 'channel';
+    if (allowMultiple) return 'operator-override';
+    throw new ConflictError(
+      `'${appId}' is already installed on channel '${channel}' (deployment ${sameChannelCopy.id}). This app is single-instance; ` +
+        `pass --channel <name> to run a second copy on another channel the catalog offers, or --allow-multiple (CLI) / "install another" (dashboard) to force one.`,
+    );
   }
 
   protected override async onBeforeCreate(deploymentId: string, app: string, subdomain: string): Promise<void> {

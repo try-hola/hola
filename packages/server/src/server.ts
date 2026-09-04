@@ -479,10 +479,13 @@ async function route(url: URL, req: Request): Promise<Response> {
     const appId = decodeURIComponent(catalogVersionDetailMatch[1]);
     const version = decodeURIComponent(catalogVersionDetailMatch[2]);
     const source = searchParams.get('source') || undefined;
+    // Release channel (#428) restricting `latest`/pinned-version eligibility;
+    // default `stable` (unchanged behaviour when omitted).
+    const channel = searchParams.get('channel') || undefined;
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.getVersionDetail(appId, version, source);
+      const payload = await catalog.getVersionDetail(appId, version, source, channel);
       return json(payload);
     } catch (error) {
       logger.warn('Catalog version detail failed', { appId, version, error: error instanceof Error ? error.message : String(error) });
@@ -1197,7 +1200,13 @@ async function route(url: URL, req: Request): Promise<Response> {
       const services = getServices();
       const detail = await services.deployments.getDeployment(deploymentId);
       const appId = detail.app;
-      const targetVersion = body.version ?? detail.latestVersion;
+      // Resolve the target version + the deployment's channel (#428): default
+      // is the channel-filtered `latestVersion`; an explicit `body.version` is
+      // validated for channel eligibility here (VERSION_NOT_ON_CHANNEL) before
+      // any draft is built. The detail read above is handed over (#432) so the
+      // resolution reuses it rather than re-reading the deployment and
+      // re-fetching the catalog version list.
+      const { version: targetVersion, channel } = await services.deployments.resolveUpgradeTarget(deploymentId, body.version, { detail });
       if (!targetVersion) {
         return json(
           {
@@ -1218,8 +1227,13 @@ async function route(url: URL, req: Request): Promise<Response> {
       // Rebuild the draft from the SAME catalog source the app was installed from
       // (#340): createDraft defaults source to `hola`, so an app from a custom
       // source (e.g. a private catalog) would 404 with APP_NOT_FOUND on upgrade.
+      //
+      // `channel` (#428) is a second line of defence, not the primary check
+      // (resolveUpgradeTarget already validated it above): it keeps the
+      // deployment's channel sticky through the draft/finalize round-trip so an
+      // upgrade never implicitly changes what the deployment follows.
       const source = await services.deployments.getDeploymentSource(deploymentId);
-      const draft = await services.drafts.createDraft({ appId, version: targetVersion, source });
+      const draft = await services.drafts.createDraft({ appId, version: targetVersion, source, channel });
       try {
         const carried = await services.deployments.getActiveConfig(deploymentId);
         const draftDetail = await services.drafts.getDraft(draft.draftId);
