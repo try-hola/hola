@@ -64,6 +64,27 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   (`materializeCompose` → `compose-mounts.ts`), granting a trusted app (e.g. the
   `backrest` backup app) read access to all app data. `apps-data` is privileged;
   reserve it for trusted catalog apps.
+- **Capability contracts (ADR 0004; cardinality + container-logs in spec 004).**
+  A contract names a two-sided integration: a **provider** performs it
+  (`provides`), **acceptors** opt in to being a subject (`accepts`). Acceptor
+  participation is a **list** — an app with two stateful services declares two
+  participations, each with its own `id` and hooks (`backupParticipations()` in
+  `@hola/shared/contracts` is the one reader; a legacy singular `backup` block
+  normalises to one participation named `default`). A contract has **one
+  provider per host**, enforced at `createFromDraft` before any state is
+  created (`assertProviderAllowed`); a second install providing an
+  already-provided contract is refused (`PROVIDER_EXISTS`), and a legacy pair
+  is flagged (`providerConflict`) rather than auto-resolved. Every contract
+  declares a **participation mode** — `declared` (`auth@1`, `backup@1`,
+  `push@1`) or `implicit` (`container-logs@1`: every non-provider install is a
+  subject by virtue of running, nothing to accept). `container-logs@1` is the
+  first app-provided **provisioned** contract: on consent, materialisation
+  injects a redacting Docker-API proxy sidecar (`hola-docker-proxy`, run from
+  the server's own image) plus `DOCKER_HOST` into the provider's compose,
+  exposing container list/logs/events and a field-redacted inspect only — never
+  the raw socket. Every app container also carries `sh.hola.app`,
+  `sh.hola.deployment`, `sh.hola.name` labels (`applyPlatformDefaults`) so a
+  collector groups logs by app with no per-app configuration.
 - **Auth/SSO (Authentik).** `ProvisionerService` (`services/core/provisioner.ts`)
   provisions per-app auth at deploy time for three modes declared in the app
   manifest's `auth` block: `native-oidc` (env injection and/or a post-deploy setup
@@ -139,5 +160,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/003-release-channels/plan.md`
+`specs/004-contract-cardinality/plan.md`
 <!-- SPECKIT END -->

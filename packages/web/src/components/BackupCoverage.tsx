@@ -2,10 +2,10 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { HardDriveDownload, ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-react';
 
-import type { ContractParticipant, ContractRollup } from '@hola/shared';
+import type { ContractCoverage, ContractParticipant, ContractRollup } from '@hola/shared';
 import { BACKUP_CONTRACT_REF as BACKUP_REF } from '@hola/shared/contracts';
 
-import { coverageRows, COVERAGE_META } from '../utils/backup-coverage';
+import { coverageRows, unquiescedServices, COVERAGE_META } from '../utils/backup-coverage';
 import type { Coverage } from '../utils/backup-coverage';
 import { AppIcon } from './ui/AppIcon';
 import { StatusBadge } from './ui/StatusBadge';
@@ -27,20 +27,23 @@ import { StatusBadge } from './ui/StatusBadge';
  * the restore rather than during it.
  */
 
-const CoverageBadge: React.FC<{ coverage: Coverage }> = ({ coverage }) => {
+const CoverageBadge: React.FC<{ coverage: Coverage; counts?: ContractCoverage }> = ({ coverage, counts }) => {
   const meta = COVERAGE_META[coverage];
+  const title = coverage === 'partial' && counts
+    ? `${meta.title} ${counts.targeted} of ${counts.recognised} databases quiesced.`
+    : meta.title;
   return (
     <span
-      title={meta.title}
+      title={title}
       className="inline-flex items-center h-6 px-[9px] rounded-[7px] text-xs font-semibold"
       style={{ color: meta.color, background: meta.bg }}
     >
-      {meta.label}
+      {coverage === 'partial' && counts ? `${meta.label} · ${counts.targeted} of ${counts.recognised}` : meta.label}
     </span>
   );
 };
 
-const ProviderPanel: React.FC<{ providers: ContractParticipant[] }> = ({ providers }) => {
+const ProviderPanel: React.FC<{ providers: ContractParticipant[]; providerConflict?: boolean }> = ({ providers, providerConflict }) => {
   if (providers.length === 0) {
     return (
       <div className="px-5 py-10 text-center bg-surface-1 border border-dashed border-border rounded-[14px]">
@@ -69,6 +72,14 @@ const ProviderPanel: React.FC<{ providers: ContractParticipant[] }> = ({ provide
       <div className="px-[18px] py-3 border-b border-border text-[11.5px] font-semibold text-text-faint uppercase tracking-[0.04em]">
         Backup provider
       </div>
+      {providerConflict && (
+        <div className="flex items-start gap-[10px] px-[18px] py-3 border-b border-border-soft bg-warning-weak text-warning text-[12.5px]">
+          <AlertTriangle className="w-4 h-4 flex-none mt-0.5" />
+          <span>
+            More than one app provides backups. Hola expects one provider per contract; uninstall one of them.
+          </span>
+        </div>
+      )}
       {providers.map(provider => (
         <div key={provider.deploymentId} className="px-[18px] py-[14px] border-b border-border-soft last:border-b-0">
           <div className="flex items-center gap-[11px] flex-wrap">
@@ -122,11 +133,15 @@ export const BackupCoverage: React.FC<{
   }
 
   const rows = coverageRows(rollup);
-  const covered = rows.filter(r => r.coverage !== 'uncovered').length;
+  // `partial` is deliberately excluded from "covered" — the whole point of the
+  // state is that the page must not count a database that may be copied
+  // mid-write among the apps it vouches for.
+  const covered = rows.filter(r => r.coverage === 'quiesced' || r.coverage === 'as-is').length;
+  const partialCount = rows.filter(r => r.coverage === 'partial').length;
 
   return (
     <div className="flex flex-col gap-[18px]">
-      <ProviderPanel providers={rollup.providers} />
+      <ProviderPanel providers={rollup.providers} providerConflict={rollup.providerConflict} />
 
       <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-[18px] py-3 border-b border-border flex-wrap">
@@ -136,6 +151,9 @@ export const BackupCoverage: React.FC<{
           {rows.length > 0 && (
             <span className="text-[12.5px] text-text-muted">
               {covered} of {rows.length} installed {rows.length === 1 ? 'app' : 'apps'} covered
+              {partialCount > 0 && (
+                <span className="text-warning"> · {partialCount} partially</span>
+              )}
             </span>
           )}
         </div>
@@ -161,7 +179,7 @@ export const BackupCoverage: React.FC<{
                 </span>
               )}
               <div className="flex-1" />
-              <CoverageBadge coverage={coverage} />
+              <CoverageBadge coverage={coverage} counts={participant.coverage} />
             </div>
           ))
         )}
@@ -179,26 +197,34 @@ export const BackupCoverage: React.FC<{
  * app can be perfectly prepared for a backup that nobody is taking.
  */
 export const AppBackupCoverage: React.FC<{
-  contracts?: { accepts?: string[]; hooks?: string[]; provides?: string[] };
+  contracts?: { accepts?: string[]; hooks?: string[]; provides?: string[]; coverage?: Record<string, ContractCoverage> };
   rollup?: ContractRollup;
   loading?: boolean;
 }> = ({ contracts, rollup, loading }) => {
   const accepts = contracts?.accepts?.includes(BACKUP_REF) ?? false;
   const hooks = contracts?.hooks?.includes(BACKUP_REF) ?? false;
   const isProvider = contracts?.provides?.includes(BACKUP_REF) ?? false;
-  const coverage: Coverage = accepts ? (hooks ? 'quiesced' : 'as-is') : 'uncovered';
+  const serverCoverage = contracts?.coverage?.[BACKUP_REF];
+  const coverage: Coverage = serverCoverage ? serverCoverage.state : accepts ? (hooks ? 'quiesced' : 'as-is') : 'uncovered';
   const meta = COVERAGE_META[coverage];
   const runningProvider = rollup?.providers.find(p => p.status === 'running');
+  const missing = serverCoverage && coverage === 'partial' ? unquiescedServices(serverCoverage) : [];
 
   return (
     <div className="animate-fadein bg-surface-1 border border-border rounded-card overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-[18px] py-4 border-b border-border-soft flex-wrap">
         <div className="font-semibold text-[15px]">Backups for this app</div>
-        <CoverageBadge coverage={coverage} />
+        <CoverageBadge coverage={coverage} counts={serverCoverage} />
       </div>
 
       <div className="px-[18px] py-[18px] flex flex-col gap-3 text-sm">
         <p className="m-0 text-text-muted max-w-[620px]">{meta.title}</p>
+
+        {missing.length > 0 && (
+          <p className="m-0 text-warning max-w-[620px]">
+            {missing.map((svc) => `\`${svc}\` has no pre-backup hook.`).join(' ')}
+          </p>
+        )}
 
         {isProvider && (
           <p className="m-0 text-text-muted max-w-[620px]">

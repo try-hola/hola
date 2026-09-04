@@ -36,6 +36,7 @@ const rollup = (over: Partial<GetContractsResponse['items'][number]> = {}): GetC
       version: 1,
       shape: 'brokered',
       providerKind: 'app',
+      participation: 'declared',
       summary: 'Back up every app that accepts the contract',
       providers: [],
       acceptors: [],
@@ -120,6 +121,45 @@ describe('Backups page coverage', () => {
 
     await screen.findByText('Backup provider');
     expect(screen.queryByRole('button', { name: /create backup/i })).toBeNull();
+  });
+
+  it('renders a postiz-shaped acceptor as partially covered, excluded from the covered count (spec 004)', async () => {
+    contractsList.mockResolvedValue(rollup({
+      providers: [app('backrest', { granted: true })],
+      acceptors: [
+        app('postiz', {
+          hooks: true,
+          coverage: {
+            state: 'partial',
+            targeted: 1,
+            recognised: 2,
+            participations: [{ id: 'default', service: 'postiz-postgres' }],
+            databases: ['postiz-postgres', 'temporal-postgres'],
+          },
+        }),
+        app('uptime-kuma', {
+          hooks: false,
+          coverage: { state: 'as-is', targeted: 0, recognised: 0, participations: [], databases: [] },
+        }),
+      ],
+    }));
+    render(<MemoryRouter><Backups /></MemoryRouter>);
+
+    expect(await screen.findByText('Partially covered · 1 of 2')).toBeInTheDocument();
+    // 3 rows total (postiz partial, uptime-kuma as-is, backrest uncovered — it
+    // provides but doesn't accept); only uptime-kuma counts as covered.
+    expect(screen.getByText(/1 of 3 installed apps covered/)).toBeInTheDocument();
+    expect(screen.getByText(/1 partially/)).toBeInTheDocument();
+  });
+
+  it('shows a warning when more than one app provides backups (legacy pair)', async () => {
+    contractsList.mockResolvedValue(rollup({
+      providers: [app('backrest-a', { granted: true }), app('backrest-b', { granted: true })],
+      providerConflict: true,
+    }));
+    render(<MemoryRouter><Backups /></MemoryRouter>);
+
+    expect(await screen.findByText(/More than one app provides backups/)).toBeInTheDocument();
   });
 
   it('surfaces a failed rollup instead of rendering an empty, reassuring page', async () => {

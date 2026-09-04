@@ -1,6 +1,6 @@
 # ADR 0004: Capability contracts — `provides` / `accepts`
 
-- **Status:** Proposed (August 2026)
+- **Status:** Accepted (August 2026; amended 2026-09-04 by spec 004)
 - **Context:** ADR 0002 defined cross-app integration one-directionally: an app declares
   `consumes: <capability>` and the server reconciles a generic primitive. Since then the
   *other* half of several integrations has appeared as one-off manifest blocks (`auth`,
@@ -243,7 +243,161 @@ tolerate an already-installed backrest whose stored manifest still declares it (
 
 `container-logs` (#245) is re-examined under §5 before it is built: a collector scraping every
 container continuously is a **provisioned** contract, not a brokered one — the server grants
-the log source and stays out of the stream.
+the log source and stays out of the stream. §12 below carries this out.
+
+### 9. Acceptor participation is a list
+
+Backup exposed a gap the model didn't answer: an app with **two** stateful services (its own
+database plus a workflow engine's) can only name one in a singular `backup` block, so the
+second is copied live on every capture — while the app still reads as fully "accepted." Spec
+004 (#426) rules that **acceptor participation is a list**, as a property of the contract
+model itself, not a one-off fix to `backup@1`:
+
+```jsonc
+"accepts": ["backup@1"],
+"backup": [
+  { "id": "app-db",       "preHook": { … }, "postHook": { … } },
+  { "id": "temporal-db",  "preHook": { … }, "postHook": { … } }
+]
+```
+
+Each participation carries a stable `id` (unique within the app) and its own hooks. The
+existing singular object (`{ preHook?, postHook? }`) remains valid and is normalised to a
+one-element list whose id is `default` — every published manifest and every on-disk release
+manifest keeps working with byte-identical behavior (ADR 0003). `backupParticipations()`
+(`@hola/shared/contracts`) is the one reader of either shape; the publish-time coercer
+(`coerceManifestBackup`) always emits the canonical array. A duplicate id, a missing id in the
+plural form, or a participation with neither hook is dropped with a logged warning, first
+occurrence wins — never a failed catalog load.
+
+`push@1` already conformed (`AppPushTarget[]`). `auth@1` is the deliberate exception: an app
+has **one identity**, so its acceptor block stays a single object by nature, not by omission.
+
+**Ordering, failure and cleanup.** The broker's prepare runs participations **in declaration
+order within an app, and apps in ascending deployment id** — a stable, documented order shared
+by the broker and the server's own pre-upgrade snapshot. Pre-hooks run sequentially and
+**fail-closed**: the first failure stops the prepare outright (no later pre-hook — in that app
+or a later one — ever starts), and the prepare fails naming the participation. Cleanup then
+runs the post-hook of every participation that was **started** (succeeded or failed) in the
+same forward order, and never one that never started. Finalize runs every eligible
+participation's post-hook regardless of individual failures and reports one result per
+participation (`{ deploymentId, participationId, ok, output? }`), so an app that failed one of
+three participations is distinguishable from one that failed all three.
+
+### 10. One provider per contract per host
+
+Nothing previously said what two installed apps both declaring `provides: ["backup@1"]` means.
+Spec 004 (clarification) rules that **a contract has at most one provider per host**, enforced
+**at install, before any deployment or job is created**: `assertProviderAllowed` runs
+immediately after the existing single-instance guard (`assertInstanceAllowed`) and before the
+consent check, scanning exactly the same live deployment set the instance guard counts — so the
+two guards can never disagree about what "installed" means. A conflicting install is rejected
+(`PROVIDER_EXISTS`) naming the existing provider deployment and the corrective action
+("uninstall it first"); no deployment or job is created for the rejected install. A stopped or
+failed provider still counts — it holds the grant — and uninstall is the only hand-over. The
+provider's own upgrade, rollback or restart never trips the guard: those paths never call
+`createFromDraft`, so a provider cannot "see itself" as a second install.
+
+Records from before this rule existed (two live providers of one contract) are not
+auto-removed: the rollup flags the contract (`providerConflict: true`) and the dashboard
+renders a warning on the provider panel.
+
+**Known limit, accepted:** a channel rehearsal copy of a provider (spec 003, ADR 0005) is
+refused by this guard exactly like any other second provider — a provider app cannot currently
+be trialled on a pre-release channel alongside its stable copy. This is a real gap for the
+handful of contracts with a provider role, not a general problem with channels; revisit if an
+operator actually needs to rehearse a provider upgrade this way.
+
+### 11. Participation mode: declared vs. implicit
+
+Every contract definition now carries a **participation mode**: `declared` (an app opts in via
+`accepts`, and the block is the reviewable artifact §2 describes) or `implicit` (every
+installed, non-provider deployment is a subject **by virtue of running**, with nothing to
+declare). `auth@1`, `backup@1` and `push@1` are `declared`. `container-logs@1` (§12) is the
+first `implicit` contract: a log collector reads every container's logs whether or not the
+container's author ever considered it, so there is no "accept" question to ask.
+
+The rollup and its clients must not misread an implicit contract's subjects as uncovered:
+
+- for a `declared` contract, the buckets are unchanged (`providers` / `acceptors` /
+  `unaffiliated`, as §7 describes);
+- for an `implicit` contract, every non-provider install lands in `acceptors` (with no
+  `hooks`/`coverage` — neither concept applies) and `unaffiliated` is **always empty**. The
+  rollup entry exposes `participation` so a client renders the right label without knowing the
+  ref.
+
+A manifest `accepts` naming an implicit contract is meaningless and is dropped with a logged
+warning at coercion — the same treatment §2's rollup gives a platform-provided `provides`.
+
+### 12. `container-logs@1`: the first app-provided provisioned contract
+
+A log collector (#245) that tails every container continuously is exactly the case §5 predicts
+for a **provisioned** contract: brokering it through the server would make Hola the data plane
+for every log line on the host. `container-logs@1` (`provisioned`, provider kind `app`,
+participation `implicit`) is added to the table with a new provider grant kind,
+`container-logs`, disclosed at install the same way `apps-data` is:
+
+> *"Read the logs of every container on this host — this app can read whatever every installed
+> app writes to its logs, which routinely includes tokens, request paths and personal data, and
+> can see which containers exist and how they are labelled. It cannot start, stop or reach into
+> them."*
+
+**The log-source mechanism.** FR-023's envelope — read container logs, enumerate containers and
+their labels; never start/stop/create/exec/delete a container, copy files out of one, or read
+its environment variables — rules out every off-the-shelf option:
+
+- **a read-only bind of `/var/run/docker.sock`** — the `:ro` mode bit restricts the filesystem
+  node the bind mount exposes, not the protocol spoken over it once opened; the Docker API
+  behind the socket is fully writable regardless;
+- **a read-only mount of the Docker log directory** (`/var/lib/docker/containers`) — kernel-
+  enforced read-only, but every container's `config.v2.json` lives right next to its log file
+  with the container's full `Config.Env`, so it leaks every other app's secrets to the
+  collector; it is also only useful with the `json-file` log driver;
+- **an off-the-shelf path-prefix proxy** (e.g. `tecnativa/docker-socket-proxy`) — its
+  `CONTAINERS=1` flag opens every GET under `/containers/`, including `/containers/{id}/archive`
+  (file exfiltration) and the unredacted inspect (full environment); none of them can rewrite a
+  response body, which redacting inspect requires.
+
+The chosen mechanism is a **platform-managed, redacting Docker API proxy** (`hola-docker-proxy`,
+`packages/server/src/docker-proxy.ts` with its pure decision/redaction logic in
+`src/lib/docker-proxy.ts`), run from the **server's own image** — no new published artefact,
+since the image is already pulled on every host and already has the socket-group access the
+server itself needs. On consent, materialisation injects the sidecar into the provider's compose
+(read-only socket bind, no published ports, and only the provider project's own networks — never the external `hola` network) and points every *other* service at it via
+`DOCKER_HOST=tcp://hola-docker-proxy:2375`. The proxy forwards `GET /containers/json`,
+`GET /containers/{id}/logs` and `GET /events` unchanged; rebuilds `GET /containers/{id}/json`
+from an explicit field allowlist (`Id`, `Name`, `Created`, `State`, `Image`,
+`Config.{Tty,Labels,Image,Hostname}` — dropping `Config.Env`, `Config.Cmd`, `Config.Entrypoint`,
+`HostConfig`, `Mounts`, `NetworkSettings`); and denies everything else, including any non-`GET`
+verb, with `403`. The allowlist is chosen against the fields real collectors (Alloy, Promtail,
+Vector) actually read (TTY and labels for formatting, name/image for grouping); extending it is
+a one-line, reviewed change, not a redesign.
+
+Revocation follows the existing path: nothing the grant issues persists beyond the compose
+project, so `docker compose down` on uninstall removes the sidecar and its env. A provisioned
+contract needs no broker credential: `mintContractEnv` mints only for a granted contract whose
+`shape` is `brokered`, so a provider of only `container-logs@1` gets no `HOLA_CONTRACT_TOKEN`.
+
+The compose validator's bind-source rule is unchanged and pinned by test for the socket, the
+log directory, and their parents; a new `RESERVED_SERVICE_NAME` rule rejects a user-authored
+service named `hola-docker-proxy`, so the platform's injection is the only path to the name.
+
+### 13. Platform container labels
+
+Every app container gains three reserved-namespace labels, applied by `applyPlatformDefaults`
+alongside the other platform defaults (post-validation, every service, every deployment):
+
+| key | value |
+| --- | --- |
+| `sh.hola.app` | the Hola app id (`deployment.app`) |
+| `sh.hola.deployment` | the deployment id |
+| `sh.hola.name` | the deployment's display name |
+
+These exist so a `container-logs@1` collector (or any future consumer of `docker inspect`) can
+group logs by app with **no per-app configuration** — the whole reason the grant is worth
+holding. Labels merge into whichever form the app declared (list or map), preserving every
+other user label; a user-authored value under the `sh.hola.` prefix is overwritten, since the
+platform is the source of truth for who's who.
 
 ### Rejected alternatives
 

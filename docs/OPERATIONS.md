@@ -300,16 +300,52 @@ docker run --rm -v hola-data:/data -v "$PWD":/backup alpine \
 
 Hola takes no app backups of its own. A **provider** app from the catalog does
 (Backrest today), and Hola brokers it: before the provider captures, the server
-runs the pre-backup hook of every app that **accepts** the `backup@1` contract —
+runs the pre-backup hook of every **participation** an accepting app declares —
 a `pg_dump` for a database-backed app — and the post-backup hook after (ADR
-0004). An app that accepts the contract and declares no hook is already safe to
-copy as it sits (SQLite, flat files).
+0004). An app with two databases (its own, plus a workflow engine's) declares
+two participations, one per database; both dumps run, in order, before the
+capture.
 
-The **Backups** page is the view over that: which app provides backups, whether
-it's running, and which installed apps it covers. An app listed as *not covered*
-is still captured as raw files, but nothing quiesces it first — a database there
-may be copied mid-write and only reveal itself as unusable during a restore.
-Each app's own detail page shows the same fact under its **Backups** tab.
+The **Backups** page is the view over that, and renders one of four states per
+installed app:
+
+- **Quiesced** — every recognised database service the app runs has a
+  pre-backup hook; the capture is transaction-consistent.
+- **Partially covered** — the app runs at least one recognised database with
+  *no* hook (e.g. one participation covers its own database but not a second
+  one). Shown with the count, "1 of 2 databases quiesced," and **not** counted
+  as fully covered in the page's summary — the whole point of this state is to
+  stop a two-database app from reading as safe when it isn't. Fixed by adding
+  the missing participation in the catalog.
+- **Covered as-is** — the app accepts the contract, runs no recognised
+  database, and needs no hook (SQLite, flat files); already safe to copy
+  exactly as it sits.
+- **Not covered** — the app does not accept `backup@1` at all. Still captured
+  as raw files with everything else, but nothing quiesces it first.
+
+Each app's own detail page shows the same judgement under its **Backups** tab,
+naming which database is missing a hook when the state is partial.
+
+**One provider per host.** A contract has at most one provider; installing a
+second app that also provides `backup@1` is refused at install, naming the
+existing provider and telling you to uninstall it first. A pair recorded
+before this rule existed (rare) is flagged as a warning on the Backups page
+rather than silently resolved — uninstall one of them.
+
+### Container logs
+
+`container-logs@1` is a **provisioned** contract: a log collector app from the
+catalog (once one ships) can read every container's logs and enumerate
+containers on the host — nothing else. The install wizard's consent step
+spells out what that means before you approve it: the collector can read
+whatever every installed app writes to its logs (which routinely includes
+tokens and personal data) and can see what containers exist and how they're
+labelled; it cannot start, stop, exec into, or read the environment of any
+container. Access is revoked the moment the collector is uninstalled.
+
+Every app container carries three labels a collector reads to group logs by
+app with no per-app configuration: `sh.hola.app` (the app id), `sh.hola.deployment`
+(the deployment id) and `sh.hola.name` (the deployment's display name).
 
 ## Upgrade
 

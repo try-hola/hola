@@ -293,6 +293,16 @@ services:
 `;
       expect(codes(validateComposeDocument(yaml))).toContain('INVALID_SERVICE_NAME');
     });
+
+    test('a user-authored service named hola-docker-proxy is rejected (spec 004: reserved for the platform)', () => {
+      const yaml = `
+services:
+  hola-docker-proxy:
+    image: nginx:1.27
+`;
+      const errs = errors(validateComposeDocument(yaml));
+      expect(errs.map((e) => e.code)).toContain('RESERVED_SERVICE_NAME');
+    });
   });
 
   describe('environment forms', () => {
@@ -351,6 +361,32 @@ services:
     volumes:
       - ./config:/etc/app:ro
       - /var/run/docker.sock:/var/run/docker.sock
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('VOLUME_NOT_UNDER_APP_DATA');
+    });
+
+    test('pinned: the docker socket, docker log dir, and their parents are rejected (spec 004 FR-025)', () => {
+      const paths = [
+        '/var/run/docker.sock',
+        '/var/lib/docker/containers',
+        '/var/lib/docker',
+        '/var/run',
+      ];
+      for (const p of paths) {
+        const yaml = `services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ${p}:${p}\n`;
+        expect(codes(validateComposeDocument(yaml))).toContain('VOLUME_NOT_UNDER_APP_DATA');
+      }
+    });
+
+    test('pinned: the docker socket is rejected in long syntax too', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
 `;
       expect(codes(validateComposeDocument(yaml))).toContain('VOLUME_NOT_UNDER_APP_DATA');
     });

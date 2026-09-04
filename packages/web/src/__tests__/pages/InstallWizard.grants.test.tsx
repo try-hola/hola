@@ -126,4 +126,81 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
     expect(screen.queryByText(/requests access to other apps/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled();
   });
+
+  it('renders the container-logs consent row and blocks Next until acknowledged (spec 004)', async () => {
+    draftsApi.create.mockResolvedValueOnce({
+      draftId,
+      app: { id: 'alloy', name: 'Alloy', icon: '📦' },
+      systemEnv: [],
+      appEnv: [],
+      defaults: { ports: [], volumes: [] },
+      provides: ['container-logs@1'],
+    });
+
+    renderWizard();
+    await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
+
+    const row = await screen.findByText(/read the logs of every container on this host/i);
+    const label = row.closest('label')!;
+    const checkbox = label.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).not.toBeChecked();
+    expect(screen.getByRole('button', { name: /next/i })).toBeDisabled();
+
+    fireEvent.click(checkbox);
+    expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled();
+  });
+
+  it('renders both grants when a manifest provides both backup@1 and container-logs@1', async () => {
+    draftsApi.create.mockResolvedValueOnce({
+      draftId,
+      app: { id: 'multi', name: 'Multi', icon: '📦' },
+      systemEnv: [],
+      appEnv: [],
+      defaults: { ports: [], volumes: [] },
+      provides: ['backup@1', 'container-logs@1'],
+    });
+
+    renderWizard();
+    await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
+
+    expect(await screen.findByText(/read the data of every installed app/i)).toBeInTheDocument();
+    expect(await screen.findByText(/read the logs of every container on this host/i)).toBeInTheDocument();
+  });
+
+  it('surfaces a 409 PROVIDER_EXISTS create error with the server message', async () => {
+    create.mockRejectedValueOnce(
+      Object.assign(new Error("'alloy' provides container-logs@1, which 'Existing Collector' (deployment existing-1) already provides. A contract has one provider per host; uninstall it first."), {
+        code: 'CONFLICT',
+        details: { code: 'PROVIDER_EXISTS', contract: 'container-logs@1', existing: { id: 'existing-1', name: 'Existing Collector' } },
+      }),
+    );
+    draftsApi.create.mockResolvedValueOnce({
+      draftId,
+      app: { id: 'alloy', name: 'Alloy', icon: '📦' },
+      systemEnv: [],
+      appEnv: [],
+      defaults: { ports: [], volumes: [] },
+      provides: ['container-logs@1'],
+    });
+
+    renderWizard();
+    await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
+
+    const row = await screen.findByText(/read the logs of every container on this host/i);
+    const label = row.closest('label')!;
+    const checkbox = label.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    fireEvent.click(checkbox);
+
+    await clickNext();
+    await clickNext();
+    await clickNext();
+    await clickNext();
+    await clickNext();
+
+    fireEvent.click(screen.getByRole('button', { name: /^install$/i }));
+
+    await waitFor(() => expect(screen.getByText(/already provides/i)).toBeInTheDocument());
+    expect(screen.getAllByText(/Existing Collector/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Existing Collector/ })).toHaveAttribute('href', '/deployments/existing-1');
+  });
 });

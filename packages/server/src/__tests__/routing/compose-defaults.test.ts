@@ -148,3 +148,114 @@ describe('applyPlatformDefaults', () => {
     });
   });
 });
+
+describe('platform labels (spec 004, FR-030/031)', () => {
+  const OFF: ComposeDefaultsConfig = { restartPolicy: '', logMaxSize: '', logMaxFile: '3', noNewPrivileges: false };
+  const LABELS = { 'sh.hola.app': 'postiz', 'sh.hola.deployment': 'postiz-1a2b', 'sh.hola.name': 'Postiz' };
+
+  test('adds the three labels to every service, map form when labels are absent', () => {
+    const doc = parse(applyPlatformDefaults('services:\n  app:\n    image: app:1\n  db:\n    image: postgres:16\n', ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual(LABELS);
+    expect(doc.services.db.labels).toEqual(LABELS);
+  });
+
+  test('map-form labels merge, preserving user keys', () => {
+    const input = 'services:\n  app:\n    image: app:1\n    labels:\n      com.example.x: "1"\n';
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual({ 'com.example.x': '1', ...LABELS });
+  });
+
+  test('list-form labels stay a list; entries appended, a duplicate key replaced', () => {
+    const input = [
+      'services:',
+      '  app:',
+      '    image: app:1',
+      '    labels:',
+      '      - com.example.x=1',
+      '      - sh.hola.app=other',
+      '',
+    ].join('\n');
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual([
+      'com.example.x=1',
+      'sh.hola.app=postiz',
+      'sh.hola.deployment=postiz-1a2b',
+      'sh.hola.name=Postiz',
+    ]);
+  });
+
+  test('a user-authored value under sh.hola. is overwritten; other user labels survive', () => {
+    const input = 'services:\n  app:\n    image: app:1\n    labels:\n      sh.hola.app: bogus\n      com.example.x: "1"\n';
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual({ 'com.example.x': '1', ...LABELS });
+  });
+
+  test('a list-form user label named after an Object.prototype key survives untouched', () => {
+    // `key in labels` would match `constructor`/`toString` through the prototype
+    // chain and rewrite the entry to `<key>=undefined`, silently corrupting a
+    // label the platform has no business touching.
+    const input = 'services:\n  app:\n    image: app:1\n    labels:\n      - constructor=mine\n      - toString=also-mine\n';
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual([
+      'constructor=mine',
+      'toString=also-mine',
+      'sh.hola.app=postiz',
+      'sh.hola.deployment=postiz-1a2b',
+      'sh.hola.name=Postiz',
+    ]);
+  });
+
+  test('a user-authored label elsewhere under the reserved namespace is dropped, not kept', () => {
+    // ADR 0004 §13 calls `sh.hola.` reserved. Leaving an app-authored key there
+    // would let a bundle feed a collector that groups on the namespace whatever
+    // it liked, under a prefix the platform vouches for.
+    const input = [
+      'services:',
+      '  app:',
+      '    image: app:1',
+      '    labels:',
+      '      sh.hola.app.origin: spoofed',
+      '      com.example.x: "1"',
+      '',
+    ].join('\n');
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual({ 'com.example.x': '1', ...LABELS });
+    expect(doc.services.app.labels['sh.hola.app.origin']).toBeUndefined();
+  });
+
+  test('the same holds for list form, and unparseable entries are preserved verbatim', () => {
+    const input = [
+      'services:',
+      '  app:',
+      '    image: app:1',
+      '    labels:',
+      '      - sh.hola.spoof=nope',
+      '      - com.example.x=1',
+      '      - 5',
+      '',
+    ].join('\n');
+    const doc = parse(applyPlatformDefaults(input, ON, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual([
+      'com.example.x=1',
+      5,
+      'sh.hola.app=postiz',
+      'sh.hola.deployment=postiz-1a2b',
+      'sh.hola.name=Postiz',
+    ]);
+  });
+
+  test('an all-disabled install-wide config still rewrites when labels are present', () => {
+    const doc = parse(applyPlatformDefaults('services:\n  app:\n    image: app:1\n', OFF, { labels: LABELS }));
+    expect(doc.services.app.labels).toEqual(LABELS);
+  });
+
+  test('no labels runtime -> unchanged behaviour (no labels key added)', () => {
+    const doc = parse(applyPlatformDefaults('services:\n  app:\n    image: app:1\n', ON));
+    expect(doc.services.app.labels).toBeUndefined();
+  });
+
+  test('an empty labels object changes nothing', () => {
+    const yaml = 'services:\n  app:\n    image: app:1\n';
+    expect(applyPlatformDefaults(yaml, OFF, { labels: {} })).toBe(yaml);
+  });
+});

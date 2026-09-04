@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ContractParticipant, ContractRollup } from '@hola/shared';
 
-import { coverageRows } from '../../utils/backup-coverage';
+import { coverageRows, unquiescedServices } from '../../utils/backup-coverage';
 
 /**
  * Flattening the `backup@1` rollup into one row per installed app (ADR 0004
@@ -25,6 +25,7 @@ const rollup = (over: Partial<ContractRollup> = {}): ContractRollup => ({
   version: 1,
   shape: 'brokered',
   providerKind: 'app',
+  participation: 'declared',
   summary: 'Backups',
   providers: [],
   acceptors: [],
@@ -72,5 +73,63 @@ describe('coverageRows', () => {
       unaffiliated: [app('audiobookshelf')],
     }));
     expect(rows.map(r => r.participant.name)).toEqual(['audiobookshelf', 'zulip']);
+  });
+
+  it('uses the server-computed coverage state when present, over the legacy hooks flag', () => {
+    const rows = coverageRows(rollup({
+      acceptors: [
+        app('postiz', {
+          hooks: true,
+          coverage: {
+            state: 'partial',
+            targeted: 1,
+            recognised: 2,
+            participations: [{ id: 'default', service: 'postiz-postgres' }],
+            databases: ['postiz-postgres', 'temporal-postgres'],
+          },
+        }),
+      ],
+    }));
+    expect(rows[0]?.coverage).toBe('partial');
+  });
+
+  it('falls back to the hooks flag when coverage is absent (older server)', () => {
+    const rows = coverageRows(rollup({ acceptors: [app('paperless', { hooks: true })] }));
+    expect(rows[0]?.coverage).toBe('quiesced');
+  });
+
+  it('a row for an implicit rollup is never uncovered', () => {
+    const rows = coverageRows(rollup({
+      participation: 'implicit',
+      providers: [app('collector')],
+      acceptors: [app('appA'), app('appB')],
+    }));
+    expect(rows.every(r => r.coverage !== 'uncovered')).toBe(true);
+  });
+});
+
+describe('unquiescedServices', () => {
+  it('names the recognised databases no participation targets', () => {
+    expect(
+      unquiescedServices({
+        state: 'partial',
+        targeted: 1,
+        recognised: 2,
+        participations: [{ id: 'default', service: 'postiz-postgres' }],
+        databases: ['postiz-postgres', 'temporal-postgres'],
+      }),
+    ).toEqual(['temporal-postgres']);
+  });
+
+  it('is empty when everything is targeted', () => {
+    expect(
+      unquiescedServices({
+        state: 'quiesced',
+        targeted: 1,
+        recognised: 1,
+        participations: [{ id: 'default', service: 'db' }],
+        databases: ['db'],
+      }),
+    ).toEqual([]);
   });
 });
