@@ -139,6 +139,15 @@ duplicate the operator has to remember the story behind. A later channel change 
 to make two copies share a channel does not retroactively revoke the guard or recompute the
 reason; the PATCH (§5) only returns an advisory warning.
 
+The **label is derived at read time** and the reason stays the audit fact (#433): the
+reason records which install the guard permitted, so it always sits on the copy installed
+second — install `rc` first and it lands on the `stable` copy, labelling the wrong one and
+leaving the rc copy unexplained. The detail therefore also carries the app's other live
+copies (`DeploymentDetail.siblings`, projected from the loaded deployment map — no catalog
+call, no job), and the dashboard builds the label from this copy's own channel plus those
+siblings, appending the reason only as a secondary "permitted by …" phrase. Both copies read
+correctly in either order, and nothing persisted changes.
+
 ### 5. Channel is sticky; changing it is a metadata write
 
 Promote and rollback never touch `channel` — an rc deployment that takes a stable release

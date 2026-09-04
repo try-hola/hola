@@ -40,8 +40,12 @@ Package: `packages/web`. All data comes from the wire fields in `contracts/api.m
 
 - Details card facts gain:
   - `Channel` → `deployment.channel` (always).
-  - `Instance` → when `instanceReason === 'channel'`: `<channel> copy of <app>`; when
-    `operator-override`: `additional copy (operator override)`.
+  - `Instance` (amended 2026-09-04, [#433](https://github.com/try-hola/hola/issues/433)) →
+    shown whenever `siblings` is non-empty, regardless of install order:
+    `<channel> instance of <app> · also installed: <name> (<channel>), …`. Only when
+    `instanceReason` is set, append ` · permitted by channel` /
+    ` · permitted by operator override`. Derived from live data — `instanceReason`
+    alone can't label the pair, since it always lands on the copy installed second.
   - `Latest` fact appends ` (<latestVersionChannel>)` when non-stable.
 - Upgrade dialog: target line shows `<latestVersion> (<latestVersionChannel>)` when
   non-stable.

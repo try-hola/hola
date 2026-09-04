@@ -470,14 +470,24 @@ export const DeploymentDetail: React.FC = () => {
     // #428: the channel this deployment follows — always shown (defaults to
     // `stable` for a pre-feature record with none).
     { label: 'Channel', value: deployment.channel ?? STABLE_CHANNEL },
-    // #428: why this is a permitted second copy of a single-instance app.
-    // Absent for a first copy or a multi-instance app.
-    ...(deployment.instanceReason
+    // #433: what this copy is among the app's live copies — derived from the
+    // deployment's own channel and its siblings, so both copies read correctly
+    // whichever went in first. (`instanceReason` alone could not: it is the
+    // install-time audit fact, always recorded on the copy installed second, so
+    // an rc-then-stable pair labelled the stable copy and said nothing about the
+    // rc one.) The reason, when set, only adds the secondary phrase.
+    ...(deployment.siblings?.length
       ? [{
           label: 'Instance',
-          value: deployment.instanceReason === 'channel'
-            ? `${deployment.channel ?? STABLE_CHANNEL} copy of ${deployment.app}`
-            : 'additional copy (operator override)',
+          value: [
+            `${deployment.channel ?? STABLE_CHANNEL} instance of ${deployment.app}`,
+            `also installed: ${deployment.siblings.map((s) => `${s.name} (${s.channel})`).join(', ')}`,
+            ...(deployment.instanceReason
+              ? [deployment.instanceReason === 'channel'
+                  ? 'permitted by channel'
+                  : 'permitted by operator override']
+              : []),
+          ].join(' · '),
         }]
       : []),
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),

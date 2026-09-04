@@ -389,8 +389,10 @@ install is rejected saying the channel has no versions published for the app,
 and `--allow-multiple` is what forces it. The same applies whenever the channel's
 published-ness can't be established at install time (the catalog was unreachable,
 or the app was installed by OCI reference) — the platform fails closed. The
-dashboard's deployment detail shows *why* the second copy exists (it follows
-`rc`, or an operator forced it with `--allow-multiple`); `hola deployments`
+dashboard's deployment detail names each copy by the channel it follows and
+lists the app's other copies ("`rc` instance of remo · also installed: remo
+(stable)"), adding *why* the second copy was permitted (it followed a published
+channel, or an operator forced it with `--allow-multiple`); `hola deployments`
 tags the row with its channel (`gitea-rc [rc]`). Once
 installed, `hola upgrade <deploymentId>` (no explicit `--app-version`) always
 offers the newest version eligible on the deployment's own channel — its own

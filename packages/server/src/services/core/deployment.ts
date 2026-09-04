@@ -992,8 +992,26 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     const detail = toDetailResponse(deployment);
     const contracts = await this.readDeploymentContracts(deployment);
     if (Object.keys(contracts).length > 0) detail.contracts = contracts;
+    const siblings = this.deploymentSiblings(deployment);
+    if (siblings) detail.siblings = siblings;
     await this.enrichUpdateInfo([detail]);
     return detail;
+  }
+
+  /**
+   * The app's other live copies, for the detail's instance label (#433).
+   *
+   * Base: none — RealDeploymentService derives them from the loaded deployment
+   * set. Derived at read time rather than persisted: `instanceReason` records
+   * which install the guard permitted (an install-time audit fact, always on the
+   * copy installed second), which mislabels the pair when the channel copy went
+   * in first. The siblings are live, so both copies read correctly either way.
+   */
+  protected deploymentSiblings(
+    deployment: EnhancedDeploymentDetail,
+  ): GetDeploymentResponse['siblings'] {
+    void deployment;
+    return undefined;
   }
 
   /**
@@ -1767,6 +1785,23 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       ...(hooks?.length ? { hooks } : {}),
       ...(granted.length ? { granted } : {}),
     };
+  }
+
+  /**
+   * The app's other live copies, each with the channel it follows (#433).
+   *
+   * Read straight off the loaded deployment map — no catalog call and no job, so
+   * this stays a pure projection of state the detail request has already paid for
+   * (Constitution III). Absent rather than empty when this is the only copy, so
+   * the dashboard can key the whole instance label off its presence.
+   */
+  protected override deploymentSiblings(
+    deployment: EnhancedDeploymentDetail,
+  ): GetDeploymentResponse['siblings'] {
+    const siblings = Array.from(this.deployments.values())
+      .filter((d) => d.app === deployment.app && d.id !== deployment.id)
+      .map((d) => ({ id: d.id, name: d.name, channel: d.channel ?? STABLE_CHANNEL }));
+    return siblings.length > 0 ? siblings : undefined;
   }
 
   /** Cross-app capabilities the active release declares it consumes (ADR 0002). */
