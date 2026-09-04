@@ -85,10 +85,15 @@ const catalogApi = {
   })),
 };
 
+const contractsApi = {
+  list: vi.fn(async () => ({ items: [] })),
+};
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     deployments: deploymentsApi,
     catalog: catalogApi,
+    contracts: contractsApi,
   },
 }));
 
@@ -561,5 +566,120 @@ describe('DeploymentDetail release channels (#428)', () => {
     const select = await screen.findByDisplayValue('stable');
     fireEvent.change(select, { target: { value: 'rc' } });
     await waitFor(() => expect(screen.getByText(/already follows channel 'rc'/)).toBeInTheDocument());
+  });
+});
+
+describe('DeploymentDetail backup coverage + grants (spec 004)', () => {
+  function renderBackupsTab() {
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=backups`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  beforeEach(() => {
+    globalCache.clear();
+    contractsApi.list.mockClear();
+  });
+
+  it('renders "Partially covered" with the unquiesced service named, for a partial coverage judgement', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: {
+        accepts: ['backup@1'],
+        hooks: ['backup@1'],
+        coverage: {
+          'backup@1': {
+            state: 'partial',
+            targeted: 1,
+            recognised: 2,
+            participations: [{ id: 'default', service: 'postiz-postgres' }],
+            databases: ['postiz-postgres', 'temporal-postgres'],
+          },
+        },
+      },
+    });
+    renderBackupsTab();
+
+    expect(await screen.findByText('Partially covered · 1 of 2')).toBeInTheDocument();
+    const service = screen.getByText('temporal-postgres');
+    expect(service.tagName).toBe('CODE');
+    expect(service.closest('p')).toHaveTextContent('temporal-postgres has no pre-backup hook.');
+  });
+
+  it('names every unquiesced service, joined with "and" and a plural verb', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: {
+        accepts: ['backup@1'],
+        hooks: ['backup@1'],
+        coverage: {
+          'backup@1': {
+            state: 'partial',
+            targeted: 1,
+            recognised: 3,
+            participations: [{ id: 'default', service: 'postiz-postgres' }],
+            databases: ['postiz-postgres', 'temporal-postgres', 'cache-db'],
+          },
+        },
+      },
+    });
+    renderBackupsTab();
+
+    expect(await screen.findByText('temporal-postgres')).toHaveProperty('tagName', 'CODE');
+    expect(screen.getByText('cache-db').tagName).toBe('CODE');
+    expect(screen.getByText('cache-db').closest('p')).toHaveTextContent(
+      'temporal-postgres and cache-db have no pre-backup hook.',
+    );
+  });
+
+  it('falls back to "Quiesced" from `hooks` when `coverage` is absent (older server)', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: { accepts: ['backup@1'], hooks: ['backup@1'] },
+    });
+    renderBackupsTab();
+
+    expect(await screen.findByText('Quiesced')).toBeInTheDocument();
+  });
+
+  it('shows a Grants fact naming the container-logs grant when granted', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: { provides: ['container-logs@1'], granted: ['container-logs@1'] },
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=overview`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText('Grants')).toBeInTheDocument();
+    expect(screen.getByText('Read the logs of every container on this host')).toBeInTheDocument();
+  });
+
+  it('shows no Grants fact when nothing is granted', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({ ...deployment });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=overview`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    await screen.findByText('App'); // details card has rendered
+    expect(screen.queryByText('Grants')).not.toBeInTheDocument();
   });
 });

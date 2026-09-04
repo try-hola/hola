@@ -47,6 +47,14 @@ function coerceRefs(
       logger.warn('Dropping `provides` for a platform-provided contract', { ...ctx, ref });
       continue;
     }
+    // An implicit contract (spec 004, ADR 0004 §11) has no acceptor side to opt
+    // into: every install is a subject by virtue of running, with nothing to
+    // declare. `accepts` naming one is meaningless — dropped the same way a
+    // platform-provided `provides` is, so the vocabulary keeps meaning one thing.
+    if (role === 'accepts' && def.participation === 'implicit') {
+      logger.warn('Dropping `accepts` for a contract whose participation is implicit', { ...ctx, ref });
+      continue;
+    }
     const canonical = formatContractRef(def);
     if (!out.includes(canonical)) out.push(canonical);
   }
@@ -121,6 +129,7 @@ export type ContractRollupEntry = {
 export function buildContractRollup(entries: readonly ContractRollupEntry[]): ContractRollup[] {
   return CONTRACTS.map((def) => {
     const ref = formatContractRef(def);
+    const implicit = def.participation === 'implicit';
     const providers: ContractParticipant[] = [];
     const acceptors: ContractParticipant[] = [];
     const unaffiliated: ContractParticipant[] = [];
@@ -136,8 +145,28 @@ export function buildContractRollup(entries: readonly ContractRollupEntry[]): Co
         // "why did nothing back up?" needs to see that difference.
         providers.push({ ...deployment, granted: contracts.granted?.includes(ref) ?? false });
       }
+
+      // Implicit participation (spec 004, ADR 0004 §11): every non-provider
+      // install is a subject by virtue of running — there is nothing for it to
+      // declare, so it lands in `acceptors` (with no `hooks`/`coverage`, which
+      // don't apply) regardless of what `accepts` says, and `unaffiliated`
+      // stays empty. `coerceRefs` already strips a stray `accepts` for an
+      // implicit contract at read time; this branch does not depend on that.
+      if (implicit) {
+        if (!provides) acceptors.push({ ...deployment });
+        continue;
+      }
+
       if (accepts) {
-        acceptors.push({ ...deployment, hooks: contracts.hooks?.includes(ref) ?? false });
+        // Coverage (spec 004): copied straight from the per-deployment judgement
+        // when present, so every client renders the same verdict without
+        // recomputing image-family recognition itself.
+        const coverage = contracts.coverage?.[ref];
+        acceptors.push({
+          ...deployment,
+          hooks: contracts.hooks?.includes(ref) ?? false,
+          ...(coverage ? { coverage } : {}),
+        });
       }
       if (!provides && !accepts) {
         unaffiliated.push({ ...deployment });
@@ -150,10 +179,14 @@ export function buildContractRollup(entries: readonly ContractRollupEntry[]): Co
       version: def.version,
       shape: def.shape,
       providerKind: def.providerKind,
+      participation: def.participation,
       summary: def.summary,
       providers,
       acceptors,
       unaffiliated,
+      // Records that predate the one-provider-per-host guard (spec 004 FR-013):
+      // surfaced as a warning, never auto-removed or demoted.
+      ...(providers.length > 1 ? { providerConflict: true as const } : {}),
     };
   });
 }

@@ -14,6 +14,9 @@ import {
   missingGrantConsents,
   parseContractRef,
   providerGrantsFor,
+  backupParticipations,
+  isDatabaseImage,
+  judgeBackupCoverage,
 } from '@hola/shared/contracts';
 
 import type { ContractParticipant, ContractRollup } from '@hola/shared';
@@ -49,13 +52,28 @@ describe('the contract table', () => {
     expect(new Set(refs).size).toBe(refs.length);
   });
 
-  test('models the three contracts ADR 0004 names, with their shapes', () => {
+  test('models the four contracts ADR 0004 names, with their shapes', () => {
     // The shape is the ADR's load-bearing distinction — broker an operation,
     // provision a connection. auth was always provisioned; naming it here is what
     // stops a future contract from being brokered by default.
     expect(parseContractRef('auth@1')).toMatchObject({ shape: 'provisioned', providerKind: 'platform' });
     expect(parseContractRef('backup@1')).toMatchObject({ shape: 'brokered', providerKind: 'app' });
     expect(parseContractRef('push@1')).toMatchObject({ shape: 'brokered', providerKind: 'platform' });
+    expect(parseContractRef('container-logs@1')).toMatchObject({
+      shape: 'provisioned',
+      providerKind: 'app',
+      participation: 'implicit',
+    });
+  });
+
+  test('every entry declares a participation mode (spec 004)', () => {
+    for (const def of CONTRACTS) {
+      expect(['declared', 'implicit']).toContain(def.participation);
+    }
+    expect(parseContractRef('auth@1')?.participation).toBe('declared');
+    expect(parseContractRef('backup@1')?.participation).toBe('declared');
+    expect(parseContractRef('push@1')?.participation).toBe('declared');
+    expect(parseContractRef('container-logs@1')?.participation).toBe('implicit');
   });
 });
 
@@ -123,6 +141,20 @@ describe('coerceAccepts / coerceProvides', () => {
     expect(coerceAccepts(['auth@1'], logger, ctx)).toEqual(['auth@1']);
     expect(warnings).toHaveLength(0);
   });
+
+  test('drops `accepts` for an implicit contract with a warning naming implicit participation (spec 004)', () => {
+    const { logger, warnings } = makeSpyLogger();
+    expect(coerceAccepts(['container-logs@1', 'backup@1'], logger, ctx)).toEqual(['backup@1']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toMatch(/implicit/i);
+    expect(warnings[0]?.context).toMatchObject({ ref: 'container-logs@1' });
+  });
+
+  test('`provides` for an implicit contract is unaffected — only `accepts` is dropped', () => {
+    const { logger, warnings } = makeSpyLogger();
+    expect(coerceProvides(['container-logs@1'], logger, ctx)).toEqual(['container-logs@1']);
+    expect(warnings).toHaveLength(0);
+  });
 });
 
 describe('findUndeclaredAcceptorBlocks', () => {
@@ -188,6 +220,187 @@ describe('provider grants (ADR 0004 §4)', () => {
     expect(grantsInclude(['backup@1'], 'apps-data')).toBe(true);
     expect(grantsInclude(['auth@1', 'push@1'], 'apps-data')).toBe(false);
     expect(grantsInclude(['telemetry@1'], 'apps-data')).toBe(false);
+  });
+
+  test('container-logs@1 carries its own grant kind', () => {
+    expect(providerGrantsFor(['container-logs@1'])).toEqual([
+      { ref: 'container-logs@1', grant: expect.objectContaining({ kind: 'container-logs' }) },
+    ]);
+    expect(grantsInclude(['container-logs@1'], 'container-logs')).toBe(true);
+    expect(grantsInclude(['backup@1'], 'container-logs')).toBe(false);
+  });
+});
+
+describe('backupParticipations (spec 004, FR-001)', () => {
+  test('the singular legacy object becomes a one-element list named "default"', () => {
+    expect(backupParticipations({ preHook: { service: 'db', command: ['pg_dump'] } })).toEqual([
+      { id: 'default', preHook: { service: 'db', command: ['pg_dump'] } },
+    ]);
+    expect(backupParticipations({ postHook: { service: 'db', command: ['rm'] } })).toEqual([
+      { id: 'default', postHook: { service: 'db', command: ['rm'] } },
+    ]);
+  });
+
+  test('a singular object with neither hook yields no participations', () => {
+    expect(backupParticipations({})).toEqual([]);
+    expect(backupParticipations(undefined)).toEqual([]);
+    expect(backupParticipations(null)).toEqual([]);
+    expect(backupParticipations('nonsense')).toEqual([]);
+  });
+
+  test('the plural array is kept in declaration order', () => {
+    const plural = [
+      { id: 'app-db', preHook: { service: 'postiz-postgres', command: ['pg_dump'] } },
+      { id: 'temporal-db', preHook: { service: 'temporal-postgres', command: ['pg_dump'] } },
+    ];
+    expect(backupParticipations(plural).map((p) => p.id)).toEqual(['app-db', 'temporal-db']);
+  });
+
+  test('an entry with a missing or blank id is dropped', () => {
+    const plural = [
+      { preHook: { service: 'db', command: ['x'] } },
+      { id: '   ', preHook: { service: 'db', command: ['x'] } },
+      { id: 'kept', preHook: { service: 'db', command: ['x'] } },
+    ];
+    expect(backupParticipations(plural).map((p) => p.id)).toEqual(['kept']);
+  });
+
+  test('a duplicate id keeps the first occurrence', () => {
+    const plural = [
+      { id: 'x', preHook: { service: 'a', command: ['1'] } },
+      { id: 'x', preHook: { service: 'b', command: ['2'] } },
+    ];
+    const result = backupParticipations(plural);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 'x', preHook: { service: 'a' } });
+  });
+
+  test('an entry with neither hook is dropped', () => {
+    const plural = [{ id: 'empty' }, { id: 'kept', postHook: { service: 'db', command: ['rm'] } }];
+    expect(backupParticipations(plural).map((p) => p.id)).toEqual(['kept']);
+  });
+
+  test('junk input yields an empty list', () => {
+    expect(backupParticipations(42)).toEqual([]);
+    expect(backupParticipations([1, 2, 'x', null])).toEqual([]);
+  });
+});
+
+describe('isDatabaseImage (spec 004, FR-015)', () => {
+  test.each([
+    ['postgres:17-alpine', true],
+    ['bitnami/postgresql:16', true],
+    ['ghcr.io/immich-app/postgres:14-vectorchord0.3.0', true],
+    ['mysql/mysql-server:8', true],
+    ['timescale/timescaledb-ha:pg16', true],
+    ['mongodb/mongodb-community-server:7', true],
+    ['nginx:1.27', false],
+    ['redis:7', false],
+    ['postgrest/postgrest:v12', false],
+    ['ghcr.io/org/app@sha256:abcdef1234567890', false],
+  ])('%s -> %s', (ref, expected) => {
+    expect(isDatabaseImage(ref)).toBe(expected);
+  });
+
+  test('never matches on app id, only image family', () => {
+    expect(isDatabaseImage('postiz')).toBe(false);
+    expect(isDatabaseImage('')).toBe(false);
+  });
+
+  // A companion that merely TALKS to a database holds none of the data. Counting
+  // one as a recognised database reports a fully quiesced app as `partial`, which
+  // teaches operators to ignore the single warning FR-019 exists to raise.
+  test.each([
+    ['mongo-express:1.0', false],
+    ['prometheuscommunity/postgres-exporter:v0.15', false],
+    ['mysql-exporter:latest', false],
+    ['mariadb-backup:11', false],
+    ['dpage/pgadmin4:8', false],
+    // …while a real database whose name merely has extra words still matches.
+    ['mysql/mysql-server:8', true],
+    ['timescale/timescaledb-ha:pg16', true],
+    ['mongodb/mongodb-community-server:7', true],
+  ])('companion vs database: %s -> %s', (ref, expected) => {
+    expect(isDatabaseImage(ref)).toBe(expected);
+  });
+});
+
+describe('judgeBackupCoverage (spec 004, FR-016)', () => {
+  test('not accepting is always uncovered, regardless of databases/participations', () => {
+    expect(
+      judgeBackupCoverage({ accepts: false, participations: [], databaseServices: ['db'] }),
+    ).toMatchObject({ state: 'uncovered' });
+  });
+
+  test('accepts, no databases, at least one participation -> quiesced', () => {
+    expect(
+      judgeBackupCoverage({
+        accepts: true,
+        participations: [{ id: 'default', preHook: { service: 'redis', command: ['x'] } }],
+        databaseServices: [],
+      }),
+    ).toMatchObject({ state: 'quiesced', targeted: 0, recognised: 0 });
+  });
+
+  test('accepts, no databases, no participations -> as-is', () => {
+    expect(judgeBackupCoverage({ accepts: true, participations: [], databaseServices: [] })).toMatchObject({
+      state: 'as-is',
+      targeted: 0,
+      recognised: 0,
+    });
+  });
+
+  test('accepts, one database, no participations -> partial 0/1', () => {
+    expect(
+      judgeBackupCoverage({ accepts: true, participations: [], databaseServices: ['app-db'] }),
+    ).toMatchObject({ state: 'partial', targeted: 0, recognised: 1 });
+  });
+
+  test('the postiz shape: one participation of two recognised databases -> partial 1/2', () => {
+    const result = judgeBackupCoverage({
+      accepts: true,
+      participations: [{ id: 'default', preHook: { service: 'postiz-postgres', command: ['pg_dump'] } }],
+      databaseServices: ['postiz-postgres', 'temporal-postgres'],
+    });
+    expect(result).toMatchObject({ state: 'partial', targeted: 1, recognised: 2 });
+    expect(result.participations).toEqual([{ id: 'default', service: 'postiz-postgres' }]);
+    expect(result.databases).toEqual(['postiz-postgres', 'temporal-postgres']);
+  });
+
+  test('every recognised database targeted -> quiesced', () => {
+    expect(
+      judgeBackupCoverage({
+        accepts: true,
+        participations: [
+          { id: 'app-db', preHook: { service: 'postiz-postgres', command: ['x'] } },
+          { id: 'temporal-db', preHook: { service: 'temporal-postgres', command: ['x'] } },
+        ],
+        databaseServices: ['postiz-postgres', 'temporal-postgres'],
+      }),
+    ).toMatchObject({ state: 'quiesced', targeted: 2, recognised: 2 });
+  });
+
+  test('a post-hook-only participation targets nothing', () => {
+    expect(
+      judgeBackupCoverage({
+        accepts: true,
+        participations: [{ id: 'cleanup', postHook: { service: 'postiz-postgres', command: ['rm'] } }],
+        databaseServices: ['postiz-postgres'],
+      }),
+    ).toMatchObject({ state: 'partial', targeted: 0, recognised: 1 });
+  });
+
+  test('two pre-hooks naming the same service count it once', () => {
+    expect(
+      judgeBackupCoverage({
+        accepts: true,
+        participations: [
+          { id: 'a', preHook: { service: 'db', command: ['1'] } },
+          { id: 'b', preHook: { service: 'db', command: ['2'] } },
+        ],
+        databaseServices: ['db'],
+      }),
+    ).toMatchObject({ state: 'quiesced', targeted: 1, recognised: 1 });
   });
 });
 
@@ -272,6 +485,22 @@ describe('buildContractRollup (ADR 0004 Phase 4)', () => {
     expect(backup(items).unaffiliated.map((p) => p.deploymentId)).toEqual(['mystery']);
   });
 
+  test('providerConflict is set when more than one deployment provides the same contract (spec 004)', () => {
+    const items = buildContractRollup([
+      { deployment: app('backrest-1'), contracts: { provides: ['backup@1'], granted: ['backup@1'] } },
+      { deployment: app('backrest-2'), contracts: { provides: ['backup@1'], granted: ['backup@1'] } },
+    ]);
+    expect(backup(items).providerConflict).toBe(true);
+    expect(backup(items).providers).toHaveLength(2);
+  });
+
+  test('providerConflict is absent when there is exactly one provider', () => {
+    const items = buildContractRollup([
+      { deployment: app('backrest'), contracts: { provides: ['backup@1'], granted: ['backup@1'] } },
+    ]);
+    expect(backup(items).providerConflict).toBeUndefined();
+  });
+
   test('carries each contract\'s shape and provider kind through to the client', () => {
     // A platform-provided contract has no app provider by definition; a client that
     // knows this renders "provided by Hola" instead of "none installed".
@@ -279,5 +508,63 @@ describe('buildContractRollup (ADR 0004 Phase 4)', () => {
     const auth = items.find((i) => i.ref === 'auth@1')!;
     expect(auth).toMatchObject({ shape: 'provisioned', providerKind: 'platform', providers: [] });
     expect(auth.acceptors.map((p) => p.deploymentId)).toEqual(['mealie']);
+  });
+
+  test('every rollup item carries its participation mode', () => {
+    const items = buildContractRollup([]);
+    expect(items.find((i) => i.ref === 'backup@1')?.participation).toBe('declared');
+    expect(items.find((i) => i.ref === 'push@1')?.participation).toBe('declared');
+    expect(items.find((i) => i.ref === 'auth@1')?.participation).toBe('declared');
+    expect(items.find((i) => i.ref === 'container-logs@1')?.participation).toBe('implicit');
+  });
+
+  describe('implicit participation: container-logs@1 (spec 004, US6)', () => {
+    const containerLogsOf = (items: ContractRollup[]) => items.find((i) => i.ref === 'container-logs@1')!;
+
+    test('a provider plus three other installs: all three are acceptors, none unaffiliated', () => {
+      const items = buildContractRollup([
+        { deployment: app('alloy'), contracts: { provides: ['container-logs@1'], granted: ['container-logs@1'] } },
+        { deployment: app('appA'), contracts: {} },
+        { deployment: app('appB'), contracts: {} },
+        { deployment: app('appC'), contracts: {} },
+      ]);
+      const rollup = containerLogsOf(items);
+      expect(rollup.providers.map((p) => p.deploymentId)).toEqual(['alloy']);
+      expect(rollup.acceptors.map((p) => p.deploymentId).sort()).toEqual(['appA', 'appB', 'appC']);
+      expect(rollup.unaffiliated).toEqual([]);
+    });
+
+    test('a manifest declaring accepts for the implicit contract does not double-list it — coercion already dropped it', () => {
+      // buildContractRollup trusts coerceRefs to have stripped a stray
+      // `accepts: ['container-logs@1']` already; this proves the rollup itself
+      // is also implicit-aware (defence in depth) — the app appears exactly once.
+      const items = buildContractRollup([
+        { deployment: app('alloy'), contracts: { provides: ['container-logs@1'] } },
+        { deployment: app('sneaky'), contracts: { accepts: ['container-logs@1'] } },
+      ]);
+      const rollup = containerLogsOf(items);
+      expect(rollup.acceptors.filter((p) => p.deploymentId === 'sneaky')).toHaveLength(1);
+      expect(rollup.acceptors[0]).not.toHaveProperty('hooks');
+      expect(rollup.acceptors[0]).not.toHaveProperty('coverage');
+    });
+
+    test('a provider that is itself a subject appears once, under providers only', () => {
+      const items = buildContractRollup([
+        { deployment: app('alloy'), contracts: { provides: ['container-logs@1'], granted: ['container-logs@1'] } },
+      ]);
+      const rollup = containerLogsOf(items);
+      expect(rollup.providers.map((p) => p.deploymentId)).toEqual(['alloy']);
+      expect(rollup.acceptors).toEqual([]);
+    });
+
+    test('backup@1 buckets are unchanged by this feature — declared participation, unaffiliated apps still listed', () => {
+      const items = buildContractRollup([
+        { deployment: app('backrest'), contracts: { provides: ['backup@1'], granted: ['backup@1'] } },
+        { deployment: app('immich'), contracts: {} },
+      ]);
+      const backup = items.find((i) => i.ref === 'backup@1')!;
+      expect(backup.participation).toBe('declared');
+      expect(backup.unaffiliated.map((p) => p.deploymentId)).toEqual(['immich']);
+    });
   });
 });

@@ -99,6 +99,13 @@ services:
       # The running version, surfaced in the dashboard / system status. Exported by
       # scripts/_common.sh from the bundle's VERSION file (same value as the image tag).
       - HOLA_VERSION=${HOLA_VERSION:-}
+      # container-logs@1 (spec 004, ADR 0004 §12): the injected `hola-docker-proxy`
+      # sidecar defaults to `ghcr.io/try-hola/server:${HOLA_VERSION}` (this same
+      # image) and the host's `/var/run/docker.sock`. Override either only for a
+      # dev build with no pinned HOLA_VERSION, or a host whose Docker socket lives
+      # elsewhere — both pass straight through when set, unset otherwise.
+      - HOLA_SERVER_IMAGE=${HOLA_SERVER_IMAGE:-}
+      - HOLA_DOCKER_SOCKET=${HOLA_DOCKER_SOCKET:-}
       # Platform hosts the server emits Traefik file-provider routes for (core.yml):
       # the UI itself, the Traefik dashboard, and (when SSO is on) the Authentik UI.
       # These replace the Docker-label routers Traefik used to discover.

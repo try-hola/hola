@@ -13,7 +13,7 @@ import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import type { AppUpgradeMeta } from '@hola/shared';
+import type { AppUpgradeMeta, AppBackupDeclaration } from '@hola/shared';
 import { RealDeploymentService } from '../../services/core/deployment';
 import { MockProvisionerService } from '../../services/core/provisioner';
 import { RealDraftService } from '../../services/core/draft';
@@ -29,6 +29,8 @@ type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
 
 // Per-version upgrade metadata, settable per test (drives `preUpgradeBackup`).
 let upgradeByVersion: Record<string, AppUpgradeMeta | undefined> = {};
+// Per-version backup declaration (spec 004: singular or plural), settable per test.
+let backupByVersion: Record<string, AppBackupDeclaration | undefined> = {};
 
 function makeCatalog(): CatalogArg {
   return {
@@ -37,8 +39,36 @@ function makeCatalog(): CatalogArg {
       defaultEnv: [],
       defaults: { ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }], volumes: [] },
       upgrade: upgradeByVersion[version],
+      backup: backupByVersion[version],
     }),
   } as unknown as CatalogArg;
+}
+
+/** Records every exec so tests can assert which hook ran, in what order. */
+class ExecSpy extends MockDockerService {
+  execs: Array<{ service: string; command: string[] }> = [];
+  /** Service names whose exec should fail (simulating a broken dump). */
+  failForServices: string[] = [];
+
+  override async composeExec(
+    projectPath: string,
+    projectName: string,
+    service: string,
+    command: string[],
+    opts?: { user?: string; profiles?: string[] },
+  ): Promise<{ success: boolean; output: string }> {
+    this.execs.push({ service, command });
+    if (this.failForServices.includes(service)) {
+      return { success: false, output: 'FATAL: could not connect to server' };
+    }
+    return super.composeExec(projectPath, projectName, service, command, opts);
+  }
+
+  execsFor(phase: 'pre' | 'post'): string[] {
+    return this.execs
+      .filter((e) => (phase === 'pre' ? e.command.join(' ').includes('pg_dump') : e.command.includes('rm')))
+      .map((e) => e.service);
+  }
 }
 
 function makeValidation(): ValidationArg {
@@ -64,6 +94,7 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
   let dataRoot: string;
   let appsRoot: string;
   let prevAppsBindRoot: string | undefined;
+  let docker: ExecSpy;
 
   beforeEach(async () => {
     dataRoot = await mkdtemp(join(tmpdir(), 'hola-snap-data-'));
@@ -71,6 +102,8 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     prevAppsBindRoot = process.env.HOLA_APPS_BIND_ROOT;
     process.env.HOLA_APPS_BIND_ROOT = appsRoot;
     upgradeByVersion = {};
+    backupByVersion = {};
+    docker = new ExecSpy();
   });
 
   afterEach(async () => {
@@ -87,7 +120,7 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     const jobs = new RealJobService(database, logging);
     const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());
-    const deployments = new RealDeploymentService(storage, jobs, new MockDockerService(), drafts, routing, logging, new MockProvisionerService());
+    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
     return { storage, jobs, drafts, deployments };
   }
 
@@ -186,6 +219,102 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
 
     // No restore requested → the forward-migrated data is left as-is.
     expect(await readAppData(dep.deploymentId)).toBe('v2-data-migrated');
+  });
+
+  test('a two-participation outgoing release runs both pre-hooks before the tar and both post-hooks after (spec 004)', async () => {
+    backupByVersion = {
+      '1.0.0': [
+        { id: 'app-db', preHook: { service: 'app-db', command: ['pg_dump', 'app'] }, postHook: { service: 'app-db', command: ['rm', 'app.sql'] } },
+        { id: 'gitea-db', preHook: { service: 'gitea-db', command: ['pg_dump', 'gitea'] }, postHook: { service: 'gitea-db', command: ['rm', 'gitea.sql'] } },
+      ],
+    };
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+
+    expect(docker.execsFor('pre')).toEqual(['app-db', 'gitea-db']);
+    expect(docker.execsFor('post')).toEqual(['app-db', 'gitea-db']);
+    expect(await readdir(snapshotsPath(dep.deploymentId))).toHaveLength(1);
+  });
+
+  test('when the second of three pre-hooks fails, it throws, cleans up the two started participations, and never starts a third', async () => {
+    backupByVersion = {
+      '1.0.0': [
+        { id: 'first', preHook: { service: 'first-db', command: ['pg_dump', 'first'] }, postHook: { service: 'first-db', command: ['rm', 'first.sql'] } },
+        { id: 'second', preHook: { service: 'second-db', command: ['pg_dump', 'second'] }, postHook: { service: 'second-db', command: ['rm', 'second.sql'] } },
+        { id: 'third', preHook: { service: 'third-db', command: ['pg_dump', 'third'] }, postHook: { service: 'third-db', command: ['rm', 'third.sql'] } },
+      ],
+    };
+    docker.failForServices = ['second-db'];
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    // Required so the failure propagates instead of being swallowed as best-effort.
+    upgradeByVersion = { '2.0.0': { preUpgradeBackup: 'required' } };
+
+    await expect(
+      deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), options: { autoStart: false } }),
+    ).rejects.toThrow(/preHook failed/);
+
+    expect(docker.execsFor('pre')).toEqual(['first-db', 'second-db']); // third never started
+    expect(docker.execsFor('post')).toEqual(['first-db', 'second-db']); // both started ones cleaned up
+    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false); // no tar was taken
+  });
+
+  test('a post-hook-only participation still has its post-hook run (FR-002)', async () => {
+    // No preHook means nothing "starts", but the cleanup is still declared and
+    // still ran under the pre-spec-004 singular block — dropping it here would
+    // leave the app's own cleanup un-run on every upgrade.
+    backupByVersion = {
+      '1.0.0': { postHook: { service: 'gitea', command: ['rm', 'gitea.sql'] } },
+    };
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+
+    expect(docker.execsFor('pre')).toEqual([]);
+    expect(docker.execsFor('post')).toEqual(['gitea']);
+    expect(await readdir(snapshotsPath(dep.deploymentId))).toHaveLength(1);
+  });
+
+  test('a plural post-hook-only participation runs alongside the hooked ones', async () => {
+    backupByVersion = {
+      '1.0.0': [
+        { id: 'app-db', preHook: { service: 'app-db', command: ['pg_dump', 'app'] }, postHook: { service: 'app-db', command: ['rm', 'app.sql'] } },
+        { id: 'cleanup-only', postHook: { service: 'scratch', command: ['rm', 'scratch'] } },
+      ],
+    };
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+
+    expect(docker.execsFor('pre')).toEqual(['app-db']);
+    expect(docker.execsFor('post')).toEqual(['app-db', 'scratch']);
+  });
+
+  test('a singular backup fixture behaves unchanged', async () => {
+    backupByVersion = {
+      '1.0.0': {
+        preHook: { service: 'gitea', command: ['pg_dump', 'gitea'] },
+        postHook: { service: 'gitea', command: ['rm', 'gitea.sql'] },
+      },
+    };
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+
+    expect(docker.execsFor('pre')).toEqual(['gitea']);
+    expect(docker.execsFor('post')).toEqual(['gitea']);
+    expect(await readdir(snapshotsPath(dep.deploymentId))).toHaveLength(1);
   });
 
   test('retention keeps only the most recent N snapshots', async () => {

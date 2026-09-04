@@ -113,6 +113,34 @@ Lifecycle actions (start/stop/restart/delete) and rollback run as jobs through
 the same Deployment service, so list, detail, and history always read one
 consistent state source.
 
+### Materialise-time injections
+
+`RealDeploymentService.materializeCompose` — run inside the lifecycle job, never
+at create time — rewrites the release's Compose in a fixed order after
+validation: network attach, env injection, token substitution, platform
+defaults, then provider grants.
+
+- **Platform labels** (spec 004): every service of every deployment gets three
+  reserved-namespace labels — `sh.hola.app`, `sh.hola.deployment`,
+  `sh.hola.name` — merged into whichever label form (list or map) the app
+  declared. This is what lets a `container-logs@1` collector group logs by app
+  with no per-app configuration.
+- **Provider grants** (ADR 0004 §4/§12): a deployment's `provides`, intersected
+  with the operator's consent (`grantedContracts`), decides what gets injected.
+  `apps-data` adds a read-only, identity-mapped mount of the apps root to every
+  service. `container-logs` adds a `hola-docker-proxy` sidecar (a redacting
+  Docker API proxy run from the server's own image) and points every other
+  service at it via `DOCKER_HOST`. Both are re-derived on every materialise, so
+  a manifest that later drops a `provides` role loses the grant immediately.
+  Cross-app privilege is created here alone — never at draft or create time —
+  and only for a role the operator has explicitly consented to.
+
+Two create-time guards (before any deployment state exists) bound what a
+deploy can become: the single-instance guard (per app and channel), and the
+one-provider-per-contract guard (spec 004) — a second install providing a
+contract a live deployment already provides is refused before a draft's
+consent is even checked.
+
 ## Data layout
 
 All durable state lives under `HOLA_DATA_DIR` (the `hola-data` volume at `/data`
