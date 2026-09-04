@@ -579,11 +579,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * the mock stays permissive: it resolves every draft to one placeholder app, so
    * enforcing here would spuriously collide unrelated mock-based tests.)
    */
-  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL): InstanceReason | undefined {
+  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean): InstanceReason | undefined {
     void appId;
     void multiInstance;
     void allowMultiple;
     void channel;
+    void channelPublished;
     return undefined;
   }
 
@@ -740,13 +741,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       // Singleton-by-default (#246), now per app AND channel (#428): reject a
       // second install of an app whose manifest doesn't opt into multiples
-      // unless it follows a channel no existing copy does, or the operator
-      // overrides it per install. Checked up front, before any state is
-      // created — like the auth and routing guards. The override still
+      // unless it follows a PUBLISHED channel no existing copy does (#431), or
+      // the operator overrides it per install. Checked up front, before any
+      // state is created — like the auth and routing guards. The override still
       // requires a distinct subdomain (below). The return value records WHY a
       // second copy was permitted (`channel` takes precedence over
       // `operator-override` — clarification Q1), so the dashboard can explain it.
-      const instanceReason = this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple, channel);
+      // `channelPublished` comes off the finalized manifest for the same reason
+      // `channel` does: the catalog was already read once, at draft creation.
+      const instanceReason = this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple, channel, artifacts?.manifest.channelPublished);
 
       // Capability contract grants (ADR 0004 §4). A `provides` role can carry
       // privilege — `backup@1`'s provider gets a read-only view of EVERY app's
@@ -2931,11 +2934,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * Enforce single-instance-by-default (#246), now per app AND channel (#428):
-   * reject installing an app that already has a deployment ON THIS CHANNEL,
-   * unless its manifest opts into multiples (`multiInstance: true`), no
-   * existing copy follows this channel, or the caller passes the per-install
-   * override. Operates on the rehydrated in-memory map. Global-capability
+   * Enforce single-instance-by-default (#246), now per app AND PUBLISHED
+   * channel (#428, #431): reject installing an app that already has a
+   * deployment, unless its manifest opts into multiples
+   * (`multiInstance: true`), no existing copy follows this channel AND the
+   * catalog publishes a version of the app on it, or the caller passes the
+   * per-install override. Operates on the rehydrated in-memory map. Global-capability
    * bolt-ons (backup → apps-data, homepage → app-registry) assume one
    * instance, so the override is "you know what you're doing" — it still
    * requires a distinct subdomain, which onBeforeCreate validates separately.
@@ -2945,13 +2949,28 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * both would have worked (clarification Q1) — the channel difference is
    * what actually permitted it, so that's what's recorded.
    */
-  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL): InstanceReason | undefined {
+  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean): InstanceReason | undefined {
     if (multiInstance) return undefined;
     const existing = [...this.deployments.values()].filter(d => d.app === appId);
     if (existing.length === 0) return undefined;
     const sameChannelCopy = existing.find(d => (d.channel ?? STABLE_CHANNEL) === channel);
-    if (!sameChannelCopy) return 'channel';
+    // A channel differentiates a second copy only when the catalog actually
+    // PUBLISHES this app on it (#431). Otherwise any invented name
+    // (`--channel banana`) would resolve the newest stable version through the
+    // stable floor (FR-003) and count as a distinct channel — an unlimited
+    // `--allow-multiple` with a nicer label, defeating the guard that the
+    // singleton bolt-ons (backup's apps-data, homepage's app-registry) rely on.
+    // Fail-closed: `channelPublished` is a draft-time fact and is absent
+    // whenever it couldn't be established (catalog unavailable, install-by-ref,
+    // a pre-#431 manifest), which reads here as "not published".
+    if (!sameChannelCopy && channelPublished === true) return 'channel';
     if (allowMultiple) return 'operator-override';
+    if (!sameChannelCopy) {
+      throw new ConflictError(
+        `'${appId}' is already installed (deployment ${existing[0]!.id}). Channel '${channel}' has no versions published for this app, ` +
+          `so it does not count as a separate channel; pass --allow-multiple (CLI) or "install another" (dashboard) to force a second copy.`,
+      );
+    }
     throw new ConflictError(
       `'${appId}' is already installed on channel '${channel}' (deployment ${sameChannelCopy.id}). This app is single-instance; ` +
         `pass --channel <name> to run a second copy on another channel the catalog offers, or --allow-multiple (CLI) / "install another" (dashboard) to force one.`,

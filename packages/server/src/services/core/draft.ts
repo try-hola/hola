@@ -112,6 +112,12 @@ export interface FinalizedManifest {
   // copied from the draft so `createFromDraft` needs no catalog lookup to know
   // which channel the resulting deployment should follow.
   channel?: string;
+  // Whether `channel` is a channel the catalog actually publishes versions of
+  // this app on (#431), decided at draft-create time and carried here so the
+  // single-instance guard needs no catalog lookup either. Fail-closed: absent is
+  // read as "not published" (pre-#431 manifests, install-by-ref, a draft built
+  // from placeholder defaults because the catalog was unavailable).
+  channelPublished?: boolean;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -472,6 +478,11 @@ export class RealDraftService implements DraftService {
       const composeOverride = defaults.composeOverride ?? '';
       assertComposeParses(composeOverride, 'catalog bundle');
 
+      // Resolved channel (#428): the request's explicit channel, else the
+      // resolved version's own channel (a pinned pre-release implies its channel
+      // per FR-008), else `stable`. Always written.
+      const resolvedChannel = requestedChannel ?? defaults.resolvedChannel ?? STABLE_CHANNEL;
+
       // Create initial draft
       const draft: Draft = {
         draftId,
@@ -502,10 +513,16 @@ export class RealDraftService implements DraftService {
         backup: defaults.backup,
         push: defaults.push,
         profiles: defaults.profiles,
-        // Resolved channel (#428): the request's explicit channel, else the
-        // resolved version's own channel (a pinned pre-release implies its
-        // channel per FR-008), else `stable`. Always written.
-        channel: requestedChannel ?? defaults.resolvedChannel ?? STABLE_CHANNEL,
+        channel: resolvedChannel,
+        // Is that channel one the catalog actually publishes this app on (#431)?
+        // Decided here, from the catalog read that just resolved the version, so
+        // the single-instance guard never needs a catalog call at create time
+        // (Constitution III). Fail-closed: `false` when the catalog didn't report
+        // its channels at all — the placeholder-defaults fallback (no bundle),
+        // install-by-ref, or an older/duck-typed catalog. A deployment may still
+        // FOLLOW an unpublished channel and receive stable-floor offers; it just
+        // isn't a free second copy of a single-instance app.
+        channelPublished: defaults.channels?.includes(resolvedChannel) === true,
         files: [],
       };
 
@@ -612,7 +629,10 @@ export class RealDraftService implements DraftService {
         push: detail.push,
         profiles: detail.profiles,
         // Install-by-ref bypasses the catalog index (#428): always `stable`.
+        // With no index there is no published-channel set to consult, so the
+        // channel never differentiates a second copy (#431, fail-closed).
         channel: STABLE_CHANNEL,
+        channelPublished: false,
         files: [],
       };
 
@@ -917,8 +937,10 @@ export class RealDraftService implements DraftService {
       // outside canonicalSpec and don't perturb the checksum — like icon/displayName.
       // `channel` (#428) is the same kind of fact: it already selected `version`
       // (which IS in canonicalSpec), so it doesn't need to perturb the checksum
-      // a second time.
-      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, channel: draft.channel, checksum, finalizedAt };
+      // a second time. `channelPublished` (#431) rides along with it — the
+      // catalog fact about that channel, resolved once at draft-create time and
+      // carried so the create-time single-instance guard needs no catalog call.
+      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, channel: draft.channel, channelPublished: draft.channelPublished, checksum, finalizedAt };
       await this.storageService.writeFile(
         `${finalizedDir}/manifest.json`,
         JSON.stringify(manifest, null, 2)
@@ -968,7 +990,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string; channels?: string[] }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source, channel);
       return {
@@ -993,6 +1015,12 @@ export class RealDraftService implements DraftService {
         // `requestedChannel ?? resolvedChannel ?? 'stable'` so a pinned
         // pre-release implies its channel even with no explicit request.channel.
         resolvedChannel: versionDetail.channel,
+        // The app's PUBLISHED channels (#431) — the channels the catalog lists a
+        // well-formed version of this app on. Feeds createDraft's
+        // `channelPublished` fact; absent here (the placeholder-defaults
+        // fallback below, or a catalog that doesn't report it) means the draft
+        // records `false` and the channel doesn't differentiate a second copy.
+        channels: versionDetail.channels,
       };
     } catch (error) {
       // Only "this app has no bundle at all" is a legitimate fallback. Everything

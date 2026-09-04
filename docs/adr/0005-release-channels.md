@@ -92,19 +92,44 @@ The web install wizard creates its draft on mount, before any UI choice, so it r
 different resolved version, hence different env/port/security/profile defaults, so recreating
 is correct, not a workaround.
 
-### 4. Single-instance guard is per app and channel, with a recorded reason
+### 4. Single-instance guard is per app and published channel, with a recorded reason
 
 The singleton-by-default guard (#246) now asks "does any existing copy of this app already
 follow this channel?", not "does any copy exist at all"
-(`assertInstanceAllowed`, `packages/server/src/services/core/deployment.ts:2916`):
+(`assertInstanceAllowed`, `packages/server/src/services/core/deployment.ts`):
 
 ```
-multiInstance                              → no guard
-no existing copy of the app                → allowed, no reason recorded
-no existing copy on this channel           → allowed, reason 'channel'
-existing copy on this channel + override   → allowed, reason 'operator-override'
-existing copy on this channel, no override → 409, naming --channel as the escape hatch
+multiInstance                                        → no guard
+no existing copy of the app                          → allowed, no reason recorded
+no existing copy on this channel, channel published  → allowed, reason 'channel'
+otherwise, with override                             → allowed, reason 'operator-override'
+otherwise                                            → 409
 ```
+
+**A channel only counts when the catalog publishes it** (#431). Because `stable` is
+eligible on every channel (§2), an invented channel name resolves the newest *stable*
+version through the floor — so without this rule `--channel banana`, `--channel c`,
+`--channel d`… would each buy another copy of a singleton app, an unlimited
+`--allow-multiple` with a nicer label, defeating the guard the global bolt-ons
+(`backup` → `apps-data`, `homepage` → `app-registry`) depend on. "Published" means the
+catalog lists at least one well-formed version of *that app* on the channel — the same
+`channels[]` set the catalog card already reports (`distinctChannels`, `catalog.ts`), now
+returned on the version detail as well.
+
+The check is a **draft-time fact**, not a create-time catalog call: `getDraftDefaults`
+already reads the catalog to resolve the version, so `createDraft` records
+`Draft.channelPublished` there and it travels onto the finalized manifest exactly like
+`channel` and `multiInstance` (Constitution III — no per-deploy work at create time, and
+the fact can never disagree with the version actually pinned).
+
+It **fails closed**: absent means unpublished. That covers the placeholder-defaults
+fallback (no bundle / catalog unavailable), install-by-ref (no catalog index to consult)
+and pre-#431 manifests. A second copy of a singleton app is never urgent, the override is
+always one flag away, and failing open would restore the bypass precisely when the catalog
+can't contradict it. A deployment may still *follow* an unpublished channel — it receives
+the stable floor's offers, unchanged (spec edge case, `channels.test.ts`) — it just isn't a
+free second copy. The 409 for that case names the unpublished channel and points at
+`--allow-multiple`; the same-channel 409 keeps pointing at `--channel`.
 
 `channel` takes precedence over `operator-override` even when the override was also
 supplied: the reason recorded is the one that actually permitted the install (clarification
@@ -168,6 +193,14 @@ back to list order.
   `compareVersions`' string-fallback ordering instead of list position — a behavior change,
   accepted, and covered by `catalog-channels.test.ts`. No catalog app relies on the old
   fallback today.
+- The per-app-and-channel guard costs a wire field and a fail-closed default: an operator
+  installing a second copy on a channel the catalog hasn't published yet (a channel they
+  intend to pre-follow, or any install while the catalog is unreachable) must pass
+  `--allow-multiple`, and the copy is then labelled `operator-override` rather than by its
+  channel. Accepted: the alternative is a guard any typo can walk through. If the catalog
+  later publishes that channel, existing records are not recomputed — `instanceReason` is
+  a fact about why the install was permitted, not a live derivation (§4's "no retroactive
+  revocation" cuts both ways).
 - Two new wire fields ride on existing types rather than a new endpoint: `channel`/
   `channels`/`latestVersionChannel`/`instanceReason` on the catalog, draft, and deployment
   responses (all optional in the TypeScript types so existing typed fixtures keep compiling;
