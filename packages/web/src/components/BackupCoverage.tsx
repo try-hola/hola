@@ -222,7 +222,13 @@ export const AppBackupCoverage: React.FC<{
 
         {missing.length > 0 && (
           <p className="m-0 text-warning max-w-[620px]">
-            {missing.map((svc) => `\`${svc}\` has no pre-backup hook.`).join(' ')}
+            {missing.map((svc, i) => (
+              <React.Fragment key={svc}>
+                {i > 0 && (i === missing.length - 1 ? ' and ' : ', ')}
+                <code className="font-mono">{svc}</code>
+              </React.Fragment>
+            ))}
+            {missing.length === 1 ? ' has no pre-backup hook.' : ' have no pre-backup hook.'}
           </p>
         )}
 

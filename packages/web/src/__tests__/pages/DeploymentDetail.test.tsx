@@ -607,7 +607,35 @@ describe('DeploymentDetail backup coverage + grants (spec 004)', () => {
     renderBackupsTab();
 
     expect(await screen.findByText('Partially covered · 1 of 2')).toBeInTheDocument();
-    expect(screen.getByText(/`temporal-postgres` has no pre-backup hook\./)).toBeInTheDocument();
+    const service = screen.getByText('temporal-postgres');
+    expect(service.tagName).toBe('CODE');
+    expect(service.closest('p')).toHaveTextContent('temporal-postgres has no pre-backup hook.');
+  });
+
+  it('names every unquiesced service, joined with "and" and a plural verb', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: {
+        accepts: ['backup@1'],
+        hooks: ['backup@1'],
+        coverage: {
+          'backup@1': {
+            state: 'partial',
+            targeted: 1,
+            recognised: 3,
+            participations: [{ id: 'default', service: 'postiz-postgres' }],
+            databases: ['postiz-postgres', 'temporal-postgres', 'cache-db'],
+          },
+        },
+      },
+    });
+    renderBackupsTab();
+
+    expect(await screen.findByText('temporal-postgres')).toHaveProperty('tagName', 'CODE');
+    expect(screen.getByText('cache-db').tagName).toBe('CODE');
+    expect(screen.getByText('cache-db').closest('p')).toHaveTextContent(
+      'temporal-postgres and cache-db have no pre-backup hook.',
+    );
   });
 
   it('falls back to "Quiesced" from `hooks` when `coverage` is absent (older server)', async () => {
