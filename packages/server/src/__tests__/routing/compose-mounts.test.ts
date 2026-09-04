@@ -114,6 +114,18 @@ describe('injectContainerLogsSource (spec 004, ADR 0004 §12)', () => {
     expect(doc.services.alloy.environment).toEqual({ FOO: 'bar', DOCKER_HOST: CONTAINER_LOGS_DOCKER_HOST });
   });
 
+  // A bare `- FOO` entry is a host passthrough, which map form spells `FOO:`
+  // (null) — writing `FOO: ''` instead would blank the variable (#439).
+  test('preserves a bare list entry as a passthrough (null) value', () => {
+    const input = 'services:\n  alloy:\n    image: alloy:1\n    environment:\n      - FOO\n      - BAR=1\n';
+    const doc = outLogs(input);
+    expect(doc.services.alloy.environment).toEqual({
+      FOO: null,
+      BAR: '1',
+      DOCKER_HOST: CONTAINER_LOGS_DOCKER_HOST,
+    });
+  });
+
   test('overwrites a user-authored DOCKER_HOST', () => {
     const input = 'services:\n  alloy:\n    image: alloy:1\n    environment:\n      DOCKER_HOST: tcp://elsewhere:9999\n';
     const doc = outLogs(input);

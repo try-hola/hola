@@ -84,6 +84,14 @@ describe('applyPlatformDefaults', () => {
     expect(arrForm.services.app.environment).toEqual(['TZ=UTC']);
   });
 
+  // A bare `- FOO` list entry means "inherit FOO from the host"; normalising it
+  // to `FOO: ''` would silently blank the variable inside the container (#439).
+  test('TZ injection preserves a bare list entry as a passthrough (null) value', () => {
+    const opts: ComposeDefaultsConfig = { ...ON, tz: 'America/New_York' };
+    const doc = out('services:\n  app:\n    image: app:1\n    environment:\n      - FOO\n      - BAR=1\n', opts);
+    expect(doc.services.app.environment).toEqual({ FOO: null, BAR: '1', TZ: 'America/New_York' });
+  });
+
   test('resource limits applied as service-level keys when set (fill-if-absent)', () => {
     const opts: ComposeDefaultsConfig = { ...ON, memLimit: '512m', cpus: '1.5' };
     const doc = out('services:\n  app:\n    image: app:1\n    mem_limit: 256m\n', opts);

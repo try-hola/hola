@@ -34,19 +34,24 @@ export interface ComposeDoc {
 /**
  * Normalize a service's `environment` (Compose allows a `KEY=value` array or a
  * map) to a flat map. Shared by env injection and platform-defaults.
+ *
+ * A value of `null` means "pass this key through from the host environment" —
+ * the list form's bare `- FOO`, which Compose spells `FOO:` in map form. It must
+ * survive a round-trip as null: writing it back as `FOO: ''` would change the
+ * container's `FOO` from inherited to explicitly empty (#439).
  */
-export function toEnvMap(existing: unknown): Record<string, string> {
-  const envMap: Record<string, string> = {};
+export function toEnvMap(existing: unknown): Record<string, string | null> {
+  const envMap: Record<string, string | null> = {};
   if (Array.isArray(existing)) {
     for (const entry of existing) {
       if (typeof entry !== 'string') continue;
       const eq = entry.indexOf('=');
-      if (eq === -1) envMap[entry] = '';
+      if (eq === -1) envMap[entry] = null;
       else envMap[entry.slice(0, eq)] = entry.slice(eq + 1);
     }
   } else if (existing && typeof existing === 'object') {
     for (const [k, v] of Object.entries(existing as Record<string, unknown>)) {
-      envMap[k] = v == null ? '' : String(v);
+      envMap[k] = v == null ? null : String(v);
     }
   }
   return envMap;
