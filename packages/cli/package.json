@@ -19,7 +19,7 @@
     "@clack/prompts": "^1.5.1",
     "@hola/sdk": "workspace:*",
     "@hola/shared": "workspace:*",
-    "eventsource-parser": "^3.1.0",
+    "eventsource-parser": "^4.1.0",
     "picocolors": "^1.1.1",
     "sade": "^1.8.1",
     "undici": "^8.4.1"
