@@ -37,6 +37,9 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
       qc.invalidateQueries({ queryKey: queryKeys.deployments.detail(deploymentId!) });
       qc.invalidateQueries({ queryKey: queryKeys.deployments.config(deploymentId!) });
       qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      // #428: a channel change (like an upgrade) can change what's offered
+      // next, so the on-demand richer update check must refresh too.
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.updateCheck(deploymentId!) });
       qc.invalidateQueries({ queryKey: queryKeys.summary });
     },
   });

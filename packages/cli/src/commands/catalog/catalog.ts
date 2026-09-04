@@ -1,4 +1,5 @@
 import { HolaSdk } from '@hola/sdk';
+import { STABLE_CHANNEL } from '@hola/shared';
 import type { GetCatalogAppsResponse } from '@hola/shared';
 
 import { maybeNotifyUpdate } from '../../lib/update-notice';
@@ -42,7 +43,10 @@ export async function runCatalog(
     for (const app of res.items) {
       // Badge apps from a non-default source so their origin/trust is visible.
       const badge = app.source && app.source !== 'hola' ? `  [${app.source}·${app.trust}]` : '';
-      console.log(`${(app.icon || '📦')} ${app.id.padEnd(idWidth)}  ${app.description}${badge}`);
+      // #428: apps offering a channel beyond stable, e.g. "(channels: rc)".
+      const nonStableChannels = (app.channels ?? []).filter(c => c !== STABLE_CHANNEL);
+      const channels = nonStableChannels.length ? `  (channels: ${nonStableChannels.join(', ')})` : '';
+      console.log(`${(app.icon || '📦')} ${app.id.padEnd(idWidth)}  ${app.description}${badge}${channels}`);
     }
     console.log(`\n${res.total} app(s). Install with: hola install <id> [--source <source>]`);
     await maybeNotifyUpdate(sdk, opts);

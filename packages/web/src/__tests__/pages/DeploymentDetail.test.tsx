@@ -76,9 +76,19 @@ const deploymentsApi = {
   updateCheck: vi.fn(),
 };
 
+// #428: DeploymentDetail's Channel select reads the app's declared channels.
+const catalogApi = {
+  appById: vi.fn(async () => ({
+    id: 'myapp', name: 'My App', description: '', icon: '📦', category: 'apps',
+    rating: 0, downloads: 0, tags: [], featured: false, source: 'hola', trust: 'verified' as const,
+    channels: ['stable', 'rc'],
+  })),
+};
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     deployments: deploymentsApi,
+    catalog: catalogApi,
   },
 }));
 
@@ -396,5 +406,116 @@ describe('DeploymentDetail richer update check (#299)', () => {
     // Give the (disabled) query a chance to (not) fire.
     await new Promise((r) => setTimeout(r, 0));
     expect(deploymentsApi.updateCheck).not.toHaveBeenCalled();
+  });
+});
+
+// #428: release channels — Channel/Instance facts and the update dialog's
+// channel-aware target line. The "Details" facts card only renders on the
+// Overview tab (renderTabContent's default), so these use their own render
+// helper rather than `renderDetail`'s `?tab=configuration` entry.
+describe('DeploymentDetail release channels (#428)', () => {
+  function renderOverview() {
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <GlobalEventsMount />
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+            <Route path="/deployments" element={<DeploymentsListSentinel />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  afterEach(() => {
+    deploymentsApi.byId.mockResolvedValue(deployment); // restore the module default
+  });
+
+  it('shows the Channel fact, defaulting to stable when absent', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Channel')).toBeInTheDocument());
+    expect(screen.getByText('stable')).toBeInTheDocument();
+    expect(screen.queryByText('Instance')).not.toBeInTheDocument();
+  });
+
+  it('shows Channel: rc and Instance: rc copy of <app> for instanceReason "channel"', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', instanceReason: 'channel' });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Channel')).toBeInTheDocument());
+    expect(screen.getByText('rc')).toBeInTheDocument();
+    expect(screen.getByText('Instance')).toBeInTheDocument();
+    expect(screen.getByText(`rc copy of ${deployment.app}`)).toBeInTheDocument();
+  });
+
+  it('shows "additional copy (operator override)" for instanceReason "operator-override"', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', instanceReason: 'operator-override' });
+    renderOverview();
+    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
+    expect(screen.getByText('additional copy (operator override)')).toBeInTheDocument();
+  });
+
+  it('appends the target channel to the upgrade dialog title when non-stable', async () => {
+    deploymentsApi.byId.mockResolvedValue({
+      ...deployment,
+      channel: 'rc',
+      updateAvailable: true,
+      latestVersion: '1.1.0-rc.2',
+      latestVersionChannel: 'rc',
+    });
+    deploymentsApi.updateCheck.mockResolvedValue({
+      installedVersion: '1.0.0',
+      latestVersion: '1.1.0-rc.2',
+      latestVersionChannel: 'rc',
+      updateAvailable: true,
+      path: { ok: true },
+    });
+    renderDetail();
+    const openBtn = await screen.findByRole('button', { name: /upgrade to 1\.1\.0-rc\.2/i });
+    fireEvent.click(openBtn);
+    await waitFor(() => expect(screen.getByText(/Upgrade My App to 1\.1\.0-rc\.2 \(rc\)\?/)).toBeInTheDocument());
+  });
+
+  it('the Channel select renders the app\'s declared channels and PATCHes on change', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
+    deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
+    renderDetail();
+
+    const select = await screen.findByDisplayValue('stable');
+    // The second arg is the catalog source; DeploymentDetail has none to pass
+    // (the deployment API doesn't surface it), so the default `hola` applies.
+    await waitFor(() => expect(catalogApi.appById).toHaveBeenCalledWith('myapp', undefined));
+    // Both catalog-declared channels are offered.
+    expect(within(select as HTMLSelectElement).getByRole('option', { name: 'rc' })).toBeInTheDocument();
+
+    fireEvent.change(select, { target: { value: 'rc' } });
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledWith(deploymentId, { channel: 'rc' }));
+  });
+
+  it('a channel change invalidates the detail/list/update-check queries (refetches byId)', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
+    deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
+    renderDetail();
+
+    const select = await screen.findByDisplayValue('stable');
+    const callsBefore = deploymentsApi.byId.mock.calls.length;
+    fireEvent.change(select, { target: { value: 'rc' } });
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalled());
+    // `onSuccess` invalidates the detail query, which refetches while mounted.
+    await waitFor(() => expect(deploymentsApi.byId.mock.calls.length).toBeGreaterThan(callsBefore));
+  });
+
+  it('shows a returned warning as a transient notice', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
+    deploymentsApi.update.mockResolvedValueOnce({
+      ok: true as const,
+      warnings: ["Another single-instance copy of 'myapp' already follows channel 'rc'."],
+    });
+    renderDetail();
+
+    const select = await screen.findByDisplayValue('stable');
+    fireEvent.change(select, { target: { value: 'rc' } });
+    await waitFor(() => expect(screen.getByText(/already follows channel 'rc'/)).toBeInTheDocument());
   });
 });

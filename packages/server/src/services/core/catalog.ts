@@ -35,7 +35,8 @@ import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
 import { coerceManifestPush } from './manifest-push';
 import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
-import { BundleError, BundleUnavailableError } from '../../middleware/error-mapping';
+import { BundleError, BundleUnavailableError, ValidationError, assertValidChannelName } from '../../middleware/error-mapping';
+import { isValidChannelName, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL } from '@hola/shared';
 
 /**
  * Coerce one raw `manifest.defaultEnv[]` row into an `AppEnvVar`, including the
@@ -149,6 +150,9 @@ type RemoteCatalog = {
       digest?: string;
       sizeBytes?: number;
       refs?: { oci?: string };
+      // Release channel this version entry is listed on (#428); raw/unvalidated —
+      // coerceChannel resolves it (absent ⇒ 'stable'; malformed ⇒ dropped).
+      channel?: unknown;
     }>;
   }>;
 };
@@ -159,29 +163,22 @@ type CatalogVersionEntry = {
   digest?: string;
   sizeBytes?: number;
   refs?: { oci?: string };
+  // Always resolved by wellFormedVersions: never the raw/unvalidated value.
+  channel: string;
 };
 
 /**
- * Resolve "latest" to the newest concrete version. Sorts by semver descending
- * (numeric dot-segments); if any version doesn't parse as semver, falls back to
- * the catalog's listed order (last entry). Returns undefined for an empty list.
+ * Coerce a raw catalog entry's `channel` field (#428): absent (or an explicit
+ * `null`, which is how "no channel" round-trips through most JSON generators)
+ * → `stable`, today's implicit behaviour; a well-formed channel name → itself;
+ * anything else (wrong type, uppercase, empty, too long) → `undefined`, telling
+ * the caller to drop the entry. Mirrors the narrow-coercer house style
+ * (`coerceManifestEnvVar` et al.): junk is dropped, never thrown or defaulted
+ * to `stable` (which would silently promote a typo to the default channel).
  */
-function pickLatestVersion(versions: CatalogVersionEntry[]): CatalogVersionEntry | undefined {
-  if (!versions.length) return undefined;
-  const isSemver = (s: string) => /^\d+(\.\d+)*$/.test(s);
-  if (!versions.every(v => isSemver(v.version))) {
-    return versions[versions.length - 1];
-  }
-  const parse = (s: string) => s.split('.').map(p => parseInt(p, 10));
-  return [...versions].sort((a, b) => {
-    const pa = parse(a.version);
-    const pb = parse(b.version);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const diff = (pb[i] || 0) - (pa[i] || 0);
-      if (diff) return diff;
-    }
-    return 0;
-  })[0];
+function coerceChannel(value: unknown): string | undefined {
+  if (value === undefined || value === null) return STABLE_CHANNEL;
+  return isValidChannelName(value) ? value : undefined;
 }
 
 /**
@@ -209,7 +206,14 @@ export interface CatalogService {
   listApps(req: GetCatalogAppsRequest): Promise<GetCatalogAppsResponse>;
   getApp(appId: string, source?: string): Promise<GetCatalogAppResponse>;
   getVersions(appId: string, source?: string): Promise<GetCatalogAppVersionsResponse>;
-  getVersionDetail(appId: string, version: string, source?: string): Promise<GetCatalogAppVersionDetailResponse>;
+  /**
+   * `channel` (#428) restricts which versions `latest`/an unspecified version
+   * may resolve to (default `stable`) and which a pinned `version` must be
+   * eligible on. `latest` finding nothing eligible throws `BundleUnavailableError`
+   * code `NO_VERSION_ON_CHANNEL`; a pinned version that exists but isn't
+   * eligible on `channel` throws `ValidationError` code `VERSION_NOT_ON_CHANNEL`.
+   */
+  getVersionDetail(appId: string, version: string, source?: string, channel?: string): Promise<GetCatalogAppVersionDetailResponse>;
   /**
    * Resolve a version detail directly from an OCI package reference, bypassing
    * the catalog index (Slice 1 install-by-ref). Pulls + validates + coerces the
@@ -417,31 +421,75 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
 
   async getApp(appId: string, source = 'hola'): Promise<GetCatalogAppResponse> {
     const { app, record } = await this.locateApp(appId, source);
-    const mapped = this.mapApp(app, record);
-    const versions = (app.versions || []).map(v => v.version);
-    return { ...mapped, versions };
+    const versions = this.wellFormedVersions(app, record.id);
+    const mapped = this.mapAppFromVersions(app, record, versions);
+    return { ...mapped, versions: versions.map(v => v.version) };
   }
 
   async getVersions(appId: string, source = 'hola'): Promise<GetCatalogAppVersionsResponse> {
-    const { app } = await this.locateApp(appId, source);
-    const items: CatalogAppVersion[] = (app.versions || []).map(v => ({ version: v.version, createdAt: v.createdAt || new Date().toISOString() }));
+    const { app, record } = await this.locateApp(appId, source);
+    const items: CatalogAppVersion[] = this.wellFormedVersions(app, record.id).map(v => ({
+      version: v.version,
+      createdAt: v.createdAt || new Date().toISOString(),
+      channel: v.channel,
+    }));
     return { items, total: items.length };
   }
 
-  async getVersionDetail(appId: string, version: string, source = 'hola'): Promise<GetCatalogAppVersionDetailResponse> {
+  /**
+   * `channel` is intentionally NOT defaulted via a parameter default: whether it
+   * was explicitly supplied matters (FR-009). For `latest`/an unspecified
+   * version, an absent channel defaults to `stable` (there's no version to
+   * infer one from). For a PINNED version, eligibility is enforced only when
+   * `channel` was explicitly given — an operator who pins a pre-release with no
+   * channel gets that version, its channel simply becomes the implied channel
+   * (US2 acceptance scenario 5 / clarification Q4), not a validation failure.
+   */
+  async getVersionDetail(appId: string, version: string, source = 'hola', channel?: string): Promise<GetCatalogAppVersionDetailResponse> {
+    assertValidChannelName(channel);
     const { app, record } = await this.locateApp(appId, source);
-    const versions = app.versions || [];
+    const versions = this.wellFormedVersions(app, record.id);
     // Resolve the meta-version "latest" (and an unspecified version) to the
-    // newest concrete release. Catalog entries pin real versions (e.g. 1.2.1),
-    // so a literal "latest" never matches an entry — both the CLI and the web
+    // newest version ELIGIBLE ON `channel` (default `stable`) by version
+    // precedence (#428) — never by list position, so a single `-rc` entry can't
+    // flip an app's default. Catalog entries pin real versions (e.g. 1.2.1), so
+    // a literal "latest" never matches an entry — both the CLI and the web
     // wizard pass "latest" by default, so this resolution is what makes the
     // common "install the newest" path work at all.
-    const v = (!version || version === 'latest')
-      ? pickLatestVersion(versions)
-      : versions.find(x => x.version === version);
+    if (!version || version === 'latest') {
+      const effectiveChannel = channel ?? STABLE_CHANNEL;
+      const newest = newestEligibleVersion(versions, effectiveChannel);
+      if (!newest) {
+        const channelsWithVersions = [...new Set(versions.map(v => v.channel))].sort();
+        throw new BundleUnavailableError(
+          `No version of '${appId}' is available on channel '${effectiveChannel}'. Channels with versions: ${channelsWithVersions.length ? channelsWithVersions.join(', ') : 'none'}.`,
+          'NO_VERSION_ON_CHANNEL',
+        );
+      }
+      return this.resolveVersionEntry(appId, newest, record);
+    }
+
+    const v = versions.find(x => x.version === version);
     // Soft: no bundle to fetch. A caller may legitimately fall back to generic
     // defaults and let the operator supply their own compose.
     if (!v) throw new BundleUnavailableError(`VERSION_NOT_FOUND: ${appId}@${version}`, 'VERSION_NOT_FOUND');
+    // A pinned version must be eligible on an EXPLICITLY requested channel
+    // (#428, FR-009: "…or a pinned version not eligible on the explicit
+    // channel…") — own channel or `stable`. No `channel` argument at all means
+    // no constraint was asked for, so the version's own channel is simply
+    // reported (implying it), never rejected.
+    if (channel !== undefined && !isEligibleOnChannel(v.channel, channel)) {
+      const err = new ValidationError(
+        `Version ${v.version} of '${appId}' is on channel '${v.channel}', not eligible on channel '${channel}'.`,
+      );
+      err.code = 'VERSION_NOT_ON_CHANNEL';
+      throw err;
+    }
+    return this.resolveVersionEntry(appId, v, record);
+  }
+
+  /** Pull/validate/build the bundle for a resolved catalog version entry and stamp its channel onto the response. */
+  private async resolveVersionEntry(appId: string, v: CatalogVersionEntry, record: CatalogSourceRecord): Promise<GetCatalogAppVersionDetailResponse> {
     const ref = v.refs?.oci;
     if (!ref) throw new BundleUnavailableError(`NO_OCI_REF: ${appId}@${v.version}`, 'NO_OCI_REF');
 
@@ -464,7 +512,46 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     // Thread the source's `allowRegistries` (operator consent declared at source-add
     // time) through to the bundle pull so a first-party registry namespace is
     // unlocked without registering a credential.
-    return this.pullValidateBuild({ appId, source: record.id, version: v.version, ociRef: ref, credentials, extraAllowlist: record.allowRegistries });
+    const detail = await this.pullValidateBuild({ appId, source: record.id, version: v.version, ociRef: ref, credentials, extraAllowlist: record.allowRegistries });
+    return { ...detail, channel: v.channel };
+  }
+
+  /**
+   * Coerce and filter one app's raw `versions[]` into well-formed entries
+   * (#428): a malformed `channel` drops the entry (never silently promoted to
+   * `stable`); a version string repeated within the same app keeps only the
+   * first occurrence. Each drop is logged once, naming the source/app/version.
+   * Every "newest"/`channels`/listing resolution reads from this, never the
+   * raw `app.versions`.
+   */
+  private wellFormedVersions(app: RemoteCatalog['apps'][number], source: string): CatalogVersionEntry[] {
+    const out: CatalogVersionEntry[] = [];
+    const seen = new Set<string>();
+    for (const raw of app.versions ?? []) {
+      if (seen.has(raw.version)) {
+        this.logger.warn('Catalog version entry ignored', {
+          source, appId: app.id, version: raw.version, channel: raw.channel, reason: 'duplicate version',
+        });
+        continue;
+      }
+      const channel = coerceChannel(raw.channel);
+      if (channel === undefined) {
+        this.logger.warn('Catalog version entry ignored', {
+          source, appId: app.id, version: raw.version, channel: raw.channel, reason: 'malformed channel',
+        });
+        continue;
+      }
+      seen.add(raw.version);
+      out.push({
+        version: raw.version,
+        createdAt: raw.createdAt,
+        digest: raw.digest,
+        sizeBytes: raw.sizeBytes,
+        refs: raw.refs,
+        channel,
+      });
+    }
+    return out;
   }
 
   /** Find an app within a specific source's catalog (default the built-in `hola`). */
@@ -482,7 +569,9 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     // A dedicated `(ref)` source namespaces the by-ref bundle cache away from any
     // catalog source and never collides with the reserved `hola` id.
     const detail = await this.pullValidateBuild({ appId, source: '(ref)', version, ociRef, credentials });
-    return { ...detail, appId };
+    // Install-by-ref bypasses the catalog index entirely (#428): there is no
+    // channel to resolve, so it's always `stable`.
+    return { ...detail, appId, channel: STABLE_CHANNEL };
   }
 
   /**
@@ -727,6 +816,25 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
   }
 
   private mapApp(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord): CatalogApp {
+    return this.mapAppFromVersions(app, source, this.wellFormedVersions(app, source.id));
+  }
+
+  /**
+   * Same mapping as {@link mapApp}, but takes an already-computed well-formed
+   * version list — used where a caller (getApp) needs that list for another
+   * purpose too, so `wellFormedVersions` (and its warn logging) runs exactly
+   * once per request rather than once per caller.
+   */
+  private mapAppFromVersions(app: RemoteCatalog['apps'][number], source: CatalogSourceRecord, versions: CatalogVersionEntry[]): CatalogApp {
+    // Distinct well-formed channels, `stable` first (when present) then
+    // alphabetical — so a client can decide whether to offer a channel choice
+    // without a versions drill-down (#428, FR-006).
+    const channelSet = new Set(versions.map(v => v.channel));
+    const channels = [...channelSet].sort((a, b) => {
+      if (a === STABLE_CHANNEL) return -1;
+      if (b === STABLE_CHANNEL) return 1;
+      return a.localeCompare(b);
+    });
     return {
       id: app.id,
       name: app.name,
@@ -739,7 +847,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       featured: !!app.featured,
       source: source.id,
       trust: source.trust as CatalogSourceTrust,
-      version: pickLatestVersion(app.versions || [])?.version,
+      // Newest STABLE version (#428): a pre-release entry must never become the
+      // default anywhere. Absent when the app has no stable version at all — it
+      // is still listed, via `channels`, with no version shown (spec US1/US5).
+      version: newestEligibleVersion(versions, STABLE_CHANNEL)?.version,
+      channels,
     };
   }
 }

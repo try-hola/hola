@@ -30,8 +30,9 @@ import type {
 
 import { createHash } from 'crypto';
 
+import { STABLE_CHANNEL } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError, assertValidChannelName } from '../../middleware/error-mapping';
 import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
@@ -107,6 +108,10 @@ export interface FinalizedManifest {
   // createFromDraft can resolve the operator's enabled set against the declared
   // keys without re-reading the bundle.
   profiles?: AppProfileConfig[];
+  // Release channel this manifest's version was resolved against (#428):
+  // copied from the draft so `createFromDraft` needs no catalog lookup to know
+  // which channel the resulting deployment should follow.
+  channel?: string;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -440,14 +445,21 @@ export class RealDraftService implements DraftService {
 
     if (!request.appId) throw new ValidationError('appId or ociRef is required');
     const source = request.source ?? 'hola';
-    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source });
+    // Validate up front (#428) so a malformed channel fails before any catalog
+    // call, matching INVALID_CHANNEL's other raise site (the deployment PATCH).
+    const requestedChannel = assertValidChannelName(request.channel);
+    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source, channel: requestedChannel });
 
     try {
       // Get app info from catalog (from the requested source, default `hola`)
       const app = await this.catalogService.getApp(request.appId, source);
 
-      // Get default environment and configuration
-      const defaults = await this.getDraftDefaults(request.appId, request.version, source);
+      // Get default environment and configuration, resolved against the
+      // requested channel (#428) — an explicit channel, a pinned version's
+      // implied channel, or `stable`. NO_VERSION_ON_CHANNEL / VERSION_NOT_ON_CHANNEL
+      // propagate from here (getDraftDefaults only soft-falls-back on "no bundle
+      // at all", never on a channel mismatch).
+      const defaults = await this.getDraftDefaults(request.appId, request.version, source, requestedChannel);
 
       // Resolve `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in the seeded env values
       // to this install's concrete host/domain, so the wizard shows a real
@@ -490,6 +502,10 @@ export class RealDraftService implements DraftService {
         backup: defaults.backup,
         push: defaults.push,
         profiles: defaults.profiles,
+        // Resolved channel (#428): the request's explicit channel, else the
+        // resolved version's own channel (a pinned pre-release implies its
+        // channel per FR-008), else `stable`. Always written.
+        channel: requestedChannel ?? defaults.resolvedChannel ?? STABLE_CHANNEL,
         files: [],
       };
 
@@ -595,6 +611,8 @@ export class RealDraftService implements DraftService {
         backup: detail.backup,
         push: detail.push,
         profiles: detail.profiles,
+        // Install-by-ref bypasses the catalog index (#428): always `stable`.
+        channel: STABLE_CHANNEL,
         files: [],
       };
 
@@ -897,7 +915,10 @@ export class RealDraftService implements DraftService {
       // `source`/`credentialRef` are install-time routing metadata (which catalog
       // source + which registry credential), not deployable content, so they live
       // outside canonicalSpec and don't perturb the checksum — like icon/displayName.
-      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, checksum, finalizedAt };
+      // `channel` (#428) is the same kind of fact: it already selected `version`
+      // (which IS in canonicalSpec), so it doesn't need to perturb the checksum
+      // a second time.
+      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, channel: draft.channel, checksum, finalizedAt };
       await this.storageService.writeFile(
         `${finalizedDir}/manifest.json`,
         JSON.stringify(manifest, null, 2)
@@ -947,9 +968,9 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string }> {
     try {
-      const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source);
+      const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source, channel);
       return {
         env: versionDetail.defaultEnv,
         defaults: versionDetail.defaults,
@@ -968,20 +989,27 @@ export class RealDraftService implements DraftService {
         // The concrete version the catalog resolved (e.g. "latest" → "1.4.1"), so
         // the draft persists a real version for display + update detection.
         resolvedVersion: versionDetail.version,
+        // The resolved version's own channel (#428) — feeds createDraft's
+        // `requestedChannel ?? resolvedChannel ?? 'stable'` so a pinned
+        // pre-release implies its channel even with no explicit request.channel.
+        resolvedChannel: versionDetail.channel,
       };
     } catch (error) {
-      // Only "this app has no bundle" is a legitimate fallback. Everything else —
-      // a registry outside the allowlist, a denied or unreachable pull, an
-      // unresolvable credential, a malformed bundle — is a hard failure that must
-      // reach the caller NOW.
+      // Only "this app has no bundle at all" is a legitimate fallback. Everything
+      // else — a registry outside the allowlist, a denied or unreachable pull, an
+      // unresolvable credential, a malformed bundle, or a channel/version request
+      // that the catalog explicitly can't satisfy (#428: NO_VERSION_ON_CHANNEL /
+      // VERSION_NOT_ON_CHANNEL) — is a hard failure that must reach the caller NOW.
       //
       // This catch used to be unconditional, so a blocked pull produced a draft
       // built from placeholders (APP_PORT=8080, no defaultEnv, no compose). That
       // draft finalized cleanly and cut a release with no compose file, and the
       // operator only saw it as "Active release has no compose file" from the
-      // deploy job seconds later — with the real reason buried in a WARN.
-      if (!(error instanceof BundleUnavailableError)) {
-        this.logger.error('Failed to resolve app defaults from the catalog', error as Error, { appId, version, source });
+      // deploy job seconds later — with the real reason buried in a WARN. The
+      // same reasoning applies to a channel mismatch: it must be reported as the
+      // request error it is (spec FR-009), never silently substituted.
+      if (!(error instanceof BundleUnavailableError) || error.code === 'NO_VERSION_ON_CHANNEL') {
+        this.logger.error('Failed to resolve app defaults from the catalog', error as Error, { appId, version, source, channel });
         throw error;
       }
 

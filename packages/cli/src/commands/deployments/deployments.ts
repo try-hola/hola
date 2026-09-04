@@ -1,5 +1,5 @@
 import { HolaSdk } from '@hola/sdk';
-import { API } from '@hola/shared';
+import { API, STABLE_CHANNEL } from '@hola/shared';
 import type { GetDeploymentsResponse } from '@hola/shared';
 
 import { streamSSE } from '../../lib/sse';
@@ -32,10 +32,14 @@ export async function runDeploymentsList(
       return;
     }
     const idWidth = Math.max(2, ...res.items.map(d => d.id.length));
-    const nameWidth = Math.max(4, ...res.items.map(d => d.name.length));
+    // #428: ` [<channel>]` suffix for a non-stable row widens the name column
+    // it's padded against, so the rest of the table stays aligned.
+    const nameCell = (d: GetDeploymentsResponse['items'][number]) =>
+      d.channel && d.channel !== STABLE_CHANNEL ? `${d.name} [${d.channel}]` : d.name;
+    const nameWidth = Math.max(4, ...res.items.map(d => nameCell(d).length));
     for (const d of res.items) {
       const url = d.url ? `  ${d.url}` : '';
-      console.log(`${d.id.padEnd(idWidth)}  ${d.name.padEnd(nameWidth)}  ${d.status.padEnd(10)}${url}`);
+      console.log(`${d.id.padEnd(idWidth)}  ${nameCell(d).padEnd(nameWidth)}  ${d.status.padEnd(10)}${url}`);
     }
     console.log(`\n${res.total} deployment(s).`);
     await maybeNotifyUpdate(sdk, opts);

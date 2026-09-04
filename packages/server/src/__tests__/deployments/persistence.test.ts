@@ -30,7 +30,7 @@ type JobArg = ConstructorParameters<typeof RealDeploymentService>[1];
 function makeCatalog(opts?: { multiInstance?: boolean }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: 'Test App', icon: '📦' }),
-    getVersionDetail: async () => ({
+    getVersionDetail: async (_appId: string, _version: string, _source?: string, channel?: string) => ({
       defaultEnv: [{ key: 'APP_PORT', value: '3000', isSecret: false, description: 'port' }],
       defaults: {
         ports: [{ host: 3000, container: 3000, protocol: 'tcp' as const }],
@@ -38,6 +38,11 @@ function makeCatalog(opts?: { multiInstance?: boolean }): CatalogArg {
       },
       // #246: a catalog app that declares it supports multiple instances.
       ...(opts?.multiInstance ? { multiInstance: true } : {}),
+      // #428: echo the requested channel back as the resolved version's channel
+      // (this stub isn't exercising catalog eligibility — that's
+      // catalog-channels.test.ts / channels.test.ts) so a draft/deployment
+      // created through it follows the channel it asked for.
+      channel: channel ?? 'stable',
     }),
   } as unknown as CatalogArg;
 }
@@ -97,8 +102,8 @@ describe('Deployment persistence (real service)', () => {
     return { storage, drafts, routing, deployments };
   }
 
-  async function finalizedDraft(drafts: RealDraftService, compose?: string): Promise<string> {
-    const { draftId } = await drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+  async function finalizedDraft(drafts: RealDraftService, compose?: string, channel?: string): Promise<string> {
+    const { draftId } = await drafts.createDraft({ appId: 'gitea', version: '1.0.0', channel });
     if (compose) {
       await drafts.updateDraft(draftId, { composeOverride: compose });
     }
@@ -379,6 +384,108 @@ describe('Deployment persistence (real service)', () => {
     await s2.deployments.getDeployment(dep.deploymentId); // triggers ensureLoaded → reconcile
     const map = await s2.routing.getRoutingMap();
     expect(map['second-desk.local.hola']?.deploymentId).toBe(dep.deploymentId);
+  });
+
+  // --- Release channels (#428): the single-instance guard is per app AND channel ---
+
+  test('a channel copy of a single-instance app is permitted without the override (#428)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const first = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    // First copy records no reason.
+    expect((await deployments.getDeployment(first.deploymentId)).instanceReason).toBeUndefined();
+
+    // A distinct name AND a channel no existing copy follows → no override needed.
+    const second = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      options: { autoStart: false },
+    });
+    const detail = await deployments.getDeployment(second.deploymentId);
+    expect(detail.channel).toBe('rc');
+    expect(detail.instanceReason).toBe('channel');
+
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(2);
+  });
+
+  test('a second copy on the same channel is rejected, naming the channel and --channel (#428)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc', options: { autoStart: false } });
+
+    await expect(
+      deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc-2', options: { autoStart: false } })
+    ).rejects.toThrow(/channel 'rc'.*--channel/s);
+
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
+  });
+
+  test('override supplied but not needed records reason "channel" (#428, clarification Q1)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // The channel difference alone would have permitted this; allowMultiple is
+    // also supplied but wasn't what actually permitted it, so `channel` wins.
+    const second = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      allowMultiple: true,
+      options: { autoStart: false },
+    });
+    expect((await deployments.getDeployment(second.deploymentId)).instanceReason).toBe('channel');
+  });
+
+  test('override needed (same channel) records reason "operator-override" (#428)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    const second = await deployments.createFromDraft({
+      draftId: await finalizedDraft(drafts),
+      name: 'gitea-two',
+      allowMultiple: true,
+      options: { autoStart: false },
+    });
+    const detail = await deployments.getDeployment(second.deploymentId);
+    expect(detail.channel).toBe('stable');
+    expect(detail.instanceReason).toBe('operator-override');
+  });
+
+  test('a multiInstance app records no instance reason regardless of channel (#428)', async () => {
+    const { drafts, deployments } = makeSystem({ multiInstance: true });
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    const second = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc', options: { autoStart: false } });
+    expect((await deployments.getDeployment(second.deploymentId)).instanceReason).toBeUndefined();
+  });
+
+  test('persisted channel and instanceReason survive a restart (#428)', async () => {
+    const s1 = makeSystem();
+    await s1.deployments.createFromDraft({ draftId: await finalizedDraft(s1.drafts), name: 'gitea', options: { autoStart: false } });
+    const second = await s1.deployments.createFromDraft({
+      draftId: await finalizedDraft(s1.drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      options: { autoStart: false },
+    });
+
+    const stored = JSON.parse(await readFile(join(dataRoot, 'deployments', second.deploymentId, 'metadata.json'), 'utf8'));
+    expect(stored.channel).toBe('rc');
+    expect(stored.instanceReason).toBe('channel');
+
+    const s2 = makeSystem();
+    const detail = await s2.deployments.getDeployment(second.deploymentId);
+    expect(detail.channel).toBe('rc');
+    expect(detail.instanceReason).toBe('channel');
+  });
+
+  test('a channel copy still needs a distinct subdomain — the default name is a host conflict (#428, FR-017)', async () => {
+    const { drafts, deployments } = makeSystem();
+    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // Same default name on a different channel: the channel difference permits
+    // the SECOND-INSTANCE guard, but the existing subdomain-conflict rejection
+    // still applies unchanged (FR-017 / clarification: distinct-name rule).
+    await expect(
+      deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea', options: { autoStart: false } })
+    ).rejects.toThrow(/already in use/);
+
+    expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
   });
 
   test('unknown/stale releases and unfinalized drafts fail with typed errors', async () => {

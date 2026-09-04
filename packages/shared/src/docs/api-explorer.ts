@@ -1025,10 +1025,17 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   downloads: string | number;
   tags: string[];
   featured: boolean;
+  // Newest STABLE version (#428); absent when the app has no stable version.
+  version?: string;
+  // Distinct channels this app has well-formed versions on, 'stable' first
+  // (#428) — e.g. ['stable', 'rc'].
+  channels?: string[];
   versions: string[];
 }`,
 
     GetCatalogAppVersionsResponse: `{
+  // Each item gains 'channel' (#428) — absent on the catalog entry reads as
+  // 'stable'; the server always emits it.
   items: CatalogAppVersion[];
   total: number;
 }`,
@@ -1036,12 +1043,19 @@ export function generateTypeScriptSchemas(): Record<string, string> {
     GetCatalogAppVersionDetailResponse: `{
   defaultEnv: AppEnvVar[];
   defaults: DraftDefaults;
+  // Channel of the resolved version (#428); 'stable' unless a non-default
+  // channel was requested/pinned.
+  channel?: string;
 }`,
 
     // Draft schemas
     CreateDraftRequest: `{
   appId: string;
   version?: string;
+  // Release channel to follow (#428): validated (400 INVALID_CHANNEL);
+  // 'latest' resolves to the newest version eligible on it. Default: stable,
+  // or the pinned version's own channel.
+  channel?: string;
 }`,
 
     CreateDraftResponse: `{
@@ -1141,10 +1155,17 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   env?: AppEnvVar[];
   removeEnvKeys?: string[];
   systemOverrides?: Record<string, string>;
+  // Change the followed release channel (#428): validated (400
+  // INVALID_CHANNEL); a metadata write only, never a job — the running
+  // version is untouched.
+  channel?: string;
 }`,
 
     PatchDeploymentResponse: `{
   ok: true;
+  // Non-fatal notices (#428) — e.g. another single-instance copy of this app
+  // already follows the new channel. The change still applies.
+  warnings?: string[];
 }`,
 
     PostDeploymentActionRequest: `{

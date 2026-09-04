@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-import { runDeploymentAction, runRollback, runUninstall } from '../commands/deployments/actions';
+import { runDeploymentAction, runRollback, runUninstall, runUpgrade } from '../commands/deployments/actions';
 import type { HolaSdk } from '@hola/sdk';
 import { scriptedPrompter } from '../install/prompter';
 
@@ -14,6 +14,7 @@ function makeSdk(overrides: { deployments?: Record<string, unknown>; jobs?: Reco
         calls.push('rollback');
         return { jobId: 'j1', targetReleaseId: 'r0', previousReleaseId: 'r1' };
       }),
+      promote: vi.fn(async () => { calls.push('promote'); return { deploymentId: 'dep1', releaseId: 'r2', jobId: 'j1' }; }),
       byId: vi.fn(async () => { calls.push('byId'); return { id: 'dep1', name: 'Gitea' }; }),
       delete: vi.fn(async () => { calls.push('delete'); }),
       ...(overrides.deployments ?? {}),
@@ -101,6 +102,32 @@ describe('deployment lifecycle actions', () => {
     const sdk = makeSdk();
     await runUninstall('dep1', { yes: true }, { sdk: sdk as unknown as HolaSdk });
     expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1');
+  });
+
+  it('upgrade passes --app-version through to promote', async () => {
+    const sdk = makeSdk();
+    const res = await runUpgrade('dep1', { appVersion: '1.3.0', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.promote).toHaveBeenCalledWith('dep1', { version: '1.3.0' });
+    expect(res?.deploymentId).toBe('dep1');
+    expect(process.exitCode).toBe(0);
+  });
+
+  // #428: no new CLI flag for channels — the server's default upgrade target is
+  // already channel-filtered, and an explicit --app-version outside the
+  // deployment's channel comes back as the server's VERSION_NOT_ON_CHANNEL
+  // message, printed verbatim (with its PATCH hint) through the existing
+  // reportDeployError path.
+  it('upgrade surfaces the server\'s VERSION_NOT_ON_CHANNEL message verbatim and exits 1', async () => {
+    const message =
+      "Version 1.3.0-rc.1 is on channel 'rc'; deployment dep1 follows 'stable'. " +
+      'Change the deployment\'s channel first (dashboard → Channel, or PATCH /api/deployments/dep1 {"channel":"rc"}), then upgrade.';
+    const sdk = makeSdk({
+      deployments: { promote: vi.fn(async () => { throw new Error(message); }) },
+    });
+    const res = await runUpgrade('dep1', { appVersion: '1.3.0-rc.1', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(message));
   });
 
   it('uninstall fails fast (exit 1, no delete) on an unknown deployment', async () => {

@@ -144,4 +144,44 @@ describe('Catalog', () => {
       expect(screen.queryByText('Installed')).not.toBeInTheDocument();
     });
   });
+
+  // #428
+  describe('release channels', () => {
+    it('shows a channel hint for an app with a non-stable channel', async () => {
+      mockApi([app({ channels: ['stable', 'rc'] })]);
+      renderCatalog();
+      expect(await screen.findByText('rc available')).toBeInTheDocument();
+    });
+
+    it('shows no channel hint for a stable-only app', async () => {
+      mockApi([app({ channels: ['stable'] })]);
+      renderCatalog();
+      await waitFor(() => expect(screen.getByText('Ubuntu Webtop')).toBeInTheDocument());
+      expect(screen.queryByText(/available$/)).not.toBeInTheDocument();
+    });
+
+    it('offers "Install on rc" for an installed app whose deployment is stable', async () => {
+      mockApi([app({ channels: ['stable', 'rc'] })], [deployment({ channel: 'stable' })]);
+      renderCatalog();
+      await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
+      const link = screen.getByRole('link', { name: /install on rc/i });
+      expect(link).toHaveAttribute('href', '/catalog/webtop/install?channel=rc');
+    });
+
+    it('does not offer "Install on rc" when a deployment already follows rc', async () => {
+      mockApi([app({ channels: ['stable', 'rc'] })], [deployment({ channel: 'rc' })]);
+      renderCatalog();
+      await waitFor(() => expect(screen.getByText('Installed')).toBeInTheDocument());
+      expect(screen.queryByRole('link', { name: /install on rc/i })).not.toBeInTheDocument();
+    });
+
+    it('shows no version and routes the primary install to the first channel for an app with no stable version', async () => {
+      mockApi([app({ version: undefined, channels: ['rc'] })]);
+      renderCatalog();
+      await waitFor(() => expect(screen.getByText('Ubuntu Webtop')).toBeInTheDocument());
+      expect(screen.queryByText(/· v/)).not.toBeInTheDocument();
+      const install = screen.getByRole('link', { name: /install/i });
+      expect(install).toHaveAttribute('href', '/catalog/webtop/install?channel=rc');
+    });
+  });
 });

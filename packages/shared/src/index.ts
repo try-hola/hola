@@ -149,8 +149,12 @@ export const API = {
  * Compare two semver-ish version strings (e.g. `0.6.23`, `0.6.23-rc.1`). Returns
  * a negative number if `a < b`, positive if `a > b`, and 0 if equal. Tolerant of
  * a leading `v`/`cli-v` and of differing segment counts; a release ranks above a
- * prerelease of the same numeric version (`1.2.0` > `1.2.0-rc.1`). Non-numeric
- * release segments fall back to a string compare so it never throws.
+ * prerelease of the same numeric version (`1.2.0` > `1.2.0-rc.1`). Prerelease
+ * tags are compared per semver §11.4 — dot-separated identifier by identifier,
+ * with all-numeric identifiers compared NUMERICALLY, so `1.3.0-rc.10` correctly
+ * outranks `1.3.0-rc.9` (a plain string compare gets that backwards, which
+ * matters now that release channels make long rc sequences first-class, #428).
+ * Non-numeric release segments fall back to a string compare so it never throws.
  */
 export function compareVersions(a: string, b: string): number {
   const parse = (v: string) => {
@@ -170,12 +174,98 @@ export function compareVersions(a: string, b: string): number {
   if (!pa.pre && pb.pre) return 1;
   if (pa.pre && !pb.pre) return -1;
   if (pa.pre === pb.pre) return 0;
-  return pa.pre < pb.pre ? -1 : 1;
+  // Semver §11.4: compare prerelease identifiers left to right. Numeric
+  // identifiers compare as numbers (rc.10 > rc.9) and rank below alphanumeric
+  // ones; a shorter identifier list ranks below an otherwise-equal longer one.
+  const ia = pa.pre.split('.');
+  const ib = pb.pre.split('.');
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    const sa = ia[i];
+    const sb = ib[i];
+    if (sa === undefined) return -1;
+    if (sb === undefined) return 1;
+    const na = /^\d+$/.test(sa);
+    const nb = /^\d+$/.test(sb);
+    if (na && nb) {
+      const diff = parseInt(sa, 10) - parseInt(sb, 10);
+      if (diff !== 0) return diff;
+    } else if (na !== nb) {
+      return na ? -1 : 1;
+    } else if (sa !== sb) {
+      return sa < sb ? -1 : 1;
+    }
+  }
+  return 0;
 }
 
 /** True when `candidate` is a strictly newer version than `current`. */
 export function isNewerVersion(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0;
+}
+
+// ------------------------------------------------------
+// Release channels (#428): a catalog version entry and a deployment each
+// follow a channel (default `stable`), which decides which versions a
+// deployment is offered on upgrade. See specs/003-release-channels and
+// docs/adr/0005-release-channels.md.
+// ------------------------------------------------------
+
+/** The default channel every deployment and version entry falls back to. It is also the
+ * floor every other channel includes: a `stable` version is eligible on every channel. */
+export const STABLE_CHANNEL = 'stable';
+
+/** Grammar for a well-formed channel name: lowercase, starts with a letter, 1-32 chars. */
+export const CHANNEL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** True when `s` is a string matching the channel-name grammar. */
+export function isValidChannelName(s: unknown): s is string {
+  return typeof s === 'string' && CHANNEL_NAME_RE.test(s);
+}
+
+/**
+ * The one `INVALID_CHANNEL` message text, so the catalog, draft and deployment
+ * raise sites can't drift apart (they were four hand-copied duplicates).
+ */
+export function invalidChannelMessage(channel: string): string {
+  return (
+    `Channel '${channel}' is not a valid channel name. Channel names are lowercase, ` +
+    'start with a letter, and contain only letters, digits and hyphens (1-32 characters).'
+  );
+}
+
+/**
+ * A version tagged with `versionChannel` is eligible for a deployment following
+ * `channel` when they match, or when the version is on `stable` (the floor every
+ * channel includes). There is no ordering between non-stable channels.
+ */
+export function isEligibleOnChannel(versionChannel: string, channel: string): boolean {
+  return versionChannel === channel || versionChannel === STABLE_CHANNEL;
+}
+
+/** A deployment's reason for being a permitted second copy of a single-instance app. */
+export type InstanceReason = 'channel' | 'operator-override';
+
+/**
+ * The newest entry eligible on `channel` (own channel or `stable`), by version
+ * precedence (`compareVersions`). An entry without a `channel` is treated as
+ * `stable`. Returns `undefined` when nothing is eligible.
+ *
+ * Ties fall back to LIST POSITION (the last eligible entry wins), preserving
+ * the pre-#428 `pickLatestVersion` behaviour for catalogs whose version strings
+ * aren't numeric semver at all (e.g. `main`/`edge` tags, which `compareVersions`
+ * rates equal): those are listed oldest-first, so the last one is the newest.
+ */
+export function newestEligibleVersion<T extends { version: string; channel?: string }>(
+  entries: T[],
+  channel: string = STABLE_CHANNEL,
+): T | undefined {
+  let best: T | undefined;
+  for (const entry of entries) {
+    const entryChannel = entry.channel ?? STABLE_CHANNEL;
+    if (!isEligibleOnChannel(entryChannel, channel)) continue;
+    if (!best || compareVersions(entry.version, best.version) >= 0) best = entry;
+  }
+  return best;
 }
 
 /**
@@ -519,10 +609,17 @@ export type CatalogApp = {
   // public catalog) and its trust level, so the UI can badge custom sources.
   source: string;
   trust: CatalogSourceTrust;
-  // Newest available version (resolved the same way "latest" resolves at
-  // install time), so the browse listing can show it without a drill-down
-  // request. Omitted if the source has no versions at all.
+  // Newest **stable** version (resolved the same way "latest" resolves at
+  // install time on the stable channel — #428), so the browse listing can show
+  // it without a drill-down request. Omitted if the source has no stable
+  // version (an app that only publishes to a non-stable channel is still
+  // listed, via `channels`, with no version shown).
   version?: string;
+  // Distinct well-formed channels this app has at least one version on (#428),
+  // `stable` first when present then alphabetical. Lets a client decide whether
+  // to offer a channel choice without a versions drill-down. The server always
+  // emits this; optional in the type only so pre-existing typed fixtures compile.
+  channels?: string[];
 };
 
 export type GetCatalogAppsRequest = PageRequest & {
@@ -742,6 +839,10 @@ export type GetCatalogAppResponse = CatalogApp & {
 export type CatalogAppVersion = {
   version: string;
   createdAt: string;
+  // Release channel this version entry is listed on (#428); absent on a
+  // catalog entry means `stable`. The server always emits it (resolved);
+  // optional in the type only so pre-existing typed fixtures compile.
+  channel?: string;
 };
 
 export type GetCatalogAppVersionsResponse = {
@@ -901,6 +1002,9 @@ export type GetCatalogAppVersionDetailResponse = {
   // checkbox per profile; the enabled set is threaded into the compose lifecycle
   // as `COMPOSE_PROFILES`. Absent when the app has no optional services.
   profiles?: AppProfileConfig[];
+  // Release channel of the resolved version (#428) — `stable` unless a
+  // non-default channel was requested/pinned. The server always emits it.
+  channel?: string;
 };
 
 // ------------------------------------------------------
@@ -1122,6 +1226,11 @@ export type Draft = {
   // selected keys are sent on create; the declared list itself is read-only.
   profiles?: AppProfileConfig[];
   files: Array<{ uploadId: string; name: string; size: number; kind: 'composeOverride' | 'additionalFile' | 'env' | 'secret' }>;
+  // Release channel this draft resolves the version against (#428): the
+  // request's explicit channel, else the pinned version's own channel, else
+  // `stable`. Carried through finalize onto the deployment record (read-only;
+  // not user-editable). The server always writes it.
+  channel?: string;
 };
 
 export type CreateDraftRequest = {
@@ -1137,6 +1246,10 @@ export type CreateDraftRequest = {
   ociRef?: string;
   // Stored registry credential id used to pull `ociRef` / the source's packages.
   credentialRef?: string;
+  // Release channel to follow (#428). Validated server-side; when absent the
+  // channel is implied by a pinned `version`'s own channel, else `stable`.
+  // Install-by-ref drafts ignore this (always `stable`).
+  channel?: string;
 };
 export type CreateDraftResponse = {
   draftId: string;
@@ -1190,11 +1303,19 @@ export type DeploymentListItem = {
   status: DeploymentStatus;
   uptime?: string;
   version?: string;
-  // Newest catalog version for this app, and whether it's newer than the
-  // installed `version` (per-app update notifications, #284). Derived server-side
-  // from the catalog; absent when the catalog is unavailable.
+  // Newest catalog version for this app **eligible on this deployment's
+  // channel** (own channel or `stable` — #428), and whether it's newer than the
+  // installed `version` (per-app update notifications, #284). Derived
+  // server-side from the catalog; absent when the catalog is unavailable.
   latestVersion?: string;
   updateAvailable?: boolean;
+  // Release channel this deployment follows (#428). Optional in the type so
+  // pre-existing typed fixtures compile; the server always emits it and a
+  // record written before this feature reads as `stable`.
+  channel?: string;
+  // Channel of `latestVersion`, when present (#428) — lets a client render
+  // `1.3.0-rc.2 (rc)` without a further lookup.
+  latestVersionChannel?: string;
   resources?: { cpu: string; memory: string };
   ports: string[];
   lastUpdated: string;
@@ -1214,9 +1335,9 @@ export type DeploymentDetail = {
   status: DeploymentStatus;
   uptime?: string;
   version?: string;
-  // Newest catalog version + whether an update is available (per-app update
-  // notifications, #284). Derived server-side; absent when the catalog is
-  // unavailable.
+  // Newest catalog version eligible on this deployment's channel + whether an
+  // update is available (per-app update notifications, #284; channel-filtered
+  // #428). Derived server-side; absent when the catalog is unavailable.
   latestVersion?: string;
   updateAvailable?: boolean;
   url?: string;
@@ -1226,6 +1347,16 @@ export type DeploymentDetail = {
   // Capability contract roles this install fills (ADR 0004). Absent when the
   // active release declares none, which is the overwhelming majority of apps.
   contracts?: DeploymentContracts;
+  // Release channel this deployment follows (#428); a record written before
+  // this feature reads as `stable`. The server always emits it.
+  channel?: string;
+  // Channel of `latestVersion`, when present (#428).
+  latestVersionChannel?: string;
+  // Why this is a permitted second copy of a single-instance app (#428):
+  // `channel` when it follows a channel no existing copy did at install time,
+  // `operator-override` when the allow-multiple override was needed instead.
+  // Absent for a first copy or a multi-instance app.
+  instanceReason?: InstanceReason;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
@@ -1254,6 +1385,10 @@ export type GetDeploymentUpdateCheckResponse = {
   path?: UpgradePathResult;
   preUpgradeBackup?: 'required' | 'recommended' | 'none';
   upgradeNotesUrl?: string;
+  /** The deployment's channel the offer was computed for (#428). The server always emits it. */
+  channel?: string;
+  /** Channel of `latestVersion`, when present (#428). */
+  latestVersionChannel?: string;
 };
 
 /**
@@ -1310,11 +1445,27 @@ export type PatchDeploymentRequest = {
   /** Keys to delete from the deployment's env. Idempotent (unknown keys are ignored). */
   removeEnvKeys?: string[];
   systemOverrides?: Record<string, string>;
+  /**
+   * Change the channel this deployment follows (#428). Validated
+   * (`INVALID_CHANNEL` when malformed). A channel change never alters the
+   * running version and never enqueues a job — it is a metadata write only.
+   * May be combined with `env`/`removeEnvKeys`/`systemOverrides` in one request.
+   */
+  channel?: string;
 };
 // `jobId` is present when the update triggered a real redeploy (a restart job
 // that re-materializes Compose from the freshly-rewritten manifest); absent
 // when the PATCH touched nothing that needs a redeploy.
-export type PatchDeploymentResponse = { ok: true; jobId?: string };
+export type PatchDeploymentResponse = {
+  ok: true;
+  jobId?: string;
+  /**
+   * Non-fatal notices about the change (#428) — e.g. a channel change that
+   * makes two single-instance copies of the app share a channel. The change
+   * still applies; this is informational.
+   */
+  warnings?: string[];
+};
 
 // The active release's full config for the DeploymentDetail Configuration tab —
 // unlike `getActiveConfig`'s value-only maps (used internally for promote's
@@ -1786,6 +1937,18 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // manifest is not covered by an old consent. Absent for the overwhelming
   // majority of apps, which request no cross-app privilege at all.
   grantedContracts?: string[];
+  // Release channel this deployment follows (#428): set from the finalized
+  // manifest at create time, changed only via PATCH `{ channel }` (sticky
+  // across promote/rollback). Optional in the type so pre-existing typed
+  // fixtures compile — the server always writes it for new records, and a
+  // record persisted before this feature is read as `stable`, matching the
+  // `subdomain` (#246) precedent.
+  channel?: string;
+  // Why this is a permitted second copy of a single-instance app (#428): set
+  // once at create time from `assertInstanceAllowed`'s return value, never
+  // changed afterward (a later channel change that causes overlap only
+  // returns a PATCH warning). Absent for a first copy or a multi-instance app.
+  instanceReason?: InstanceReason;
   metadata: {
     createdAt: string;
     owner?: string;
@@ -1947,6 +2110,10 @@ export type CreateDeploymentFromDraftResponse = {
   deploymentId: string;
   releaseId: string;
   jobId?: string; // If deployment started immediately
+  // Release channel the new deployment follows (#428), so a CLI/dashboard
+  // client can print/show "Following channel: <c>" without a further lookup.
+  // The server always emits it.
+  channel?: string;
 };
 
 /**

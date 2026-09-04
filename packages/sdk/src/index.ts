@@ -108,7 +108,10 @@ export class HolaSdk {
     // `source` selects which catalog source the app comes from (default `hola`).
     app: (appId: string, source?: string) => this.get<GetCatalogAppResponse>(`${API.catalog.appById(appId)}${buildQuery({ source })}`),
     versions: (appId: string, source?: string) => this.get<GetCatalogAppVersionsResponse>(`${API.catalog.versions(appId)}${buildQuery({ source })}`),
-    versionDetail: (appId: string, version: string, source?: string) => this.get<GetCatalogAppVersionDetailResponse>(`${API.catalog.versionDetail(appId, version)}${buildQuery({ source })}`),
+    // `channel` (#428) restricts `latest`/an unspecified version to that
+    // channel's newest eligible version, and validates a pinned `version`'s
+    // eligibility on it. Default `stable` server-side when omitted.
+    versionDetail: (appId: string, version: string, source?: string, channel?: string) => this.get<GetCatalogAppVersionDetailResponse>(`${API.catalog.versionDetail(appId, version)}${buildQuery({ source, channel })}`),
     // Force an immediate re-fetch of the remote catalog (bypasses the refresh-interval
     // TTL) so newly-published app versions surface as available updates right away.
     refresh: (force = true) => this.post<RefreshCatalogResponse>(`${API.catalog.refresh}${buildQuery({ force })}`),

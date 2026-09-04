@@ -1,4 +1,5 @@
 import { HolaSdk } from '@hola/sdk';
+import { STABLE_CHANNEL } from '@hola/shared';
 import type { CreateDraftResponse, GetDraftResponse, AppEnvVar } from '@hola/shared';
 import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
 
@@ -51,6 +52,22 @@ export interface InstallOptions {
    * prevents. The error names the exact flag to re-run with.
    */
   grant?: string | string[];
+  /**
+   * From `--channel <name>` (#428): the release channel to follow. `latest`
+   * (the default when no version is pinned) resolves to the newest version
+   * eligible on this channel. Default: `stable`, or the pinned version's own
+   * channel when `<appId>@<version>` / `--app-version` names a pre-release.
+   * Sent on `POST /api/drafts`; the server rejects an unknown/malformed name
+   * (`INVALID_CHANNEL`) or a channel/version pairing it can't satisfy
+   * (`NO_VERSION_ON_CHANNEL` / `VERSION_NOT_ON_CHANNEL`).
+   */
+  channel?: string;
+  /**
+   * From `--as <name>` (#428): alias of `--name`, matching the issue's
+   * proposed `hola install remo --channel rc --as remo-beta` phrasing. If
+   * both `--name` and `--as` are given, `--name` wins and a note is printed.
+   */
+  as?: string;
 }
 
 /** Parse repeated/comma-separated `--profile` flags into a deduped key list. */
@@ -138,7 +155,9 @@ export async function runInstall(
   const { appId, version } = isRef
     ? { appId: rawAppId, version: 'latest' }
     : resolveAppAndVersion(rawAppId, opts.appVersion);
-  const name = opts.name ?? (isRef ? undefined : appId);
+  // `--as` (#428) is an alias of `--name`; `--name` wins when both are given.
+  if (opts.name && opts.as) out('Note: --name overrides --as');
+  const name = opts.name ?? opts.as ?? (isRef ? undefined : appId);
 
   try {
     const overrides = parseSet(opts.set);
@@ -150,7 +169,7 @@ export async function runInstall(
     } else {
       const from = opts.source && opts.source !== 'hola' ? ` (source: ${opts.source})` : '';
       out(`Creating draft for ${appId}@${version} (from catalog${from})`);
-      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source })) as CreateDraftResponse).draftId;
+      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source, channel: opts.channel })) as CreateDraftResponse).draftId;
     }
 
     // Merge `--set` overrides and auto-fill empty generate-recipe secrets onto
@@ -202,7 +221,13 @@ export async function runInstall(
     const result = await finalizeAndDeploy(sdk, draftId, { name, strict: opts.strict, noStream: opts.noStream, allowMultiple: opts.allowMultiple, profiles: parseProfiles(opts.profile), grants: parseGrants(opts.grant) }, out);
 
     if (opts.json) console.log(JSON.stringify(result, null, 2));
-    else out(`Done. ${appId} → job status: ${result.status}`);
+    else {
+      out(`Done. ${appId} → job status: ${result.status}`);
+      // #428: covers both an explicit --channel and a channel implied by a
+      // pinned pre-release version, so an operator who typed only a version
+      // learns what the deployment now follows.
+      if (result.channel && result.channel !== STABLE_CHANNEL) out(`Following channel: ${result.channel}`);
+    }
     if (result.status === 'failed' || result.status === 'error') process.exitCode = 1;
     await maybeNotifyUpdate(sdk, opts);
     return result;
