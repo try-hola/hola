@@ -189,9 +189,21 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     // Path prefixes to exempt from forward-auth. Security-relevant, so validate:
     // each must start with `/` and never be `/` (can't exempt the whole app).
     const bypassPaths = asStringArray(fa?.bypassPaths)?.filter((p) => p.startsWith('/') && p !== '/');
+    // Same shape and validation as `bypassPaths`, but the renderer gates these
+    // behind HTTP Basic auth (an app-declared secret, named by
+    // `bypassAuthPasswordEnv` below) instead of leaving them open — for a bypass
+    // path that still needs SOME auth but whose app has no credential of its own
+    // to enforce it with (e.g. a Kobo sync endpoint). See
+    // ForwardAuthMiddleware.protectedBypassPaths.
+    const protectedBypassPaths = asStringArray(fa?.protectedBypassPaths)?.filter((p) => p.startsWith('/') && p !== '/');
+    // The env-var KEY (from this app's own defaultEnv) holding the shared
+    // protectedBypassPaths password. Just a name, so plain string coercion.
+    const bypassAuthPasswordEnv = asString(fa?.bypassAuthPasswordEnv);
     result.forwardAuth = {
       ...(allowedGroups ? { allowedGroups } : {}),
       ...(bypassPaths && bypassPaths.length > 0 ? { bypassPaths } : {}),
+      ...(protectedBypassPaths && protectedBypassPaths.length > 0 ? { protectedBypassPaths } : {}),
+      ...(bypassAuthPasswordEnv ? { bypassAuthPasswordEnv } : {}),
     };
   }
 

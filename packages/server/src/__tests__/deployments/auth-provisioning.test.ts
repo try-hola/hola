@@ -962,6 +962,49 @@ describe('Auth provisioning lifecycle', () => {
     expect(spy.deprovisions[0].ref?.mode).toBe('forward-auth');
   });
 
+  // --- protectedBypassPaths: secret resolved from the app's OWN appEnv (#89 rework) ---
+
+  test('forward-auth: resolves protectedBypassPaths secret from the app\'s own appEnv and passes it to the provisioner', async () => {
+    const auth: AppAuthConfig = {
+      mode: 'forward-auth',
+      forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 'OPDS_BYPASS_PASSWORD' },
+    };
+    const sys = makeSystem({ auth });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    // The password is an ORDINARY generated appEnv secret (defaultEnv `isSecret` +
+    // `generate` normally fills this in at install time) — the platform just reads
+    // it back, it never generates or persists anything of its own.
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride: COMPOSE,
+      appEnv: [{ key: 'OPDS_BYPASS_PASSWORD', value: 'generated-secret-value', isSecret: true }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    expect(spy.provisions[0].bypassAuthSecret).toBe('generated-secret-value');
+  });
+
+  test('forward-auth: bypassAuthPasswordEnv pointing at a missing appEnv key warns and proceeds with no secret', async () => {
+    // A misconfigured manifest (the pointer names a key the app never declared in
+    // its own defaultEnv) must not fail the deploy — routing.ts already fails
+    // closed on the exemption itself when no secret is present.
+    const auth: AppAuthConfig = {
+      mode: 'forward-auth',
+      forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 'OPDS_BYPASS_PASSWORD' },
+    };
+    const sys = makeSystem({ auth });
+    const spy = sys.provisioner as SpyProvisioner;
+
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    expect(spy.provisions[0].bypassAuthSecret).toBeUndefined();
+  });
+
   test('forward-auth: route activation is deferred until the gate is provisioned (no ungated window)', async () => {
     const sys = makeSystem({ auth: { mode: 'forward-auth', forwardAuth: {} } });
 
