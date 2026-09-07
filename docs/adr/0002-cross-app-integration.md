@@ -95,6 +95,17 @@ operator approval flow for privileged capabilities.)
 plan over it. Registry-driven *per-app* plans remain a future option; consistent backups of
 running DB-backed apps are tracked separately (per-app pre/post-backup hooks).
 
+> **2026-09-04 (spec 004):** `container-logs` (#245) — a collector that tails every
+> container's logs continuously — was considered here as a candidate third `consumes`
+> primitive alongside `app-registry` and `apps-data`, and is **not** one. `consumes` models
+> *app-consumes-platform* (a metadata feed, a privileged mount); a log collector is instead a
+> two-sided integration with a provider role that needs operator consent and a scoped grant —
+> exactly the shape ADR 0004 names a **contract**. It ships as `container-logs@1`, a
+> `provisioned`, `implicit`-participation contract with its own provider grant kind, in ADR
+> 0004 §12. This note exists so the "why not `consumes`" question is answered once, here,
+> rather than re-derived the next time a platform-metadata-shaped feature turns out to need a
+> provider role instead.
+
 ### Rejected alternatives
 
 - **App-to-app notification bus** — apps subscribe to system events and react. Turns
@@ -128,3 +139,5 @@ running DB-backed apps are tracked separately (per-app pre/post-backup hooks).
 - **Catalog (try-hola/apps):** Homepage bundle gains a watcher-sidecar bolt-on that renders
   `registry.json` → `services.yaml` and declares `consumes: app-registry`.
 - **Later:** backup consumer; optional generic renderer-sidecar image as authoring sugar.
+- **2026-09-04 (spec 004):** `container-logs` (#245) shipped as a contract under ADR 0004
+  §12, not a `consumes` primitive — see the note under §3 above.

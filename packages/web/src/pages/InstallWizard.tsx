@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { ChevronRight, ChevronDown, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2, ShieldCheck } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
 import { ParamField } from '../components/ui/fields/ParamField';
@@ -1817,6 +1817,27 @@ services:
                 )}
               </div>
             </div>
+
+            {draftFinalization.error && (
+              <div className="flex items-start gap-3 px-4 py-[14px] rounded-[11px] bg-danger-weak border border-danger/20 text-danger mb-4">
+                <AlertTriangle className="w-5 h-5 flex-none mt-0.5" />
+                <div>
+                  <div className="text-[13.5px] font-semibold">Could not install</div>
+                  <div className="text-[12.5px] text-text-muted mt-0.5">{draftFinalization.error}</div>
+                  {/* spec 004: a 409 PROVIDER_EXISTS names the deployment already
+                      providing the contract — link straight to it. */}
+                  {(() => {
+                    const details = draftFinalization.errorDetails as { code?: string; existing?: { id?: string; name?: string } } | null;
+                    if (details?.code !== 'PROVIDER_EXISTS' || !details.existing?.id) return null;
+                    return (
+                      <Link to={`/deployments/${details.existing.id}`} className="inline-block mt-1.5 text-primary hover:underline text-[12.5px]">
+                        View {details.existing.name ?? 'the existing install'} →
+                      </Link>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
 
             <div className="flex items-start gap-3 px-4 py-[14px] rounded-[11px] bg-info/10">
               <div className="w-5 h-5 bg-info rounded-full flex items-center justify-center flex-none mt-0.5">

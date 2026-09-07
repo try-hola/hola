@@ -312,6 +312,29 @@ export type AppBackupConfig = {
 };
 
 /**
+ * One unit of an acceptor's involvement in `backup@1` (spec 004). An app with
+ * more than one stateful service (e.g. its own database plus a workflow
+ * engine's database) declares one participation per thing that needs
+ * quiescing, each with a stable `id` unique within the app. The singular
+ * `AppBackupConfig` form is normalised to a one-element list whose id is
+ * `default` — see `backupParticipations()` in `@hola/shared/contracts`, the
+ * only reader of either shape.
+ */
+export type AppBackupParticipation = {
+  id: string;
+  preHook?: AppBackupHook;
+  postHook?: AppBackupHook;
+};
+
+/**
+ * What a bundle manifest's `backup` block may hold: the original singular
+ * object, or the plural participation list (spec 004). Always read through
+ * `backupParticipations()`, never destructured directly — a value read from
+ * disk (or a test stub) may still be the singular legacy shape.
+ */
+export type AppBackupDeclaration = AppBackupConfig | AppBackupParticipation[];
+
+/**
  * How a push overwrites the target directory (#409). `mirror` is rsync
  * `--delete` — the local tree becomes the server tree, so files only on the
  * server are removed. `additive` (the default) copies in without deleting.
@@ -986,8 +1009,9 @@ export type GetCatalogAppVersionDetailResponse = {
   upgrade?: AppUpgradeMeta;
   // Per-app pre/post-backup hooks (#121) for transaction-consistent snapshots
   // (e.g. pg_dump before a file-level capture). Optional: most apps (and SQLite)
-  // are fine with crash-consistent file snapshots and omit it.
-  backup?: AppBackupConfig;
+  // are fine with crash-consistent file snapshots and omit it. Plural participations
+  // (spec 004) are accepted from the manifest and normalised on read.
+  backup?: AppBackupDeclaration;
   // Directories the app declares as pushable (#409), each a data-root-relative
   // path `hola app data push` can bulk-load into. Optional: most apps take their
   // data through their own UI and omit it.
@@ -1222,8 +1246,9 @@ export type Draft = {
   upgrade?: AppUpgradeMeta;
   // Per-app pre/post-backup hooks (#121) seeded from the bundle manifest and
   // carried through finalize so the snapshot path can quiesce/dump around the
-  // file capture (read-only; not user-editable).
-  backup?: AppBackupConfig;
+  // file capture (read-only; not user-editable). Plural participations (spec 004)
+  // are accepted and normalised on read.
+  backup?: AppBackupDeclaration;
   // Pushable directories seeded from the bundle manifest (#409) and carried
   // through finalize so `push-targets` can resolve them against the deployment's
   // data root (read-only; not user-editable).
@@ -1804,7 +1829,8 @@ export type ComposeIssueCode =
   | 'HOST_NETWORK_MODE_NOT_ALLOWED'
   | 'NAMED_VOLUME_NOT_ALLOWED'
   | 'VOLUME_NOT_UNDER_APP_DATA'
-  | 'UNKNOWN_PLATFORM_TOKEN';
+  | 'UNKNOWN_PLATFORM_TOKEN'
+  | 'RESERVED_SERVICE_NAME';
 
 /**
  * Stable, machine-readable codes emitted by typed app-parameter validation
@@ -2011,6 +2037,12 @@ export type ContractBackupPrepareResponse = {
   jobId?: string;
   /** Deployment ids whose preHook will run, so the provider can log/report them. */
   apps: string[];
+  /**
+   * Every participation that will run, in execution order (spec 004: ascending
+   * deployment id, then declaration order within the app). Superset of `apps`
+   * at the participation grain — an app with two participations appears twice.
+   */
+  participations: Array<{ deploymentId: string; participationId: string }>;
 };
 
 /**
@@ -2023,7 +2055,28 @@ export type ContractBackupPrepareResponse = {
  */
 export type ContractBackupFinalizeResponse = {
   ok: boolean;
-  results: Array<{ deploymentId: string; ok: boolean; output?: string }>;
+  /** One entry per participation (spec 004) — an app with two participations gets two entries. */
+  results: Array<{ deploymentId: string; participationId: string; ok: boolean; output?: string }>;
+};
+
+/**
+ * Server-computed coverage judgement for one deployment's `backup@1`
+ * acceptance (spec 004, FR-015–019). Computed on read from the manifest's
+ * participations and the active release's compose, so every client renders
+ * the same verdict without recomputing image-family recognition.
+ */
+export type BackupCoverageState = 'quiesced' | 'partial' | 'as-is' | 'uncovered';
+
+export type ContractCoverage = {
+  state: BackupCoverageState;
+  /** Distinct recognised database services named by some participation's preHook. */
+  targeted: number;
+  /** Recognised database services the deployment actually runs (respecting selected profiles). */
+  recognised: number;
+  /** Declared participations, each with the service its preHook targets (if any). */
+  participations: Array<{ id: string; service?: string }>;
+  /** Recognised database service names, for a tooltip/detail listing. */
+  databases: string[];
 };
 
 /**
@@ -2042,6 +2095,10 @@ export type DeploymentContracts = {
    * The difference between "covered by quiescing" and "covered as-is": an app that
    * accepts and declares no hook is safe to copy exactly as it sits, which is a
    * different fact from an app nobody has looked at (ADR 0004 §2).
+   *
+   * @deprecated superseded by `coverage`, which carries the full judgement
+   * (state, counts, per-participation targets) instead of a bare presence flag.
+   * Still emitted for one release so an older client keeps working.
    */
   hooks?: string[];
   /**
@@ -2051,6 +2108,12 @@ export type DeploymentContracts = {
    * operator consents again.
    */
   granted?: string[];
+  /**
+   * Coverage judgement per accepted, declared contract that quiesces (spec 004).
+   * Keyed by ref; only `backup@1` is populated today. Absent when the contract
+   * isn't accepted or has no coverage concept (e.g. an implicit contract).
+   */
+  coverage?: Record<string, ContractCoverage>;
 };
 
 /** One install's appearance in a contract rollup, with the role-specific facts. */
@@ -2060,10 +2123,15 @@ export type ContractParticipant = {
   app: string;
   icon?: string;
   status: DeploymentStatus;
-  /** Acceptors: the typed block is filled in, so hooks run around the operation. */
+  /**
+   * Acceptors: the typed block is filled in, so hooks run around the operation.
+   * @deprecated superseded by `coverage` for `backup@1`; kept for compatibility.
+   */
   hooks?: boolean;
   /** Providers: the grant this role carries is consented, so the app can do the work. */
   granted?: boolean;
+  /** Acceptors of a declared contract with a coverage concept (`backup@1`): the judgement. */
+  coverage?: ContractCoverage;
 };
 
 /**
@@ -2081,6 +2149,12 @@ export type ContractRollup = {
   version: number;
   shape: ContractShape;
   providerKind: ContractProviderKind;
+  /**
+   * Whether an app opts in to being a subject via `accepts` (`declared`), or is
+   * a subject by virtue of running, with nothing to declare (`implicit`; spec
+   * 004). Lets a client label `acceptors` correctly without knowing every ref.
+   */
+  participation: 'declared' | 'implicit';
   summary: string;
   /**
    * Installs performing the capability. Always empty for a platform-provided
@@ -2089,8 +2163,14 @@ export type ContractRollup = {
    */
   providers: ContractParticipant[];
   acceptors: ContractParticipant[];
-  /** Installs filling neither role. */
+  /** Installs filling neither role. Always empty for an `implicit` contract. */
   unaffiliated: ContractParticipant[];
+  /**
+   * True when more than one live deployment provides this contract (spec 004:
+   * one provider per contract per host is enforced at install, but a pair
+   * recorded before the rule existed is surfaced here, not auto-removed).
+   */
+  providerConflict?: true;
 };
 
 export type GetContractsResponse = { items: ContractRollup[] };

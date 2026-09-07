@@ -23,7 +23,7 @@ import type {
   AppAuthConfig,
   AppSecurityConfig,
   AppUpgradeMeta,
-  AppBackupConfig,
+  AppBackupDeclaration,
   AppPushTarget,
   AppProfileConfig
 } from '@hola/shared';
@@ -100,7 +100,7 @@ export interface FinalizedManifest {
   upgrade?: AppUpgradeMeta;
   // Per-app pre/post-backup hooks (#121) carried from the bundle manifest so the
   // snapshot path can run them around the file capture.
-  backup?: AppBackupConfig;
+  backup?: AppBackupDeclaration;
   // Pushable directories (#409) carried from the bundle manifest so `push-targets`
   // can resolve them against the deployment's data root without re-reading the bundle.
   push?: AppPushTarget[];
@@ -990,7 +990,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupConfig; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string; channels?: string[] }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupDeclaration; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string; channels?: string[] }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source, channel);
       return {

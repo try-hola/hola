@@ -24,6 +24,7 @@ import { RealJobService } from '../../services/core/jobs';
 import { MockDockerService, type DockerService } from '../../services/core/docker';
 import { ProvisioningError } from '../../middleware/error-mapping';
 import { NoneProvisionerService } from '../../services/core/provisioner';
+import { RealContractTokenService } from '../../services/auth/contract-tokens';
 import type {
   ProvisionerService,
   ProvisionInput,
@@ -177,7 +178,7 @@ describe('Auth provisioning lifecycle', () => {
     await rm(dataRoot, { recursive: true, force: true });
   });
 
-  function makeSystem(opts: { auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; provisioner?: ProvisionerService; docker?: DockerService } = {}) {
+  function makeSystem(opts: { auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; provisioner?: ProvisionerService; docker?: DockerService; withContractTokens?: boolean } = {}) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
@@ -186,8 +187,12 @@ describe('Auth provisioning lifecycle', () => {
     const drafts = new RealDraftService(storage, makeCatalog(opts.auth, opts.consumes, opts.provides), makeValidation());
     const provisioner = opts.provisioner ?? new SpyProvisioner();
     const docker = opts.docker ?? new MockDockerService();
-    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner);
-    return { storage, jobs, drafts, deployments, provisioner };
+    const contractTokens = opts.withContractTokens ? new RealContractTokenService(storage) : undefined;
+    const deployments = new RealDeploymentService(
+      storage, jobs, docker, drafts, routing, logging, provisioner,
+      undefined, undefined, undefined, contractTokens,
+    );
+    return { storage, jobs, drafts, deployments, provisioner, contractTokens };
   }
 
   async function finalizedDraft(drafts: RealDraftService): Promise<string> {
@@ -583,6 +588,141 @@ describe('Auth provisioning lifecycle', () => {
     expect(raw).not.toContain(':ro');
     const stored = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`);
     expect(JSON.parse(stored).grantedContracts).toBeUndefined();
+  });
+
+  test('every service in the materialised compose carries the platform labels (spec 004, FR-030)', async () => {
+    const sys = makeSystem({ auth: undefined });
+    const created = await sys.deployments.createFromDraft({
+      draftId: await finalizedDraft(sys.drafts),
+      name: 'My Gitea',
+    });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    const doc = parse(raw) as { services: Record<string, { labels?: Record<string, string> }> };
+    expect(doc.services.gitea.labels).toMatchObject({
+      'sh.hola.app': 'gitea',
+      'sh.hola.deployment': created.deploymentId,
+      'sh.hola.name': 'My Gitea',
+    });
+  });
+
+  describe('container-logs@1 grant (spec 004, US4)', () => {
+    const prevServerImage = process.env.HOLA_SERVER_IMAGE;
+    const prevDockerSocket = process.env.HOLA_DOCKER_SOCKET;
+    const prevVersion = process.env.HOLA_VERSION;
+
+    afterEach(() => {
+      if (prevServerImage === undefined) delete process.env.HOLA_SERVER_IMAGE; else process.env.HOLA_SERVER_IMAGE = prevServerImage;
+      if (prevDockerSocket === undefined) delete process.env.HOLA_DOCKER_SOCKET; else process.env.HOLA_DOCKER_SOCKET = prevDockerSocket;
+      if (prevVersion === undefined) delete process.env.HOLA_VERSION; else process.env.HOLA_VERSION = prevVersion;
+    });
+
+    test('granted: the sidecar is injected with the resolved image/socket, DOCKER_HOST on the app service, no contract token', async () => {
+      process.env.HOLA_SERVER_IMAGE = 'ghcr.io/try-hola/server:9.9.9';
+      process.env.HOLA_DOCKER_SOCKET = '/custom/docker.sock';
+      const sys = makeSystem({ auth: undefined, provides: ['container-logs@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['container-logs@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { image?: string; volumes?: string[]; environment?: Record<string, string> }> };
+      expect(doc.services['hola-docker-proxy']).toBeDefined();
+      expect(doc.services['hola-docker-proxy'].image).toBe('ghcr.io/try-hola/server:9.9.9');
+      expect(doc.services['hola-docker-proxy'].volumes).toContain('/custom/docker.sock:/var/run/docker.sock:ro');
+      expect(doc.services.gitea.environment?.DOCKER_HOST).toBe('tcp://hola-docker-proxy:2375');
+
+      // No HOLA_CONTRACT_TOKEN anywhere: container-logs@1 is provisioned, not
+      // brokered, so it never needs (and never gets) a broker credential.
+      expect(raw).not.toContain('HOLA_CONTRACT_TOKEN');
+      const envExists = await sys.storage.fileExists(`deployments/${created.deploymentId}/runtime/.env`);
+      if (envExists) {
+        const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+        expect(dotenv).not.toContain('HOLA_CONTRACT_TOKEN');
+      }
+    });
+
+    test('image falls back to ghcr.io/try-hola/server:${HOLA_VERSION} when HOLA_SERVER_IMAGE is unset', async () => {
+      delete process.env.HOLA_SERVER_IMAGE;
+      process.env.HOLA_VERSION = '1.2.3';
+      const sys = makeSystem({ auth: undefined, provides: ['container-logs@1'] });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['container-logs@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { image?: string }> };
+      expect(doc.services['hola-docker-proxy'].image).toBe('ghcr.io/try-hola/server:1.2.3');
+    });
+
+    test('socket falls back to /var/run/docker.sock when HOLA_DOCKER_SOCKET is unset', async () => {
+      delete process.env.HOLA_DOCKER_SOCKET;
+      const sys = makeSystem({ auth: undefined, provides: ['container-logs@1'] });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['container-logs@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { volumes?: string[] }> };
+      expect(doc.services['hola-docker-proxy'].volumes).toContain('/var/run/docker.sock:/var/run/docker.sock:ro');
+    });
+
+    test('an app that neither provides nor is granted container-logs gets none of it', async () => {
+      const sys = makeSystem({ auth: undefined });
+      const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      expect(raw).not.toContain('hola-docker-proxy');
+      expect(raw).not.toContain('DOCKER_HOST');
+    });
+
+    test('a backup@1 provider still receives the contract token env (brokered stays brokered)', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['backup@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      expect(raw).toContain('HOLA_CONTRACT_TOKEN');
+    });
+
+    test('create without grants for a container-logs@1 provider is refused, naming it', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['container-logs@1'] });
+      const draftId = await finalizedDraft(sys.drafts);
+      await expect(sys.deployments.createFromDraft({ draftId, name: 'gitea' })).rejects.toThrow(/container-logs@1/);
+      expect((await sys.deployments.listDeployments({})).items).toHaveLength(0);
+    });
+
+    test('after deleteDeployment of a granted provider, the token store holds no entry and the runtime dir is gone (FR-024)', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['container-logs@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['container-logs@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      await sys.deployments.deleteDeployment(created.deploymentId);
+
+      expect(await sys.storage.fileExists(`deployments/${created.deploymentId}/runtime/docker-compose.yml`)).toBe(false);
+      const tokenFileExists = await sys.storage.fileExists('config/contract-tokens.json');
+      if (tokenFileExists) {
+        const raw = await sys.storage.readFileAsString('config/contract-tokens.json');
+        expect(JSON.parse(raw).tokens.find((t: { deploymentId: string }) => t.deploymentId === created.deploymentId)).toBeUndefined();
+      }
+    });
   });
 
   test('no auth block: deploys normally with no provisioning and no injected env', async () => {

@@ -63,6 +63,10 @@ const SUPPORTED_TOP_LEVEL_KEYS = new Set([
 
 // Compose service names: start alphanumeric, then alphanumerics, `_`, `.`, `-`.
 const SERVICE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
+// Service names reserved for platform-injected components (spec 004): a
+// user-authored service of this name is a validation error, never silently
+// shadowed or merged. Currently just the container-logs proxy sidecar.
+export const RESERVED_SERVICE_NAMES: ReadonlySet<string> = new Set(['hola-docker-proxy']);
 // Permissive image reference: optional registry[:port]/, path, optional :tag, optional @sha256:digest.
 const IMAGE_REF_RE =
   /^([a-z0-9.-]+(:[0-9]+)?\/)?[a-z0-9][a-z0-9._/-]*(:[\w][\w.-]*)?(@sha256:[a-f0-9]{64})?$/i;
@@ -365,6 +369,12 @@ export function validateComposeObject(parsed: unknown): ValidationIssue[] {
   for (const [name, rawSvc] of Object.entries(doc.services)) {
     if (!SERVICE_NAME_RE.test(name)) {
       issues.push(issue('INVALID_SERVICE_NAME', 'error', `Invalid service name '${name}'`, `services.${name}`));
+    }
+    if (RESERVED_SERVICE_NAMES.has(name)) {
+      // The container-logs proxy sidecar (spec 004) is the platform's own
+      // post-validation injection; a user-authored service under this name
+      // would either collide with it or spoof its identity to a collector.
+      issues.push(issue('RESERVED_SERVICE_NAME', 'error', `Service name '${name}' is reserved for a platform-injected component`, `services.${name}`));
     }
     if (!isPlainObject(rawSvc)) {
       issues.push(issue('INVALID_SERVICE', 'error', `Service '${name}' must be a mapping`, `services.${name}`));

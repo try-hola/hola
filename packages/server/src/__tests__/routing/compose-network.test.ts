@@ -8,7 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import { parse } from 'yaml';
 
-import { attachToHolaNetwork } from '../../services/core/compose-network';
+import { attachToHolaNetwork, injectEnvironment } from '../../services/core/compose-network';
 
 describe('attachToHolaNetwork', () => {
   test('attaches a single-service app to the hola network with the alias and keeps default', () => {
@@ -55,5 +55,22 @@ describe('attachToHolaNetwork', () => {
   test('returns the input unchanged when there are no services', () => {
     const input = 'networks:\n  x: {}\n';
     expect(attachToHolaNetwork(input, { alias: 'a-1' })).toBe(input);
+  });
+});
+
+describe('injectEnvironment', () => {
+  // A bare `- FOO` list entry is a host passthrough; normalising it to `FOO: ''`
+  // would turn an inherited variable into an explicitly empty one (#439).
+  test('preserves a bare list entry as a null (passthrough) map value', () => {
+    const input = 'services:\n  app:\n    image: app:1\n    environment:\n      - FOO\n      - BAR=1\n';
+    const yaml = injectEnvironment(input, { OIDC_ID: 'abc' }, {});
+    expect(parse(yaml).services.app.environment).toEqual({ FOO: null, BAR: '1', OIDC_ID: 'abc' });
+    expect(yaml).toContain('FOO: null');
+  });
+
+  test('a passthrough survives a second round-trip through the map form', () => {
+    const once = injectEnvironment('services:\n  app:\n    image: app:1\n    environment:\n      - FOO\n', { A: '1' }, {});
+    const twice = injectEnvironment(once, { B: '2' }, {});
+    expect(parse(twice).services.app.environment).toEqual({ FOO: null, A: '1', B: '2' });
   });
 });

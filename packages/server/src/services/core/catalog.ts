@@ -739,8 +739,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       const upgrade = coerceManifestUpgrade(manifest.upgrade);
 
       // Per-app pre/post-backup hooks (#121): run around a snapshot for
-      // transaction-consistent backups. Coerced narrowly like `auth`.
-      const backup = coerceManifestBackup(manifest.backup);
+      // transaction-consistent backups. Coerced narrowly like `auth`; spec 004
+      // accepts either the legacy singular block or a plural participation
+      // list and always emits the canonical array (`backupParticipations()` is
+      // the only reader downstream).
+      const backup = coerceManifestBackup(manifest.backup, this.logger, { appId, version });
 
       // Directories the app declares as pushable (#409). Coerced narrowly like
       // `auth`; the server resolves each `path` against the deployment's data

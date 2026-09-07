@@ -26,7 +26,7 @@ import { RealLoggingService } from '../../services/core/logging';
 import { RealJobService } from '../../services/core/jobs';
 import { MockDockerService } from '../../services/core/docker';
 import { NoneProvisionerService } from '../../services/core/provisioner';
-import type { AppBackupConfig, ContractRollup, GetDeploymentResponse } from '@hola/shared';
+import type { AppBackupConfig, AppBackupDeclaration, AppProfileConfig, ContractRollup, GetDeploymentResponse } from '@hola/shared';
 
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
@@ -39,7 +39,31 @@ const PG_BACKUP: AppBackupConfig = {
 };
 
 /** What each app's manifest declares, keyed by app id. */
-type AppShape = { provides?: string[]; accepts?: string[]; backup?: AppBackupConfig };
+type AppShape = {
+  provides?: string[];
+  accepts?: string[];
+  backup?: AppBackupConfig | AppBackupDeclaration;
+  profiles?: AppProfileConfig[];
+};
+
+/** A postiz-shaped compose: two postgres services plus the app's own image. */
+const POSTIZ_COMPOSE =
+  'services:\n' +
+  '  postiz:\n' +
+  '    image: ghcr.io/gitroomhq/postiz-app:v1.0.0\n' +
+  '  postiz-postgres:\n' +
+  '    image: postgres:17-alpine\n' +
+  '  temporal-postgres:\n' +
+  '    image: postgres:17-alpine\n';
+
+const POSTIZ_ONE_PARTICIPATION: AppBackupDeclaration = [
+  { id: 'default', preHook: { service: 'postiz-postgres', command: ['pg_dump', 'app'] } },
+];
+
+const POSTIZ_TWO_PARTICIPATIONS: AppBackupDeclaration = [
+  { id: 'app-db', preHook: { service: 'postiz-postgres', command: ['pg_dump', 'app'] } },
+  { id: 'temporal-db', preHook: { service: 'temporal-postgres', command: ['pg_dump', 'temporal'] } },
+];
 
 function makeCatalog(apps: Record<string, AppShape>): CatalogArg {
   return {
@@ -93,11 +117,16 @@ describe('contract rollup', () => {
     return { storage, jobs, drafts, deployments };
   }
 
-  async function install(sys: ReturnType<typeof makeSystem>, appId: string, grants?: string[]): Promise<string> {
+  async function install(
+    sys: ReturnType<typeof makeSystem>,
+    appId: string,
+    grants?: string[],
+    extra: { compose?: string; profiles?: string[] } = {},
+  ): Promise<string> {
     const { draftId } = await sys.drafts.createDraft({ appId, version: '1.0.0' });
-    await sys.drafts.updateDraft(draftId, { composeOverride: COMPOSE });
+    await sys.drafts.updateDraft(draftId, { composeOverride: extra.compose ?? COMPOSE });
     await sys.drafts.finalizeDraft(draftId);
-    const created = await sys.deployments.createFromDraft({ draftId, name: appId, grants });
+    const created = await sys.deployments.createFromDraft({ draftId, name: appId, grants, profiles: extra.profiles });
     expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
     return created.deploymentId;
   }
@@ -169,7 +198,21 @@ describe('contract rollup', () => {
     const paperless = await install(sys, 'paperless');
 
     const detail: GetDeploymentResponse = await sys.deployments.getDeployment(paperless);
-    expect(detail.contracts).toEqual({ accepts: ['backup@1'], hooks: ['backup@1'] });
+    // The stub compose runs no recognised database image, so coverage is
+    // `quiesced` off the one declared participation with nothing to target.
+    expect(detail.contracts).toEqual({
+      accepts: ['backup@1'],
+      hooks: ['backup@1'],
+      coverage: {
+        'backup@1': {
+          state: 'quiesced',
+          targeted: 0,
+          recognised: 0,
+          participations: [{ id: 'default', service: 'db' }],
+          databases: [],
+        },
+      },
+    });
   });
 
   test('a provider install reports the grant it actually holds', async () => {
@@ -187,5 +230,95 @@ describe('contract rollup', () => {
     const immich = await install(sys, 'immich');
 
     expect((await sys.deployments.getDeployment(immich)).contracts).toBeUndefined();
+  });
+
+  describe('backup coverage (spec 004, US2)', () => {
+    test('the postiz shape — one participation, two recognised databases — is partial 1/2', async () => {
+      const sys = makeSystem({ postiz: { accepts: ['backup@1'], backup: POSTIZ_ONE_PARTICIPATION } });
+      const postiz = await install(sys, 'postiz', undefined, { compose: POSTIZ_COMPOSE });
+
+      const detail = await sys.deployments.getDeployment(postiz);
+      expect(detail.contracts?.coverage?.['backup@1']).toEqual({
+        state: 'partial',
+        targeted: 1,
+        recognised: 2,
+        participations: [{ id: 'default', service: 'postiz-postgres' }],
+        databases: ['postiz-postgres', 'temporal-postgres'],
+      });
+
+      const rollup = backupOf((await sys.deployments.getContracts()).items);
+      const acceptor = rollup.acceptors.find((a) => a.deploymentId === postiz);
+      expect(acceptor?.coverage).toEqual(detail.contracts?.coverage?.['backup@1']);
+    });
+
+    test('two participations covering both recognised databases is quiesced', async () => {
+      const sys = makeSystem({ postiz: { accepts: ['backup@1'], backup: POSTIZ_TWO_PARTICIPATIONS } });
+      const postiz = await install(sys, 'postiz', undefined, { compose: POSTIZ_COMPOSE });
+
+      const detail = await sys.deployments.getDeployment(postiz);
+      expect(detail.contracts?.coverage?.['backup@1']).toMatchObject({ state: 'quiesced', targeted: 2, recognised: 2 });
+    });
+
+    test('accepts, no participations, no recognised database is covered as-is', async () => {
+      const sys = makeSystem({ uptime: { accepts: ['backup@1'] } });
+      const uptime = await install(sys, 'uptime');
+
+      const detail = await sys.deployments.getDeployment(uptime);
+      expect(detail.contracts?.coverage?.['backup@1']).toMatchObject({ state: 'as-is', targeted: 0, recognised: 0 });
+    });
+
+    test('accepts, no participations, one recognised database is partial 0/1', async () => {
+      const compose = 'services:\n  app:\n    image: mysql:8\n';
+      const sys = makeSystem({ solo: { accepts: ['backup@1'] } });
+      const solo = await install(sys, 'solo', undefined, { compose });
+
+      const detail = await sys.deployments.getDeployment(solo);
+      expect(detail.contracts?.coverage?.['backup@1']).toMatchObject({ state: 'partial', targeted: 0, recognised: 1 });
+    });
+
+    test('a database service behind an unselected profile is not counted', async () => {
+      const compose =
+        'services:\n' +
+        '  app:\n' +
+        '    image: nginx:1.27\n' +
+        '  optional-db:\n' +
+        '    image: postgres:17-alpine\n' +
+        '    profiles: ["extra"]\n';
+      const sys = makeSystem({
+        profiled: { accepts: ['backup@1'], profiles: [{ key: 'extra', label: 'Extra DB', default: false }] },
+      });
+      const profiled = await install(sys, 'profiled', undefined, { compose }); // profiles NOT selected
+
+      const detail = await sys.deployments.getDeployment(profiled);
+      expect(detail.contracts?.coverage?.['backup@1']).toMatchObject({ state: 'as-is', targeted: 0, recognised: 0 });
+    });
+
+    test('not accepting the contract carries no coverage for it', async () => {
+      const sys = makeSystem({ immich: {} });
+      const immich = await install(sys, 'immich');
+
+      expect((await sys.deployments.getDeployment(immich)).contracts).toBeUndefined();
+    });
+  });
+
+  describe('the implicit container-logs@1 rollup (spec 004, US6)', () => {
+    test('every non-provider install is a subject, none unaffiliated', async () => {
+      const sys = makeSystem({
+        alloy: { provides: ['container-logs@1'] },
+        appA: {},
+        appB: {},
+        appC: {},
+      });
+      await install(sys, 'alloy', ['container-logs@1']);
+      const a = await install(sys, 'appA');
+      const b = await install(sys, 'appB');
+      const c = await install(sys, 'appC');
+
+      const items = (await sys.deployments.getContracts()).items;
+      const rollup = items.find((i) => i.ref === 'container-logs@1')!;
+      expect(rollup.participation).toBe('implicit');
+      expect(rollup.acceptors.map((p) => p.deploymentId).sort()).toEqual([a, b, c].sort());
+      expect(rollup.unaffiliated).toEqual([]);
+    });
   });
 });

@@ -26,7 +26,7 @@ import { RealLoggingService } from '../../services/core/logging';
 import { RealJobService } from '../../services/core/jobs';
 import { MockDockerService } from '../../services/core/docker';
 import { NoneProvisionerService } from '../../services/core/provisioner';
-import type { AppBackupConfig } from '@hola/shared';
+import type { AppBackupConfig, AppBackupDeclaration, AppBackupParticipation } from '@hola/shared';
 
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
@@ -38,11 +38,40 @@ const PG_BACKUP: AppBackupConfig = {
   postHook: { service: 'db', command: ['rm', '-f', '/backups/app.sql'] },
 };
 
+/** A two-participation manifest (spec 004): an app with its own DB and a workflow engine's DB. */
+const PLURAL_BACKUP: AppBackupParticipation[] = [
+  {
+    id: 'app-db',
+    preHook: { service: 'postiz-postgres', command: ['sh', '-c', 'pg_dump -U app app > /backups/app.sql'] },
+    postHook: { service: 'postiz-postgres', command: ['rm', '-f', '/backups/app.sql'] },
+  },
+  {
+    id: 'temporal-db',
+    preHook: { service: 'temporal-postgres', command: ['sh', '-c', 'pg_dump -U temporal temporal > /backups/temporal.sql'] },
+    postHook: { service: 'temporal-postgres', command: ['rm', '-f', '/backups/temporal.sql'] },
+  },
+];
+
+/** A three-participation manifest, for the "stop after the second failure" scenario. */
+const TRIPLE_BACKUP: AppBackupParticipation[] = [
+  ...PLURAL_BACKUP,
+  {
+    id: 'third-db',
+    preHook: { service: 'third-postgres', command: ['sh', '-c', 'pg_dump -U third third > /backups/third.sql'] },
+    postHook: { service: 'third-postgres', command: ['rm', '-f', '/backups/third.sql'] },
+  },
+];
+
 /** Records every exec so tests can assert which hook ran where. */
 class ExecSpy extends MockDockerService {
   execs: Array<{ projectName: string; service: string; command: string[] }> = [];
   /** Deployment id substrings whose exec should fail (simulating a broken dump). */
   failFor: string[] = [];
+  /** Service names whose exec should fail — for targeting one of several
+   *  participations within the SAME app/project. */
+  failForServices: string[] = [];
+  /** Runs before each exec is answered, so a test can cancel mid-prepare. */
+  onExec?: (e: { projectName: string; service: string; command: string[] }) => void | Promise<void>;
 
   override async composeExec(
     projectPath: string,
@@ -52,7 +81,8 @@ class ExecSpy extends MockDockerService {
     opts?: { user?: string; profiles?: string[] },
   ): Promise<{ success: boolean; output: string }> {
     this.execs.push({ projectName, service, command });
-    if (this.failFor.some(f => projectName.includes(f))) {
+    await this.onExec?.({ projectName, service, command });
+    if (this.failFor.some(f => projectName.includes(f)) || this.failForServices.includes(service)) {
       return { success: false, output: 'FATAL: could not connect to server' };
     }
     return super.composeExec(projectPath, projectName, service, command, opts);
@@ -66,7 +96,7 @@ class ExecSpy extends MockDockerService {
   }
 }
 
-function makeCatalog(opts: { accepts?: string[]; backup?: AppBackupConfig }): CatalogArg {
+function makeCatalog(opts: { accepts?: string[]; backup?: AppBackupDeclaration }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: appId, icon: '📦' }),
     getVersionDetail: async () => ({
@@ -109,7 +139,7 @@ describe('capability contract broker: backup@1', () => {
   });
 
   /** A system whose catalog stub gives every app the same accepts/backup shape. */
-  function makeSystem(opts: { accepts?: string[]; backup?: AppBackupConfig }) {
+  function makeSystem(opts: { accepts?: string[]; backup?: AppBackupDeclaration }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
@@ -192,14 +222,17 @@ describe('capability contract broker: backup@1', () => {
   });
 
   test('a failed preHook fails the job and cleans up the dumps that did land', async () => {
-    // Fail-closed (ADR 0004 §6): the provider aborts rather than capture files it
-    // would report as transaction-consistent. Nothing else will call finalize, so
-    // the broker cleans up after the apps that DID dump — otherwise every app's
-    // data root keeps a stale dump that inflates the next backup and misleads a
-    // later restore.
+    // Fail-closed (spec 004 FR-006/007): the provider aborts rather than capture
+    // files it would report as transaction-consistent, and cleanup runs the
+    // postHook of every participation that was STARTED (in ascending-deployment-id
+    // order) before the failure — never one that comes after it. App ids are
+    // chosen so "ok" sorts before "broken" and is therefore the one that starts
+    // (and gets cleaned up); a participation reached AFTER the failure (a third
+    // app, or — see the plural-participation tests above — a later participation
+    // in the same app) never starts and gets no cleanup.
     const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
-    const ok = await install(sys, 'paperless');
-    const broken = await install(sys, 'mealie');
+    const ok = await install(sys, 'a-app-ok');
+    const broken = await install(sys, 'z-app-broken');
     docker.failFor = [broken];
 
     const prepared = await sys.deployments.prepareContractBackup();
@@ -212,7 +245,137 @@ describe('capability contract broker: backup@1', () => {
 
   test('with no apps installed at all, prepare is a no-op rather than an error', async () => {
     const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
-    expect(await sys.deployments.prepareContractBackup()).toEqual({ apps: [] });
+    expect(await sys.deployments.prepareContractBackup()).toEqual({ apps: [], participations: [] });
     expect(await sys.deployments.finalizeContractBackup()).toEqual({ ok: true, results: [] });
+  });
+
+  describe('plural participation (spec 004, US1)', () => {
+    test('runs both pre-hooks in declaration order and both post-hooks on finalize', async () => {
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PLURAL_BACKUP });
+      const postiz = await install(sys, 'postiz');
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect(prepared.apps).toEqual([postiz]);
+      expect(prepared.participations).toEqual([
+        { deploymentId: postiz, participationId: 'app-db' },
+        { deploymentId: postiz, participationId: 'temporal-db' },
+      ]);
+      expect((await waitForJob(sys.jobs, prepared.jobId!)).status).toBe('completed');
+
+      const preExecs = docker.execs.filter((e) => e.command.join(' ').includes('pg_dump'));
+      expect(preExecs.map((e) => e.service)).toEqual(['postiz-postgres', 'temporal-postgres']);
+
+      const finalized = await sys.deployments.finalizeContractBackup();
+      expect(finalized.ok).toBe(true);
+      expect(finalized.results).toEqual([
+        { deploymentId: postiz, participationId: 'app-db', ok: true, output: expect.any(String) },
+        { deploymentId: postiz, participationId: 'temporal-db', ok: true, output: expect.any(String) },
+      ]);
+    });
+
+    test('a failing second pre-hook fails the job, runs the post-hooks of app-db and temporal-db, and never starts a third', async () => {
+      const sys = makeSystem({ accepts: ['backup@1'], backup: TRIPLE_BACKUP });
+      const postiz = await install(sys, 'postiz');
+      docker.failForServices = ['temporal-postgres'];
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect(prepared.participations.map((p) => p.participationId)).toEqual(['app-db', 'temporal-db', 'third-db']);
+      const job = await waitForJob(sys.jobs, prepared.jobId!);
+      expect(job.status).toBe('failed');
+      expect(job.error).toContain('1 of 3 participation(s)');
+      expect(job.error).toContain(`${postiz}/temporal-db`);
+
+      // app-db and temporal-db were STARTED (their preHook ran), so both get
+      // cleanup; third-db's preHook never started, so it gets none.
+      const cleaned = docker.execs.filter((e) => e.command.includes('rm')).map((e) => e.service);
+      expect(cleaned.sort()).toEqual(['postiz-postgres', 'temporal-postgres'].sort());
+      expect(cleaned).not.toContain('third-postgres');
+
+      // third-db's preHook never ran at all.
+      const preExecs = docker.execs.filter((e) => e.command.join(' ').includes('pg_dump')).map((e) => e.service);
+      expect(preExecs).toEqual(['postiz-postgres', 'temporal-postgres']);
+    });
+
+    test('cancelling mid-prepare still cleans up the participations that already dumped', async () => {
+      // A cancel aborts the capture as surely as a failure does, and the provider
+      // will never call finalize for a prepare that never completed — so the
+      // dumps already written have to be cleaned up here (FR-007) or they sit in
+      // the app's data root until something else happens to remove them.
+      const sys = makeSystem({ accepts: ['backup@1'], backup: TRIPLE_BACKUP });
+      await install(sys, 'postiz');
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      // Cancel as soon as the FIRST dump has run: the next loop checkpoint sees
+      // the flag, so app-db is started and temporal-db/third-db never are.
+      docker.onExec = async (e) => {
+        if (e.service === 'postiz-postgres' && e.command.join(' ').includes('pg_dump')) {
+          await sys.jobs.cancelJob(prepared.jobId!);
+        }
+      };
+
+      const start = Date.now();
+      for (;;) {
+        const job = await sys.jobs.getJob(prepared.jobId!);
+        if (job && job.status !== 'queued' && job.status !== 'running') break;
+        if (Date.now() - start > 5000) throw new Error(`Job did not settle (last: ${job?.status})`);
+        await new Promise((r) => setTimeout(r, 10));
+      }
+
+      const preExecs = docker.execs.filter((e) => e.command.join(' ').includes('pg_dump')).map((e) => e.service);
+      expect(preExecs).toEqual(['postiz-postgres']);
+      const cleaned = docker.execs.filter((e) => e.command.includes('rm')).map((e) => e.service);
+      expect(cleaned).toEqual(['postiz-postgres']);
+    });
+
+    test('prepare response lists participations in execution order, distinct from apps', async () => {
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PLURAL_BACKUP });
+      const postiz = await install(sys, 'postiz');
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect(prepared.apps).toEqual([postiz]);
+      expect(prepared.participations).toHaveLength(2);
+      await waitForJob(sys.jobs, prepared.jobId!);
+    });
+
+    test('two apps run in ascending deployment id order', async () => {
+      // Slug prefixes chosen so ascending deployment-id order is deterministic
+      // regardless of the random id suffix.
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      const zebra = await install(sys, 'zzz-app');
+      const alpha = await install(sys, 'aaa-app');
+      expect(alpha < zebra).toBe(true);
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect(prepared.apps).toEqual([alpha, zebra]);
+      await waitForJob(sys.jobs, prepared.jobId!);
+
+      const preOrder = docker.execs.filter((e) => e.command.join(' ').includes('pg_dump')).map((e) => e.projectName);
+      expect(preOrder).toEqual([`hola-${alpha}`, `hola-${zebra}`]);
+    });
+
+    test('a singular manifest reports the participation "default", exec sequence unchanged', async () => {
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      const paperless = await install(sys, 'paperless');
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect(prepared.participations).toEqual([{ deploymentId: paperless, participationId: 'default' }]);
+      await waitForJob(sys.jobs, prepared.jobId!);
+
+      const finalized = await sys.deployments.finalizeContractBackup();
+      expect(finalized.results).toEqual([{ deploymentId: paperless, participationId: 'default', ok: true, output: expect.any(String) }]);
+    });
+
+    test('finalize keeps going past a failing post-hook', async () => {
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PLURAL_BACKUP });
+      const postiz = await install(sys, 'postiz');
+      docker.failForServices = ['postiz-postgres'];
+
+      const finalized = await sys.deployments.finalizeContractBackup();
+      expect(finalized.ok).toBe(false);
+      expect(finalized.results).toEqual([
+        { deploymentId: postiz, participationId: 'app-db', ok: false, output: expect.any(String) },
+        { deploymentId: postiz, participationId: 'temporal-db', ok: true, output: expect.any(String) },
+      ]);
+    });
   });
 });

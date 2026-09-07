@@ -33,7 +33,7 @@ import type {
 } from '@hola/shared';
 import { STABLE_CHANNEL } from '@hola/shared';
 import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/param-validate';
-import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
+import { BACKUP_CONTRACT_REF, providerGrantsFor } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ParamField } from '../components/ui/fields/ParamField';
@@ -495,6 +495,19 @@ export const DeploymentDetail: React.FC = () => {
     ...(deployment.url ? [{ label: 'URL', value: deployment.url, mono: true }] : []),
     ...(deployment.ports.length
       ? [{ label: 'Ports', value: deployment.ports.join(', '), mono: true }]
+      : []),
+    // Spec 004: the privileged grants this install actually holds (declared ∩
+    // consented), named in the operator's terms — there was no visibility into
+    // this on the detail page before. A ref with no matching grant (shouldn't
+    // happen for a well-formed contract, but never worth a blank row) falls
+    // back to the raw ref.
+    ...((deployment.contracts?.granted?.length ?? 0) > 0
+      ? [{
+          label: 'Grants',
+          value: (deployment.contracts!.granted ?? [])
+            .map((ref) => providerGrantsFor([ref])[0]?.grant.label ?? ref)
+            .join(', '),
+        }]
       : []),
   ];
 

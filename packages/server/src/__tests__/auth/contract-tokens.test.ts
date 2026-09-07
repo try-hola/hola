@@ -13,7 +13,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { RealStorageService } from '../../services/core/storage';
-import { RealContractTokenService, createContractTokenAuthProvider } from '../../services/auth/contract-tokens';
+import { RealContractTokenService, createContractTokenAuthProvider, contractCapability } from '../../services/auth/contract-tokens';
 import { getRequiredCapability } from '../../middleware/auth';
 
 describe('contract-scoped tokens', () => {
@@ -115,5 +115,18 @@ describe('contract-scoped tokens', () => {
     // doesn't know grants nothing here, rather than a capability nothing checks.
     const token = await service.mint('future-app', ['telemetry@1']);
     expect((await service.authenticateToken(token)).principal?.capabilities).toEqual([]);
+  });
+
+  test('container-logs@1 is provisioned, not brokered: its capability matches no route (spec 004 FR-026)', () => {
+    // The broker routes stay backup@1-only (research.md): a provisioned contract
+    // needs no broker endpoints, so even though `contractCapability` resolves a
+    // capability name for it, nothing in the auth middleware's route table ever
+    // requires it — unlike backup@1's real broker route.
+    expect(contractCapability('container-logs@1')).toBe('contract:container-logs');
+    expect(getRequiredCapability('/api/contracts/backup/prepare', 'POST')).toBe('contract:backup');
+    // No pattern in the table matches a container-logs broker path (there is no
+    // such route), so a POST there falls through to the generic default rather
+    // than the contract-scoped capability nothing would ever check.
+    expect(getRequiredCapability('/api/contracts/container-logs/prepare', 'POST')).not.toBe('contract:container-logs');
   });
 });

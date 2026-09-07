@@ -285,6 +285,34 @@ describe('install', () => {
     );
   });
 
+  it('--grant container-logs@1 is passed through (spec 004)', async () => {
+    const sdk = makeSdk();
+    await runInstall('grafana-alloy', { grant: ['container-logs@1'], noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.deployments.create).toHaveBeenCalledWith(
+      expect.objectContaining({ grants: ['container-logs@1'] }),
+    );
+  });
+
+  it('a 409 PROVIDER_EXISTS response prints the server message and exits non-zero (spec 004)', async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
+    try {
+      const sdk = makeSdk();
+      sdk.deployments.create = vi.fn(async () => {
+        throw new Error(
+          "'grafana-alloy' provides container-logs@1, which 'Alloy' (deployment alloy-77) already provides. " +
+            'A contract has one provider per host; uninstall it first.',
+        );
+      });
+      const res = await runInstall('grafana-alloy', { grant: ['container-logs@1'], noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(errors.some(e => /already provides/.test(e) && /uninstall it first/.test(e))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('hints at --allow-multiple when a single-instance app is already installed (#246)', async () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });

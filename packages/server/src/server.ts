@@ -1549,8 +1549,10 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   // Capability contract broker (ADR 0004 §6, closing #298). A backup provider
   // (backrest) announces the start and end of its run; the server runs every
-  // accepting app's hooks in that app's own containers. The provider never
-  // touches another app — it asks, and the orchestrator acts.
+  // accepting app's backup participations (spec 004: one or more per app, in
+  // declaration order, fail-closed) in that app's own containers and reports
+  // per participation. The provider never touches another app — it asks, and
+  // the orchestrator acts.
   //
   // Authenticated with the provider's contract-scoped token (`contract:backup`),
   // minted for its deployment at install and revoked when it's uninstalled. The

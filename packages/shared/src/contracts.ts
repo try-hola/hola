@@ -38,7 +38,18 @@
  * the server (grant + broker), the web install wizard (render the consent step)
  * and the CLI (`--grant`). The manifest-coercion layer, which needs a Logger,
  * stays server-side in `services/core/contracts.ts`.
+ *
+ * **Spec 004** adds: acceptor participation as a *list* (`backup@1`'s block may
+ * be one or many participations — `backupParticipations()` is the only reader
+ * of either shape); a per-contract *participation mode* (`declared` — the app
+ * opts in via `accepts` — vs `implicit` — every install is a subject with
+ * nothing to declare, `container-logs@1`); a database-image recogniser and
+ * coverage judgement (`isDatabaseImage`, `judgeBackupCoverage`) so the dashboard
+ * can tell "quiesced" from "partially covered" from "as-is"; and the platform
+ * label keys applied to every app container.
  */
+
+import type { AppBackupConfig, AppBackupDeclaration, AppBackupHook, AppBackupParticipation, BackupCoverageState, ContractCoverage } from './index';
 
 /**
  * How a contract's two sides actually exchange (ADR 0004 §5).
@@ -80,8 +91,12 @@ export type ContractProviderKind = 'app' | 'platform';
  * the operator installing it saw nothing. ADR 0004 §4 attaches it to the provider
  * role instead and discloses it at install, so the person who bears the risk is
  * the one asked.
+ *
+ * `container-logs` (spec 004, ADR 0004 §12) is the second kind: a read-only,
+ * least-privilege log source (a redacting Docker API proxy, never a raw socket
+ * or log-directory mount) for a trusted log collector.
  */
-export type ProviderGrantKind = 'apps-data';
+export type ProviderGrantKind = 'apps-data' | 'container-logs';
 
 export type ProviderGrant = {
   kind: ProviderGrantKind;
@@ -98,6 +113,14 @@ export interface ContractDefinition {
   version: number;
   shape: ContractShape;
   providerKind: ContractProviderKind;
+  /**
+   * Whether an app opts in to being a subject via `accepts` (`declared`), or is
+   * a subject by virtue of running, with nothing to declare (`implicit`; spec
+   * 004, ADR 0004 §11). `container-logs@1` is the first `implicit` contract:
+   * a manifest `accepts` naming it is meaningless and is dropped with a
+   * warning, the way `provides` on a platform-provided contract already is.
+   */
+  participation: 'declared' | 'implicit';
   /**
    * Privilege the server grants this contract's provider at deploy time, and
    * which the operator must consent to at install. Absent ⇒ filling the provider
@@ -126,6 +149,7 @@ export const CONTRACTS: readonly ContractDefinition[] = [
     version: 1,
     shape: 'provisioned',
     providerKind: 'platform',
+    participation: 'declared',
     acceptorBlock: 'auth',
     summary: 'Per-app SSO provisioned at deploy time (native-oidc, forward-auth, native-ldap).',
   },
@@ -134,6 +158,7 @@ export const CONTRACTS: readonly ContractDefinition[] = [
     version: 1,
     shape: 'brokered',
     providerKind: 'app',
+    participation: 'declared',
     acceptorBlock: 'backup',
     providerGrant: {
       kind: 'apps-data',
@@ -150,8 +175,26 @@ export const CONTRACTS: readonly ContractDefinition[] = [
     version: 1,
     shape: 'brokered',
     providerKind: 'platform',
+    participation: 'declared',
     acceptorBlock: 'push',
     summary: 'Bulk data loaded into declared directories under the app\'s data root.',
+  },
+  {
+    id: 'container-logs',
+    version: 1,
+    shape: 'provisioned',
+    providerKind: 'app',
+    participation: 'implicit',
+    providerGrant: {
+      kind: 'container-logs',
+      label: 'Read the logs of every container on this host',
+      risk:
+        'This app can read whatever every installed app writes to its logs — which routinely includes ' +
+        'tokens, request paths and personal data — and can see which containers exist and how they are ' +
+        'labelled. It cannot start, stop or reach into them. Grant it only to a log collector you trust ' +
+        'with everything on this host.',
+    },
+    summary: 'Continuous read access to every container\'s logs for a trusted collector; every install is a subject.',
   },
 ] as const;
 
@@ -161,6 +204,16 @@ export const CONTRACTS: readonly ContractDefinition[] = [
  * typo would silently mean "no app participates".
  */
 export const BACKUP_CONTRACT_REF = 'backup@1';
+
+/**
+ * The container-logs contract's canonical ref (spec 004), for callers that need
+ * to name it — the CLI's `--grant`, a client rendering the rollup, a test.
+ * Unlike `BACKUP_CONTRACT_REF`, the server never matches on this string: the
+ * provider guard keys on `providerKind`, the implicit-`accepts` drop on
+ * `participation`, and materialisation on the grant `kind`, so the ref stays a
+ * label rather than a branch.
+ */
+export const CONTAINER_LOGS_CONTRACT_REF = 'container-logs@1';
 
 /** Canonical ref for a definition (`backup@1`). */
 export function formatContractRef(def: ContractDefinition): string {
@@ -216,3 +269,195 @@ export function missingGrantConsents(provides: string[] | undefined, consented: 
 export function grantsInclude(refs: string[] | undefined, kind: ProviderGrantKind): boolean {
   return (refs ?? []).some((ref) => parseContractRef(ref)?.providerGrant?.kind === kind);
 }
+
+// ---------------------------------------------------------------------------
+// Plural participation (spec 004, FR-001–004)
+// ---------------------------------------------------------------------------
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function asNonEmptyString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : undefined;
+}
+
+/** A command must be a non-empty array of non-empty strings (exec form, no shell-string). */
+function asCommand(v: unknown): string[] | undefined {
+  if (!Array.isArray(v) || v.length === 0) return undefined;
+  if (!v.every((x) => typeof x === 'string' && x.length > 0)) return undefined;
+  return v as string[];
+}
+
+function readHook(value: unknown): AppBackupHook | undefined {
+  if (!isRecord(value)) return undefined;
+  const service = asNonEmptyString(value.service);
+  const command = asCommand(value.command);
+  if (!service || !command) return undefined;
+  return { service, command };
+}
+
+/**
+ * The one reader of the `backup` block, in either shape (spec 004 / ADR 0003
+ * back-compat): the legacy singular object (`{ preHook?, postHook? }`) becomes
+ * a one-element list whose participation id is `default`; the plural array is
+ * filtered to well-formed entries in declaration order (a missing/blank `id`,
+ * a duplicate `id` — first wins — or an entry with neither hook is dropped).
+ * Pure and warning-less by design: this runs on every read (including
+ * on-disk release manifests written before this feature), while the
+ * publish-time coercer (`coerceManifestBackup`, server-side, with a logger) is
+ * where a bundle author's manifest gets one warning per drop.
+ */
+export function backupParticipations(value: unknown): AppBackupParticipation[] {
+  if (Array.isArray(value)) {
+    const out: AppBackupParticipation[] = [];
+    const seen = new Set<string>();
+    for (const entry of value) {
+      if (!isRecord(entry)) continue;
+      const id = asNonEmptyString(entry.id);
+      if (!id || seen.has(id)) continue;
+      const preHook = readHook(entry.preHook);
+      const postHook = readHook(entry.postHook);
+      if (!preHook && !postHook) continue;
+      seen.add(id);
+      const participation: AppBackupParticipation = { id };
+      if (preHook) participation.preHook = preHook;
+      if (postHook) participation.postHook = postHook;
+      out.push(participation);
+    }
+    return out;
+  }
+
+  if (isRecord(value)) {
+    const preHook = readHook(value.preHook);
+    const postHook = readHook(value.postHook);
+    if (!preHook && !postHook) return [];
+    const participation: AppBackupParticipation = { id: 'default' };
+    if (preHook) participation.preHook = preHook;
+    if (postHook) participation.postHook = postHook;
+    return [participation];
+  }
+
+  return [];
+}
+
+/** Re-exported so a caller can accept either the config or declaration type without importing both. */
+export type { AppBackupConfig, AppBackupDeclaration, AppBackupParticipation };
+
+// ---------------------------------------------------------------------------
+// Database-service recognition and backup coverage (spec 004, FR-015–019)
+// ---------------------------------------------------------------------------
+
+/**
+ * Closed, documented list of database image families whose live file copy is
+ * unsafe (relational and document databases). A platform constant, never app
+ * data — recognition keys on the image reference only, never an app id, and
+ * matches the check the catalog's own CI applies. Caches (Redis) are
+ * deliberately absent: a crash-consistent copy of a cache is acceptable.
+ * Extend by pull request as the catalog adds database images.
+ */
+export const DATABASE_IMAGE_FAMILIES = [
+  'postgres',
+  'postgresql',
+  'pgvector',
+  'postgis',
+  'timescaledb',
+  'mysql',
+  'mariadb',
+  'percona',
+  'mongo',
+  'mongodb',
+  'mssql',
+  'cockroachdb',
+  'couchdb',
+] as const;
+
+/**
+ * Whether an image reference names a recognised database family. Strips the
+ * registry/path and the tag/digest, then matches the lower-cased last path
+ * segment against the family list: exact, `family-*` (`mysql-server`,
+ * `timescaledb-ha`) or `*-family` (unlikely today, kept for symmetry). A
+ * prefix/suffix match whose remaining words name a companion role
+ * (`mongo-express`, `postgres-exporter`, `mariadb-backup`) is NOT a database —
+ * see `COMPANION_ROLE_WORDS`.
+ */
+export function isDatabaseImage(imageRef: string): boolean {
+  if (typeof imageRef !== 'string' || imageRef.trim().length === 0) return false;
+  const withoutDigest = imageRef.split('@')[0] ?? '';
+  const lastSlash = withoutDigest.lastIndexOf('/');
+  const afterSlash = lastSlash >= 0 ? withoutDigest.slice(lastSlash + 1) : withoutDigest;
+  const withoutTag = afterSlash.split(':')[0] ?? '';
+  const segment = withoutTag.toLowerCase().trim();
+  if (!segment) return false;
+
+  return DATABASE_IMAGE_FAMILIES.some((family) => {
+    if (segment === family) return true;
+    if (segment.startsWith(`${family}-`)) return !namesACompanionRole(segment.slice(family.length + 1));
+    if (segment.endsWith(`-${family}`)) return !namesACompanionRole(segment.slice(0, -(family.length + 1)));
+    return false;
+  });
+}
+
+/**
+ * Words that turn a database family name into something that *talks to* a
+ * database rather than *being* one: `mongo-express` (a web UI),
+ * `postgres-exporter` (metrics), `mariadb-backup` (a dump tool). None of these
+ * hold the data, so counting them as recognised databases would report a
+ * perfectly quiesced app as `partial` — teaching operators to ignore the one
+ * warning FR-019 exists to raise. Kept deliberately short and literal; extend by
+ * pull request alongside `DATABASE_IMAGE_FAMILIES`.
+ */
+const COMPANION_ROLE_WORDS: ReadonlySet<string> = new Set([
+  'adminer', 'admin', 'agent', 'backup', 'backups', 'cli', 'client', 'dump',
+  'exporter', 'express', 'init', 'operator', 'proxy', 'restore', 'ui', 'web',
+]);
+
+/** Whether any hyphen-separated word of the remainder names a companion role. */
+function namesACompanionRole(remainder: string): boolean {
+  return remainder.split('-').some((word) => COMPANION_ROLE_WORDS.has(word));
+}
+
+/**
+ * The coverage judgement for one deployment's `backup@1` acceptance (spec 004
+ * FR-016; data-model.md "Coverage judgement" state table). `targeted` counts
+ * distinct entries of `databaseServices` named by some participation's
+ * **pre-hook** — the pre-hook is the quiesce; a post-hook-only participation
+ * targets nothing, and two pre-hooks naming the same service count it once.
+ */
+export function judgeBackupCoverage(input: {
+  accepts: boolean;
+  participations: AppBackupParticipation[];
+  databaseServices: string[];
+}): ContractCoverage {
+  const { accepts, participations, databaseServices } = input;
+  const recognisedSet = new Set(databaseServices);
+  const targetedSet = new Set<string>();
+  const parts = participations.map((p) => {
+    const service = p.preHook?.service;
+    if (service && recognisedSet.has(service)) targetedSet.add(service);
+    return { id: p.id, service };
+  });
+
+  const recognised = databaseServices.length;
+  const targeted = targetedSet.size;
+
+  let state: BackupCoverageState;
+  if (!accepts) state = 'uncovered';
+  else if (recognised === 0) state = participations.length > 0 ? 'quiesced' : 'as-is';
+  else state = targeted === recognised ? 'quiesced' : 'partial';
+
+  return { state, targeted, recognised, participations: parts, databases: databaseServices };
+}
+
+// ---------------------------------------------------------------------------
+// Platform container labels (spec 004, FR-030/031)
+// ---------------------------------------------------------------------------
+
+/** Reserved-namespace label naming the Hola app id, on every app container. */
+export const PLATFORM_LABEL_APP = 'sh.hola.app';
+/** Reserved-namespace label naming the deployment id, on every app container. */
+export const PLATFORM_LABEL_DEPLOYMENT = 'sh.hola.deployment';
+/** Reserved-namespace label naming the deployment's display name, on every app container. */
+export const PLATFORM_LABEL_NAME = 'sh.hola.name';
+/** The reserved namespace itself — a user-authored label under this prefix is overwritten. */
+export const PLATFORM_LABEL_PREFIX = 'sh.hola.';
