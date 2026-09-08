@@ -9,7 +9,6 @@ import {
   AlertCircle,
   Terminal,
   X,
-  Check,
 } from 'lucide-react';
 import type {
   CatalogApp,
@@ -21,6 +20,8 @@ import { STABLE_CHANNEL } from '@hola/shared';
 import { useCatalogAppsApi } from '../hooks/useCatalogApi';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
+import { ChannelPill } from '../components/ui/ChannelPill';
+import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { api } from '../utils/api-hybrid';
 import { globalCache } from '../utils/cache';
 
@@ -139,6 +140,7 @@ export const Catalog: React.FC = () => {
   // Failure here is non-fatal: no deployments data just means every card falls
   // back to offering an install, which is the pre-existing behaviour.
   const { data: deploymentsData } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
+  const prereleaseEnrolled = usePrereleaseEnrolment();
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -185,16 +187,17 @@ export const Catalog: React.FC = () => {
   // catalog sources therefore reads as installed in both — acceptable while a
   // second install is impossible anyway, and it goes away with multi-instance
   // support (see the follow-up issue).
-  // #428: also track which channel(s) an app's existing deployment(s) follow,
-  // so the card can offer "Install on <channel>" only for a channel none of
-  // them already covers.
+  // Also track whether any of the app's existing copies report `multiInstance`
+  // — only then does the card offer "+ Another" (#428).
   const installedByApp = useMemo(() => {
-    const m = new Map<string, { id: string; channels: Set<string> }>();
+    const m = new Map<string, { id: string; multiInstance: boolean }>();
     for (const d of deploymentsData?.items ?? []) {
-      const channel = d.channel ?? STABLE_CHANNEL;
       const existing = m.get(d.app);
-      if (existing) existing.channels.add(channel);
-      else m.set(d.app, { id: d.id, channels: new Set([channel]) });
+      if (existing) {
+        if (d.multiInstance) existing.multiInstance = true;
+      } else {
+        m.set(d.app, { id: d.id, multiInstance: d.multiInstance === true });
+      }
     }
     return m;
   }, [deploymentsData?.items]);
@@ -340,23 +343,17 @@ export const Catalog: React.FC = () => {
               const installToWithChannel = (channel: string) =>
                 `${installTo}${installTo.includes('?') ? '&' : '?'}channel=${channel}`;
               // An installed app has no install path — the card manages the
-              // existing deployment instead. Apps that support running more than
-              // one instance would offer "Add" here; nothing does yet (see the
-              // multi-instance follow-up), so installed always means manage.
+              // existing deployment instead. "+ Another" only appears when the
+              // installed copy reports `multiInstance` (#428).
               const installedInfo = installedByApp.get(app.id);
               const installedId = installedInfo?.id;
               const goTo = installedId ? `/deployments/${installedId}` : installTo;
-              // #246: for an already-installed app, offer a deliberate second
-              // install. The wizard passes the allow-multiple override and asks for
-              // a distinct name (→ distinct subdomain); the server rejects it if the
-              // app is single-instance and no distinct host is chosen.
+              // #246: for an already-installed multi-instance app, offer a
+              // deliberate second install. The wizard passes the allow-multiple
+              // override and asks for a distinct name (→ distinct subdomain).
               const installAnotherTo = `${installTo}${installTo.includes('?') ? '&' : '?'}another=1`;
-              // #428: channels beyond stable this app has versions on, and
-              // (for an installed app) which of those no existing deployment
-              // already follows — those get their own "Install on <channel>"
-              // affordance instead of the blunt "install another".
+              // #428: channels beyond stable this app has versions on.
               const nonStableChannels = (app.channels ?? []).filter((c) => c !== STABLE_CHANNEL);
-              const installOnChannels = nonStableChannels.filter((c) => !installedInfo?.channels.has(c));
               // An app with no stable version at all has no `app.version` to
               // show; route its primary install straight to the first channel
               // that does have one (the install flow's own channel choice, if
@@ -380,16 +377,17 @@ export const Catalog: React.FC = () => {
                           <Star className="w-3.5 h-3.5 text-warning fill-current flex-none" />
                         )}
                       </div>
-                      <div className="text-xs text-text-faint mt-px">
-                        {app.category}
-                        {app.version && <span className="font-mono ml-1.5">· v{app.version}</span>}
-                        {custom && <span className="ml-1.5 text-warning">· {app.source} ({app.trust})</span>}
-                        {/* #428: a hint that this app has more than the stable
-                            release, e.g. "rc available" (one channel per app
-                            with no `beta`-includes-`rc` hierarchy — see
-                            data-model.md). */}
-                        {nonStableChannels.length > 0 && (
-                          <span className="ml-1.5">{nonStableChannels.join(', ')} available</span>
+                      <div className="text-xs text-text-faint mt-px flex items-center gap-1.5 flex-wrap">
+                        <span>
+                          {app.category}
+                          {app.version && <span className="font-mono ml-1.5">· v{app.version}</span>}
+                          {custom && <span className="ml-1.5 text-warning">· {app.source} ({app.trust})</span>}
+                        </span>
+                        {/* #428: enrolled operators see a pill naming the
+                            app's other published channels; unenrolled
+                            operators see no channel chrome at all. */}
+                        {prereleaseEnrolled && nonStableChannels.length > 0 && (
+                          <ChannelPill channel={nonStableChannels.join(', ')} kind="published" />
                         )}
                       </div>
                     </div>
@@ -403,56 +401,41 @@ export const Catalog: React.FC = () => {
                     {app.description}
                   </p>
 
-                  <div className="flex items-center gap-[10px] mt-4 pt-[14px] border-t border-border-soft">
-                    <span className="inline-flex items-center gap-1.5 text-[11.5px] text-warning font-medium">
+                  <div className="flex items-center gap-[10px] mt-4 pt-[14px] border-t border-border-soft flex-wrap">
+                    <span className="inline-flex items-center gap-1.5 text-[11.5px] text-warning font-medium whitespace-nowrap flex-none">
                       <Star className="w-3.5 h-3.5 fill-current" />
                       {app.rating}
                     </span>
                     <div className="flex-1" />
                     {installedId ? (
                       <>
-                        <span className="inline-flex items-center gap-1.5 text-[12px] text-text-muted font-medium">
-                          <Check className="w-3.5 h-3.5 text-success" />
-                          Installed
+                        <span className="inline-flex items-center gap-1.5 text-[12px] text-text-muted font-medium whitespace-nowrap flex-none">
+                          Installed ✓
                         </span>
-                        <Link
-                          to={installAnotherTo}
-                          onClick={(e) => e.stopPropagation()}
-                          title="Install another instance"
-                          className="h-[34px] px-[12px] flex items-center gap-[5px] bg-surface-2 text-text-muted border border-border rounded-lg text-[13px] font-semibold hover:border-primary hover:text-text-strong transition-colors"
-                        >
-                          <Plus className="w-4 h-4" />
-                          Another
-                        </Link>
+                        {installedInfo?.multiInstance && (
+                          <Link
+                            to={installAnotherTo}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Install another instance"
+                            className="h-[34px] px-[12px] flex items-center gap-[5px] bg-surface-2 text-text-muted border border-border rounded-lg text-[13px] font-semibold hover:border-primary hover:text-text-strong transition-colors whitespace-nowrap flex-none"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Another
+                          </Link>
+                        )}
                         <Link
                           to={goTo}
                           onClick={(e) => e.stopPropagation()}
-                          className="h-[34px] px-[14px] flex items-center gap-[6px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
+                          className="h-[34px] px-[14px] flex items-center gap-[6px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors whitespace-nowrap flex-none"
                         >
                           Manage
                         </Link>
-                        {/* #428: a channel none of this app's existing copies
-                            follows — a targeted second install, distinct from
-                            the blunt "Another" (which needs the allow-multiple
-                            override the channel difference makes unnecessary). */}
-                        {installOnChannels.map((c) => (
-                          <Link
-                            key={c}
-                            to={installToWithChannel(c)}
-                            onClick={(e) => e.stopPropagation()}
-                            title={`Install on the ${c} channel`}
-                            className="h-[34px] px-[12px] flex items-center gap-[5px] bg-surface-2 text-text-muted border border-border rounded-lg text-[13px] font-semibold hover:border-primary hover:text-text-strong transition-colors"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Install on {c}
-                          </Link>
-                        ))}
                       </>
                     ) : (
                       <Link
                         to={primaryInstallTo}
                         onClick={(e) => e.stopPropagation()}
-                        className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition"
+                        className="h-[34px] px-[14px] flex items-center gap-[6px] bg-primary-weak text-primary rounded-lg text-[13px] font-semibold hover:bg-primary hover:text-white transition whitespace-nowrap flex-none"
                       >
                         <Plus className="w-4 h-4" />
                         Install

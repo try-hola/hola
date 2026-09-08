@@ -3,6 +3,7 @@ import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { ChevronRight, ChevronDown, Check, Upload, X, Plus, AlertTriangle, Eye, EyeOff, RotateCw, FileText, Code, Download, Wand2, ShieldCheck } from 'lucide-react';
 import { AppIcon } from '../components/ui/AppIcon';
 import { ParamField } from '../components/ui/fields/ParamField';
+import { RadioGroup } from '../components/ui/fields/RadioGroup';
 import type {
   AppEnvVar,
   SystemEnvVar,
@@ -22,6 +23,7 @@ import { useCatalogAppApi } from '../hooks/useCatalogApi';
 import { useDraftValidation } from '../hooks/useDraftValidation';
 import { useDraftUpload } from '../hooks/useDraftUpload';
 import { useDraftFinalization } from '../hooks/useDraftFinalization';
+import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { api } from '../utils/api-hybrid';
 
 const steps = [
@@ -161,6 +163,107 @@ const DraftErrorPanel: React.FC<{
   );
 };
 
+type AlreadyInstalledDetails = {
+  code: 'ALREADY_INSTALLED';
+  existing: { id: string; name: string; channel: string };
+  channelPublished: boolean;
+};
+
+/**
+ * Narrow an error payload to `ALREADY_INSTALLED` details (spec 005 FR-018).
+ * A server that predates the structured-details change sends the same code
+ * with no payload, so the shape is checked rather than assumed.
+ */
+function asAlreadyInstalled(details: unknown): AlreadyInstalledDetails | null {
+  if (typeof details !== 'object' || details === null) return null;
+  const d = details as Partial<AlreadyInstalledDetails>;
+  if (
+    d.code !== 'ALREADY_INSTALLED' ||
+    typeof d.existing?.id !== 'string' ||
+    typeof d.existing?.name !== 'string' ||
+    typeof d.existing?.channel !== 'string' ||
+    typeof d.channelPublished !== 'boolean'
+  ) {
+    return null;
+  }
+  return d as AlreadyInstalledDetails;
+}
+
+/**
+ * The wizard turns "already installed" into a choice (spec 005 FR-018/FR-019)
+ * instead of a dead-end error: switch the existing copy to the requested
+ * channel, open it as-is, or install this one alongside it — the last option
+ * always offered when the existing copy already occupies the requested channel
+ * (that install can only proceed with the operator override), and otherwise
+ * only when the requested channel is published — an unpublished channel that no
+ * copy occupies has no version to install a separate copy from.
+ */
+const AlreadyInstalledPanel: React.FC<{
+  details: AlreadyInstalledDetails;
+  requestedChannel: string;
+  onSwitch: (existingId: string, channel: string) => Promise<void>;
+  onInstallSeparate: () => void;
+}> = ({ details, requestedChannel, onSwitch, onInstallSeparate }) => {
+  const [busy, setBusy] = useState(false);
+  const [switchErr, setSwitchErr] = useState<string | null>(null);
+  const { existing, channelPublished } = details;
+  const sameChannel = existing.channel === requestedChannel;
+
+  const handleSwitch = async () => {
+    setBusy(true);
+    setSwitchErr(null);
+    try {
+      await onSwitch(existing.id, requestedChannel);
+    } catch (e) {
+      setSwitchErr(e instanceof Error ? e.message : 'Failed to switch channel');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-0.5">
+      <p className="text-[12.5px] text-text-muted">
+        {existing.name} is already installed and follows {existing.channel}.
+      </p>
+      {switchErr && <div className="text-[12.5px] text-danger mt-1.5">{switchErr}</div>}
+      <div className="flex flex-wrap items-center gap-2 mt-2.5">
+        {!sameChannel && (
+          <button
+            type="button"
+            onClick={handleSwitch}
+            disabled={busy}
+            className="bg-primary text-primary-contrast px-3 py-1.5 rounded-lg text-[13px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            Switch {existing.name} to {requestedChannel} instead
+          </button>
+        )}
+        <Link
+          to={`/deployments/${existing.id}`}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors"
+        >
+          Open {existing.name}
+        </Link>
+        {/* `channelPublished` is false whenever the catalog couldn't confirm the
+            channel (unreachable catalog, install-by-ref, a pre-#431 manifest) —
+            but the copy blocking this install is still there, so hiding the
+            override on that alone leaves the wizard with no way forward at all.
+            The CLI never lost `--allow-multiple` here. */}
+        {(channelPublished || sameChannel) && (
+          <button
+            type="button"
+            onClick={onInstallSeparate}
+            disabled={busy}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium text-text-muted hover:text-text-strong transition-colors disabled:opacity-50"
+          >
+            {sameChannel ? 'Install another copy (operator override)' : `Install a separate ${requestedChannel} copy`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const InstallWizard: React.FC = () => {
   const { appId } = useParams();
   const [searchParams] = useSearchParams();
@@ -259,8 +362,15 @@ export const InstallWizard: React.FC = () => {
   const [instanceName, setInstanceName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
   const [availability, setAvailability] = useState<GetSubdomainAvailabilityResponse | null>(null);
-  const allowMultiple = searchParams.get('another') === '1';
+  // Lifted to state (spec 005 US4) so the ALREADY_INSTALLED conflict panel's
+  // "Install a separate copy" action can set it programmatically before
+  // re-finalizing — seeded from the URL so the catalog's "install another"
+  // link (`?another=1`) still works unchanged.
+  const [allowMultiple, setAllowMultiple] = useState(() => searchParams.get('another') === '1');
   const subdomain = slugifySubdomain(instanceName);
+  // spec 005 US1: gates the Channel radio group's visibility for an operator
+  // who hasn't enrolled in pre-release discovery (never on by default).
+  const enrolled = usePrereleaseEnrolment();
 
   // Real app metadata, resolved from the catalog when the draft is created.
   // Falls back to the route's appId for the brief window before the draft loads.
@@ -282,6 +392,20 @@ export const InstallWizard: React.FC = () => {
   // versions). Install-by-ref has no catalog entry to ask, so it never offers one.
   const { data: catalogAppData } = useCatalogAppApi(ociRef ? '' : app.id, source);
   const availableChannels = catalogAppData?.channels ?? [];
+  // Radio options for the summary step's Channel picker. Built from the
+  // channels the catalog actually PUBLISHES for this app (plus whatever this
+  // draft already follows, so the checked option always exists even when the
+  // catalog no longer lists it or is unreachable) — `stable` is NOT assumed:
+  // an app that publishes only a pre-release channel has no stable version to
+  // install, and offering "Stable (recommended)" there would hand the operator
+  // a choice that can only fail in `switchChannel`.
+  const channelOptions = (() => {
+    const all = [...new Set([...availableChannels, followedChannel])];
+    return [
+      ...(all.includes(STABLE_CHANNEL) ? [{ value: STABLE_CHANNEL, label: 'Stable (recommended)' }] : []),
+      ...all.filter((c) => c !== STABLE_CHANNEL).map((c) => ({ value: c, label: `${c} — pre-release` })),
+    ];
+  })();
 
   // Track the active draft + whether it was installed, so an abandoned wizard
   // can clean up its orphaned draft on unmount without deleting an installed one.
@@ -494,10 +618,14 @@ export const InstallWizard: React.FC = () => {
     }
   };
 
-  // Finalize draft and create deployment
-  const finalizeDraft = async (): Promise<boolean> => {
+  // Finalize draft and create deployment. `allowMultipleOverride` lets the
+  // ALREADY_INSTALLED conflict panel's "Install a separate copy" action force
+  // the flag on the SAME call that flips `setAllowMultiple(true)` — reading
+  // the `allowMultiple` state here alone would still see the pre-update value
+  // (state updates aren't synchronous).
+  const finalizeDraft = async (allowMultipleOverride?: boolean): Promise<boolean> => {
     if (!draftId) return false;
-    
+
     try {
       // #246: send the chosen name (→ subdomain) and, for a deliberate second
       // install of a single-instance app, the allow-multiple override.
@@ -505,7 +633,7 @@ export const InstallWizard: React.FC = () => {
       // explicitly (even if empty); otherwise send nothing so defaults apply.
       await draftFinalization.finalizeDraft(draftId, {
         name: instanceName.trim() || undefined,
-        allowMultiple,
+        allowMultiple: allowMultipleOverride ?? allowMultiple,
         profiles: profiles ? [...selectedProfiles] : undefined,
         // ADR 0004: the consent the operator gave for each privileged role the
         // app declares. Sending only what was actually checked is the point —
@@ -517,6 +645,20 @@ export const InstallWizard: React.FC = () => {
       console.error('Failed to finalize draft:', err);
       return false;
     }
+  };
+
+  // spec 005 US4: the ALREADY_INSTALLED conflict panel's "Switch" action —
+  // change the EXISTING copy's followed channel and go look at it instead of
+  // finishing this install. The channel change is a metadata-only PATCH (no
+  // job), so this is safe to do without ever creating a deployment here.
+  const handleSwitchExisting = async (existingId: string, targetChannel: string) => {
+    await api.deployments.update(existingId, { channel: targetChannel });
+    // Best-effort: this install attempt is abandoned in favor of switching the
+    // existing copy — a stray draft left behind is harmless, so a failure here
+    // must not block navigation to the copy that just changed channel.
+    if (draftId) await api.drafts.remove(draftId).catch(() => {});
+    installedRef.current = true; // already cleaned up above; don't double-remove on unmount
+    navigate(`/deployments/${existingId}`);
   };
 
   // Every row's issues against its own spec (legacy/custom rows with no spec
@@ -595,13 +737,22 @@ export const InstallWizard: React.FC = () => {
     }
   };
 
-  const handleInstall = async () => {
-    const success = await finalizeDraft();
+  const handleInstall = async (allowMultipleOverride?: boolean) => {
+    const success = await finalizeDraft(allowMultipleOverride);
     if (success) {
       // Mark installed so the unmount cleanup doesn't delete this draft.
       installedRef.current = true;
       navigate('/deployments');
     }
+  };
+
+  // spec 005 US4: the conflict panel's "Install a separate copy" /
+  // "Install another copy (operator override)" action — the same install this
+  // wizard was already doing, with the override forced on the SAME call that
+  // flips the state (see `finalizeDraft`).
+  const handleInstallSeparate = async () => {
+    setAllowMultiple(true);
+    await handleInstall(true);
   };
 
   const addEnvVar = async () => {
@@ -1630,21 +1781,25 @@ services:
             </p>
 
             <div className="space-y-4 mb-4">
-              {/* #428: only offered when the app actually has more than one
-                  channel with versions — otherwise there's no real choice to make. */}
-              {availableChannels.length > 1 && (
+              {/* spec 005 US1/US3: offered when there's an actual choice to make
+                  — enrolled in pre-release discovery with 2+ channels — or the
+                  wizard was opened with an explicit ?channel= (e.g. the deployment
+                  detail page's "Try <c> in a separate copy" link, or a per-channel
+                  catalog install), which must show its choice even to an operator
+                  who never enrolled. Either way there must be a real choice on
+                  offer: an app the catalog publishes on exactly one channel
+                  renders nothing, even when reached via ?channel=. */}
+              {((enrolled && availableChannels.length > 1) || searchParams.has('channel')) && channelOptions.length > 1 && (
                 <div>
                   <h4 className="text-[13.5px] font-semibold text-text-strong mb-2">Channel</h4>
-                  <select
-                    value={followedChannel}
-                    disabled={channelSwitching}
-                    onChange={(e) => void switchChannel(e.target.value)}
-                    className="w-full h-[38px] px-3 bg-surface-2 border border-border rounded-[10px] text-sm outline-none focus:border-primary disabled:opacity-50"
-                  >
-                    {availableChannels.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
+                  <div className={channelSwitching ? 'pointer-events-none opacity-50' : undefined}>
+                    <RadioGroup
+                      name="channel"
+                      value={followedChannel}
+                      onChange={(next) => void switchChannel(next)}
+                      options={channelOptions}
+                    />
+                  </div>
                   {channelSwitchError && (
                     <div className="mt-1.5 text-[12.5px] text-danger">{channelSwitchError}</div>
                   )}
@@ -1681,30 +1836,25 @@ services:
                     <span className="font-mono text-text-faint">checking {subdomain}.…</span>
                   )}
                 </div>
-                {/* #428: a channel-differentiated second copy explains ITSELF —
-                    swap the blunt "additional instance" warning for a note
-                    naming the channel and the (empty-data) starting point. */}
-                {channel && channel !== STABLE_CHANNEL ? (
+                {/* spec 005 FR-017: a channel-differentiated copy explains ITSELF —
+                    gated on the channel the copy will actually follow (explicit
+                    OR implied by a pinned pre-release version), not just an
+                    explicit selection, so an implied non-stable channel gets the
+                    same honest note. Swaps the blunt "additional instance"
+                    warning for one naming the channel and the empty-data start. */}
+                {followedChannel !== STABLE_CHANNEL ? (
                   <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-[10px] bg-info/10 text-[12.5px] text-text-muted">
                     <AlertTriangle className="w-4 h-4 text-info flex-none mt-px" />
                     <span>
-                      This copy follows the {channel} channel and starts with empty data.
-                      Give it a distinct name so it gets its own address — the channel
-                      doesn&apos;t exempt it from the one-app-per-subdomain rule.
+                      This copy follows the {followedChannel} channel: it receives {followedChannel} releases
+                      as well as stable ones, and starts with empty data. Give it a distinct
+                      name so it gets its own address.
                     </span>
                   </div>
                 ) : allowMultiple && (
                   <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-[10px] bg-warning/10 text-[12.5px] text-text-muted">
                     <AlertTriangle className="w-4 h-4 text-warning flex-none mt-px" />
                     <span>Installing an additional instance. Give it a distinct name so it gets its own address and data.</span>
-                  </div>
-                )}
-                {/* Following channel (#428): shown whenever the resolved channel
-                    isn't stable — covers an explicit ?channel= and one implied
-                    by a pinned pre-release version. */}
-                {followedChannel !== STABLE_CHANNEL && (
-                  <div className="mt-2 text-[12.5px] text-text-muted">
-                    Following channel: <span className="font-mono text-text-strong">{followedChannel}</span>
                   </div>
                 )}
               </div>
@@ -1818,26 +1968,43 @@ services:
               </div>
             </div>
 
-            {draftFinalization.error && (
-              <div className="flex items-start gap-3 px-4 py-[14px] rounded-[11px] bg-danger-weak border border-danger/20 text-danger mb-4">
-                <AlertTriangle className="w-5 h-5 flex-none mt-0.5" />
-                <div>
-                  <div className="text-[13.5px] font-semibold">Could not install</div>
-                  <div className="text-[12.5px] text-text-muted mt-0.5">{draftFinalization.error}</div>
-                  {/* spec 004: a 409 PROVIDER_EXISTS names the deployment already
-                      providing the contract — link straight to it. */}
-                  {(() => {
-                    const details = draftFinalization.errorDetails as { code?: string; existing?: { id?: string; name?: string } } | null;
-                    if (details?.code !== 'PROVIDER_EXISTS' || !details.existing?.id) return null;
-                    return (
-                      <Link to={`/deployments/${details.existing.id}`} className="inline-block mt-1.5 text-primary hover:underline text-[12.5px]">
-                        View {details.existing.name ?? 'the existing install'} →
-                      </Link>
-                    );
-                  })()}
+            {draftFinalization.error && (() => {
+              const alreadyInstalled = asAlreadyInstalled(draftFinalization.errorDetails);
+              return (
+                <div className="flex items-start gap-3 px-4 py-[14px] rounded-[11px] bg-danger-weak border border-danger/20 text-danger mb-4">
+                  <AlertTriangle className="w-5 h-5 flex-none mt-0.5" />
+                  <div>
+                    <div className="text-[13.5px] font-semibold">Could not install</div>
+                    {alreadyInstalled ? (
+                      // spec 005 US4: the server refused a conflicting single-instance
+                      // install — turn it into Switch / Open / Install-separate rather
+                      // than a dead-end message.
+                      <AlreadyInstalledPanel
+                        details={alreadyInstalled}
+                        requestedChannel={followedChannel}
+                        onSwitch={handleSwitchExisting}
+                        onInstallSeparate={handleInstallSeparate}
+                      />
+                    ) : (
+                      <>
+                        <div className="text-[12.5px] text-text-muted mt-0.5">{draftFinalization.error}</div>
+                        {/* spec 004: a 409 PROVIDER_EXISTS names the deployment already
+                            providing the contract — link straight to it. */}
+                        {(() => {
+                          const details = draftFinalization.errorDetails as { code?: string; existing?: { id?: string; name?: string } } | null;
+                          if (details?.code !== 'PROVIDER_EXISTS' || !details.existing?.id) return null;
+                          return (
+                            <Link to={`/deployments/${details.existing.id}`} className="inline-block mt-1.5 text-primary hover:underline text-[12.5px]">
+                              View {details.existing.name ?? 'the existing install'} →
+                            </Link>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             <div className="flex items-start gap-3 px-4 py-[14px] rounded-[11px] bg-info/10">
               <div className="w-5 h-5 bg-info rounded-full flex items-center justify-center flex-none mt-0.5">
@@ -1943,7 +2110,7 @@ services:
               <div className="flex-1" />
               {isLastStep ? (
                 <button
-                  onClick={handleInstall}
+                  onClick={() => void handleInstall()}
                   disabled={isLoading || availability?.available === false}
                   className="h-[42px] px-[22px] flex items-center gap-2 bg-primary text-white rounded-[10px] text-sm font-semibold shadow-primary-glow hover:brightness-110 disabled:opacity-50 transition"
                 >

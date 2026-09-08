@@ -35,6 +35,7 @@ import type {
   DeploymentDirectoryLayout,
   Job,
   DeploymentListItem,
+  CatalogAppVersion,
   ProvisionedAuthRef,
   AuthMode,
   GetLogsResponse,
@@ -329,6 +330,9 @@ function toListItem(d: EnhancedDeploymentDetail): DeploymentListItem {
     // Release channel this deployment follows (#428); a record written before
     // this feature carries no `channel` and reads as `stable` (no migration).
     channel: d.channel ?? STABLE_CHANNEL,
+    // Whether this app's manifest declares itself multi-instance (spec 005);
+    // absent (never `false`) means single-instance.
+    ...(d.multiInstance ? { multiInstance: true } : {}),
   };
 }
 
@@ -349,14 +353,22 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     // Release channel (#428); see toListItem.
     channel: d.channel ?? STABLE_CHANNEL,
     ...(d.instanceReason ? { instanceReason: d.instanceReason } : {}),
+    // Whether this app's manifest declares itself multi-instance (spec 005);
+    // absent (never `false`) means single-instance. See toListItem.
+    ...(d.multiInstance ? { multiInstance: true } : {}),
   };
 }
 
-/** Filter + paginate stored deployments into a list response. */
-function filterAndPaginateDeployments(
+/**
+ * Status/`q` filter step, shared by both the default and `prerelease` list
+ * paths (spec 005, US5) — split out of `filterAndPaginateDeployments` so the
+ * prerelease branch can enrich the FULL filtered set before paginating it
+ * (research.md R7), while the default path still paginates first (unchanged).
+ */
+function filterDeployments(
   all: EnhancedDeploymentDetail[],
   request: GetDeploymentsRequest
-): GetDeploymentsResponse {
+): EnhancedDeploymentDetail[] {
   let filtered = all;
 
   if (request.status && request.status !== 'all') {
@@ -371,12 +383,47 @@ function filterAndPaginateDeployments(
     );
   }
 
+  return filtered;
+}
+
+/** Paginate already-projected list items into a page response. */
+function paginateListItems(
+  items: DeploymentListItem[],
+  request: GetDeploymentsRequest
+): GetDeploymentsResponse {
+  const page = request.page || 1;
+  const limit = request.limit || 12;
+  const startIndex = (page - 1) * limit;
+  return { items: items.slice(startIndex, startIndex + limit), page, limit, total: items.length };
+}
+
+/**
+ * Filter + paginate stored deployments into a list response (default path,
+ * no `prerelease` filter): unchanged from before the split — paginate the raw
+ * records first, then project only the current page's items.
+ */
+function filterAndPaginateDeployments(
+  all: EnhancedDeploymentDetail[],
+  request: GetDeploymentsRequest
+): GetDeploymentsResponse {
+  const filtered = filterDeployments(all, request);
   const page = request.page || 1;
   const limit = request.limit || 12;
   const startIndex = (page - 1) * limit;
   const items = filtered.slice(startIndex, startIndex + limit).map(toListItem);
 
   return { items, page, limit, total: filtered.length };
+}
+
+/**
+ * Whether a list item counts as "pre-release" for the `prerelease` filter
+ * (spec 005, US5, data-model.md "Deployments list request"): the followed
+ * channel is non-stable, OR the running build's catalog channel is known and
+ * non-stable. Generic — no per-app logic, just channel comparison.
+ */
+function isPrereleaseItem(item: DeploymentListItem): boolean {
+  const channel = item.channel ?? STABLE_CHANNEL;
+  return channel !== STABLE_CHANNEL || (!!item.versionChannel && item.versionChannel !== STABLE_CHANNEL);
 }
 
 /** Paginate deployment jobs into a history response. */
@@ -860,6 +907,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // Why this is a permitted second copy of a single-instance app (#428);
         // absent for a first copy or a multi-instance app.
         ...(instanceReason ? { instanceReason } : {}),
+        // Whether this app's manifest declares itself multi-instance (spec
+        // 005), copied from the finalized manifest already read above for the
+        // guard — no second catalog call. Written ONLY when `true`; absent
+        // (never `false`) means single-instance, matching the `instanceReason`
+        // precedent.
+        ...(artifacts?.manifest.multiInstance === true ? { multiInstance: true } : {}),
         // Persist the catalog icon (emoji or image URL) carried through the
         // finalized manifest, so the launcher and registry feed have a stable
         // icon without a live catalog lookup. Falls back to a generic glyph.
@@ -1024,7 +1077,23 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async listDeployments(request: GetDeploymentsRequest): Promise<GetDeploymentsResponse> {
     await this.ensureLoaded();
     this.logger.info('Listing deployments', { request });
-    const page = filterAndPaginateDeployments(Array.from(this.deployments.values()), request);
+    const all = Array.from(this.deployments.values());
+
+    if (request.prerelease) {
+      // US5 (spec 005): filter by status/`q` first, then enrich EVERY
+      // remaining item (bounded by host-scale deployment count, catalog-cache
+      // reads keyed per source::app) so `versionChannel` is known before the
+      // prerelease keep, THEN paginate — otherwise a naive filter-after-page
+      // would under-fill pages (research.md R7). The default path below is
+      // unchanged: paginate first, enrich only the current page.
+      const filtered = filterDeployments(all, request);
+      const items = filtered.map(toListItem);
+      await this.enrichUpdateInfo(items);
+      const kept = items.filter(isPrereleaseItem);
+      return paginateListItems(kept, request);
+    }
+
+    const page = filterAndPaginateDeployments(all, request);
     await this.enrichUpdateInfo(page.items);
     return page;
   }
@@ -1115,6 +1184,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       updateAvailable: !!detail.updateAvailable,
       channel: detail.channel,
       latestVersionChannel: detail.latestVersionChannel,
+      versionChannel: detail.versionChannel,
     };
   }
 
@@ -1169,7 +1239,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * in-memory/mock service has no catalog); RealDeploymentService overrides it.
    */
   protected async enrichUpdateInfo(
-    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string; versionChannel?: string; multiInstance?: boolean }>,
   ): Promise<void> {
     void items;
   }
@@ -2630,45 +2700,83 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * installed `version`. Cheap (the catalog version list is served from the
    * in-memory cache, no bundle pull). Fail-safe — any catalog error leaves the
    * fields unset rather than failing the list/detail request.
+   *
+   * Also derives `versionChannel` (spec 005): the catalog channel of the
+   * version the deployment is currently RUNNING, distinct from `channel` (the
+   * followed track). Both facts come off the same per-app version list, so the
+   * memo below (R3) is keyed per `${source}::${app}` — not also by channel —
+   * and holds the FULL entries array rather than just the newest eligible one;
+   * `newestEligibleVersion` (unchanged) and the running-version lookup are then
+   * both derived from it per item.
    */
+  /**
+   * Records written before spec 005 carry no `multiInstance` flag, yet the
+   * catalog card offers "+ Another" only for copies that report it — so a
+   * genuinely multi-instance app installed earlier would silently lose the
+   * affordance. Derive it once, on read, from the active release manifest (the
+   * same source `createFromDraft` copies it from) and persist the answer so the
+   * disk read happens at most once per record. An unreadable manifest leaves the
+   * field absent (single-instance, the spec's documented reading) and is retried
+   * on the next read. Bounded by page size: this runs on the projected items.
+   */
+  private async backfillMultiInstance(items: Array<{ id?: string; multiInstance?: boolean }>): Promise<void> {
+    for (const item of items) {
+      if (item.multiInstance !== undefined || !item.id) continue;
+      const deployment = this.deployments.get(item.id);
+      if (!deployment || deployment.multiInstance !== undefined) continue;
+      const manifest = await this.readActiveManifest(deployment).catch(() => undefined);
+      if (!manifest) continue;
+      deployment.multiInstance = manifest.multiInstance === true;
+      if (deployment.multiInstance) item.multiInstance = true;
+      await this.persistDeployment(deployment).catch((err) => {
+        this.logger.warn('Failed to persist multiInstance backfill', { deploymentId: deployment.id, error: String(err) });
+      });
+    }
+  }
+
   protected override async enrichUpdateInfo(
-    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string }>,
+    items: Array<{ id?: string; app: string; version?: string; latestVersion?: string; updateAvailable?: boolean; channel?: string; latestVersionChannel?: string; versionChannel?: string; multiInstance?: boolean }>,
   ): Promise<void> {
+    await this.backfillMultiInstance(items);
     if (!this.catalogService || items.length === 0) return;
     // The source an item was installed from (default `hola`), so update detection
-    // queries the right catalog. Keyed per (source, app, channel) — #428: two
-    // deployments of the same app can follow different channels and must be
-    // offered different "newest" versions, and two sources could publish the
-    // same appId. `(ref)` installs have no index to check → skipped. `channel`
-    // is already set on every item by toListItem/toDetailResponse before this
-    // runs (defaults to `stable` for a pre-feature record).
+    // queries the right catalog. Keyed per (source, app) — two sources could
+    // publish the same appId. `(ref)` installs have no index to check → skipped.
     const sourceOf = (item: { id?: string; app: string }) =>
       (item.id ? this.deployments.get(item.id)?.metadata?.source : undefined) ?? 'hola';
-    const newestByKey = new Map<string, { version: string; channel: string } | undefined>();
+    const entriesByKey = new Map<string, CatalogAppVersion[] | undefined>();
     for (const item of items) {
       const source = sourceOf(item);
-      const channel = item.channel ?? STABLE_CHANNEL;
-      const key = `${source}::${item.app}::${channel}`;
-      if (newestByKey.has(key)) continue;
-      if (source === '(ref)') { newestByKey.set(key, undefined); continue; }
+      const key = `${source}::${item.app}`;
+      if (entriesByKey.has(key)) continue;
+      if (source === '(ref)') { entriesByKey.set(key, undefined); continue; }
       try {
         const { items: versions } = await this.catalogService.getVersions(item.app, source);
-        // Newest version ELIGIBLE on this deployment's channel (own channel or
-        // `stable` — #428), by version precedence, never by list position.
-        const newest = newestEligibleVersion(versions, channel);
-        newestByKey.set(key, newest ? { version: newest.version, channel: newest.channel ?? STABLE_CHANNEL } : undefined);
+        entriesByKey.set(key, versions);
       } catch {
-        newestByKey.set(key, undefined); // app not in catalog / catalog down — skip
+        entriesByKey.set(key, undefined); // app not in catalog / catalog down — skip
       }
     }
     for (const item of items) {
       const source = sourceOf(item);
+      // `channel` is already set on every item by toListItem/toDetailResponse
+      // before this runs (defaults to `stable` for a pre-feature record).
       const channel = item.channel ?? STABLE_CHANNEL;
       item.channel = channel;
-      const newest = newestByKey.get(`${source}::${item.app}::${channel}`);
+      const entries = entriesByKey.get(`${source}::${item.app}`);
+      if (!entries) continue;
+
+      // Catalog channel of the version this deployment is currently RUNNING
+      // (spec 005); absent when that version isn't in the list.
+      const running = item.version ? entries.find((v) => v.version === item.version) : undefined;
+      if (running) item.versionChannel = running.channel ?? STABLE_CHANNEL;
+
+      // Newest version ELIGIBLE on this deployment's channel (own channel or
+      // `stable` — #428), by version precedence, never by list position.
+      const newest = newestEligibleVersion(entries, channel);
       if (!newest) continue;
       item.latestVersion = newest.version;
-      item.latestVersionChannel = newest.channel;
+      item.latestVersionChannel = newest.channel ?? STABLE_CHANNEL;
       // Only flag an update when the installed version is a concrete, comparable
       // one. A deployment pinned to the literal "latest" has no known concrete
       // version to compare against — treating it as 0.0.0 would mark *every*
@@ -2696,6 +2804,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       updateAvailable: !!detail.updateAvailable,
       channel: detail.channel,
       latestVersionChannel: detail.latestVersionChannel,
+      versionChannel: detail.versionChannel,
     };
     if (!this.catalogService || !detail.updateAvailable || !detail.latestVersion) return base;
     try {
@@ -3265,15 +3374,41 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // a pre-#431 manifest), which reads here as "not published".
     if (!sameChannelCopy && channelPublished === true) return 'channel';
     if (allowMultiple) return 'operator-override';
+
+    // The copy the structured conflict names (spec 005, data-model.md
+    // "Already-installed conflict", research.md R5): the copy already on the
+    // requested channel when one exists, else the OLDEST live copy by
+    // `metadata.createdAt` — NOT `existing[0]` / Map iteration order, which is
+    // rehydration order after a restart, not install age.
+    // A record whose `createdAt` is missing or unparseable sorts LAST rather
+    // than winning by NaN comparison (every `<` against NaN is false, which
+    // would silently degrade the rule to "whatever Map order put first").
+    const createdAtOf = (d: EnhancedDeploymentDetail) => {
+      const t = new Date(d.metadata?.createdAt ?? '').getTime();
+      return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+    };
+    const namedCopy =
+      sameChannelCopy ??
+      existing.reduce((oldest, d) => (createdAtOf(d) < createdAtOf(oldest) ? d : oldest));
+    const details = {
+      code: 'ALREADY_INSTALLED',
+      existing: { id: namedCopy.id, name: namedCopy.name, channel: namedCopy.channel ?? STABLE_CHANNEL },
+      channelPublished: channelPublished === true,
+    };
+
+    // Messages are surface-neutral (contracts/api.md): they name the existing
+    // copy but carry no CLI flag or dashboard label — SC-003. The wizard/CLI
+    // build their own actions from `details`, not by parsing this string.
     if (!sameChannelCopy) {
       throw new ConflictError(
-        `'${appId}' is already installed (deployment ${existing[0]!.id}). Channel '${channel}' has no versions published for this app, ` +
-          `so it does not count as a separate channel; pass --allow-multiple (CLI) or "install another" (dashboard) to force a second copy.`,
+        `'${appId}' is already installed as '${namedCopy.name}'. Channel '${channel}' has no versions published for this app, ` +
+          `so it does not count as a separate channel.`,
+        details,
       );
     }
     throw new ConflictError(
-      `'${appId}' is already installed on channel '${channel}' (deployment ${sameChannelCopy.id}). This app is single-instance; ` +
-        `pass --channel <name> to run a second copy on another channel the catalog offers, or --allow-multiple (CLI) / "install another" (dashboard) to force one.`,
+      `'${appId}' is already installed as '${namedCopy.name}' and follows '${channel}'. This app is single-instance.`,
+      details,
     );
   }
 

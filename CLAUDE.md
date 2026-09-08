@@ -101,7 +101,19 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   (`stable` is the floor every channel includes). The channel enters at draft
   creation and rides the finalized manifest onto the deployment; the
   single-instance guard (#246) is per app **and** channel, with the permitting
-  reason (`channel` vs `operator-override`) recorded and shown.
+  reason (`channel` vs `operator-override`) recorded and shown. **Operator
+  model (spec 005, ADR 0005 §7).** Discovery of non-stable channels (catalog
+  pill, wizard radio, list filter) is gated by a host setting,
+  `settings.channels.showPrerelease` (default off), read through one shared
+  fail-closed web hook — turning it off never changes what channel an
+  installed copy follows. A copy's followed `channel` (the track) and its
+  running build's `versionChannel` (derived on read, not persisted) are
+  distinct facts shown together; Join/Leave are just the existing `PATCH
+  { channel }` behind a confirm dialog (Join requires enrolment, Leave never
+  does). A same-app conflict at install time returns a structured
+  `ALREADY_INSTALLED` (`details.code`, same `CONFLICT` top-level shape as
+  `PROVIDER_EXISTS`) so the wizard/CLI render a choice instead of a
+  surface-neutral message the caller has to parse.
 
 ## Conventions
 
@@ -160,5 +172,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/004-contract-cardinality/plan.md`
+`specs/005-beta-channel-ux/plan.md`
 <!-- SPECKIT END -->
