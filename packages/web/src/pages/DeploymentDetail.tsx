@@ -51,6 +51,12 @@ import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 // is imported from @hola/shared/param-validate so it can't drift from the
 // server's own definition as new spec fields are added.
 
+// Copy for the destructive remove confirmation (mirrored on the deployments
+// list, which offers the same action per row).
+const REMOVE_DIALOG_BODY =
+  "This permanently removes the deployment: it stops and deletes the containers, " +
+  "deprovisions SSO, releases the route, and deletes its data. This can't be undone.";
+
 // Decorative sparkline bar heights — computed once at module load (the values
 // are illustrative, not real time-series data).
 const SPARK_BARS = Array.from({ length: 34 }, (_, i) => 30 + ((i * 37) % 70));
@@ -1222,61 +1228,20 @@ export const DeploymentDetail: React.FC = () => {
         onCancel={() => { setChannelDialog(null); setChannelError(null); }}
       />
 
-      {showRemoveConfirm && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => { if (!removing) setShowRemoveConfirm(false); }}
-        >
-          <div
-            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="remove-dialog-title"
-          >
-            <div className="p-6">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-danger-weak text-danger">
-                  <AlertTriangle className="w-[18px] h-[18px]" />
-                </div>
-                <div className="min-w-0">
-                  <h2 id="remove-dialog-title" className="text-lg font-semibold m-0">Remove {deployment.name}?</h2>
-                  <p className="mt-1.5 text-sm text-text-muted">
-                    This permanently removes the deployment: it stops and deletes the
-                    containers, deprovisions SSO, releases the route, and deletes its
-                    data. This can't be undone.
-                  </p>
-                </div>
-              </div>
-
-              {removeError && (
-                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{removeError}</span>
-                </div>
-              )}
-
-              <div className="mt-6 flex justify-end gap-2.5">
-                <button
-                  onClick={() => setShowRemoveConfirm(false)}
-                  disabled={removing}
-                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRemove}
-                  disabled={removing}
-                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {removing ? <RotateCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                  {removing ? 'Removing…' : 'Remove'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Removal confirmation dialog */}
+      <ConfirmDialog
+        open={showRemoveConfirm}
+        title={`Remove ${deployment.name}?`}
+        body={REMOVE_DIALOG_BODY}
+        confirmLabel={removing ? 'Removing…' : 'Remove'}
+        busy={removing}
+        error={removeError}
+        danger
+        icon={<AlertTriangle className="w-[18px] h-[18px]" />}
+        confirmIcon={<Trash2 className="w-4 h-4" />}
+        onConfirm={handleRemove}
+        onCancel={() => setShowRemoveConfirm(false)}
+      />
 
       {/* Header card */}
       <div className="bg-surface-1 border border-border rounded-[14px] p-[20px_22px] mb-4">

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { sdkAdapter } from '../../utils/sdk-adapter';
@@ -156,12 +156,22 @@ describe('Deployments - SDK Adapter', () => {
 // mock that needs a per-test-controllable return value must route through
 // `vi.hoisted` — a bare closure over a later `const` would see it as
 // undefined at hoist time.
-const { listApi, prereleaseEnrolled } = vi.hoisted(() => ({
+const { listApi, removeApi, prereleaseEnrolled } = vi.hoisted(() => ({
   listApi: vi.fn(),
+  removeApi: vi.fn(),
   prereleaseEnrolled: vi.fn(() => false),
 }));
 vi.mock('../../utils/api-hybrid', () => ({
   api: { deployments: { list: (...args: unknown[]) => listApi(...args) } },
+}));
+// The list page reaches for `utils/api` (not the hybrid client) for the
+// destructive DELETE and the catalog re-check, so the remove flow below is
+// driven through this second mock.
+vi.mock('../../utils/api', () => ({
+  api: {
+    deployments: { remove: (...args: unknown[]) => removeApi(...args) },
+    catalog: { refresh: vi.fn(async () => ({})) },
+  },
 }));
 // usePrereleaseEnrolment is backed by a settings fetch through a different
 // path (useSettingsApi/safeFetchEnhanced) than the mocked deployments list
@@ -309,6 +319,88 @@ describe('Deployments - channel pill (#428)', () => {
     await waitFor(() => expect(listApi).toHaveBeenCalledTimes(4));
     expect((listApi.mock.calls[3]![0] as { prerelease?: boolean }).prerelease).toBeUndefined();
 
+    cleanup();
+  });
+});
+
+// #446: the list-level remove confirmation is the shared `ConfirmDialog` with
+// `danger` — same copy, same handlers, same busy/error states as before.
+describe('Deployments - remove confirmation (#446)', () => {
+  async function renderList(items: DeploymentListItem[]) {
+    listApi.mockResolvedValueOnce({ items, page: 1, limit: 100, total: items.length });
+    const { Deployments } = await import('../../pages/Deployments');
+    return render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <Deployments />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  beforeEach(() => {
+    listApi.mockClear();
+    removeApi.mockReset();
+    prereleaseEnrolled.mockReset();
+    prereleaseEnrolled.mockReturnValue(false);
+  });
+
+  it('opens a danger-styled dialog naming the row and removes it on confirm', async () => {
+    removeApi.mockResolvedValue({ ok: true });
+    await renderList([mockDeployments[0]]);
+
+    fireEvent.click(await screen.findByTitle('Remove'));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Remove Nextcloud?')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/This permanently removes the deployment: it stops and deletes the containers/)
+    ).toBeInTheDocument();
+
+    // The destructive confirm carries ConfirmDialog's `danger` styling.
+    const confirm = within(dialog).getByRole('button', { name: 'Remove' });
+    expect(confirm).toHaveClass('bg-danger');
+
+    listApi.mockResolvedValueOnce({ items: [], page: 1, limit: 100, total: 0 });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(removeApi).toHaveBeenCalledWith('nextcloud-prod'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    cleanup();
+  });
+
+  it('keeps the dialog open and shows the failure inline when removal fails', async () => {
+    removeApi.mockRejectedValue(new Error('teardown failed'));
+    await renderList([mockDeployments[0]]);
+
+    fireEvent.click(await screen.findByTitle('Remove'));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    expect(await within(dialog).findByText('teardown failed')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('treats a 404 as success (idempotent DELETE) and closes the dialog', async () => {
+    removeApi.mockRejectedValue(Object.assign(new Error('not found'), { statusCode: 404 }));
+    await renderList([mockDeployments[0]]);
+
+    fireEvent.click(await screen.findByTitle('Remove'));
+    listApi.mockResolvedValueOnce({ items: [], page: 1, limit: 100, total: 0 });
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    cleanup();
+  });
+
+  it('closes without removing when Cancel is clicked', async () => {
+    await renderList([mockDeployments[0]]);
+
+    fireEvent.click(await screen.findByTitle('Remove'));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(removeApi).not.toHaveBeenCalled();
     cleanup();
   });
 });
