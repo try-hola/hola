@@ -22,9 +22,11 @@ import type {
 import { STABLE_CHANNEL } from '@hola/shared';
 import { api } from '../utils/api';
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
+import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { TransientNotice } from '../components/ui/TransientNotice';
+import { ChannelPill, pillFor } from '../components/ui/ChannelPill';
 
 const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -64,6 +66,10 @@ export const Deployments: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<DeploymentStatus | 'all'>('all');
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
 
+  // "Pre-release" filter chip (spec 005, US5): an independent boolean, ANDed
+  // with the status filter, not persisted (matches the status filter).
+  const [prerelease, setPrerelease] = useState(false);
+
   // Pagination state
   const [page, setPage] = useState(1);
   const [limit] = useState(12); // Number of deployments per page
@@ -73,8 +79,9 @@ export const Deployments: React.FC = () => {
     page,
     limit,
     q: searchTerm || undefined,
-    status: statusFilter === 'all' ? undefined : statusFilter
-  }), [page, limit, searchTerm, statusFilter]);
+    status: statusFilter === 'all' ? undefined : statusFilter,
+    prerelease: prerelease || undefined
+  }), [page, limit, searchTerm, statusFilter, prerelease]);
 
   const {
     data: deploymentsResponse,
@@ -85,6 +92,17 @@ export const Deployments: React.FC = () => {
 
   const deployments = deploymentsResponse?.items || [];
   const totalDeployments = deploymentsResponse?.total || 0;
+
+  // "Pre-release" chip visibility (spec 005, US5, R7/R8): shown once enrolled,
+  // OR as soon as any currently-visible row is non-stable — even when not
+  // enrolled, so an operator can find/filter rows their settings would
+  // otherwise keep them from discovering more of. Also shown whenever the
+  // filter is ON: the filtered page can legitimately be empty (every matching
+  // row is on another page's status, or there are none left), and hiding the
+  // only control that can turn the filter back off would strand an unenrolled
+  // operator on a permanently empty list.
+  const prereleaseEnrolled = usePrereleaseEnrolment();
+  const showPrereleaseChip = prerelease || prereleaseEnrolled || deployments.some((d) => pillFor(d) !== null);
 
   const handleAction = useCallback(async (deploymentId: string, action: 'start' | 'stop' | 'restart') => {
     try {
@@ -308,6 +326,26 @@ export const Deployments: React.FC = () => {
             );
           })}
         </div>
+
+        {/* "Pre-release" chip (spec 005, US5): independent of the status
+            filter above (ANDed, not part of the same segmented group). */}
+        {showPrereleaseChip && (
+          <div
+            role="button"
+            aria-pressed={prerelease}
+            onClick={() => {
+              setPrerelease((prev) => !prev);
+              setPage(1); // Reset to first page when toggling
+            }}
+            className={`h-[38px] px-[13px] flex items-center rounded-[9px] text-[13px] font-medium cursor-pointer border ${
+              prerelease
+                ? 'bg-primary-weak text-primary border-primary/30'
+                : 'bg-surface-1 text-text-muted border-border hover:text-text-strong'
+            }`}
+          >
+            Pre-release
+          </div>
+        )}
       </div>
 
       {/* Job Tracker */}
@@ -376,15 +414,12 @@ export const Deployments: React.FC = () => {
                 <StatusBadge status={deployment.status} />
               </div>
               <div className="font-mono text-[12.5px] text-text-muted flex items-center gap-1.5 min-w-0">
-                {/* #428: channel pill for a non-stable deployment. */}
-                {deployment.channel && deployment.channel !== STABLE_CHANNEL && (
-                  <span
-                    title={`Follows the ${deployment.channel} channel`}
-                    className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-surface-2 text-text-muted text-[10.5px] font-semibold whitespace-nowrap flex-none"
-                  >
-                    {deployment.channel}
-                  </span>
-                )}
+                {/* #428 / spec 005: channel pill — running build wins over the
+                    followed channel when known (pillFor, data-model.md). */}
+                {(() => {
+                  const pill = pillFor(deployment);
+                  return pill && <ChannelPill channel={pill.channel} kind={pill.kind} />;
+                })()}
                 <span className="whitespace-nowrap">{deployment.version || '—'}</span>
                 {deployment.updateAvailable && deployment.latestVersion && (
                   <span

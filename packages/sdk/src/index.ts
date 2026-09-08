@@ -1,7 +1,9 @@
 import { 
   API, 
+  // Settings
+  GetSettingsResponse, PatchSettingsRequest, PatchSettingsResponse,
   // Phase 7 Draft types
-  CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
+  CreateDraftRequest, CreateDraftResponse, GetDraftResponse,
   PatchDraftRequest, PatchDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   ValidateDraftResponse, EnhancedPreflightResponse, FinalizeDraftResponse,
@@ -41,6 +43,30 @@ export type SdkInitOptions = {
   token?: string;
   fetchImpl?: typeof fetch;
 };
+
+// Structured error thrown for every non-2xx SDK response (spec 005, R6). When
+// the response body is a `{ error: { code, message, details, requestId } }`
+// envelope (the server's standard shape, see `middleware/error-mapping.ts`),
+// `message` is the server's own message and `code`/`details`/`requestId` are
+// populated from it. Otherwise `message` falls back to the legacy
+// `HTTP <status> <statusText>: <text>` form and only `status` is set — but the
+// thrown value is always a `HolaApiError`, so `instanceof HolaApiError` works
+// uniformly regardless of body shape.
+export class HolaApiError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+  requestId?: string;
+
+  constructor(message: string, status: number, opts?: { code?: string; details?: unknown; requestId?: string }) {
+    super(message);
+    this.name = 'HolaApiError';
+    this.status = status;
+    this.code = opts?.code;
+    this.details = opts?.details;
+    this.requestId = opts?.requestId;
+  }
+}
 
 export class HolaSdk {
   private baseUrl: string;
@@ -209,6 +235,13 @@ export class HolaSdk {
     health: () => this.get(API.system.health),
     updateCheck: () => this.get<GetUpdateCheckResponse>(API.system.updateCheck),
   };
+
+  // Dashboard-wide system settings (env vars, docker/tls/notifications config,
+  // and the pre-release-channel discovery gate, spec 005).
+  settings = {
+    get: () => this.get<GetSettingsResponse>(API.settings.base),
+    update: (data: PatchSettingsRequest) => this.patch<PatchSettingsResponse>(API.settings.base, data),
+  };
 }
 
 // --- helpers ---
@@ -234,12 +267,46 @@ function inferToken() {
 async function parseJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const text = await safeText(res);
-    throw new Error(`HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ''}`);
+    const structured = parseStructuredError(text);
+    if (structured) {
+      throw new HolaApiError(structured.message, res.status, {
+        code: structured.code,
+        details: structured.details,
+        requestId: structured.requestId,
+      });
+    }
+    throw new HolaApiError(`HTTP ${res.status} ${res.statusText}${text ? `: ${text}` : ''}`, res.status);
   }
   // May be empty body (204)
   const ct = res.headers.get('content-type') ?? '';
   if (!ct.includes('application/json')) return undefined as unknown as T;
   return res.json() as Promise<T>;
+}
+
+// Recognizes the server's standard error envelope
+// (`{ error: { code, message, details?, requestId? } }`, see
+// `middleware/error-mapping.ts`). Returns `undefined` for anything else
+// (plain text, unrelated JSON) so the caller falls back to the legacy message.
+function parseStructuredError(text: string): { code?: string; message: string; details?: unknown; requestId?: string } | undefined {
+  if (!text) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object' || !('error' in parsed)) return undefined;
+  const err = (parsed as { error?: unknown }).error;
+  if (!err || typeof err !== 'object') return undefined;
+  const { message } = err as { message?: unknown };
+  if (typeof message !== 'string') return undefined;
+  const { code, details, requestId } = err as { code?: unknown; details?: unknown; requestId?: unknown };
+  return {
+    code: typeof code === 'string' ? code : undefined,
+    message,
+    details,
+    requestId: typeof requestId === 'string' ? requestId : undefined,
+  };
 }
 
 async function safeText(res: Response) {

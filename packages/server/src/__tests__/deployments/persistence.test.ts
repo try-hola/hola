@@ -44,7 +44,9 @@ function makeCatalog(opts?: { multiInstance?: boolean; unavailable?: boolean }):
           volumes: [{ hostPath: './data', containerPath: '/data', readOnly: false }],
         },
         // #246: a catalog app that declares it supports multiple instances.
-        ...(opts?.multiInstance ? { multiInstance: true } : {}),
+        // `false` is written explicitly (spec 005) so a test can distinguish an
+        // explicit single-instance manifest from one that omits the field.
+        ...(opts?.multiInstance !== undefined ? { multiInstance: opts.multiInstance } : {}),
         // #428: echo the requested channel back as the resolved version's channel
         // (this stub isn't exercising catalog eligibility — that's
         // catalog-channels.test.ts / channels.test.ts) so a draft/deployment
@@ -419,15 +421,109 @@ describe('Deployment persistence (real service)', () => {
     expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(2);
   });
 
-  test('a second copy on the same channel is rejected, naming the channel and --channel (#428)', async () => {
+  test('a second copy on the same channel is rejected as a structured ALREADY_INSTALLED conflict (#428, spec 005)', async () => {
     const { drafts, deployments } = makeSystem();
-    await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc', options: { autoStart: false } });
+    const first = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc', options: { autoStart: false } });
 
-    await expect(
-      deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc-2', options: { autoStart: false } })
-    ).rejects.toThrow(/channel 'rc'.*--channel/s);
+    let err!: ConflictError;
+    try {
+      await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'rc'), name: 'gitea-rc-2', options: { autoStart: false } });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      err = e as ConflictError;
+    }
+    const details1 = err.details as { code?: string; existing?: { id: string; name: string; channel: string }; channelPublished?: boolean };
+    expect(err.code).toBe('CONFLICT');
+    expect(details1.code).toBe('ALREADY_INSTALLED');
+    expect(details1.existing).toEqual({ id: first.deploymentId, name: 'gitea-rc', channel: 'rc' });
+    expect(details1.channelPublished).toBe(true);
+    expect(err.message).not.toContain('--allow-multiple');
+    expect(err.message).not.toContain('--channel');
+    expect(err.message).not.toContain('install another');
 
     expect((await deployments.listDeployments({ page: 1, limit: 100 })).items).toHaveLength(1);
+  });
+
+  test('a second copy on an UNPUBLISHED channel is rejected as ALREADY_INSTALLED with channelPublished:false (#431, spec 005)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const first = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    let err!: ConflictError;
+    try {
+      await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, undefined, 'banana'), name: 'gitea-banana', options: { autoStart: false } });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      err = e as ConflictError;
+    }
+    const details2 = err.details as { code?: string; existing?: { id: string; name: string; channel: string }; channelPublished?: boolean };
+    expect(err.code).toBe('CONFLICT');
+    expect(details2.code).toBe('ALREADY_INSTALLED');
+    expect(details2.existing).toEqual({ id: first.deploymentId, name: 'gitea', channel: 'stable' });
+    expect(details2.channelPublished).toBe(false);
+    expect(err.message).toContain("Channel 'banana'");
+    expect(err.message).toContain('no versions published');
+    expect(err.message).not.toContain('--allow-multiple');
+    expect(err.message).not.toContain('--channel');
+    expect(err.message).not.toContain('install another');
+  });
+
+  test('ALREADY_INSTALLED "existing" selection: same-channel copy wins; otherwise the OLDEST live copy by metadata.createdAt (#428/#431, spec 005, research.md R5)', async () => {
+    const s1 = makeSystem();
+    const stable = await s1.deployments.createFromDraft({ draftId: await finalizedDraft(s1.drafts), name: 'gitea', options: { autoStart: false } });
+    const rc = await s1.deployments.createFromDraft({
+      draftId: await finalizedDraft(s1.drafts, undefined, 'rc'),
+      name: 'gitea-rc',
+      options: { autoStart: false },
+    });
+
+    // Pin createdAt explicitly so the selection rule is exercised deterministically
+    // rather than depending on real-clock resolution between two awaited creates:
+    // stable is the OLDER copy, rc is the NEWER one, regardless of Map insertion
+    // order once rehydrated (research.md R5 — rehydration order is not age order).
+    const stablePath = join(dataRoot, 'deployments', stable.deploymentId, 'metadata.json');
+    const rcPath = join(dataRoot, 'deployments', rc.deploymentId, 'metadata.json');
+    const stableMeta = JSON.parse(await readFile(stablePath, 'utf8'));
+    const rcMeta = JSON.parse(await readFile(rcPath, 'utf8'));
+    stableMeta.metadata.createdAt = new Date('2026-01-01T00:00:00.000Z').toISOString();
+    rcMeta.metadata.createdAt = new Date('2026-01-02T00:00:00.000Z').toISOString();
+    await writeFile(stablePath, JSON.stringify(stableMeta));
+    await writeFile(rcPath, JSON.stringify(rcMeta));
+
+    // A fresh service rehydrates from the (now edited) stored metadata.
+    const s2 = makeSystem();
+
+    // Requesting the (published) `rc` channel again: a same-channel copy exists,
+    // so `existing` names IT — the rc copy — not the oldest copy.
+    let sameChannelErr!: ConflictError;
+    try {
+      await s2.deployments.createFromDraft({
+        draftId: await finalizedDraft(s2.drafts, undefined, 'rc'),
+        name: 'gitea-rc-2',
+        options: { autoStart: false },
+      });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      sameChannelErr = e as ConflictError;
+    }
+    const sameChannelDetails = sameChannelErr.details as { existing?: { id: string; name: string; channel: string } };
+    expect(sameChannelDetails.existing).toEqual({ id: rc.deploymentId, name: 'gitea-rc', channel: 'rc' });
+
+    // Requesting an UNPUBLISHED channel: no same-channel copy exists, so
+    // `existing` falls back to the copy with the SMALLEST metadata.createdAt —
+    // the stable copy, even though it wasn't touched by this request at all.
+    let unpublishedErr!: ConflictError;
+    try {
+      await s2.deployments.createFromDraft({
+        draftId: await finalizedDraft(s2.drafts, undefined, 'banana'),
+        name: 'gitea-banana',
+        options: { autoStart: false },
+      });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      unpublishedErr = e as ConflictError;
+    }
+    const unpublishedDetails = unpublishedErr.details as { existing?: { id: string; name: string; channel: string } };
+    expect(unpublishedDetails.existing).toEqual({ id: stable.deploymentId, name: 'gitea', channel: 'stable' });
   });
 
   test('override supplied but not needed records reason "channel" (#428, clarification Q1)', async () => {
@@ -631,5 +727,112 @@ describe('Deployment persistence (real service)', () => {
 
     const list = await deployments.listDeployments({ page: 1, limit: 100 });
     expect(list.items).toHaveLength(1); // only the one valid deployment
+  });
+
+  // --- multiInstance (spec 005): projected straight from the finalized
+  // manifest already read at create time (R4) — no new catalog call. ---
+
+  test('a multiInstance manifest yields multiInstance: true on the created deployment and the list item (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem({ multiInstance: true });
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // "Create response": the detail read immediately after creation.
+    const detail = await deployments.getDeployment(created.deploymentId);
+    expect(detail.multiInstance).toBe(true);
+
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items[0]?.multiInstance).toBe(true);
+  });
+
+  test('a pre-feature record (no multiInstance on disk) is backfilled from the active manifest on read and persisted (spec 005)', async () => {
+    const a = makeSystem({ multiInstance: true });
+    const created = await a.deployments.createFromDraft({ draftId: await finalizedDraft(a.drafts), name: 'gitea', options: { autoStart: false } });
+
+    // Simulate a record written before spec 005: strip the flag from metadata.json.
+    const path = `deployments/${created.deploymentId}/metadata.json`;
+    const record = JSON.parse(await a.storage.readFileAsString(path)) as Record<string, unknown>;
+    expect(record.multiInstance).toBe(true);
+    delete record.multiInstance;
+    await a.storage.writeFile(path, JSON.stringify(record, null, 2));
+
+    // A fresh service (restart) reads the flag from the release manifest on the
+    // first list, and persists it so the next read costs no disk access.
+    const b = makeSystem({ multiInstance: true });
+    const list = await b.deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items[0]?.multiInstance).toBe(true);
+    const persisted = JSON.parse(await b.storage.readFileAsString(path)) as Record<string, unknown>;
+    expect(persisted.multiInstance).toBe(true);
+
+    // A single-instance legacy record is backfilled to an explicit false on disk
+    // and still projects NO field (absent reads single-instance).
+    const c = makeSystem();
+    const single = await c.deployments.createFromDraft({ draftId: await finalizedDraft(c.drafts), name: 'gitea-2', allowMultiple: true, options: { autoStart: false } });
+    const singlePath = `deployments/${single.deploymentId}/metadata.json`;
+    const d = makeSystem();
+    const detail = await d.deployments.getDeployment(single.deploymentId);
+    expect('multiInstance' in detail).toBe(false);
+    const singleRecord = JSON.parse(await d.storage.readFileAsString(singlePath)) as Record<string, unknown>;
+    expect(singleRecord.multiInstance).toBe(false);
+  });
+
+  test('a single-instance manifest with the field omitted yields NO multiInstance field, not false (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    const detail = await deployments.getDeployment(created.deploymentId);
+    expect(detail.multiInstance).toBeUndefined();
+    expect('multiInstance' in detail).toBe(false);
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items[0]?.multiInstance).toBeUndefined();
+    expect('multiInstance' in list.items[0]!).toBe(false);
+  });
+
+  test('a manifest with an explicit multiInstance: false yields NO multiInstance field, not false (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem({ multiInstance: false });
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+    const detail = await deployments.getDeployment(created.deploymentId);
+    expect(detail.multiInstance).toBeUndefined();
+    expect('multiInstance' in detail).toBe(false);
+    const list = await deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items[0]?.multiInstance).toBeUndefined();
+    expect('multiInstance' in list.items[0]!).toBe(false);
+  });
+
+  test('multiInstance survives a restart (spec 005)', async () => {
+    const s1 = makeSystem({ multiInstance: true });
+    const dep = await s1.deployments.createFromDraft({ draftId: await finalizedDraft(s1.drafts), name: 'gitea', options: { autoStart: false } });
+
+    const stored = JSON.parse(await readFile(join(dataRoot, 'deployments', dep.deploymentId, 'metadata.json'), 'utf8'));
+    expect(stored.multiInstance).toBe(true);
+
+    // A fresh service set over the same data root only REHYDRATES the stored
+    // record — it never re-derives multiInstance from the catalog — so the
+    // second system's catalog need not agree.
+    const s2 = makeSystem();
+    const detail = await s2.deployments.getDeployment(dep.deploymentId);
+    expect(detail.multiInstance).toBe(true);
+    const list = await s2.deployments.listDeployments({ page: 1, limit: 100 });
+    expect(list.items.find((i) => i.id === dep.deploymentId)?.multiInstance).toBe(true);
+  });
+
+  test('a raw stored record without the field at all reads back with multiInstance absent, not coerced to false (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea', options: { autoStart: false } });
+
+    // Simulate a pre-feature record: no `multiInstance` key at all (already the
+    // case here since the manifest didn't declare it — confirm directly against
+    // the raw stored JSON, matching the #428 "records without a stored channel"
+    // convention).
+    const metaPath = join(dataRoot, 'deployments', dep.deploymentId, 'metadata.json');
+    const raw = JSON.parse(await readFile(metaPath, 'utf8')) as Record<string, unknown>;
+    expect('multiInstance' in raw).toBe(false);
+
+    const reloaded = makeSystem();
+    const detail = await reloaded.deployments.getDeployment(dep.deploymentId);
+    expect(detail.multiInstance).toBeUndefined();
+    expect('multiInstance' in detail).toBe(false);
+    const list = await reloaded.deployments.listDeployments({ page: 1, limit: 100 });
+    const item = list.items.find((i) => i.id === dep.deploymentId);
+    expect(item?.multiInstance).toBeUndefined();
+    expect(item && 'multiInstance' in item).toBe(false);
   });
 });

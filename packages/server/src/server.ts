@@ -208,6 +208,19 @@ function getIdentity(req: Request): GetMeResponse | null {
 }
 
 // Router
+/**
+ * `GET/PATCH /api/settings` never return the SMTP password: the shared type
+ * documents it as redacted, and since spec 005 the settings document is read by
+ * every dashboard page (enrolment gating), not just the Settings page. The
+ * password stays on disk and in PATCH requests; only responses drop it.
+ */
+function redactNotifications<T extends { smtpPassword?: string } | undefined>(n: T): T {
+  if (!n) return n;
+  const { smtpPassword: _password, ...rest } = n;
+  void _password;
+  return rest as T;
+}
+
 async function route(url: URL, req: Request): Promise<Response> {
   const { pathname, searchParams } = url;
 
@@ -1022,6 +1035,10 @@ async function route(url: URL, req: Request): Promise<Response> {
     const limit = Number(searchParams.get('limit')) || 12;
     const q = searchParams.get('q') || undefined;
     const statusParam = searchParams.get('status') || 'all';
+    // Pre-release list filter (spec 005, US5): keeps only rows whose followed
+    // or running-build channel is non-stable, applied server-side before
+    // pagination (contracts/api.md).
+    const prerelease = searchParams.get('prerelease') === 'true';
 
     try {
       const services = getServices();
@@ -1030,6 +1047,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         limit,
         q,
         status: statusParam === 'all' ? 'all' : statusParam as 'running' | 'stopped' | 'installing' | 'updating' | 'error',
+        ...(prerelease ? { prerelease } : {}),
       });
       return json(payload);
     } catch (err) {
@@ -1651,7 +1669,8 @@ async function route(url: URL, req: Request): Promise<Response> {
         systemEnv: systemSettings.systemEnv,
         docker: systemSettings.docker,
         tls: systemSettings.tls,
-        notifications: systemSettings.notifications,
+        notifications: redactNotifications(systemSettings.notifications),
+        channels: systemSettings.channels,
       };
       return json(payload);
     } catch (error) {
@@ -1662,6 +1681,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         docker: { host: '/var/run/docker.sock' },
         tls: { email: '' },
         notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+        channels: { showPrerelease: false },
       };
       return json(payload);
     }
@@ -1679,7 +1699,8 @@ async function route(url: URL, req: Request): Promise<Response> {
         systemEnv: updatedSettings.systemEnv,
         docker: updatedSettings.docker,
         tls: updatedSettings.tls,
-        notifications: updatedSettings.notifications,
+        notifications: redactNotifications(updatedSettings.notifications),
+        channels: updatedSettings.channels,
       };
       return json(payload);
     } catch (error) {

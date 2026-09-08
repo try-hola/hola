@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { sdkAdapter } from '../../utils/sdk-adapter';
@@ -149,14 +149,26 @@ describe('Deployments - SDK Adapter', () => {
   });
 });
 
-// #428: the deployments list renders a channel pill for a non-stable row.
+// #428 / spec 005: the deployments list renders a channel pill (via `pillFor`
+// → `ChannelPill`) for a non-stable row, and a "Pre-release" filter chip that
+// sends `prerelease=true` server-side (US5).
 // `vi.mock` factories are hoisted above the module's own top-level code, so a
 // mock that needs a per-test-controllable return value must route through
 // `vi.hoisted` — a bare closure over a later `const` would see it as
 // undefined at hoist time.
-const { listApi } = vi.hoisted(() => ({ listApi: vi.fn() }));
+const { listApi, prereleaseEnrolled } = vi.hoisted(() => ({
+  listApi: vi.fn(),
+  prereleaseEnrolled: vi.fn(() => false),
+}));
 vi.mock('../../utils/api-hybrid', () => ({
   api: { deployments: { list: (...args: unknown[]) => listApi(...args) } },
+}));
+// usePrereleaseEnrolment is backed by a settings fetch through a different
+// path (useSettingsApi/safeFetchEnhanced) than the mocked deployments list
+// above; stubbing the hook directly keeps this suite focused on Deployments'
+// own pill/chip logic rather than re-testing settings plumbing.
+vi.mock('../../hooks/usePrereleaseEnrolment', () => ({
+  usePrereleaseEnrolment: () => prereleaseEnrolled(),
 }));
 
 describe('Deployments - channel pill (#428)', () => {
@@ -174,6 +186,8 @@ describe('Deployments - channel pill (#428)', () => {
 
   beforeEach(() => {
     listApi.mockClear();
+    prereleaseEnrolled.mockReset();
+    prereleaseEnrolled.mockReturnValue(false);
   });
 
   it('renders a pill for a non-stable channel', async () => {
@@ -205,6 +219,96 @@ describe('Deployments - channel pill (#428)', () => {
       latestVersionChannel: 'rc',
     }]);
     expect(await screen.findByText(/1\.3\.0-rc\.2 \(rc\)/)).toBeInTheDocument();
+    cleanup();
+  });
+
+  // --- pillFor cases (spec 005, data-model.md "Pill selection") ---
+
+  it('pillFor: a running build on a non-stable channel wins ("Running a beta build")', async () => {
+    await renderList([{ ...mockDeployments[0], channel: 'stable', versionChannel: 'beta' }]);
+    const pill = await screen.findByTitle('Running a beta build');
+    expect(pill).toHaveTextContent('beta');
+    cleanup();
+  });
+
+  it('pillFor: falls back to the followed channel when versionChannel is unknown ("Follows the beta channel")', async () => {
+    await renderList([{ ...mockDeployments[0], channel: 'beta', versionChannel: undefined }]);
+    const pill = await screen.findByTitle('Follows the beta channel');
+    expect(pill).toHaveTextContent('beta');
+    cleanup();
+  });
+
+  it('pillFor: stable channel + stable running build renders no pill at all', async () => {
+    await renderList([{ ...mockDeployments[0], channel: 'stable', versionChannel: 'stable' }]);
+    await screen.findByText(mockDeployments[0].name);
+    expect(screen.queryByTitle(/Follows the .* channel/)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/Running a .* build/)).not.toBeInTheDocument();
+    cleanup();
+  });
+
+  // --- "Pre-release" filter chip (spec 005, US5) ---
+
+  it('shows the Pre-release chip when enrolled, even though every visible row is stable', async () => {
+    prereleaseEnrolled.mockReturnValue(true);
+    await renderList([{ ...mockDeployments[0], channel: 'stable', versionChannel: 'stable' }]);
+    expect(await screen.findByText('Pre-release')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('shows the Pre-release chip when any visible row is non-stable, even when not enrolled', async () => {
+    prereleaseEnrolled.mockReturnValue(false);
+    await renderList([{ ...mockDeployments[0], channel: 'rc' }]);
+    expect(await screen.findByText('Pre-release')).toBeInTheDocument();
+    cleanup();
+  });
+
+  it('hides the Pre-release chip when not enrolled and every visible row is stable', async () => {
+    prereleaseEnrolled.mockReturnValue(false);
+    await renderList([{ ...mockDeployments[0], channel: 'stable', versionChannel: 'stable' }]);
+    await screen.findByText(mockDeployments[0].name);
+    expect(screen.queryByText('Pre-release')).not.toBeInTheDocument();
+    cleanup();
+  });
+
+  it('clicking the Pre-release chip filters server-side and resets the page; toggling off drops the param', async () => {
+    prereleaseEnrolled.mockReturnValue(true); // chip visible from the start regardless of rows
+    const page1Items: DeploymentListItem[] = Array.from({ length: 12 }, (_, i) => ({
+      ...mockDeployments[0],
+      id: `d-${i}`,
+      name: `App ${i}`,
+    }));
+
+    listApi.mockResolvedValueOnce({ items: page1Items, page: 1, limit: 12, total: 20 });
+    const { Deployments } = await import('../../pages/Deployments');
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <Deployments />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    await screen.findByText('App 0');
+    expect(listApi).toHaveBeenCalledTimes(1);
+
+    // Move to page 2 first, to prove the chip click below resets it to 1.
+    listApi.mockResolvedValueOnce({ items: page1Items, page: 2, limit: 12, total: 20 });
+    fireEvent.click(screen.getByTitle('Next page'));
+    await waitFor(() => expect(listApi).toHaveBeenCalledTimes(2));
+    expect(listApi.mock.calls[1]![0]).toMatchObject({ page: 2 });
+    expect((listApi.mock.calls[1]![0] as { prerelease?: boolean }).prerelease).toBeUndefined();
+
+    // Click the chip: prerelease=true is sent and the page resets to 1.
+    listApi.mockResolvedValueOnce({ items: [], page: 1, limit: 12, total: 0 });
+    fireEvent.click(screen.getByText('Pre-release'));
+    await waitFor(() => expect(listApi).toHaveBeenCalledTimes(3));
+    expect(listApi.mock.calls[2]![0]).toMatchObject({ page: 1, prerelease: true });
+
+    // Toggle the chip back off: the param is dropped from the next call.
+    listApi.mockResolvedValueOnce({ items: page1Items, page: 1, limit: 12, total: 20 });
+    fireEvent.click(screen.getByText('Pre-release'));
+    await waitFor(() => expect(listApi).toHaveBeenCalledTimes(4));
+    expect((listApi.mock.calls[3]![0] as { prerelease?: boolean }).prerelease).toBeUndefined();
+
     cleanup();
   });
 });
