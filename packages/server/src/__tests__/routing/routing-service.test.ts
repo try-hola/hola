@@ -179,6 +179,69 @@ describe('RoutingService', () => {
     expect(bypass.middlewares).toBeUndefined();
   });
 
+  test('forward-auth protectedBypassPaths emit a shared basicAuth middleware attached only to those routers', async () => {
+    const base = routing.generateRule({ deploymentId: 'calibre-dep-a', appName: 'calibre-web', port: 8083 });
+    const rule = {
+      ...base,
+      forwardAuth: {
+        name: 'ak-calibre-dep-a',
+        outpostUrl: 'http://authentik-server:9000',
+        bypassPaths: ['/api/v1/setup/'],
+        protectedBypassPaths: ['/opds', '/kobo/'],
+        bypassAuthSecret: 'the-raw-shared-secret',
+      },
+    };
+    await routing.activateRoute(rule);
+
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+
+    // The base app router is still gated by the forward-auth middleware.
+    expect(dynamic.http.routers['calibre-dep-a'].middlewares).toEqual(['ak-calibre-dep-a']);
+
+    // The plain (unprotected) bypass router is unaffected — no middleware.
+    const plainBypass = dynamic.http.routers['calibre-dep-a-bypass-0'];
+    expect(plainBypass.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/api/v1/setup/`)');
+    expect(plainBypass.middlewares).toBeUndefined();
+
+    // ONE shared basicAuth middleware for the deployment, named off the service.
+    const mwName = 'calibre-dep-a-bypass-auth';
+    const basicAuth = dynamic.http.middlewares[mwName]?.basicAuth;
+    expect(basicAuth).toBeDefined();
+    expect(basicAuth.users).toHaveLength(1);
+    // Fixed username `hola`; the password half is an htpasswd-format bcrypt hash
+    // ($2a$/$2b$/$2x$/$2y$ — the prefixes Traefik's basicAuth recognizes).
+    expect(basicAuth.users[0]).toMatch(/^hola:\$2[abxy]\$\d{2}\$.+$/);
+
+    // Every declared protectedBypassPaths prefix gets its own higher-priority
+    // router, matching the same Host && PathPrefix shape as the plain bypass
+    // loop, but carrying the shared basicAuth middleware instead of none.
+    const protected0 = dynamic.http.routers['calibre-dep-a-protected-bypass-0'];
+    expect(protected0.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/opds`)');
+    expect(protected0.priority).toBeGreaterThan(1);
+    expect(protected0.service).toBe('calibre-dep-a');
+    expect(protected0.middlewares).toEqual([mwName]);
+
+    const protected1 = dynamic.http.routers['calibre-dep-a-protected-bypass-1'];
+    expect(protected1.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/kobo/`)');
+    expect(protected1.middlewares).toEqual([mwName]);
+  });
+
+  test('protectedBypassPaths without a secret emits no basicAuth middleware or protected routers (defensive)', async () => {
+    // Shouldn't happen in practice (the provisioner always resolves a secret
+    // alongside a non-empty protectedBypassPaths), but the renderer must not
+    // emit an unauthenticated router if the secret is somehow missing.
+    const base = routing.generateRule({ deploymentId: 'calibre-dep-b', appName: 'calibre-web', port: 8083 });
+    const rule = {
+      ...base,
+      forwardAuth: { name: 'ak-calibre-dep-b', outpostUrl: 'http://authentik-server:9000', protectedBypassPaths: ['/opds'] },
+    };
+    await routing.activateRoute(rule);
+
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(dynamic.http.routers['calibre-dep-b-protected-bypass-0']).toBeUndefined();
+    expect(dynamic.http.middlewares?.['calibre-dep-b-bypass-auth']).toBeUndefined();
+  });
+
   test('re-activating the same deployment replaces its prior host', async () => {
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea' }));
     await routing.activateRoute(routing.generateRule({ deploymentId: 'dep-a', appName: 'gitea-renamed' }));

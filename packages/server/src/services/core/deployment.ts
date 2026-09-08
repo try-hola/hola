@@ -47,6 +47,7 @@ import type {
   DeploymentContracts,
   GetContractsResponse,
   AppBackupHook,
+  AppAuthConfig,
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
@@ -1959,6 +1960,40 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return out;
   }
 
+  /**
+   * Resolve the shared HTTP Basic secret for `protectedBypassPaths`, from the
+   * app's OWN active appEnv — not a platform-generated value. Returns undefined
+   * when the manifest declares no protectedBypassPaths (the common case, where
+   * an appEnv read would be pure overhead) or declares them with no
+   * `bypassAuthPasswordEnv` pointing at a key.
+   *
+   * A `bypassAuthPasswordEnv` that names a key missing from (or blank in)
+   * defaultEnv is a manifest bug — the app package author declared the pointer
+   * without also declaring the secret it points to — so this warns and returns
+   * undefined rather than throwing: routing.ts already fails closed on the
+   * exemption (no secret → no basicAuth middleware, no protected-bypass router),
+   * so the path just falls back under the full SSO gate instead of ever being
+   * left open.
+   */
+  private async resolveBypassAuthSecret(
+    deployment: EnhancedDeploymentDetail,
+    forwardAuth: AppAuthConfig['forwardAuth'],
+  ): Promise<string | undefined> {
+    const passwordEnv = forwardAuth?.bypassAuthPasswordEnv;
+    if (!forwardAuth?.protectedBypassPaths?.length || !passwordEnv) return undefined;
+
+    const appEnv = await this.readActiveAppEnv(deployment);
+    const secret = appEnv[passwordEnv];
+    if (!secret) {
+      this.logger.warn('protectedBypassPaths declares bypassAuthPasswordEnv, but the key is missing/empty in appEnv', {
+        deploymentId: deployment.id,
+        bypassAuthPasswordEnv: passwordEnv,
+      });
+      return undefined;
+    }
+    return secret;
+  }
+
   /** Absolute path to the active release's manifest, or undefined if there's no
    *  active release. Shared by `getConfig`/`updateDeployment` so both operate on
    *  the exact same file `materializeCompose` reads at deploy time. */
@@ -2825,6 +2860,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const wantsFallback = auth?.fallback === 'forward-auth' && auth.mode !== 'forward-auth';
     if (!auth || (auth.mode === 'none' && !wantsFallback)) return null;
 
+    // `protectedBypassPaths` gates on an app-declared secret (an ordinary
+    // defaultEnv entry, `isSecret: true` + `generate`), not a platform-managed
+    // one — resolve it once from the active appEnv and thread it through both
+    // provision() calls below. Absent when the manifest declares no
+    // protectedBypassPaths, so apps that don't use the feature never pay for
+    // an appEnv read.
+    const bypassAuthSecret = await this.resolveBypassAuthSecret(deployment, auth.forwardAuth);
+
     const rule = this.routingRuleFor(deployment);
     const result = await this.provisioner.provision({
       deploymentId: deployment.id,
@@ -2835,6 +2878,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       oidc: auth.oidc,
       ldap: auth.ldap,
       forwardAuth: auth.forwardAuth,
+      bypassAuthSecret,
     });
 
     // Defense-in-depth: also gate the app behind forward-auth when requested,
@@ -2849,6 +2893,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         host: rule.host,
         existingRef: deployment.metadata.auth?.fallbackRef,
         forwardAuth: auth.forwardAuth,
+        bypassAuthSecret,
       });
       middleware = fa.middleware;
       fallbackRef = fa.ref;

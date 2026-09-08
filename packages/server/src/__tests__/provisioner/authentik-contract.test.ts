@@ -487,6 +487,60 @@ describe('RealAuthentikProvisionerService (REST contract)', () => {
     expect(result.ref).toMatchObject({ mode: 'forward-auth', providerPk: 55, outpostPk: 1 });
   });
 
+  test('forward-auth provision threads a passed-in bypassAuthSecret straight through to the middleware', async () => {
+    // The secret is resolved by the CALLER (deployment.ts, from the app's own
+    // appEnv) and handed in as ProvisionInput.bypassAuthSecret — the provisioner
+    // no longer generates or persists anything of its own, it just passes the
+    // plaintext value through to the middleware descriptor routing.ts hashes.
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision({
+      deploymentId: 'calibre-dep-a',
+      appName: 'calibre-web',
+      mode: 'forward-auth',
+      host: 'calibre-web.example.com',
+      forwardAuth: { protectedBypassPaths: ['/opds', '/kobo/'] },
+      bypassAuthSecret: 'plaintext-from-app-env',
+    });
+
+    expect(result.middleware?.protectedBypassPaths).toEqual(['/opds', '/kobo/']);
+    expect(result.middleware?.bypassAuthSecret).toBe('plaintext-from-app-env');
+
+    // Reuse (redeploy/restart) threads it through identically — no rotation, no
+    // regeneration, since there's nothing left here to regenerate.
+    const again = await svc.provision({
+      deploymentId: 'calibre-dep-a',
+      appName: 'calibre-web',
+      mode: 'forward-auth',
+      host: 'calibre-web.example.com',
+      existingRef: result.ref,
+      forwardAuth: { protectedBypassPaths: ['/opds', '/kobo/'] },
+      bypassAuthSecret: 'plaintext-from-app-env',
+    });
+    expect(again.middleware?.bypassAuthSecret).toBe('plaintext-from-app-env');
+  });
+
+  test('forward-auth provision without protectedBypassPaths ignores any bypassAuthSecret passed in', async () => {
+    installFetch();
+    const svc = new RealAuthentikProvisionerService(CONFIG);
+
+    const result = await svc.provision({
+      deploymentId: 'remo-dep-a',
+      appName: 'remo',
+      mode: 'forward-auth',
+      host: 'remo.example.com',
+      forwardAuth: { bypassPaths: ['/api/v1/setup/'] },
+      // No protectedBypassPaths declared — even if a secret somehow arrived, the
+      // middleware must not carry it (routing.ts's fail-closed check keys off
+      // protectedBypassPaths being non-empty).
+      bypassAuthSecret: 'should-not-appear',
+    });
+
+    expect(result.middleware?.bypassAuthSecret).toBeUndefined();
+    expect(result.middleware?.protectedBypassPaths).toBeUndefined();
+  });
+
   test('forward-auth provider name uses the full deployment-id suffix, so two installs of the same app do not collide (#346)', async () => {
     const svc = new RealAuthentikProvisionerService(CONFIG);
 

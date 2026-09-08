@@ -1145,7 +1145,27 @@ export type AppAuthConfig = {
   // is publicly reachable — declare it narrowly. Must start with `/` and never be
   // `/` (you cannot exempt the whole app). See the `connect` block, which surfaces
   // the code/key an operator uses against such a path.
-  forwardAuth?: { allowedGroups?: string[]; bypassPaths?: string[] };
+  //
+  // `protectedBypassPaths` is the same idea for a non-browser client whose app
+  // does NOT protect the path with its own credential (e.g. an e-reader's OPDS/Kobo
+  // sync endpoint) — rather than exempting it with NO auth, Traefik enforces HTTP
+  // Basic auth on it using a single shared credential covering every declared
+  // prefix. Same start-with-`/`, never-exactly-`/` validation as `bypassPaths`.
+  //
+  // `bypassAuthPasswordEnv` names the env-var KEY (from this app's own
+  // `defaultEnv`) whose resolved value is that shared password. The app package
+  // author declares the key here AND adds it to `defaultEnv` with `isSecret: true`
+  // plus a `generate` recipe (see ParamGenerate), so Hola auto-fills a random value
+  // at deploy time like any other generated secret — there's no platform-generated
+  // file behind this, it's an ordinary app secret the platform happens to also read
+  // for Traefik-side enforcement. See ForwardAuthMiddleware for how the resolved
+  // value is hashed/rendered.
+  forwardAuth?: {
+    allowedGroups?: string[];
+    bypassPaths?: string[];
+    protectedBypassPaths?: string[];
+    bypassAuthPasswordEnv?: string;
+  };
   // Optionally gate a `native-oidc`/no-auth app behind proxy login too.
   fallback?: 'forward-auth';
 };
@@ -2269,6 +2289,21 @@ export type ForwardAuthMiddleware = {
   // NO forward-auth middleware, so a non-browser client can reach an app API path
   // the app protects with its own credential. From `auth.forwardAuth.bypassPaths`.
   bypassPaths?: string[];
+  // URL path prefixes to ALSO exempt from the forward-auth gate, but — unlike
+  // `bypassPaths` — gated behind HTTP Basic auth instead of left wide open: for a
+  // non-browser client (an e-reader, a webhook) that needs SOME auth but whose app
+  // has no credential of its own to enforce it with. The renderer emits ONE
+  // `basicAuth` middleware per deployment (shared across every declared prefix,
+  // not one per prefix) hashing `bypassAuthSecret` at render time. From
+  // `auth.forwardAuth.protectedBypassPaths`.
+  protectedBypassPaths?: string[];
+  // Raw plaintext secret backing the HTTP Basic auth on `protectedBypassPaths` —
+  // resolved elsewhere (the deployment's own active `appEnv`, via
+  // `auth.forwardAuth.bypassAuthPasswordEnv`) and passed straight through here.
+  // Bcrypt-hashed at Traefik-render time in routing.ts rather than here, so
+  // hashing stays colocated with Traefik-format concerns. Present only when
+  // `protectedBypassPaths` is non-empty.
+  bypassAuthSecret?: string;
 };
 
 export type TraefikRoutingRule = {

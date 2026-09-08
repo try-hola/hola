@@ -200,6 +200,24 @@ function routerTlsBlock(baseDomain: string, certResolver?: string): Record<strin
   return { certResolver, domains: [{ main: baseDomain, sans: [`*.${baseDomain}`] }] };
 }
 
+// Bcrypt cost for the htpasswd-format hash Traefik's basicAuth middleware verifies
+// `protectedBypassPaths` credentials against. 10 matches htpasswd's own `-B`
+// default and is the standard balance of brute-force resistance vs. per-request
+// verification cost for a middleware that runs on every matching request.
+const BYPASS_AUTH_BCRYPT_COST = 10;
+
+/**
+ * Hash the raw per-deployment bypass-auth secret into the htpasswd-format bcrypt
+ * hash Traefik's basicAuth middleware expects for a `users: ["name:hash"]` entry.
+ * Traefik's basicAuth (go-http-auth) recognizes bcrypt hashes prefixed `$2a$`,
+ * `$2b$`, `$2x$`, or `$2y$`; Bun's built-in `Bun.password` (bcrypt algorithm)
+ * produces `$2b$`-prefixed hashes, so no extra hashing dependency is needed here
+ * (the server only ever runs under Bun — see packages/server/Dockerfile).
+ */
+function hashBypassAuthSecret(secret: string): string {
+  return Bun.password.hashSync(secret, { algorithm: 'bcrypt', cost: BYPASS_AUTH_BCRYPT_COST });
+}
+
 /** Render the Traefik file-provider dynamic config for a routing map (deterministic). */
 function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certResolver?: string): string {
   const routers: Record<string, unknown> = {};
@@ -258,6 +276,39 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
           tls: routerTlsBlock(baseDomain, certResolver),
         };
       });
+
+      // Protected bypass exemptions: same shape as the unprotected loop above
+      // (higher-priority router, straight to the app service, no forward-auth
+      // middleware), but for a client that needs SOME auth rather than none — so
+      // each such router instead carries a Basic-auth middleware, ONE per
+      // deployment shared across every declared prefix (not one per prefix; the
+      // credential is deployment-wide). `bypassAuthSecret` is the app's own
+      // plaintext secret, resolved by the caller from its active appEnv (see
+      // AppAuthConfig.forwardAuth.bypassAuthPasswordEnv); it's hashed HERE, at
+      // render time, rather than at resolution, so hashing stays colocated with
+      // Traefik-format concerns. Traefik's basicAuth middleware accepts htpasswd-
+      // format bcrypt hashes (the `$2a$`/`$2b$`/`$2x$`/`$2y$`-prefixed form); a
+      // fresh hash per render is fine — Basic-auth verification only checks the
+      // hash against the submitted password, never against a prior render's hash.
+      const protectedPrefixes = rule.forwardAuth.protectedBypassPaths ?? [];
+      if (protectedPrefixes.length > 0 && rule.forwardAuth.bypassAuthSecret) {
+        const basicAuthMwName = `${rule.serviceName}-bypass-auth`;
+        middlewares[basicAuthMwName] = {
+          basicAuth: {
+            users: [`hola:${hashBypassAuthSecret(rule.forwardAuth.bypassAuthSecret)}`],
+          },
+        };
+        protectedPrefixes.forEach((prefix, i) => {
+          routers[`${rule.serviceName}-protected-bypass-${i}`] = {
+            rule: `Host(\`${host}\`) && PathPrefix(\`${prefix}\`)`,
+            service: rule.serviceName,
+            priority: 100,
+            entryPoints: ['websecure'],
+            tls: routerTlsBlock(baseDomain, certResolver),
+            middlewares: [basicAuthMwName],
+          };
+        });
+      }
     }
 
     routers[rule.serviceName] = router;

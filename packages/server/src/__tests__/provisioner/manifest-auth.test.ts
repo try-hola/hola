@@ -259,4 +259,56 @@ describe('coerceManifestAuth', () => {
       coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { bypassPaths: ['/', '/hooks/', 'x'] } })
     ).toEqual({ mode: 'forward-auth', forwardAuth: { bypassPaths: ['/hooks/'] } });
   });
+
+  test('coerces forward-auth protectedBypassPaths alongside plain bypassPaths, same validation', () => {
+    // Valid protectedBypassPaths prefixes are kept alongside plain bypassPaths —
+    // the two lists are independent and both may be present at once.
+    expect(
+      coerceManifestAuth({
+        mode: 'forward-auth',
+        forwardAuth: { bypassPaths: ['/api/v1/setup/'], protectedBypassPaths: ['/opds', '/kobo/'] },
+      })
+    ).toEqual({
+      mode: 'forward-auth',
+      forwardAuth: { bypassPaths: ['/api/v1/setup/'], protectedBypassPaths: ['/opds', '/kobo/'] },
+    });
+
+    // protectedBypassPaths alone (no plain bypassPaths) is valid.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } });
+
+    // Same validation as bypassPaths: entries not starting with `/`, the
+    // whole-app `/`, and non-strings are dropped; nothing valid surviving omits
+    // the field entirely.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['no-slash', '/', 123] } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: {} });
+
+    // A mix keeps only the valid entries.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/', '/opds', 'x'] } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } });
+  });
+
+  test('coerces forward-auth bypassAuthPasswordEnv alongside protectedBypassPaths', () => {
+    // The env-var key naming the app's own defaultEnv secret is kept verbatim.
+    expect(
+      coerceManifestAuth({
+        mode: 'forward-auth',
+        forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 'OPDS_BYPASS_PASSWORD' },
+      })
+    ).toEqual({
+      mode: 'forward-auth',
+      forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 'OPDS_BYPASS_PASSWORD' },
+    });
+
+    // Not a plain non-empty string (missing, empty, or wrong type) → omitted entirely.
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: '' } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } });
+    expect(
+      coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 123 } })
+    ).toEqual({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } });
+  });
 });
