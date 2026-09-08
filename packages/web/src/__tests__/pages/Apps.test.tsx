@@ -123,3 +123,54 @@ describe('Apps landing', () => {
     });
   });
 });
+
+// #444 / spec 005: end users see the same pre-release marker operators get on the
+// Deployments list, from the channel fields already on each deployment row. No
+// enrolment gating here — an installed non-stable copy always says so.
+describe('Apps landing — pre-release channel pill', () => {
+  const tile = (over: Record<string, unknown>) => ({
+    id: 'gitea-abc12345', name: 'Gitea', app: 'gitea', icon: '🍵', status: 'running',
+    ports: [], lastUpdated: 'now', url: 'https://gitea.local.hola', ...over,
+  });
+
+  it('labels a copy following a pre-release channel when the running build’s channel is unknown', async () => {
+    mockApi([tile({ channel: 'beta' })]);
+    renderApps();
+
+    expect(await screen.findByTitle('Follows the beta channel')).toHaveTextContent('beta');
+  });
+
+  it('prefers the running build over the followed track (same rule as the operator list)', async () => {
+    mockApi([tile({ channel: 'beta', versionChannel: 'beta' })]);
+    renderApps();
+
+    expect(await screen.findByTitle('Running a beta build')).toHaveTextContent('beta');
+  });
+
+  it('labels a stable-track copy that is running a pre-release build', async () => {
+    mockApi([tile({ channel: 'stable', versionChannel: 'beta' })]);
+    renderApps();
+
+    expect(await screen.findByTitle('Running a beta build')).toHaveTextContent('beta');
+    expect(screen.queryByTitle('Follows the beta channel')).not.toBeInTheDocument();
+  });
+
+  it('shows no pill for a stable copy on a stable build', async () => {
+    mockApi([tile({ channel: 'stable', versionChannel: 'stable' })]);
+    renderApps();
+
+    expect(await screen.findByText('Gitea')).toBeInTheDocument();
+    expect(screen.queryByTitle(/Follows the|Running a/)).not.toBeInTheDocument();
+  });
+
+  it('renders the tile unharmed when the channel fields are absent', async () => {
+    // Older records (and any read where the catalog could not resolve the running
+    // version's channel) carry neither field — fail closed to no pill, not a crash.
+    mockApi([tile({})]);
+    renderApps();
+
+    expect(await screen.findByTitle('Open Gitea')).toHaveAttribute('href', 'https://gitea.local.hola');
+    expect(screen.getByText('Open')).toBeInTheDocument();
+    expect(screen.queryByTitle(/Follows the|Running a/)).not.toBeInTheDocument();
+  });
+});
