@@ -27,6 +27,13 @@ import { AppIcon } from '../components/ui/AppIcon';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import { TransientNotice } from '../components/ui/TransientNotice';
 import { ChannelPill, pillFor } from '../components/ui/ChannelPill';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+
+// Copy for the destructive remove confirmation (mirrored on the deployment
+// detail page, which offers the same action).
+const REMOVE_DIALOG_BODY =
+  "This permanently removes the deployment: it stops and deletes the containers, " +
+  "deprovisions SSO, releases the route, and deletes its data. This can't be undone.";
 
 const STATUS_FILTERS: { value: DeploymentStatus | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -187,61 +194,19 @@ export const Deployments: React.FC = () => {
       {notice && <TransientNotice message={notice} onDismiss={() => setNotice(null)} />}
 
       {/* Removal confirmation dialog */}
-      {pendingDelete && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => { if (!deleting) setPendingDelete(null); }}
-        >
-          <div
-            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="remove-dialog-title"
-          >
-            <div className="p-6">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-danger-weak text-danger">
-                  <AlertTriangle className="w-[18px] h-[18px]" />
-                </div>
-                <div className="min-w-0">
-                  <h2 id="remove-dialog-title" className="text-lg font-semibold m-0">Remove {pendingDelete.name}?</h2>
-                  <p className="mt-1.5 text-sm text-text-muted">
-                    This permanently removes the deployment: it stops and deletes the
-                    containers, deprovisions SSO, releases the route, and deletes its
-                    data. This can't be undone.
-                  </p>
-                </div>
-              </div>
-
-              {deleteError && (
-                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{deleteError}</span>
-                </div>
-              )}
-
-              <div className="mt-6 flex justify-end gap-2.5">
-                <button
-                  onClick={() => setPendingDelete(null)}
-                  disabled={deleting}
-                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  disabled={deleting}
-                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-danger text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {deleting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                  {deleting ? 'Removing…' : 'Remove'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={`Remove ${pendingDelete?.name}?`}
+        body={REMOVE_DIALOG_BODY}
+        confirmLabel={deleting ? 'Removing…' : 'Remove'}
+        busy={deleting}
+        error={deleteError}
+        danger
+        icon={<AlertTriangle className="w-[18px] h-[18px]" />}
+        confirmIcon={<Trash2 className="w-4 h-4" />}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
 
       {/* Header */}
       <div className="flex items-end gap-3.5 mb-[18px] flex-wrap">
