@@ -957,18 +957,24 @@ export interface ApiErrorCodeMetadata {
 }
 
 /**
- * Every `error.code` the API can return (`middleware/error-mapping.ts`),
- * matched to its HTTP status and, where applicable, the `error.details`
- * shape a client should read a discriminator from (spec 005, contracts/api.md
- * "Error-code reference"). `CONFLICT` is the shared top-level code for two
- * distinct `details.code` discriminators — clients branch on `details.code`,
- * never by parsing `error.message`.
+ * Reference table of the `error.code` values the API returns (the typed error
+ * classes in `middleware/error-mapping.ts` plus the codes services assign on
+ * top of them), each with its HTTP status and, where applicable, the
+ * `error.details` shape a client should read a discriminator from (spec 005,
+ * contracts/api.md "Error-code reference"). `CONFLICT` is the shared
+ * top-level code for two distinct `details.code` discriminators — clients
+ * branch on `details.code`, never by parsing `error.message`. Not rendered by
+ * the dashboard today; it is the documented contract for SDK/CLI consumers.
  */
 export const API_ERROR_CODES: ApiErrorCodeMetadata[] = [
   { code: 'VALIDATION_ERROR', status: 400 },
   { code: 'INVALID_CHANNEL', status: 400 },
+  { code: 'UNAUTHORIZED', status: 401 },
+  { code: 'FORBIDDEN', status: 403 },
   { code: 'NOT_FOUND', status: 404 },
   { code: 'NO_VERSION_ON_CHANNEL', status: 404 },
+  { code: 'BUNDLE_UNAVAILABLE', status: 404 },
+  { code: 'TIMEOUT', status: 408 },
   {
     code: 'CONFLICT',
     status: 409,
@@ -977,7 +983,12 @@ export const API_ERROR_CODES: ApiErrorCodeMetadata[] = [
   },
   { code: 'VERSION_NOT_ON_CHANNEL', status: 409 },
   { code: 'DRAFT_VALIDATION_FAILED', status: 422, details: 'issues[]' },
+  { code: 'DEPLOYMENT_VALIDATION_FAILED', status: 422, details: 'issues[]' },
   { code: 'PROMOTE_VALIDATION_FAILED', status: 422, details: 'issues[]' },
+  { code: 'RATE_LIMIT_EXCEEDED', status: 429 },
+  { code: 'SERVICE_ERROR', status: 500 },
+  { code: 'INTERNAL_ERROR', status: 500 },
+  { code: 'PROVISIONING_ERROR', status: 502 },
 ];
 
 /**
