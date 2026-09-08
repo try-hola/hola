@@ -895,3 +895,57 @@ describe('DeploymentDetail backup coverage + grants (spec 004)', () => {
     expect(screen.queryByText('Grants')).not.toBeInTheDocument();
   });
 });
+
+// #446: the remove confirmation is the shared `ConfirmDialog` with `danger`,
+// not a hand-rolled modal — same copy, same handlers, same busy/error states.
+describe('DeploymentDetail remove confirmation (#446)', () => {
+  beforeEach(() => {
+    deploymentsApi.byId.mockResolvedValue(deployment);
+    deploymentsApi.remove.mockReset();
+  });
+
+  it('opens a danger-styled dialog with the removal copy and removes on confirm', async () => {
+    deploymentsApi.remove.mockResolvedValue({ ok: true });
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Remove My App?')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText(/This permanently removes the deployment: it stops and deletes the containers/),
+    ).toBeInTheDocument();
+
+    // The destructive confirm carries ConfirmDialog's `danger` styling.
+    const confirm = within(dialog).getByRole('button', { name: 'Remove' });
+    expect(confirm).toHaveClass('bg-danger');
+
+    fireEvent.click(confirm);
+    await waitFor(() => expect(deploymentsApi.remove).toHaveBeenCalledWith(deploymentId));
+    // Removal navigates back to the list route.
+    await waitFor(() => expect(screen.getByText('Deployments List')).toBeInTheDocument());
+  });
+
+  it('keeps the dialog open and shows the failure inline when removal fails', async () => {
+    deploymentsApi.remove.mockRejectedValue(new Error('teardown failed'));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    expect(await within(dialog).findByText('teardown failed')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('closes without removing when Cancel is clicked', async () => {
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deploymentsApi.remove).not.toHaveBeenCalled();
+  });
+});
