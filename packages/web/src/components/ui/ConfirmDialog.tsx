@@ -15,6 +15,13 @@ export interface ConfirmDialogProps {
   error?: string | null;
   /** Red/destructive confirm button style (e.g. Leave-channel flows). */
   danger?: boolean;
+  /**
+   * Leading badge rendered beside the title/body (e.g. a warning glyph on a
+   * destructive remove). The badge chrome comes from `danger`.
+   */
+  icon?: React.ReactNode;
+  /** Icon inside the confirm button; the busy spinner replaces it while `busy`. */
+  confirmIcon?: React.ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
   /** Extra content rendered between `body` and the error box (e.g. callouts). */
@@ -34,6 +41,8 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   busy = false,
   error,
   danger = false,
+  icon,
+  confirmIcon,
   onConfirm,
   onCancel,
   children,
@@ -41,6 +50,15 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   const titleId = useId();
 
   if (!open) return null;
+
+  const heading = (
+    <>
+      <h2 id={titleId} className="text-lg font-semibold m-0">
+        {title}
+      </h2>
+      {body && <p className="mt-1.5 text-sm text-text-muted">{body}</p>}
+    </>
+  );
 
   return (
     <div
@@ -55,10 +73,22 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         aria-labelledby={titleId}
       >
         <div className="p-6">
-          <h2 id={titleId} className="text-lg font-semibold m-0">
-            {title}
-          </h2>
-          {body && <p className="mt-1.5 text-sm text-text-muted">{body}</p>}
+          {icon ? (
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full ${
+                  danger ? 'bg-danger-weak text-danger' : 'bg-primary/10 text-primary'
+                }`}
+              >
+                {icon}
+              </div>
+              <div className="min-w-0">
+                {heading}
+              </div>
+            </div>
+          ) : (
+            heading
+          )}
 
           {children}
 
@@ -84,7 +114,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                 danger ? 'bg-danger' : 'bg-primary'
               }`}
             >
-              {busy && <RotateCw className="w-4 h-4 animate-spin" />}
+              {busy ? <RotateCw className="w-4 h-4 animate-spin" /> : confirmIcon}
               {confirmLabel}
             </button>
           </div>

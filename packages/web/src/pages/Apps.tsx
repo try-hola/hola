@@ -4,6 +4,7 @@ import { ExternalLink, Package, Plus, Search, SlidersHorizontal } from 'lucide-r
 
 import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { AppIcon } from '../components/ui/AppIcon';
+import { ChannelPill, pillFor } from '../components/ui/ChannelPill';
 import { StatusBadge } from '../components/ui/StatusBadge';
 import type { GetDeploymentsRequest } from '@hola/shared';
 
@@ -18,7 +19,10 @@ import type { GetDeploymentsRequest } from '@hola/shared';
  *
  * The name and icon are persisted on the deployment at install (seeded from the
  * catalog), so this renders from the deployments list alone — no live catalog
- * join, and it keeps working if the catalog is unreachable.
+ * join, and it keeps working if the catalog is unreachable. The same goes for
+ * the pre-release pill: it reads the channel fields already on each row, and is
+ * ungated by the operator's pre-release enrolment — an end user looking at a
+ * beta copy should see that it is one whether or not the host is enrolled.
  */
 
 const DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 100 };
@@ -91,6 +95,12 @@ export const Apps: React.FC = () => {
             const icon = app.icon || '';
             const displayName = app.name || app.app;
             const openable = app.status === 'running' && !!app.url;
+            // #444 / spec 005: a copy on a pre-release track (or running a
+            // pre-release build) is otherwise indistinguishable from a stable
+            // one here. Same selection rule as the operator surfaces — running
+            // build wins over the followed channel — and `pillFor` returns null
+            // when either field is absent, so an older record just gets no pill.
+            const pill = pillFor(app);
 
             return (
               <div
@@ -145,12 +155,13 @@ export const Apps: React.FC = () => {
                 <div className="mt-3.5 font-semibold text-[14.5px] leading-tight truncate max-w-full">
                   {displayName}
                 </div>
-                <div className="mt-2 min-h-[24px] flex items-center">
+                <div className="mt-2 min-h-[24px] flex flex-wrap items-center justify-center gap-1.5 max-w-full">
                   {openable ? (
                     <span className="text-[12.5px] text-text-faint">Open</span>
                   ) : (
                     <StatusBadge status={app.status} />
                   )}
+                  {pill && <ChannelPill channel={pill.channel} kind={pill.kind} />}
                 </div>
               </div>
             );
