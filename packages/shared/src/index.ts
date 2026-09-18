@@ -1376,6 +1376,15 @@ export type DeploymentListItem = {
   // Channel of `latestVersion`, when present (#428) — lets a client render
   // `1.3.0-rc.2 (rc)` without a further lookup.
   latestVersionChannel?: string;
+  // Catalog channel of the version this deployment is currently RUNNING
+  // (spec 005), distinct from `channel` (the followed track). Derived on read
+  // from the catalog's per-app version list; absent when that version isn't
+  // listed or the catalog is unreachable.
+  versionChannel?: string;
+  // Whether this app's manifest declares itself multi-instance (spec 005),
+  // projected from the record written at create time. Absent means
+  // single-instance.
+  multiInstance?: boolean;
   resources?: { cpu: string; memory: string };
   ports: string[];
   lastUpdated: string;
@@ -1384,6 +1393,9 @@ export type DeploymentListItem = {
 
 export type GetDeploymentsRequest = PageRequest & {
   status?: DeploymentStatus | 'all';
+  // Keep only deployments whose followed channel or running-build channel is
+  // non-stable (spec 005); applied server-side before pagination.
+  prerelease?: boolean;
 };
 export type GetDeploymentsResponse = PageResponse<DeploymentListItem>;
 
@@ -1426,6 +1438,15 @@ export type DeploymentDetail = {
   // accurately whichever order they were installed in. Absent when this is the
   // only copy of the app.
   siblings?: Array<{ id: string; name: string; channel: string }>;
+  // Catalog channel of the version this deployment is currently RUNNING
+  // (spec 005), distinct from `channel` (the followed track). Derived on read
+  // from the catalog's per-app version list; absent when that version isn't
+  // listed or the catalog is unreachable.
+  versionChannel?: string;
+  // Whether this app's manifest declares itself multi-instance (spec 005),
+  // projected from the record written at create time. Absent means
+  // single-instance.
+  multiInstance?: boolean;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
@@ -1458,6 +1479,10 @@ export type GetDeploymentUpdateCheckResponse = {
   channel?: string;
   /** Channel of `latestVersion`, when present (#428). */
   latestVersionChannel?: string;
+  /** Catalog channel of the RUNNING version (spec 005), distinct from `channel`
+   *  (the followed track). Absent when that version isn't listed or the
+   *  catalog is unreachable. */
+  versionChannel?: string;
 };
 
 /**
@@ -1731,6 +1756,10 @@ export type GetSettingsResponse = {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string }; // password redacted in GET
+  // Dashboard discovery gating for pre-release catalog channels (spec 005).
+  // Default `showPrerelease: false`. Gates catalog/wizard/list discovery
+  // chrome ONLY — it never changes what channel an installed copy follows.
+  channels?: { showPrerelease?: boolean };
 };
 
 export type PatchSettingsRequest = Partial<GetSettingsResponse>;

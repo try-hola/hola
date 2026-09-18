@@ -16,6 +16,9 @@ export interface SystemSettings {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string };
+  // Type parity with services/core/config.ts (spec 005); this DB-backed
+  // config service is not currently reachable from /api/settings.
+  channels?: { showPrerelease?: boolean };
 }
 
 export interface BackupSettings {
@@ -131,8 +134,11 @@ export class RealDatabaseConfigService implements DatabaseConfigService {
         // Handle nested objects properly
         ...(updates.docker && { docker: { ...current.docker, ...updates.docker } }),
         ...(updates.tls && { tls: { ...current.tls, ...updates.tls } }),
-        ...(updates.notifications && { 
-          notifications: { ...current.notifications, ...updates.notifications } 
+        ...(updates.notifications && {
+          notifications: { ...current.notifications, ...updates.notifications }
+        }),
+        ...(updates.channels && {
+          channels: { ...current.channels, ...updates.channels }
         }),
         // System env requires special handling to maintain array structure
         ...(updates.systemEnv && { systemEnv: updates.systemEnv }),

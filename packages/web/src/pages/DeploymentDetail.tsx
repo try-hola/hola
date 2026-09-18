@@ -36,9 +36,12 @@ import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/
 import { BACKUP_CONTRACT_REF, providerGrantsFor } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { ChannelPill, pillFor } from '../components/ui/ChannelPill';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi, useDeploymentUpdateCheckApi } from '../hooks/useDeploymentDetailApi';
 import { useCatalogAppApi } from '../hooks/useCatalogApi';
+import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { TransientNotice } from '../components/ui/TransientNotice';
 import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
 import { AppBackupCoverage } from '../components/BackupCoverage';
@@ -156,14 +159,23 @@ export const DeploymentDetail: React.FC = () => {
     refetch: refetchHistory
   } = useDeploymentHistoryApi(deploymentId, historyPage);
 
-  // #428: the app's declared channels, for the Configuration tab's Channel
-  // select. Fails soft (see the hook) — falls back to just the deployment's
-  // current channel when the catalog is unavailable, so the select still
-  // renders with something sensible rather than breaking the page.
+  // Spec 005: the app's declared (published) channels, for the Overview
+  // Channel block's Join actions and the separate-copy link. Fails soft (see
+  // the hook) — falls back to nothing extra when the catalog is unavailable,
+  // so the block still renders Follows/Running/Leave from the deployment's
+  // own record rather than breaking the page.
   const { data: catalogApp } = useCatalogAppApi(deployment?.app ?? '');
+  // Enrolment gates discovery only (Join, the separate-copy link): fails
+  // closed while loading/erroring, and never affects an existing copy's own
+  // pill/Leave action (FR-002/FR-003). Called unconditionally, before the
+  // loading/error/not-found early returns below, to keep hook order stable.
+  const enrolled = usePrereleaseEnrolment();
   const [channelSaving, setChannelSaving] = useState(false);
   const [channelError, setChannelError] = useState<string | null>(null);
   const [channelWarning, setChannelWarning] = useState<string | null>(null);
+  // Which Join/Leave confirmation is open, and for which channel — supports
+  // one Join button per published non-stable channel not already followed.
+  const [channelDialog, setChannelDialog] = useState<{ mode: 'join' | 'leave'; channel: string } | null>(null);
 
   // Form state
   const [isEditing, setIsEditing] = useState(false);
@@ -424,8 +436,9 @@ export const DeploymentDetail: React.FC = () => {
     }
   };
 
-  // #428: change the channel this deployment follows. A metadata write only —
-  // the running version is untouched, and `updateConfiguration`'s onSuccess
+  // Spec 005 (was #428): change the channel this deployment follows, via the
+  // Overview Channel block's Join/Leave confirm dialog. A metadata write only
+  // — the running version is untouched, and `updateConfiguration`'s onSuccess
   // already invalidates the detail/list/update-check queries so badges and
   // offered updates refresh. A returned `warnings` entry (e.g. another
   // single-instance copy already follows the target channel) is surfaced as a
@@ -436,6 +449,7 @@ export const DeploymentDetail: React.FC = () => {
     try {
       const res = await updateConfiguration({ channel });
       setChannelWarning(res?.warnings?.[0] ?? null);
+      setChannelDialog(null);
     } catch (error) {
       setChannelError(error instanceof Error ? error.message : 'Failed to change channel');
     } finally {
@@ -444,6 +458,28 @@ export const DeploymentDetail: React.FC = () => {
   };
 
   const isRunning = deployment.status === 'running';
+
+  // Spec 005 Channel block (Overview): the followed channel this copy takes
+  // update offers from, and the running build's own channel — two separate
+  // facts (FR-005/FR-006). Join is offered per published non-stable channel
+  // not already followed (enrolled only — `stable` is never a Join target,
+  // it's the floor); Leave is offered whenever the copy follows a non-stable
+  // channel, regardless of enrolment (FR-007).
+  const followedChannel = deployment.channel ?? STABLE_CHANNEL;
+  const publishedNonStableChannels = (catalogApp?.channels ?? []).filter(
+    (c) => c !== STABLE_CHANNEL && c !== followedChannel
+  );
+  const channelPill = pillFor({ channel: deployment.channel, versionChannel: deployment.versionChannel });
+  // Leaving-note condition (data-model.md): show the "stays on <version>"
+  // sentence whenever the running build's channel is non-stable OR unknown —
+  // `undefined !== STABLE_CHANNEL` is true, so this one comparison covers
+  // both the known-non-stable and the generic/unknown case.
+  const leavingKeepsCurrentBuild = deployment.versionChannel !== STABLE_CHANNEL;
+  // The offered upgrade's own channel suffix, shared by the header button and
+  // its confirm dialog's title/label (FR-009).
+  const upgradeChannelSuffix = deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL
+    ? ` (${deployment.latestVersionChannel})`
+    : '';
 
   // Real facts for the Overview "Details" card.
   const facts: { label: string; value: string; mono?: boolean }[] = [
@@ -457,9 +493,7 @@ export const DeploymentDetail: React.FC = () => {
           // #299: at-a-glance kind of update, not just "available".
           // #428: name the target's channel too when it's not stable, so
           // e.g. an rc deployment's offer reads "1.3.0-rc.2 (rc)".
-          value: `${deployment.latestVersion}${
-            deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''
-          } ${
+          value: `${deployment.latestVersion}${upgradeChannelSuffix} ${
             guidedPath ? `(upgrade via ${guidedPath.suggestedVersion} first)`
               : updateCheck?.breaking ? '(breaking update)'
               : '(update available)'
@@ -467,29 +501,9 @@ export const DeploymentDetail: React.FC = () => {
           mono: true,
         }]
       : []),
-    // #428: the channel this deployment follows — always shown (defaults to
-    // `stable` for a pre-feature record with none).
-    { label: 'Channel', value: deployment.channel ?? STABLE_CHANNEL },
-    // #433: what this copy is among the app's live copies — derived from the
-    // deployment's own channel and its siblings, so both copies read correctly
-    // whichever went in first. (`instanceReason` alone could not: it is the
-    // install-time audit fact, always recorded on the copy installed second, so
-    // an rc-then-stable pair labelled the stable copy and said nothing about the
-    // rc one.) The reason, when set, only adds the secondary phrase.
-    ...(deployment.siblings?.length
-      ? [{
-          label: 'Instance',
-          value: [
-            `${deployment.channel ?? STABLE_CHANNEL} instance of ${deployment.app}`,
-            `also installed: ${deployment.siblings.map((s) => `${s.name} (${s.channel})`).join(', ')}`,
-            ...(deployment.instanceReason
-              ? [deployment.instanceReason === 'channel'
-                  ? 'permitted by channel'
-                  : 'permitted by operator override']
-              : []),
-          ].join(' · '),
-        }]
-      : []),
+    // Spec 005: the followed channel and the Instance fact both moved into the
+    // Overview's Channel block (replaces #428/#433) — the followed channel is
+    // shown in exactly one place on the page (FR-006).
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
     { label: 'Last updated', value: deployment.lastUpdated },
     ...(deployment.url ? [{ label: 'URL', value: deployment.url, mono: true }] : []),
@@ -534,6 +548,80 @@ export const DeploymentDetail: React.FC = () => {
       case 'overview':
         return (
           <div className="animate-fadein space-y-4">
+            {/* Channel block (spec 005): replaces the old Channel/Instance
+                Details facts and the Configuration-tab "Release channel" card
+                (R8). Follows/Running are always shown; Join/Leave, the
+                sibling sentences and the separate-copy link are conditional. */}
+            <div className="bg-surface-1 border border-border rounded-card p-5">
+              <div className="flex items-center gap-2 text-[13.5px] font-semibold">
+                <span>Follows: {followedChannel}</span>
+                {channelPill && <ChannelPill channel={channelPill.channel} kind={channelPill.kind} />}
+              </div>
+              <div className="text-[13px] text-text-muted mt-1">
+                {deployment.versionChannel
+                  ? `Running ${deployment.version}, a ${deployment.versionChannel} build`
+                  : `Running ${deployment.version}`}
+              </div>
+
+              {/* FR-012: sibling sentences replace the old Instance fact. The
+                  operator-override note describes THIS copy (why it exists
+                  alongside the others), so it's shown once, not per sibling. */}
+              {!!deployment.siblings?.length && (
+                <div className="mt-3 space-y-1">
+                  {deployment.siblings.map((s) => (
+                    <div key={s.id} className="text-[13px] text-text-muted">
+                      {`${s.name} (${s.channel}) is also installed`}
+                    </div>
+                  ))}
+                  {deployment.instanceReason === 'operator-override' && (
+                    <div className="text-xs text-text-faint">installed with operator override</div>
+                  )}
+                </div>
+              )}
+
+              {(followedChannel !== STABLE_CHANNEL || (enrolled && publishedNonStableChannels.length > 0)) && (
+                <div className="flex flex-wrap gap-2 mt-4">
+                  {enrolled && publishedNonStableChannels.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => { setChannelError(null); setChannelDialog({ mode: 'join', channel: c }); }}
+                      className="h-[34px] px-[13px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
+                    >
+                      {`Join ${c}`}
+                    </button>
+                  ))}
+                  {followedChannel !== STABLE_CHANNEL && (
+                    <button
+                      onClick={() => { setChannelError(null); setChannelDialog({ mode: 'leave', channel: followedChannel }); }}
+                      className="h-[34px] px-[13px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-lg text-[13px] font-semibold hover:border-primary transition-colors"
+                    >
+                      {`Leave ${followedChannel}`}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* FR-011: a secondary action, not the headline — one link per
+                  published non-stable channel this copy doesn't already follow. */}
+              {enrolled && publishedNonStableChannels.length > 0 && (
+                <div className="flex flex-col gap-1 mt-3">
+                  {publishedNonStableChannels.map((c) => (
+                    <Link
+                      key={c}
+                      to={`/catalog/${deployment.app}/install?channel=${c}`}
+                      className="text-[12.5px] text-primary hover:underline"
+                    >
+                      {`Try ${c} in a separate copy →`}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {channelWarning && (
+              <TransientNotice message={channelWarning} onDismiss={() => setChannelWarning(null)} />
+            )}
+
             <div className="grid grid-cols-[1.5fr_1fr] gap-4">
               {/* Details */}
               <div className="bg-surface-1 border border-border rounded-card p-5">
@@ -888,44 +976,6 @@ export const DeploymentDetail: React.FC = () => {
               </div>
             )}
 
-            {/* Release channel (#428): which versions this deployment is
-                offered on upgrade. A metadata write, applied immediately on
-                change — no Edit/Save step, unlike env/system overrides above. */}
-            <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
-              <div className="flex items-center justify-between px-[18px] py-[14px]">
-                <div>
-                  <div className="font-semibold text-[15px]">Release channel</div>
-                  <div className="text-xs text-text-faint mt-0.5">
-                    Which versions this deployment is offered on upgrade. Changing it never changes the running version.
-                  </div>
-                </div>
-                <select
-                  value={deployment.channel ?? STABLE_CHANNEL}
-                  disabled={channelSaving}
-                  onChange={(e) => handleChannelChange(e.target.value)}
-                  className="h-[34px] px-3 bg-surface-2 border border-border rounded-lg text-[13px] font-mono outline-none focus:border-primary disabled:opacity-50"
-                >
-                  {/* The deployment's own channel is always an option, even when
-                      the catalog no longer lists it (the publisher pruned that
-                      channel, or the catalog is unreachable) — otherwise the
-                      select's value matches no option and the browser renders the
-                      FIRST one, silently misreporting what this deployment follows. */}
-                  {[...new Set([...(catalogApp?.channels ?? []), deployment.channel ?? STABLE_CHANNEL])].map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-              </div>
-              {channelError && (
-                <div className="flex items-start gap-2 text-sm text-danger bg-danger-weak px-[18px] py-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{channelError}</span>
-                </div>
-              )}
-            </div>
-            {channelWarning && (
-              <TransientNotice message={channelWarning} onDismiss={() => setChannelWarning(null)} />
-            )}
-
             {/* Materialized Compose · read-only */}
             <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
               <div className="flex items-center justify-between px-[18px] py-[14px] border-b border-border-soft">
@@ -1071,115 +1121,106 @@ export const DeploymentDetail: React.FC = () => {
 
   return (
     <div className="animate-fadein">
-      {/* Removal confirmation dialog */}
-      {showUpgradeConfirm && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-          onClick={() => { if (!operationLoading.upgrade) setShowUpgradeConfirm(false); }}
-        >
-          <div
-            className="bg-surface-0 rounded-xl border border-border w-full max-w-md overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="upgrade-dialog-title"
-          >
-            <div className="p-6">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full bg-primary-weak text-primary">
-                  <ArrowUpCircle className="w-[18px] h-[18px]" />
-                </div>
-                <div className="min-w-0">
-                  <h2 id="upgrade-dialog-title" className="text-lg font-semibold m-0">
-                    {guidedPath
-                      ? `Upgrade ${deployment.name} to ${guidedPath.suggestedVersion} first`
-                      : `Upgrade ${deployment.name} to ${deployment.latestVersion}${
-                          deployment.latestVersionChannel && deployment.latestVersionChannel !== STABLE_CHANNEL ? ` (${deployment.latestVersionChannel})` : ''
-                        }?`}
-                  </h2>
-                  <p className="mt-1.5 text-sm text-text-muted">
-                    Your settings and secrets carry forward.
-                    {updateCheck?.preUpgradeBackup === 'required'
-                      ? ' Hola takes a pre-upgrade snapshot first — you can roll back to it.'
-                      : updateCheck?.preUpgradeBackup === 'recommended'
-                        ? ' A pre-upgrade snapshot is recommended before you continue.'
-                        : ''}
-                  </p>
-                </div>
-              </div>
-
-              {/* #299 richness: what kind of upgrade this actually is. */}
-              {guidedPath && (
-                <div className="mt-4 flex items-start gap-2 text-sm text-warning bg-warning/10 border border-warning/30 rounded-[9px] p-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <div className="min-w-0">
-                    <div className="font-semibold text-text-strong">Guided upgrade</div>
-                    <p className="mt-0.5 text-text-muted">{guidedPath.message}</p>
-                    <p className="mt-1 text-text-muted">
-                      Upgrade to <span className="font-mono text-text-strong">{guidedPath.suggestedVersion}</span> now,
-                      let it settle, then repeat toward <span className="font-mono">{deployment.latestVersion}</span>.
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {updateCheck?.breaking && (
-                <div className="mt-3 flex items-start gap-2 text-sm bg-danger-weak border border-danger/30 rounded-[9px] p-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-danger" />
-                  <div className="min-w-0 text-text-muted">
-                    <span className="font-semibold text-text-strong">Breaking change.</span>{' '}
-                    This release migrates data or changes behavior.
-                    {updateCheck.upgradeNotesUrl ? (
-                      <>
-                        {' '}
-                        <a
-                          href={updateCheck.upgradeNotesUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
-                        >
-                          Review the upgrade notes
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </a>{' '}
-                        before you continue.
-                      </>
-                    ) : (
-                      ' Review the app’s upgrade notes before you continue.'
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {upgradeError && (
-                <div className="mt-4 flex items-start gap-2 text-sm text-danger bg-danger-weak rounded-[9px] p-3">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{upgradeError}</span>
-                </div>
-              )}
-
-              <div className="mt-6 flex justify-end gap-2.5">
-                <button
-                  onClick={() => setShowUpgradeConfirm(false)}
-                  disabled={operationLoading.upgrade}
-                  className="h-[38px] px-[14px] flex items-center bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => confirmUpgrade(guidedPath ? guidedPath.suggestedVersion : undefined)}
-                  disabled={operationLoading.upgrade}
-                  className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-transparent rounded-[9px] text-[13.5px] font-semibold hover:brightness-110 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {operationLoading.upgrade ? <RotateCw className="w-4 h-4 animate-spin" /> : <ArrowUpCircle className="w-4 h-4" />}
-                  {operationLoading.upgrade
-                    ? 'Upgrading…'
-                    : `Upgrade to ${guidedPath ? guidedPath.suggestedVersion : deployment.latestVersion}`}
-                </button>
-              </div>
+      {/* Upgrade confirmation dialog */}
+      <ConfirmDialog
+        open={showUpgradeConfirm}
+        title={
+          guidedPath
+            ? `Upgrade ${deployment.name} to ${guidedPath.suggestedVersion} first`
+            : `Upgrade ${deployment.name} to ${deployment.latestVersion}${upgradeChannelSuffix}?`
+        }
+        body={
+          <>
+            Your settings and secrets carry forward.
+            {updateCheck?.preUpgradeBackup === 'required'
+              ? ' Hola takes a pre-upgrade snapshot first — you can roll back to it.'
+              : updateCheck?.preUpgradeBackup === 'recommended'
+                ? ' A pre-upgrade snapshot is recommended before you continue.'
+                : ''}
+          </>
+        }
+        confirmLabel={
+          operationLoading.upgrade
+            ? 'Upgrading…'
+            : `Upgrade to ${guidedPath ? guidedPath.suggestedVersion : deployment.latestVersion}${guidedPath ? '' : upgradeChannelSuffix}`
+        }
+        busy={operationLoading.upgrade}
+        error={upgradeError}
+        onConfirm={() => confirmUpgrade(guidedPath ? guidedPath.suggestedVersion : undefined)}
+        onCancel={() => setShowUpgradeConfirm(false)}
+      >
+        {/* #299 richness: what kind of upgrade this actually is. */}
+        {guidedPath && (
+          <div className="mt-4 flex items-start gap-2 text-sm text-warning bg-warning/10 border border-warning/30 rounded-[9px] p-3">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <div className="font-semibold text-text-strong">Guided upgrade</div>
+              <p className="mt-0.5 text-text-muted">{guidedPath.message}</p>
+              <p className="mt-1 text-text-muted">
+                Upgrade to <span className="font-mono text-text-strong">{guidedPath.suggestedVersion}</span> now,
+                let it settle, then repeat toward <span className="font-mono">{deployment.latestVersion}</span>.
+              </p>
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {updateCheck?.breaking && (
+          <div className="mt-3 flex items-start gap-2 text-sm bg-danger-weak border border-danger/30 rounded-[9px] p-3">
+            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-danger" />
+            <div className="min-w-0 text-text-muted">
+              <span className="font-semibold text-text-strong">Breaking change.</span>{' '}
+              This release migrates data or changes behavior.
+              {updateCheck.upgradeNotesUrl ? (
+                <>
+                  {' '}
+                  <a
+                    href={updateCheck.upgradeNotesUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline font-medium"
+                  >
+                    Review the upgrade notes
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </a>{' '}
+                  before you continue.
+                </>
+              ) : (
+                ' Review the app’s upgrade notes before you continue.'
+              )}
+            </div>
+          </div>
+        )}
+      </ConfirmDialog>
+
+      {/* Join/Leave-a-channel confirmation dialog (spec 005, Channel block). */}
+      <ConfirmDialog
+        open={!!channelDialog}
+        title={
+          channelDialog?.mode === 'join'
+            ? `Join the ${channelDialog.channel} channel?`
+            : `Leave the ${channelDialog?.channel} channel?`
+        }
+        body={
+          channelDialog?.mode === 'join'
+            ? `This copy will receive ${channelDialog.channel} releases as well as stable ones. You can leave the channel at any time.`
+            : `This copy will receive only stable releases.${
+                leavingKeepsCurrentBuild
+                  ? ` Stays on ${deployment.version} until a stable release at or above it is published.`
+                  : ''
+              }`
+        }
+        confirmLabel={
+          channelSaving
+            ? 'Saving…'
+            : channelDialog?.mode === 'join'
+              ? `Join ${channelDialog.channel}`
+              : `Leave ${channelDialog?.channel}`
+        }
+        busy={channelSaving}
+        error={channelError}
+        onConfirm={() => handleChannelChange(channelDialog?.mode === 'join' ? channelDialog.channel : STABLE_CHANNEL)}
+        onCancel={() => { setChannelDialog(null); setChannelError(null); }}
+      />
 
       {showRemoveConfirm && (
         <div
@@ -1267,11 +1308,11 @@ export const DeploymentDetail: React.FC = () => {
               <button
                 onClick={() => { setUpgradeError(null); setShowUpgradeConfirm(true); }}
                 disabled={operationLoading.upgrade}
-                title={`Upgrade to ${deployment.latestVersion}`}
+                title={`Upgrade to ${deployment.latestVersion}${upgradeChannelSuffix}`}
                 className="h-[38px] px-[14px] flex items-center gap-[7px] bg-primary text-white border border-primary rounded-[9px] text-[13.5px] font-semibold hover:opacity-90 transition-opacity disabled:opacity-60"
               >
                 <ArrowUpCircle className="w-4 h-4" />
-                {operationLoading.upgrade ? 'Upgrading…' : `Upgrade to ${deployment.latestVersion}`}
+                {operationLoading.upgrade ? 'Upgrading…' : `Upgrade to ${deployment.latestVersion}${upgradeChannelSuffix}`}
               </button>
             )}
             <button

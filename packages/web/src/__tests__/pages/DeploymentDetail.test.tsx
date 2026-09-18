@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { GetDeploymentResponse, GetDeploymentConfigResponse, SSEEvent, SSEConnectionState } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 import { handleGlobalEvent, useGlobalQueryEvents } from '../../state/useGlobalQueryEvents';
+import { mockFetch, createMockResponse } from '../../setupTests';
 
 // `useGlobalQueryEvents` (mounted alongside `DeploymentDetail` below so T018 can
 // exercise the real deletion→redirect chain) drives itself off `useSSE`. Mock it
@@ -414,11 +415,14 @@ describe('DeploymentDetail richer update check (#299)', () => {
   });
 });
 
-// #428: release channels — Channel/Instance facts and the update dialog's
-// channel-aware target line. The "Details" facts card only renders on the
-// Overview tab (renderTabContent's default), so these use their own render
-// helper rather than `renderDetail`'s `?tab=configuration` entry.
-describe('DeploymentDetail release channels (#428)', () => {
+// Spec 005 (beta-channel-ux): the Channel block replaces the old #428/#433
+// Channel/Instance facts and the Configuration-tab "Release channel" select
+// with Join/Leave actions, a shared ChannelPill, sibling sentences and a
+// separate-copy link, gated on `usePrereleaseEnrolment()`. The "Details" facts
+// card and the new Channel block only render on the Overview tab
+// (renderTabContent's default), so most of these use their own render helper
+// rather than `renderDetail`'s `?tab=configuration` entry.
+describe('DeploymentDetail release channels (spec 005)', () => {
   function renderOverview() {
     return render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
@@ -433,139 +437,347 @@ describe('DeploymentDetail release channels (#428)', () => {
     );
   }
 
+  // `usePrereleaseEnrolment()` reads through `useSettingsApi()`, which hits
+  // real `fetch` (not the `api-hybrid` mock used for deployments/catalog/
+  // contracts above) — mirrors the `mockFetch`-stubbing convention already
+  // used by Catalog.test.tsx / Deployments.test.tsx for `/api/settings`.
+  let enrolledForTest = false;
+  function setEnrolled(value: boolean) {
+    enrolledForTest = value;
+  }
+
+  beforeEach(() => {
+    enrolledForTest = false;
+    mockFetch.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/settings')) {
+        return createMockResponse({ channels: { showPrerelease: enrolledForTest } });
+      }
+      return createMockResponse({});
+    });
+  });
+
   afterEach(() => {
     deploymentsApi.byId.mockResolvedValue(deployment); // restore the module default
+    // Restore the generic default so later describes (which never touch real
+    // fetch anyway, but shouldn't inherit this describe's enrolment stub).
+    mockFetch.mockImplementation(async () => createMockResponse({}));
   });
 
-  it('shows the Channel fact, defaulting to stable when absent', async () => {
-    deploymentsApi.byId.mockResolvedValue({ ...deployment });
-    renderOverview();
-    await waitFor(() => expect(screen.getByText('Channel')).toBeInTheDocument());
-    expect(screen.getByText('stable')).toBeInTheDocument();
-    expect(screen.queryByText('Instance')).not.toBeInTheDocument();
+  // --- Channel block text: the four (followed, running-build) states + the
+  // unknown-build edge case. `pillFor`'s exact logic (ChannelPill.test.tsx) is
+  // the source of truth for which pill (if any) each state shows.
+  describe('Follows/Running facts and the pill (FR-006, FR-010)', () => {
+    it('stable track, stable build: no pill', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable', versionChannel: 'stable' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: stable')).toBeInTheDocument());
+      expect(screen.getByText('Running 1.0.0, a stable build')).toBeInTheDocument();
+      expect(screen.queryByTitle(/Follows the .* channel/)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/Running a .* build/)).not.toBeInTheDocument();
+    });
+
+    it('beta(rc) track, stable build: follows-pill, Leave offered, no downgrade text', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: 'stable' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: rc')).toBeInTheDocument());
+      expect(screen.getByText('Running 1.0.0, a stable build')).toBeInTheDocument();
+      const pill = screen.getByTitle('Follows the rc channel');
+      expect(pill).toHaveTextContent('rc');
+      expect(screen.getByRole('button', { name: 'Leave rc' })).toBeInTheDocument();
+    });
+
+    it('rc track, rc build: build-pill', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment, version: '1.1.0-rc.1', channel: 'rc', versionChannel: 'rc',
+      });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: rc')).toBeInTheDocument());
+      expect(screen.getByText('Running 1.1.0-rc.1, a rc build')).toBeInTheDocument();
+      expect(screen.getByTitle('Running a rc build')).toHaveTextContent('rc');
+    });
+
+    it('stable track, rc build (leaving rc): build-pill, no Leave (already stable)', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment, version: '1.1.0-rc.1', channel: 'stable', versionChannel: 'rc',
+      });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: stable')).toBeInTheDocument());
+      expect(screen.getByText('Running 1.1.0-rc.1, a rc build')).toBeInTheDocument();
+      expect(screen.getByTitle('Running a rc build')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /^Leave/ })).not.toBeInTheDocument();
+    });
+
+    it('unknown build channel: version alone, pill falls back to the followed channel', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: undefined });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: rc')).toBeInTheDocument());
+      expect(screen.getByText('Running 1.0.0')).toBeInTheDocument();
+      expect(screen.queryByText(/Running 1\.0\.0,/)).not.toBeInTheDocument();
+      expect(screen.getByTitle('Follows the rc channel')).toHaveTextContent('rc');
+    });
   });
 
-  // #433: the Instance fact is derived from the deployment's own channel and its
-  // live siblings, so it is accurate on BOTH copies whichever went in first. The
-  // persisted `instanceReason` (always on the copy installed second) only adds a
-  // trailing "permitted by …" phrase.
-  it('labels a copy with no instanceReason from its channel and siblings (#433)', async () => {
+  // --- US1 (T018): enrolment off never hides an EXISTING non-stable copy's
+  // pill/Leave/channel-block; it only gates discovery (Join, the separate-copy
+  // link). These must keep passing through every later rewrite in this file.
+  describe('not enrolled (US1): existing pill/Leave survive, discovery stays hidden', () => {
+    it('a copy following rc keeps its pill and Leave action with enrolment off', async () => {
+      setEnrolled(false);
+      catalogApi.appById.mockResolvedValueOnce({
+        id: 'myapp', name: 'My App', description: '', icon: '📦', category: 'apps',
+        rating: 0, downloads: 0, tags: [], featured: false, source: 'hola', trust: 'verified' as const,
+        channels: ['stable', 'rc', 'beta'],
+      });
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: 'rc' });
+      renderOverview();
+
+      await waitFor(() => expect(screen.getByText('Follows: rc')).toBeInTheDocument());
+      expect(screen.getByTitle('Running a rc build')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Leave rc' })).toBeInTheDocument();
+
+      // Discovery stays hidden: no Join for the OTHER published channel, no
+      // separate-copy link, regardless of enrolment.
+      expect(screen.queryByRole('button', { name: 'Join beta' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Try beta in a separate copy/)).not.toBeInTheDocument();
+    });
+  });
+
+  // --- US2 (T025): Join/Leave gating, confirm-dialog copy, the PATCH call and
+  // query invalidation, and the warning surfacing through TransientNotice.
+  describe('Join / Leave a channel (US2)', () => {
+    it('Join is offered per published non-stable channel not already followed, only when enrolled', async () => {
+      setEnrolled(true);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable', versionChannel: 'stable' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: stable')).toBeInTheDocument());
+      // Enrolment resolves through its own async settings fetch, independent of
+      // the deployment fetch that gates "Follows: stable" above — wait for it.
+      expect(await screen.findByRole('button', { name: 'Join rc' })).toBeInTheDocument();
+      // `stable` is never a Join target (it's the floor).
+      expect(screen.queryByRole('button', { name: 'Join stable' })).not.toBeInTheDocument();
+    });
+
+    it('Join is absent when not enrolled, even though the channel is published', async () => {
+      setEnrolled(false);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable', versionChannel: 'stable' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: stable')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Join rc' })).not.toBeInTheDocument();
+    });
+
+    it('Leave is offered regardless of enrolment when the copy follows a non-stable channel', async () => {
+      setEnrolled(false);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: 'rc' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Leave rc' })).toBeInTheDocument());
+    });
+
+    it('Join opens a confirm dialog with the exact copy, and confirming PATCHes the channel', async () => {
+      setEnrolled(true);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable', versionChannel: 'stable' });
+      deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
+      renderOverview();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Join rc' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(
+        'This copy will receive rc releases as well as stable ones. You can leave the channel at any time.'
+      )).toBeInTheDocument();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Join rc' }));
+      await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledWith(deploymentId, { channel: 'rc' }));
+    });
+
+    it('Leave dialog states the running build stays put when it is not eligible on stable', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment, version: '1.3.0-rc.1', channel: 'rc', versionChannel: 'rc',
+      });
+      deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
+      renderOverview();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave rc' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(
+        'This copy will receive only stable releases. Stays on 1.3.0-rc.1 until a stable release at or above it is published.'
+      )).toBeInTheDocument();
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Leave rc' }));
+      await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledWith(deploymentId, { channel: 'stable' }));
+    });
+
+    it('Leave dialog has no "stays on" sentence when the running build is already stable', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: 'stable' });
+      renderOverview();
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave rc' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText('This copy will receive only stable releases.')).toBeInTheDocument();
+      expect(within(dialog).queryByText(/Stays on/)).not.toBeInTheDocument();
+    });
+
+    it('Leave dialog states the generic "stays on" note when the running build channel is unknown', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: undefined });
+      renderOverview();
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave rc' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(
+        'This copy will receive only stable releases. Stays on 1.0.0 until a stable release at or above it is published.'
+      )).toBeInTheDocument();
+    });
+
+    it('confirming invalidates the detail query (refetches byId)', async () => {
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', versionChannel: 'rc' });
+      deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
+      renderOverview();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Leave rc' }));
+      const dialog = await screen.findByRole('dialog');
+      const callsBefore = deploymentsApi.byId.mock.calls.length;
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Leave rc' }));
+      await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalled());
+      await waitFor(() => expect(deploymentsApi.byId.mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    it('shows a returned warning as a transient notice', async () => {
+      setEnrolled(true);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable', versionChannel: 'stable' });
+      deploymentsApi.update.mockResolvedValueOnce({
+        ok: true as const,
+        warnings: ["Another single-instance copy of 'myapp' already follows channel 'rc'."],
+      });
+      renderOverview();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Join rc' }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Join rc' }));
+      await waitFor(() => expect(screen.getByText(/already follows channel 'rc'/)).toBeInTheDocument());
+    });
+  });
+
+  // --- US3 (T027/T029): sibling sentences, the operator-override note, and
+  // the separate-copy link.
+  describe('siblings and the separate-copy link (US3)', () => {
+    it('offers "Try rc in a separate copy" only when enrolled', async () => {
+      setEnrolled(true);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
+      renderOverview();
+      const link = await screen.findByRole('link', { name: /Try rc in a separate copy/ });
+      expect(link).toHaveAttribute('href', '/catalog/myapp/install?channel=rc');
+    });
+
+    it('the separate-copy link is absent when not enrolled', async () => {
+      setEnrolled(false);
+      deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
+      renderOverview();
+      await waitFor(() => expect(screen.getByText('Follows: stable')).toBeInTheDocument());
+      expect(screen.queryByText(/Try rc in a separate copy/)).not.toBeInTheDocument();
+    });
+
+    it('renders a sentence per sibling', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment,
+        channel: 'stable',
+        siblings: [{ id: 'gitea-2', name: 'gitea-beta', channel: 'rc' }],
+      });
+      renderOverview();
+      expect(await screen.findByText('gitea-beta (rc) is also installed')).toBeInTheDocument();
+    });
+
+    it('renders one sentence per sibling for two siblings', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment,
+        channel: 'stable',
+        siblings: [
+          { id: 'gitea-2', name: 'gitea-beta', channel: 'rc' },
+          { id: 'gitea-3', name: 'gitea-canary', channel: 'canary' },
+        ],
+      });
+      renderOverview();
+      expect(await screen.findByText('gitea-beta (rc) is also installed')).toBeInTheDocument();
+      expect(screen.getByText('gitea-canary (canary) is also installed')).toBeInTheDocument();
+    });
+
+    it('shows a muted operator-override note alongside the sibling sentence', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment,
+        channel: 'rc',
+        instanceReason: 'operator-override',
+        siblings: [{ id: 'gitea-1', name: 'gitea', channel: 'rc' }],
+      });
+      renderOverview();
+      expect(await screen.findByText('gitea (rc) is also installed')).toBeInTheDocument();
+      expect(screen.getByText('installed with operator override')).toBeInTheDocument();
+    });
+
+    it('shows no override note for instanceReason "channel", and never the phrase "permitted by channel"', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment,
+        channel: 'stable',
+        instanceReason: 'channel',
+        siblings: [{ id: 'gitea-2', name: 'gitea-beta', channel: 'rc' }],
+      });
+      renderOverview();
+      expect(await screen.findByText('gitea-beta (rc) is also installed')).toBeInTheDocument();
+      expect(screen.queryByText('installed with operator override')).not.toBeInTheDocument();
+      expect(screen.queryByText(/permitted by channel/)).not.toBeInTheDocument();
+    });
+  });
+
+  // --- Header upgrade button + confirm label channel suffix (FR-009).
+  describe('header upgrade button + confirm label channel suffix', () => {
+    it('appends the target channel to the header button, confirm label and dialog title when non-stable', async () => {
+      deploymentsApi.byId.mockResolvedValue({
+        ...deployment,
+        channel: 'rc',
+        updateAvailable: true,
+        latestVersion: '1.1.0-rc.2',
+        latestVersionChannel: 'rc',
+      });
+      deploymentsApi.updateCheck.mockResolvedValue({
+        installedVersion: '1.0.0',
+        latestVersion: '1.1.0-rc.2',
+        latestVersionChannel: 'rc',
+        updateAvailable: true,
+        path: { ok: true },
+      });
+      renderDetail();
+
+      // Header button carries the suffix too, not just the dialog title.
+      const openBtn = await screen.findByRole('button', { name: /upgrade to 1\.1\.0-rc\.2 \(rc\)/i });
+      fireEvent.click(openBtn);
+
+      await waitFor(() => expect(screen.getByText(/Upgrade My App to 1\.1\.0-rc\.2 \(rc\)\?/)).toBeInTheDocument());
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByRole('button', { name: 'Upgrade to 1.1.0-rc.2 (rc)' })).toBeInTheDocument();
+    });
+  });
+
+  // --- The old #428/#433 UI is gone: the Channel/Instance Details facts and
+  // the Configuration-tab "Release channel" select.
+  it('no longer shows the old Instance fact, Channel Details fact, or the Configuration-tab Release channel card', async () => {
     deploymentsApi.byId.mockResolvedValue({
       ...deployment,
       channel: 'rc',
+      instanceReason: 'channel',
       siblings: [{ id: 'gitea-1', name: 'gitea', channel: 'stable' }],
     });
+    renderDetail(); // ?tab=configuration
+    await waitFor(() => expect(screen.getByText('Current Configuration')).toBeInTheDocument());
+    expect(screen.queryByText('Release channel')).not.toBeInTheDocument();
+    expect(screen.queryByText(/permitted by channel/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/instance of myapp/)).not.toBeInTheDocument();
+    // The Details "Channel" fact label (distinct from the Channel *block*'s
+    // "Follows:" line) is gone too — only the Overview tab ever showed it, and
+    // this render is on Configuration, so assert on the Overview facts card
+    // structure via a follow-up render.
+  });
+
+  it('the Details facts card no longer has a bare "Channel" fact label', async () => {
+    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc' });
     renderOverview();
-    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
-    expect(
-      screen.getByText(`rc instance of ${deployment.app} · also installed: gitea (stable)`)
-    ).toBeInTheDocument();
-    // Nothing permitted *this* copy — it was installed first.
-    expect(screen.queryByText(/permitted by/)).not.toBeInTheDocument();
-  });
-
-  it('appends "permitted by channel" for instanceReason "channel" (#433)', async () => {
-    deploymentsApi.byId.mockResolvedValue({
-      ...deployment,
-      channel: 'stable',
-      instanceReason: 'channel',
-      siblings: [{ id: 'gitea-2', name: 'gitea-beta', channel: 'rc' }],
-    });
-    renderOverview();
-    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
-    expect(
-      screen.getByText(
-        `stable instance of ${deployment.app} · also installed: gitea-beta (rc) · permitted by channel`
-      )
-    ).toBeInTheDocument();
-  });
-
-  it('appends "permitted by operator override" for instanceReason "operator-override" (#433)', async () => {
-    deploymentsApi.byId.mockResolvedValue({
-      ...deployment,
-      channel: 'rc',
-      instanceReason: 'operator-override',
-      siblings: [{ id: 'gitea-1', name: 'gitea', channel: 'rc' }],
-    });
-    renderOverview();
-    await waitFor(() => expect(screen.getByText('Instance')).toBeInTheDocument());
-    expect(
-      screen.getByText(
-        `rc instance of ${deployment.app} · also installed: gitea (rc) · permitted by operator override`
-      )
-    ).toBeInTheDocument();
-  });
-
-  it('shows no Instance fact when the app has no other copies (#433)', async () => {
-    // Even with an audit reason on the record: with the sibling gone (uninstalled),
-    // there is no second copy left to explain.
-    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'rc', instanceReason: 'channel' });
-    renderOverview();
-    await waitFor(() => expect(screen.getByText('Channel')).toBeInTheDocument());
-    expect(screen.queryByText('Instance')).not.toBeInTheDocument();
-  });
-
-  it('appends the target channel to the upgrade dialog title when non-stable', async () => {
-    deploymentsApi.byId.mockResolvedValue({
-      ...deployment,
-      channel: 'rc',
-      updateAvailable: true,
-      latestVersion: '1.1.0-rc.2',
-      latestVersionChannel: 'rc',
-    });
-    deploymentsApi.updateCheck.mockResolvedValue({
-      installedVersion: '1.0.0',
-      latestVersion: '1.1.0-rc.2',
-      latestVersionChannel: 'rc',
-      updateAvailable: true,
-      path: { ok: true },
-    });
-    renderDetail();
-    const openBtn = await screen.findByRole('button', { name: /upgrade to 1\.1\.0-rc\.2/i });
-    fireEvent.click(openBtn);
-    await waitFor(() => expect(screen.getByText(/Upgrade My App to 1\.1\.0-rc\.2 \(rc\)\?/)).toBeInTheDocument());
-  });
-
-  it('the Channel select renders the app\'s declared channels and PATCHes on change', async () => {
-    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
-    deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
-    renderDetail();
-
-    const select = await screen.findByDisplayValue('stable');
-    // The second arg is the catalog source; DeploymentDetail has none to pass
-    // (the deployment API doesn't surface it), so the default `hola` applies.
-    await waitFor(() => expect(catalogApi.appById).toHaveBeenCalledWith('myapp', undefined));
-    // Both catalog-declared channels are offered.
-    expect(within(select as HTMLSelectElement).getByRole('option', { name: 'rc' })).toBeInTheDocument();
-
-    fireEvent.change(select, { target: { value: 'rc' } });
-    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledWith(deploymentId, { channel: 'rc' }));
-  });
-
-  it('a channel change invalidates the detail/list/update-check queries (refetches byId)', async () => {
-    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
-    deploymentsApi.update.mockResolvedValueOnce({ ok: true as const });
-    renderDetail();
-
-    const select = await screen.findByDisplayValue('stable');
-    const callsBefore = deploymentsApi.byId.mock.calls.length;
-    fireEvent.change(select, { target: { value: 'rc' } });
-    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalled());
-    // `onSuccess` invalidates the detail query, which refetches while mounted.
-    await waitFor(() => expect(deploymentsApi.byId.mock.calls.length).toBeGreaterThan(callsBefore));
-  });
-
-  it('shows a returned warning as a transient notice', async () => {
-    deploymentsApi.byId.mockResolvedValue({ ...deployment, channel: 'stable' });
-    deploymentsApi.update.mockResolvedValueOnce({
-      ok: true as const,
-      warnings: ["Another single-instance copy of 'myapp' already follows channel 'rc'."],
-    });
-    renderDetail();
-
-    const select = await screen.findByDisplayValue('stable');
-    fireEvent.change(select, { target: { value: 'rc' } });
-    await waitFor(() => expect(screen.getByText(/already follows channel 'rc'/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('App')).toBeInTheDocument()); // Details card rendered
+    // The Channel block uses "Follows: rc", never a bare "Channel" label.
+    expect(screen.queryByText('Channel')).not.toBeInTheDocument();
   });
 });
 

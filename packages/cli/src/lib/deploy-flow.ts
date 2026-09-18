@@ -1,4 +1,4 @@
-import { HolaSdk } from '@hola/sdk';
+import { HolaApiError, HolaSdk } from '@hola/sdk';
 import { API } from '@hola/shared';
 import type { CreateDeploymentFromDraftResponse } from '@hola/shared';
 
@@ -109,6 +109,19 @@ export async function watchJob(sdk: HolaSdk, jobId: string, out: (msg: string) =
   }
 }
 
+/**
+ * Whether an error is an API 401. The SDK now throws `HolaApiError` carrying the
+ * server's OWN message ("Authentication required" / "Invalid key"), which no
+ * longer contains the status or the word "unauthorized" the old
+ * `HTTP <status> <statusText>` message did — so the status is checked first and
+ * the text sniff only remains as the fallback for non-SDK/legacy errors.
+ */
+export function isUnauthorizedError(err: unknown): boolean {
+  if (err instanceof HolaApiError && err.status === 401) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /401|unauthor/i.test(msg);
+}
+
 /** Map a CLI error to a friendly message + non-zero exit code. Returns undefined. */
 export function reportDeployError(err: unknown): undefined {
   if (err instanceof DeployAbort) {
@@ -118,11 +131,32 @@ export function reportDeployError(err: unknown): undefined {
   }
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`Failed: ${msg}`);
-  if (/401|unauthor/i.test(msg)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
+  if (isUnauthorizedError(err)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
   if (/fetch failed|ECONNREFUSED|network|connect/i.test(msg)) console.error('Hint: set HOLA_API_URL (default http://localhost:3001).');
-  // #246: a single-instance app already installed — the message already names the
+
+  // Structured ALREADY_INSTALLED conflict (spec 005, contracts/cli.md): the
+  // server names the existing copy in `details` rather than in the message
+  // (which is deliberately surface-neutral, SC-003 — it contains none of
+  // these flags itself), so the hint is built from `details`, not sniffed
+  // from the message text.
+  const details = err instanceof HolaApiError
+    ? (err.details as { code?: string; existing?: { id: string; name: string; channel: string }; channelPublished?: boolean } | undefined)
+    : undefined;
+  if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
+    const { id, name, channel } = details.existing;
+    const channelClause = details.channelPublished
+      ? `install a separate copy on another published channel with '--channel <name>', `
+      : '';
+    console.error(
+      `Hint: '${name}' (${id}) already follows ${channel}. Switch it with 'hola channel ${id} <channel>', ` +
+        channelClause +
+        `or force a second copy with '--allow-multiple --name ${name}-2'.`,
+    );
+  }
+  // #246: a single-instance app already installed (older/untyped error shape,
+  // e.g. a pre-spec-005 server) — the message already names the
   // --allow-multiple escape hatch, but pair it with the distinct-name it needs.
-  if (/single-instance/i.test(msg)) console.error('Hint: pass a distinct name too, e.g. --allow-multiple --name myapp-2.');
+  else if (/single-instance/i.test(msg)) console.error('Hint: pass a distinct name too, e.g. --allow-multiple --name myapp-2.');
   // A taken/reserved/invalid subdomain — the instance name must be distinct.
   else if (/is already in use|reserved by a core|valid DNS label/i.test(msg)) {
     console.error('Hint: choose a different instance name with --name (e.g. --name myapp-2).');

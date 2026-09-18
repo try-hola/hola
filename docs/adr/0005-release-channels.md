@@ -1,6 +1,7 @@
 # ADR 0005: Release channels
 
-- **Status:** Proposed (September 2026)
+- **Status:** Proposed (September 2026); amended September 2026 (spec 005) to add §7, the
+  operator model (enrolment, track, Join/Leave, `ALREADY_INSTALLED`).
 - **Context:** There is no supported path to run a pre-release version of a catalog app.
   Every bundle pins one version; the only way to try an upstream release candidate today is
   to edit and publish the catalog repository, which ships it to every operator. #428 proposes
@@ -128,13 +129,15 @@ and pre-#431 manifests. A second copy of a singleton app is never urgent, the ov
 always one flag away, and failing open would restore the bypass precisely when the catalog
 can't contradict it. A deployment may still *follow* an unpublished channel — it receives
 the stable floor's offers, unchanged (spec edge case, `channels.test.ts`) — it just isn't a
-free second copy. The 409 for that case names the unpublished channel and points at
-`--allow-multiple`; the same-channel 409 keeps pointing at `--channel`.
+free second copy. The 409 for that case names the unpublished channel; the same-channel 409
+names the channel the existing copy follows. (Both messages named a CLI flag until spec 005
+made them surface-neutral and moved the actionable part into `details` — see §7.)
 
 `channel` takes precedence over `operator-override` even when the override was also
 supplied: the reason recorded is the one that actually permitted the install (clarification
 Q1). The reason is persisted (`EnhancedDeploymentDetail.instanceReason`) and shown on the
-deployment detail — `remo-beta` on `rc` reads as "remo's rc instance," not an unexplained
+deployment detail — spec 005 (§7) moved that from a terse "Instance" fact into the Channel
+block's sibling sentences, but the point is unchanged: a second copy is never an unexplained
 duplicate the operator has to remember the story behind. A later channel change that happens
 to make two copies share a channel does not retroactively revoke the guard or recompute the
 reason; the PATCH (§5) only returns an advisory warning.
@@ -172,6 +175,57 @@ position** for anything else — so a single `1.3.0-rc.1` entry flipped an app's
 asked for a pre-release. It is deleted; every "newest" resolution (catalog card, `latest`,
 update offers) now goes through `newestEligibleVersion`, which never throws and never falls
 back to list order.
+
+### 7. Operator model
+
+The mechanism above (§1–§6) is necessary but not sufficient: a catalog with any non-stable
+version listed was, until spec 005, visible to every operator whether or not they asked for
+it. Spec 005 layers an explicit operator model on top, in three parts.
+
+**Enrolment gates discovery, never a copy's channel.** A host-level system setting,
+`channels.showPrerelease` (default `false`), read through one shared, cached, fail-closed web
+hook (`usePrereleaseEnrolment`), controls whether the catalog card, the install wizard's
+channel picker, and the deployments-list pre-release filter show non-stable chrome at all.
+Turning it off never changes what channel an existing copy follows — an operator who joined
+`beta` before disabling discovery keeps receiving `beta` releases; they only stop *seeing* new
+places to join one. This mirrors §2's "own channel or stable" rule: enrolment is a UI-visibility
+gate, not a second eligibility check.
+
+**Track is a per-copy fact, distinct from what a copy runs.** The deployment's followed
+`channel` (§1, §5) answers "what will I be offered next"; a new derived field,
+`versionChannel`, answers "what did I build" — the catalog channel of the *running* version,
+looked up from the same per-channel version list `enrichUpdateInfo` already fetches for update
+offers (no new catalog call). The two commonly disagree: a copy can follow `stable` while
+still running a `beta` build it joined before leaving the channel (§5's "leaving keeps the
+build" now has a name for the state), or follow `beta` while running a `stable` build it
+hasn't yet updated past. The dashboard's Channel block shows both lines; a shared `pillFor`
+helper picks one pill per row (build channel wins when known and non-stable, else the followed
+channel) so list rows carry one honest signal instead of two.
+
+**Join/Leave are the existing metadata write, given a UI.** `PATCH { channel }` (§5) already
+does the work; Join and Leave are just that call from an Overview-tab dialog, gated so Join
+requires enrolment (you can't discover a channel to join without opting in) while Leave never
+does (an operator who inherited a non-stable copy, or disabled enrolment after joining one,
+can always step back to `stable`). Leaving prints an honest note — "stays on `<version>` until
+a stable release at or above it is published" — rather than implying an immediate downgrade,
+since (§5) a channel change never touches the running release.
+
+**`ALREADY_INSTALLED` replaces prose-sniffed conflict text with structured detail.** The
+single-instance guard's conflict (§4) is unchanged in *when* it fires; what changes is its
+shape. `ConflictError.details` now carries `{ code: 'ALREADY_INSTALLED', existing: { id, name,
+channel }, channelPublished }` beside the existing `PROVIDER_EXISTS` convention (same
+top-level `code: 'CONFLICT'`, discriminator in `details.code`) so the wizard and CLI render a
+choice — switch the existing copy, open it, or install a separate copy on another published
+channel — instead of a caller having to regex the message for a flag name. `existing` is the
+live copy whose followed channel matches the request, or (when none does) the live copy with
+the smallest `metadata.createdAt` — a deterministic tie-break, not an approximation. Messages
+stay surface-neutral: neither names a CLI flag, so the same server text reads correctly in the
+wizard and in `hola install`'s stderr.
+
+The shared read for enrolment, and the `versionChannel`/`multiInstance` derivations, fail
+closed the same way §2's eligibility check does: an unreachable catalog or a pending settings
+fetch never fabricates a "yes" — it renders as `stable`-only, not-enrolled, single-instance,
+matching what an operator would see if the feature had never shipped.
 
 ### Rejected alternatives
 
@@ -217,7 +271,9 @@ back to list order.
   Constitution II; channel-aware tests inject their own stub catalog.
 - New error codes: `INVALID_CHANNEL` (400), `NO_VERSION_ON_CHANNEL` (404,
   `BundleUnavailableError`), `VERSION_NOT_ON_CHANNEL` (400, `ValidationError`). Each message
-  names the channel(s) involved and the corrective action (SC-005).
+  names the channel(s) involved and the corrective action (SC-005). Spec 005 adds
+  `ALREADY_INSTALLED` as a `details.code` on the existing `CONFLICT` (409) response (§7),
+  alongside `PROVIDER_EXISTS` — not a new top-level error code.
 - try-hola/apps (the catalog repository) still has to do the actual publishing work before
   any real pre-release bundle appears — this ADR and #418/#003-release-channels only build
   the platform side. In dependency order: (1) `bin/push-oci-package.sh` must stop moving

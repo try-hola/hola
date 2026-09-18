@@ -321,3 +321,107 @@ describe('Release channels: PATCH channel change (#428, US4)', () => {
     void first;
   });
 });
+
+// ---------------------------------------------------------------------------
+// User Story 5 (spec 005): GET /api/deployments?prerelease=true keeps only
+// rows whose followed channel OR running-build channel is non-stable, applied
+// BEFORE pagination (data-model.md "Deployments list request", research.md
+// R7). Three copies: (a) follows rc; (b) follows stable but is running a
+// listed rc build (joined rc, then left back to stable — the running build
+// never changes on a track change); (c) stable/stable.
+// ---------------------------------------------------------------------------
+describe('Release channels: prerelease list filter (spec 005, US5, T021)', () => {
+  let dataRoot: string;
+
+  beforeEach(async () => {
+    dataRoot = await mkdtemp(join(tmpdir(), 'hola-prerelease-list-'));
+  });
+
+  afterEach(async () => {
+    await rm(dataRoot, { recursive: true, force: true });
+  });
+
+  function makeSystem() {
+    const storage = new RealStorageService({ holaDir: dataRoot });
+    const catalog = makeChannelCatalog(ENTRIES);
+    const drafts = new RealDraftService(storage, catalog, makeValidation());
+    const routing = new RealRoutingService(storage, { baseDomain: 'local.hola' });
+    const jobs = makeJobs();
+    const deployments = new RealDeploymentService(
+      storage, jobs, new MockDockerService(), drafts, routing, noLogging, new MockProvisionerService(),
+      catalog as unknown as ConstructorParameters<typeof RealDeploymentService>[7],
+    );
+    return { drafts, deployments };
+  }
+
+  // Distinct appIds (rather than the shared `deploy` helper's fixed 'demo')
+  // so (a) and (b) — both installed following `rc` before (b) leaves it — don't
+  // trip the single-instance-per-channel guard against each other.
+  async function deploy(drafts: RealDraftService, deployments: RealDeploymentService, appId: string, name: string, channel?: string) {
+    const { draftId } = await drafts.createDraft({ appId, channel });
+    await drafts.updateDraft(draftId, { composeOverride: `services:\n  ${appId}:\n    image: demo:1\n` });
+    await drafts.finalizeDraft(draftId);
+    return deployments.createFromDraft({ draftId, name, options: { autoStart: false } });
+  }
+
+  async function makeThreeCopies(drafts: RealDraftService, deployments: RealDeploymentService) {
+    const a = await deploy(drafts, deployments, 'demo-a', 'demo-a-copy', 'rc');
+    const b = await deploy(drafts, deployments, 'demo-b', 'demo-b-copy', 'rc');
+    await deployments.updateDeployment(b.deploymentId, { channel: 'stable' });
+    const c = await deploy(drafts, deployments, 'demo-c', 'demo-c-copy', 'stable');
+    return { a, b, c };
+  }
+
+  test('prerelease:true returns only the two non-stable copies, with total: 2', async () => {
+    const { drafts, deployments } = makeSystem();
+    const { a, b } = await makeThreeCopies(drafts, deployments);
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10, prerelease: true });
+    expect(list.total).toBe(2);
+    expect(list.items.map((i) => i.id).sort()).toEqual([a.deploymentId, b.deploymentId].sort());
+    // (a) is caught by the followed-channel arm, (b) by the running-build arm.
+    const byId = Object.fromEntries(list.items.map((i) => [i.id, i]));
+    expect(byId[a.deploymentId]!.channel).toBe('rc');
+    expect(byId[b.deploymentId]!.channel).toBe('stable');
+    expect(byId[b.deploymentId]!.versionChannel).toBe('rc');
+  });
+
+  test('prerelease combined with a status filter narrows further', async () => {
+    const { drafts, deployments } = makeSystem();
+    const { a, b } = await makeThreeCopies(drafts, deployments);
+    // (a) stays at its post-create status ('installing'); (b) is stopped —
+    // giving two different, realistic statuses to filter on.
+    await deployments.executeAction(b.deploymentId, { action: 'stop' });
+
+    const installing = await deployments.listDeployments({ page: 1, limit: 10, prerelease: true, status: 'installing' });
+    expect(installing.total).toBe(1);
+    expect(installing.items[0]!.id).toBe(a.deploymentId);
+
+    const stopped = await deployments.listDeployments({ page: 1, limit: 10, prerelease: true, status: 'stopped' });
+    expect(stopped.total).toBe(1);
+    expect(stopped.items[0]!.id).toBe(b.deploymentId);
+  });
+
+  test('the prerelease filter is applied BEFORE pagination: limit 1, page 2 returns the SECOND prerelease row', async () => {
+    const { drafts, deployments } = makeSystem();
+    const { a, b } = await makeThreeCopies(drafts, deployments);
+
+    const page1 = await deployments.listDeployments({ page: 1, limit: 1, prerelease: true });
+    expect(page1.total).toBe(2);
+    expect(page1.items).toHaveLength(1);
+    expect(page1.items[0]!.id).toBe(a.deploymentId);
+
+    const page2 = await deployments.listDeployments({ page: 2, limit: 1, prerelease: true });
+    expect(page2.total).toBe(2);
+    expect(page2.items).toHaveLength(1);
+    expect(page2.items[0]!.id).toBe(b.deploymentId);
+  });
+
+  test('without prerelease, all three deployments are returned', async () => {
+    const { drafts, deployments } = makeSystem();
+    await makeThreeCopies(drafts, deployments);
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    expect(list.total).toBe(3);
+  });
+});

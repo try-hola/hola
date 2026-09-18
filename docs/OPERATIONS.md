@@ -400,14 +400,73 @@ command that talks to the server (both read one cached server-side check against
 the newest published release). Run `hola update --check` for the discrete report,
 or set `HOLA_NO_UPDATE_NOTICE=1` to silence the per-command notice.
 
-### Release channels
+### Trying pre-release versions of apps
 
 Per-app releases (distinct from the *platform* upgrade above) can follow a
 release **channel** other than the default `stable` — e.g. `rc` for a
 pre-release build the catalog publishes alongside its stable release. See
-[ADR 0005](adr/0005-release-channels.md) for the full model.
+[ADR 0005](adr/0005-release-channels.md) for the mechanism and §7 for the
+operator model below.
 
-**Installing on a channel:**
+**Enable discovery.** Non-stable channels are hidden from the catalog card,
+the install wizard, and the deployments-list filter until you enrol — a
+host-level setting, off by default, that only gates what the dashboard shows;
+it never changes what channel an already-installed copy follows.
+
+```bash
+hola settings prerelease on    # Settings → Pre-release apps → toggle, in the dashboard
+```
+
+Once enrolled, an app that publishes a non-stable channel shows a pill on its
+catalog card (`Also published on rc`), and the install wizard offers a channel
+choice (`Stable (recommended)` / `rc — pre-release`).
+
+**What the pill means.** A pill on a catalog card or a deployments-list row
+names a *channel*, but which one depends on context: on the catalog it is
+every channel the app publishes; on a deployment row it is whichever is
+non-stable — the channel the copy **follows** (its track) if the **running
+build**'s own channel is unknown or stable, or the running build's channel
+when that's the more informative fact (e.g. a copy that joined `rc`, then left
+it, still running an `rc` build). The deployment's Overview page always shows
+both explicitly: "Follows: `<channel>`" and "Running `<version>`, a
+`<channel>` build."
+
+**Join or leave a channel from an installed copy's Overview tab** — the
+Channel block there has one button per published channel not currently
+followed (**Join**, shown only while enrolled) and, when the copy follows a
+non-stable channel, **Leave** (always available, so you can step back to
+`stable` even with discovery off). Leaving is honest about what it does and
+doesn't do: the copy keeps running its current build — "Stays on `<version>`
+until a stable release at or above it is published" — it does not roll back.
+Equivalently from the CLI:
+
+```bash
+hola channel <deploymentId>          # show: Follows: rc / Running: 0.11.0-rc.1 (rc build)
+hola channel <deploymentId> stable   # leave rc; prints the stays-on note if applicable
+hola channel <deploymentId> rc       # join rc (server-side; the wizard/CLI don't gate on enrolment)
+```
+
+`hola channel` and the direct API PATCH are metadata-only changes — neither
+touches the running version nor enqueues a job:
+
+```bash
+curl -X PATCH $HOLA_API_URL/api/deployments/<id> \
+  -H "Authorization: Bearer $HOLA_TOKEN" -H 'content-type: application/json' \
+  -d '{"channel":"rc"}'
+```
+
+The next update check is computed against the new channel immediately; the
+currently running version is unaffected until you explicitly upgrade. Once
+installed, `hola upgrade <deploymentId>` (no explicit `--app-version`) always
+offers the newest version eligible on the deployment's own channel — its own
+channel or `stable`, never an unrelated channel. The channel is **sticky**:
+promoting or rolling back never changes it, even when an rc deployment takes a
+stable release.
+
+**Rehearsing a pre-release in a separate copy.** From an installed copy's
+Overview tab, enrolled operators see "Try `<channel>` in a separate copy →"
+for each published channel the copy doesn't already follow — it opens the
+install wizard pre-selecting that channel. Equivalently:
 
 ```bash
 hola install remo --channel rc --as remo-beta   # a new, channel-differentiated copy
@@ -424,17 +483,12 @@ releases), but it does **not** buy a second copy of a single-instance app: that
 install is rejected saying the channel has no versions published for the app,
 and `--allow-multiple` is what forces it. The same applies whenever the channel's
 published-ness can't be established at install time (the catalog was unreachable,
-or the app was installed by OCI reference) — the platform fails closed. The
-dashboard's deployment detail names each copy by the channel it follows and
-lists the app's other copies ("`rc` instance of remo · also installed: remo
-(stable)"), adding *why* the second copy was permitted (it followed a published
-channel, or an operator forced it with `--allow-multiple`); `hola deployments`
-tags the row with its channel (`gitea-rc [rc]`). Once
-installed, `hola upgrade <deploymentId>` (no explicit `--app-version`) always
-offers the newest version eligible on the deployment's own channel — its own
-channel or `stable`, never an unrelated channel. The channel is **sticky**:
-promoting or rolling back never changes it, even when an rc deployment takes a
-stable release.
+or the app was installed by OCI reference) — the platform fails closed. Every
+installed copy's Overview tab lists the app's other copies ("`gitea-rc` (`rc`)
+is also installed"), with a muted note when a copy was permitted only by
+`--allow-multiple` ("installed with operator override") rather than by
+following a distinct published channel; `hola deployments` tags the row with
+its channel (`gitea-rc [rc]`).
 
 **What a channel copy tests — and doesn't.** A channel deployment installed
 from the catalog starts with **empty data**. It proves the new version boots,
@@ -445,18 +499,19 @@ which is tracked as a follow-up
 ([try-hola/hola#429](https://github.com/try-hola/hola/issues/429)) and not
 built yet.
 
-**Changing the channel a deployment follows** is a metadata-only change — it
-never touches the running version, and never enqueues a job:
+**When install hits a conflict.** Installing on a channel an existing
+single-instance copy already occupies (or on an unpublished channel, without
+`--allow-multiple`) is refused with a message naming the existing copy — the
+wizard shows a panel with three choices (switch the existing copy to the new
+channel, open it as-is, or install a separate copy on another published
+channel); the CLI prints the same server message plus a hint:
 
-```bash
-curl -X PATCH $HOLA_API_URL/api/deployments/<id> \
-  -H "Authorization: Bearer $HOLA_TOKEN" -H 'content-type: application/json' \
-  -d '{"channel":"rc"}'
 ```
-
-(or from the dashboard: Deployment detail → Configuration → Channel). The next
-update check is computed against the new channel immediately; the currently
-running version is unaffected until you explicitly upgrade.
+Failed: 'gitea' is already installed as 'gitea' and follows 'stable'. This app is single-instance.
+Hint: 'gitea' (dep_1) already follows stable. Switch it with 'hola channel dep_1 <channel>',
+      install a separate copy on another published channel with '--channel <name>',
+      or force a second copy with '--allow-multiple --name gitea-2'.
+```
 
 ## Troubleshooting
 

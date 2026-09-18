@@ -2,6 +2,7 @@ import { HolaSdk } from '@hola/sdk';
 import { API, STABLE_CHANNEL } from '@hola/shared';
 import type { GetDeploymentsResponse } from '@hola/shared';
 
+import { isUnauthorizedError } from '../../lib/deploy-flow';
 import { streamSSE } from '../../lib/sse';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
 
@@ -130,7 +131,7 @@ async function followDeploymentLogs(deploymentId: string, stream: Streamer): Pro
 function reportListError(err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
   console.error(`Failed: ${msg}`);
-  if (/401|unauthor/i.test(msg)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
+  if (isUnauthorizedError(err)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
   if (/fetch failed|ECONNREFUSED|network|connect/i.test(msg)) console.error('Hint: set HOLA_API_URL (default http://localhost:3001).');
   process.exitCode = 1;
 }

@@ -116,6 +116,7 @@ export class DatabaseSettingsRepository implements SettingsRepository {
     docker: { host: '/var/run/docker.sock' },
     tls: { email: '' },
     notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+    channels: { showPrerelease: false },
   };
 
   private defaultBackupSettings: BackupSettings = {

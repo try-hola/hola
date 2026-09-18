@@ -288,6 +288,34 @@ prog
     await runConfig(deploymentId, streamOpts(opts));
   });
 
+// channel — show or change the release channel a deployment follows (spec
+// 005). With no [channel], prints what it follows and what it's running;
+// with one, PATCHes it (metadata-only — no job, no restart).
+prog
+  .command('channel <deploymentId> [channel]')
+  .describe('Show or change the release channel a deployment follows')
+  .example('channel gitea-ab12cd34         # show')
+  .example('channel gitea-ab12cd34 beta    # follow beta')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (deploymentId, channel, opts) => {
+    const { runChannel } = await load(import('./commands/deployments/channel'));
+    await runChannel(deploymentId, channel, camelKeys(opts));
+  });
+
+// settings prerelease — the dashboard-wide gate that shows pre-release
+// (beta, rc) catalog channels in discovery chrome (spec 005). Never changes
+// what channel an installed copy follows — see `hola channel`.
+prog
+  .command('settings prerelease [value]')
+  .describe('Show or set whether pre-release catalog channels are shown in discovery chrome')
+  .example('settings prerelease       # show')
+  .example('settings prerelease on')
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (value, opts) => {
+    const { runSettingsPrerelease } = await load(import('./commands/settings/prerelease'));
+    await runSettingsPrerelease(value, camelKeys(opts));
+  });
+
 // app data push — bulk-load a local directory into a directory the app declares
 // as pushable in its manifest (#409). rsync over SSH, so a re-push after local
 // edits transfers only the delta. Multi-word so `app data pull` can join it later.

@@ -7,6 +7,7 @@
 
 import { type AppEnvVar } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
+import { ValidationError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 
@@ -15,6 +16,10 @@ export interface SystemSettings {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string };
+  // Dashboard discovery gating for pre-release catalog channels (spec 005).
+  // Default `showPrerelease: false`. Gates catalog/wizard/list discovery
+  // chrome ONLY — it never changes what channel an installed copy follows.
+  channels?: { showPrerelease?: boolean };
 }
 
 export interface BackupSettings {
@@ -57,6 +62,7 @@ export class RealConfigService implements ConfigService {
     docker: { host: '/var/run/docker.sock' },
     tls: { email: '' },
     notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+    channels: { showPrerelease: false },
   };
 
   private defaultBackupSettings: BackupSettings = {
@@ -167,8 +173,11 @@ export class RealConfigService implements ConfigService {
         // Handle nested objects properly
         ...(updates.docker && { docker: { ...current.docker, ...updates.docker } }),
         ...(updates.tls && { tls: { ...current.tls, ...updates.tls } }),
-        ...(updates.notifications && { 
-          notifications: { ...current.notifications, ...updates.notifications } 
+        ...(updates.notifications && {
+          notifications: { ...current.notifications, ...updates.notifications }
+        }),
+        ...(updates.channels && {
+          channels: { ...current.channels, ...updates.channels }
         }),
         // System env requires special handling to maintain array structure
         ...(updates.systemEnv && { systemEnv: updates.systemEnv }),
@@ -177,7 +186,7 @@ export class RealConfigService implements ConfigService {
       // Validate settings before saving
       const errors = await this.validateSystemSettings(updated);
       if (errors.length > 0) {
-        throw new Error(`Validation failed: ${errors.join(', ')}`);
+        throw new ValidationError(`Validation failed: ${errors.join(', ')}`);
       }
 
       // Save updated settings
@@ -287,6 +296,11 @@ export class RealConfigService implements ConfigService {
       }
     }
 
+    // Validate channel-discovery settings (spec 005)
+    if (settings.channels?.showPrerelease !== undefined && typeof settings.channels.showPrerelease !== 'boolean') {
+      errors.push('Show pre-release channels must be a boolean');
+    }
+
     return errors;
   }
 
@@ -328,6 +342,7 @@ export class MockConfigService implements ConfigService {
     docker: { host: '/var/run/docker.sock' },
     tls: { email: '' },
     notifications: { smtpHost: '', smtpUser: '', smtpPassword: '' },
+    channels: { showPrerelease: false },
   };
 
   private backupSettings: BackupSettings = {
@@ -357,12 +372,15 @@ export class MockConfigService implements ConfigService {
       ...updates,
       ...(updates.docker && { docker: { ...this.systemSettings.docker, ...updates.docker } }),
       ...(updates.tls && { tls: { ...this.systemSettings.tls, ...updates.tls } }),
-      ...(updates.notifications && { 
-        notifications: { ...this.systemSettings.notifications, ...updates.notifications } 
+      ...(updates.notifications && {
+        notifications: { ...this.systemSettings.notifications, ...updates.notifications }
+      }),
+      ...(updates.channels && {
+        channels: { ...this.systemSettings.channels, ...updates.channels }
       }),
       ...(updates.systemEnv && { systemEnv: updates.systemEnv }),
     };
-    
+
     this.logger.debug('Mock system settings updated');
     return { ...this.systemSettings };
   }

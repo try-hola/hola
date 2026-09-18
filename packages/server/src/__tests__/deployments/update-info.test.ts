@@ -32,7 +32,7 @@ type UpgradeMeta = {
 // tests can serve a mixed stable/rc list.
 type CatalogVersionInput = string | { version: string; channel?: string };
 
-function makeCatalog(versions: CatalogVersionInput[], opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean }) {
+function makeCatalog(versions: CatalogVersionInput[], opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean; versionsThrow?: boolean }) {
   const versionStrings = () => versions.map((v) => (typeof v === 'string' ? v : v.version));
   const channelOfVersion = (version: string): string | undefined => {
     const entry = versions.find((v) => (typeof v === 'string' ? v : v.version) === version);
@@ -59,14 +59,22 @@ function makeCatalog(versions: CatalogVersionInput[], opts?: { upgrade?: Upgrade
         ...(opts?.upgrade ? { upgrade: opts.upgrade } : {}),
       };
     },
-    getVersions: async () => ({
-      items: versions.map((v) =>
-        typeof v === 'string'
-          ? { version: v, createdAt: '2020-01-01', channel: 'stable' }
-          : { version: v.version, createdAt: '2020-01-01', channel: v.channel ?? 'stable' },
-      ),
-      total: versions.length,
-    }),
+    // `versionsThrow` (spec 005) simulates an unreachable catalog for the
+    // per-app version list itself — distinct from `detailThrows`, which only
+    // affects a single target-bundle pull — so `versionChannel`'s fail-safe
+    // (absent, not thrown) can be exercised against the same memoized lookup
+    // `latestVersion`/`updateAvailable` already rely on.
+    getVersions: async () => {
+      if (opts?.versionsThrow) throw new Error('catalog unreachable');
+      return {
+        items: versions.map((v) =>
+          typeof v === 'string'
+            ? { version: v, createdAt: '2020-01-01', channel: 'stable' }
+            : { version: v.version, createdAt: '2020-01-01', channel: v.channel ?? 'stable' },
+        ),
+        total: versions.length,
+      };
+    },
   };
 }
 function makeValidation() {
@@ -90,7 +98,7 @@ describe('Per-app update notifications (#284)', () => {
   beforeEach(async () => { dataRoot = await mkdtemp(join(tmpdir(), 'hola-upd-')); });
   afterEach(async () => { await rm(dataRoot, { recursive: true, force: true }); });
 
-  function makeSystem(catalogVersions: CatalogVersionInput[] | null, opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean }) {
+  function makeSystem(catalogVersions: CatalogVersionInput[] | null, opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean; versionsThrow?: boolean }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const catalog = makeCatalog(catalogVersions ?? ['1.0.0'], opts);
     const drafts = new RealDraftService(storage, catalog as unknown as CatalogArg, makeValidation() as unknown as ConstructorParameters<typeof RealDraftService>[2]);
@@ -247,6 +255,73 @@ describe('Per-app update notifications (#284)', () => {
     expect(list.items[0].latestVersion).toBeUndefined();
     expect(list.items[0].updateAvailable).toBeUndefined();
   });
+
+  // --- versionChannel (spec 005): the catalog channel of the RUNNING build,
+  // distinct from `channel` (the followed track). Derived from the same
+  // memoized per-app version list `latestVersion`/`latestVersionChannel` use. ---
+
+  test('a stable copy running a listed stable build carries versionChannel "stable" (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem([
+      { version: '1.1.0', channel: 'stable' },
+      { version: '1.2.0', channel: 'stable' },
+      { version: '1.3.0-rc.1', channel: 'rc' },
+    ]);
+    const dep = await deploy(drafts, deployments, '1.1.0');
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    expect(list.items[0].versionChannel).toBe('stable');
+    // Unchanged sibling fields (#428) — still correct alongside the new one.
+    expect(list.items[0].latestVersion).toBe('1.2.0');
+    expect(list.items[0].latestVersionChannel).toBe('stable');
+    expect(list.items[0].updateAvailable).toBe(true);
+
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    expect(detail.versionChannel).toBe('stable');
+  });
+
+  test('a copy following rc, running its listed rc build, carries versionChannel "rc" (spec 005)', async () => {
+    const versions: CatalogVersionInput[] = [
+      { version: '1.3.0-rc.1', channel: 'rc' },
+      { version: '1.3.0-rc.2', channel: 'rc' },
+    ];
+    const { drafts, deployments } = makeSystem(versions);
+    const dep = await deploy(drafts, deployments, '1.3.0-rc.1', 'rc');
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    expect(list.items[0].versionChannel).toBe('rc');
+    expect(list.items[0].channel).toBe('rc');
+    expect(list.items[0].latestVersionChannel).toBe('rc');
+
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    expect(detail.versionChannel).toBe('rc');
+  });
+
+  test('versionChannel is absent when the running version is not listed in the catalog (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem(['1.0.0', '2.0.0']);
+    // Deployed on a version the catalog's version list doesn't carry.
+    const dep = await deploy(drafts, deployments, '1.5.0');
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    expect(list.items[0].versionChannel).toBeUndefined();
+
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    expect(detail.versionChannel).toBeUndefined();
+  });
+
+  test('versionChannel is absent when the catalog is unreachable (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem(['1.0.0', '2.0.0'], { versionsThrow: true });
+    const dep = await deploy(drafts, deployments, '1.0.0');
+
+    const list = await deployments.listDeployments({ page: 1, limit: 10 });
+    expect(list.items[0].versionChannel).toBeUndefined();
+    // Matches the existing fail-safe: a catalog error leaves the whole
+    // enrichment unset, not just versionChannel.
+    expect(list.items[0].latestVersion).toBeUndefined();
+    expect(list.items[0].updateAvailable).toBeUndefined();
+
+    const detail = await deployments.getDeployment(dep.deploymentId);
+    expect(detail.versionChannel).toBeUndefined();
+  });
 });
 
 describe('On-demand richer update check (#299)', () => {
@@ -254,7 +329,7 @@ describe('On-demand richer update check (#299)', () => {
   beforeEach(async () => { dataRoot = await mkdtemp(join(tmpdir(), 'hola-upd299-')); });
   afterEach(async () => { await rm(dataRoot, { recursive: true, force: true }); });
 
-  function makeSystem(catalogVersions: CatalogVersionInput[] | null, opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean }) {
+  function makeSystem(catalogVersions: CatalogVersionInput[] | null, opts?: { upgrade?: UpgradeMeta; detailThrows?: boolean; versionsThrow?: boolean }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const catalog = makeCatalog(catalogVersions ?? ['1.0.0'], opts);
     const drafts = new RealDraftService(storage, catalog as unknown as CatalogArg, makeValidation() as unknown as ConstructorParameters<typeof RealDraftService>[2]);
@@ -350,5 +425,29 @@ describe('On-demand richer update check (#299)', () => {
     expect(check.latestVersion).toBe('1.1.0-rc.2');
     expect(check.latestVersionChannel).toBe('rc');
     expect(check.updateAvailable).toBe(true);
+  });
+
+  // --- versionChannel (spec 005) on the update-check response ---
+
+  test('update-check response carries versionChannel for the running build (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem([
+      { version: '1.1.0', channel: 'stable' },
+      { version: '1.2.0', channel: 'stable' },
+    ]);
+    const dep = await deploy(drafts, deployments, '1.1.0');
+    const check = await deployments.getUpdateCheck(dep.deploymentId);
+    expect(check.versionChannel).toBe('stable');
+  });
+
+  test('update-check versionChannel is absent when the running version is unlisted (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem(['1.0.0', '2.0.0']);
+    const unlisted = await deploy(drafts, deployments, '1.5.0');
+    expect((await deployments.getUpdateCheck(unlisted.deploymentId)).versionChannel).toBeUndefined();
+  });
+
+  test('update-check versionChannel is absent when the catalog is unreachable (spec 005)', async () => {
+    const { drafts, deployments } = makeSystem(['1.0.0', '2.0.0'], { versionsThrow: true });
+    const unreachable = await deploy(drafts, deployments, '1.0.0');
+    expect((await deployments.getUpdateCheck(unreachable.deploymentId)).versionChannel).toBeUndefined();
   });
 });

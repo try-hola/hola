@@ -19,14 +19,107 @@ import type {
   GetBackupSettingsResponse,
   RegistryCredentialRecord,
   CatalogSourceRecord,
-  PreviewCatalogSourceResponse
+  PreviewCatalogSourceResponse,
+  GetDeploymentsRequest
 } from '@hola/shared';
+import { STABLE_CHANNEL } from '@hola/shared';
 import { useSettingsApi } from '../hooks/useSettingsApi';
 import { useBackupSettingsApi } from '../hooks/useSettingsApi';
 import { useSystemStatusApi } from '../hooks/useSettingsApi';
+import { useDeploymentsApi } from '../hooks/useDeploymentsApi';
 import { useTheme, type ThemePref } from '../hooks/useTheme';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../utils/api-hybrid';
+
+// Large enough to cover every installed deployment on a single host (#428/005)
+// — the count line below just needs the whole set to filter over, not a page.
+const PRERELEASE_DEPLOYMENTS_PARAMS: GetDeploymentsRequest = { page: 1, limit: 500, status: 'all' };
+
+/**
+ * Enrolment gate for pre-release (beta/rc) channels (spec 005, US6/US1). Off by
+ * default: with it off, Catalog/Deployments/the install wizard show no channel
+ * chrome for apps the operator hasn't already installed a non-stable copy of.
+ * The toggle itself never changes any deployment's followed channel — Join/Leave
+ * per app (DeploymentDetail) does that, at any time, regardless of this setting.
+ */
+export const PrereleaseCard: React.FC = () => {
+  const { data, loading, updateSettings } = useSettingsApi();
+  const { data: deploymentsData } = useDeploymentsApi(PRERELEASE_DEPLOYMENTS_PARAMS);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const enrolled = data?.channels?.showPrerelease === true;
+
+  // A copy "follows a pre-release channel" whether that's its declared track
+  // (`channel`) or — for a legacy/untracked record — the channel of the build
+  // it's actually running (`versionChannel`).
+  const prereleaseCount = React.useMemo(() => {
+    const items = deploymentsData?.items ?? [];
+    return items.filter(
+      (d) =>
+        (!!d.channel && d.channel !== STABLE_CHANNEL) ||
+        (!!d.versionChannel && d.versionChannel !== STABLE_CHANNEL)
+    ).length;
+  }, [deploymentsData]);
+
+  const toggle = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await updateSettings({ channels: { showPrerelease: !enrolled } });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to update pre-release setting');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-surface-1 border border-border rounded-card p-5">
+      <div className="font-semibold text-[15px] mb-1">Pre-release apps</div>
+      <p className="text-[13px] text-text-muted mb-3.5">
+        Pre-release versions may be unstable. You can join or leave a channel per app at any time.
+      </p>
+
+      <div className="flex items-center gap-[14px] py-[11px]">
+        <div className="flex-1">
+          <div id="prerelease-toggle-label" className="text-[13.5px] font-medium">
+            Show pre-release channels (beta, rc)
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enrolled}
+          aria-labelledby="prerelease-toggle-label"
+          disabled={busy || loading}
+          onClick={toggle}
+          className={`w-[38px] h-[22px] rounded-full relative cursor-pointer transition-colors flex-none disabled:opacity-50 disabled:cursor-not-allowed ${
+            enrolled ? 'bg-primary' : 'bg-surface-3'
+          }`}
+        >
+          <div
+            className={`absolute top-[2px] w-[18px] h-[18px] rounded-full bg-white shadow transition-[left] ${
+              enrolled ? 'left-[18px]' : 'left-[2px]'
+            }`}
+          />
+        </button>
+      </div>
+
+      {err && (
+        <div className="text-danger text-[13px] mt-1">{err}</div>
+      )}
+
+      {prereleaseCount > 0 && (
+        <p className="text-[13px] text-text-muted mt-2">
+          {prereleaseCount === 1
+            ? '1 installed app currently follows a pre-release channel'
+            : `${prereleaseCount} installed apps currently follow a pre-release channel`}
+        </p>
+      )}
+    </div>
+  );
+};
 
 /**
  * Manage registry credentials for private OCI pulls (a GHCR PAT etc.). The token
@@ -825,6 +918,9 @@ export const Settings: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Pre-release apps (spec 005) */}
+        <PrereleaseCard />
 
         {/* System status */}
         {loading ? (

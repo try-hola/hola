@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 import { runInstall, resolveAppAndVersion, parseProfiles } from '../commands/install/install';
+import { HolaApiError } from '@hola/sdk';
 import type { HolaSdk } from '@hola/sdk';
 
 function makeSdk(overrides: { drafts?: Record<string, unknown> } = {}) {
@@ -333,6 +334,86 @@ describe('install', () => {
       expect(res).toBeUndefined();
       expect(process.exitCode).toBe(1);
       expect(errors.some(e => /--allow-multiple --name/.test(e))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // --- Structured ALREADY_INSTALLED conflict (spec 005, contracts/cli.md) ---
+
+  it('a HolaApiError ALREADY_INSTALLED conflict prints the server message and the structured hint (spec 005)', async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
+    try {
+      const sdk = makeSdk({
+        drafts: {
+          create: vi.fn(async () => ({ draftId: 'd1' })),
+          byId: vi.fn(async () => ({ draftId: 'd1', appEnv: [] })),
+          validate: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+          preflight: vi.fn(async () => ({ ok: true, checks: [] })),
+          finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
+        },
+      });
+      sdk.deployments.create = vi.fn(async () => {
+        throw new HolaApiError(
+          "'gitea' is already installed as 'gitea' and follows 'stable'. This app is single-instance.",
+          409,
+          {
+            code: 'CONFLICT',
+            details: {
+              code: 'ALREADY_INSTALLED',
+              existing: { id: 'dep-1', name: 'gitea', channel: 'stable' },
+              channelPublished: true,
+            },
+          },
+        );
+      });
+      const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(errors.some(e => e.startsWith('Failed: ') && e.includes("already installed as 'gitea' and follows 'stable'"))).toBe(true);
+      expect(errors.some(e => e.includes('hola channel dep-1'))).toBe(true);
+      expect(errors.some(e => e.includes('--channel'))).toBe(true);
+      expect(errors.some(e => e.includes('--allow-multiple --name gitea-2'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a HolaApiError ALREADY_INSTALLED conflict on an unpublished channel omits the --channel clause (spec 005)', async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errors.push(String(m)); });
+    try {
+      const sdk = makeSdk({
+        drafts: {
+          create: vi.fn(async () => ({ draftId: 'd1' })),
+          byId: vi.fn(async () => ({ draftId: 'd1', appEnv: [] })),
+          validate: vi.fn(async () => ({ ok: true, errors: [], warnings: [] })),
+          preflight: vi.fn(async () => ({ ok: true, checks: [] })),
+          finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
+        },
+      });
+      sdk.deployments.create = vi.fn(async () => {
+        throw new HolaApiError(
+          "'gitea' is already installed as 'gitea'. Channel 'banana' has no versions published for this app, so it does not count as a separate channel.",
+          409,
+          {
+            code: 'CONFLICT',
+            details: {
+              code: 'ALREADY_INSTALLED',
+              existing: { id: 'dep-1', name: 'gitea', channel: 'stable' },
+              channelPublished: false,
+            },
+          },
+        );
+      });
+      const res = await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      expect(errors.some(e => e.startsWith('Failed: '))).toBe(true);
+      expect(errors.some(e => e.includes('hola channel dep-1'))).toBe(true);
+      expect(errors.some(e => e.includes('--allow-multiple --name gitea-2'))).toBe(true);
+      expect(errors.some(e => e.includes('--channel'))).toBe(false);
     } finally {
       spy.mockRestore();
     }

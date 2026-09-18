@@ -503,11 +503,18 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
         in: 'query',
         description: 'Filter by deployment status',
         required: false,
-        schema: { 
+        schema: {
           type: 'string',
           enum: ['all', 'running', 'stopped', 'installing', 'updating', 'error'],
           default: 'all'
         }
+      },
+      {
+        name: 'prerelease',
+        in: 'query',
+        description: "When 'true', keep only deployments whose followed channel or currently-running build's channel is non-stable (spec 005); applied before pagination, so `total` reflects the filtered count",
+        required: false,
+        schema: { type: 'boolean', default: false }
       }
     ],
     responseType: 'GetDeploymentsResponse'
@@ -939,6 +946,52 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
 ];
 
 /**
+ * Structured error metadata for documentation generation (`error.details`
+ * discriminators, per contracts/api.md's "Error-code reference" table).
+ */
+export interface ApiErrorCodeMetadata {
+  code: string;
+  status: number;
+  /** Human-readable note on `error.details`'s shape, when this code carries one. */
+  details?: string;
+}
+
+/**
+ * Reference table of the `error.code` values the API returns (the typed error
+ * classes in `middleware/error-mapping.ts` plus the codes services assign on
+ * top of them), each with its HTTP status and, where applicable, the
+ * `error.details` shape a client should read a discriminator from (spec 005,
+ * contracts/api.md "Error-code reference"). `CONFLICT` is the shared
+ * top-level code for two distinct `details.code` discriminators — clients
+ * branch on `details.code`, never by parsing `error.message`. Not rendered by
+ * the dashboard today; it is the documented contract for SDK/CLI consumers.
+ */
+export const API_ERROR_CODES: ApiErrorCodeMetadata[] = [
+  { code: 'VALIDATION_ERROR', status: 400 },
+  { code: 'INVALID_CHANNEL', status: 400 },
+  { code: 'UNAUTHORIZED', status: 401 },
+  { code: 'FORBIDDEN', status: 403 },
+  { code: 'NOT_FOUND', status: 404 },
+  { code: 'NO_VERSION_ON_CHANNEL', status: 404 },
+  { code: 'BUNDLE_UNAVAILABLE', status: 404 },
+  { code: 'TIMEOUT', status: 408 },
+  {
+    code: 'CONFLICT',
+    status: 409,
+    details:
+      "details.code ∈ PROVIDER_EXISTS { contract, existing{id,name} }, ALREADY_INSTALLED { existing{id,name,channel}, channelPublished }",
+  },
+  { code: 'VERSION_NOT_ON_CHANNEL', status: 409 },
+  { code: 'DRAFT_VALIDATION_FAILED', status: 422, details: 'issues[]' },
+  { code: 'DEPLOYMENT_VALIDATION_FAILED', status: 422, details: 'issues[]' },
+  { code: 'PROMOTE_VALIDATION_FAILED', status: 422, details: 'issues[]' },
+  { code: 'RATE_LIMIT_EXCEEDED', status: 429 },
+  { code: 'SERVICE_ERROR', status: 500 },
+  { code: 'INTERNAL_ERROR', status: 500 },
+  { code: 'PROVISIONING_ERROR', status: 502 },
+];
+
+/**
  * Generate TypeScript interface definitions for documentation
  */
 export function generateTypeScriptSchemas(): Record<string, string> {
@@ -1161,6 +1214,15 @@ export function generateTypeScriptSchemas(): Record<string, string> {
 
     CreateDeploymentRequest: `{
   draftId: string;
+  name?: string;
+  options?: { autoStart?: boolean; healthCheckTimeoutMs?: number; rollbackOnFailure?: boolean };
+  // Force a second copy of a single-instance app past the guard (#246), e.g.
+  // when the requested channel isn't a distinct/published one (spec 005). A
+  // 409 CONFLICT with details.code 'ALREADY_INSTALLED' is thrown when this
+  // is needed but omitted.
+  allowMultiple?: boolean;
+  profiles?: string[];
+  grants?: string[];
 }`,
 
     PatchDeploymentRequest: `{
@@ -1313,6 +1375,10 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string };
+  // Pre-release enrolment (spec 005): gates dashboard/catalog discovery of
+  // non-stable channels only — it never changes a copy's followed channel.
+  // Defaults to false.
+  channels?: { showPrerelease?: boolean };
 }`,
 
     PatchSettingsRequest: `{
@@ -1320,6 +1386,9 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string };
+  // Deep-merged with the stored value, like docker/tls/notifications. A
+  // non-boolean showPrerelease rejects with 400 VALIDATION_ERROR.
+  channels?: { showPrerelease?: boolean };
 }`,
 
     PatchSettingsResponse: `{
@@ -1327,6 +1396,7 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   docker?: { host?: string };
   tls?: { email?: string };
   notifications?: { smtpHost?: string; smtpUser?: string; smtpPassword?: string };
+  channels?: { showPrerelease?: boolean };
 }`,
 
     GetBackupSettingsResponse: `{
