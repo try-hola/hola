@@ -6,6 +6,13 @@ export interface RunResult {
   code: number;
   stdout: string;
   stderr: string;
+  /**
+   * The signal that killed the child, when one did. A signalled child reports a
+   * null exit code, which would otherwise be indistinguishable from a plain
+   * `exit 1` with no output — see #459, where a silently killed `ssh` looked
+   * like a failed remote command and left the caller nothing to report.
+   */
+  signal?: NodeJS.Signals | null;
 }
 
 export interface RunOptions {
@@ -35,7 +42,10 @@ export function systemRunner(extraSshArgs: string[] = []): Runner {
         child.stdout?.on('data', (d) => { const s = String(d); stdout += s; onOut(s); });
         child.stderr?.on('data', (d) => { const s = String(d); stderr += s; onErr(s); });
         child.on('error', reject);
-        child.on('close', (code) => { onOut('\n'); onErr('\n'); resolve({ code: code ?? 1, stdout, stderr }); });
+        child.on('close', (code, signal) => {
+          onOut('\n'); onErr('\n');
+          resolve({ code: code ?? 1, stdout, stderr, signal: signal ?? null });
+        });
         if (opts?.input != null) child.stdin?.write(opts.input);
         child.stdin?.end();
       }, reject);
