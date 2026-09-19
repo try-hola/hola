@@ -2031,6 +2031,65 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
+   * Map of compose service name -> { id, running } as the daemon currently sees
+   * it. Used either side of an `up -d` to tell which containers it recreated.
+   * Best-effort: a `ps` failure yields an empty map, which makes the caller
+   * restart nothing rather than guess.
+   */
+  private async composeStateById(
+    composeDir: string,
+    projectName: string,
+  ): Promise<Map<string, { id?: string; running: boolean }>> {
+    try {
+      const ps = await this.dockerService.composePs(composeDir, projectName);
+      return new Map(ps.services.map((svc) => [svc.name, { id: svc.id, running: svc.state === 'running' }]));
+    } catch (error) {
+      this.logger.warn('Could not read compose state; skipping the explicit restart pass', {
+        projectName,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return new Map();
+    }
+  }
+
+  /**
+   * Restart the services an `up -d` left untouched (#457) — those that were
+   * running beforehand and still have the same container id. Returns the names
+   * actually restarted, for the job output. A service compose recreated has
+   * already cycled; one that was not running is left alone, so a one-shot init
+   * container that exited 0 is not re-run.
+   *
+   * A failure here is logged, not thrown: `up -d` has already succeeded, so the
+   * deployment is up either way, and failing the job would misreport that.
+   */
+  private async restartUntouchedServices(
+    composeDir: string,
+    projectName: string,
+    before: Map<string, { id?: string; running: boolean }>,
+    profiles: string[] | undefined,
+    log: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>,
+  ): Promise<string[]> {
+    if (before.size === 0) return [];
+    const after = await this.composeStateById(composeDir, projectName);
+    const restarted: string[] = [];
+    for (const [name, prev] of before) {
+      if (!prev.running) continue;
+      const now = after.get(name);
+      // Gone, or recreated by `up -d` (new container id) — nothing to do.
+      if (!now || (prev.id && now.id && prev.id !== now.id)) continue;
+      const res = await this.dockerService.composeRestart(composeDir, projectName, name, profiles);
+      if (res.success) {
+        restarted.push(name);
+      } else {
+        this.logger.warn('Service restart failed after up -d', { projectName, service: name, output: res.output });
+        await log('warn', `Could not restart ${name}: ${res.output}`);
+      }
+    }
+    if (restarted.length > 0) await log('info', `Restarted ${restarted.length} service(s): ${restarted.join(', ')}`);
+    return restarted;
+  }
+
+  /**
    * Resolve the shared HTTP Basic secret for `protectedBypassPaths`, from the
    * app's OWN active appEnv — not a platform-generated value. Returns undefined
    * when the manifest declares no protectedBypassPaths (the common case, where
@@ -3187,10 +3246,23 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // freshly materialized compose, so changed env/labels (e.g. updated OIDC
         // wiring) would silently never reach the app. `up -d` recreates only the
         // services whose config changed, using the already-present images.
+        //
+        // Which is why the containers it left alone must then be restarted
+        // explicitly (#457): for a deployment whose compose did not change,
+        // `up -d` is a no-op and `restart` would report success having cycled
+        // nothing. That breaks the first thing an operator reaches for on a
+        // wedged app, and it strands a package whose sidecar wrote state the app
+        // only reads at boot. Snapshot the container ids first, then restart the
+        // services that were RUNNING and still carry the same id afterwards —
+        // anything `up -d` recreated has already cycled, and an exited one-shot
+        // init container is deliberately left exited rather than re-run.
+        const before = await this.composeStateById(composeDir, projectName);
         const registryAuth = await this.resolveRegistryAuth(deployment);
         const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
         output = res.output;
         if (!res.success) throw new Error(res.output);
+        const restarted = await this.restartUntouchedServices(composeDir, projectName, before, deployment.selectedProfiles, logBoth);
+        if (restarted.length > 0) output = `${output}\nRestarted: ${restarted.join(', ')}`;
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
