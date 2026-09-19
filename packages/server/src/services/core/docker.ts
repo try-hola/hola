@@ -33,6 +33,10 @@ export interface ComposeProject {
 
 export interface ComposeService {
   name: string;
+  /** Container id. Lets a caller tell a container compose RECREATED (new id)
+   *  from one it left alone (same id) across an `up -d` — see the restart
+   *  lifecycle in deployment.ts. Absent when the daemon didn't report one. */
+  id?: string;
   state: 'running' | 'stopped' | 'restarting' | 'exited' | 'dead' | 'created' | 'paused';
   status: string;
   image: string;
@@ -317,6 +321,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
           const serviceData = JSON.parse(line);
           services.push({
             name: serviceData.Service || serviceData.Name,
+            ...(serviceData.ID ? { id: String(serviceData.ID) } : {}),
             state: this.normalizeContainerState(serviceData.State),
             status: serviceData.Status || '',
             image: serviceData.Image || '',
