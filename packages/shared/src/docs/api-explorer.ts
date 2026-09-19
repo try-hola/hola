@@ -969,6 +969,11 @@ export interface ApiErrorCodeMetadata {
 export const API_ERROR_CODES: ApiErrorCodeMetadata[] = [
   { code: 'VALIDATION_ERROR', status: 400 },
   { code: 'INVALID_CHANNEL', status: 400 },
+  // The promote route's two "nothing to do" answers, which a caller driving an
+  // upgrade has to tell apart: no newer version exists at all, vs. the newest
+  // one is what is already running.
+  { code: 'NO_TARGET_VERSION', status: 400 },
+  { code: 'ALREADY_AT_VERSION', status: 400, details: '{ version, channel }' },
   { code: 'UNAUTHORIZED', status: 401 },
   { code: 'FORBIDDEN', status: 403 },
   { code: 'NOT_FOUND', status: 404 },

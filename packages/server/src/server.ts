@@ -73,6 +73,7 @@ import { createRequestMiddleware, createHealthMiddleware, getRequestContext, typ
 import { getServices, resetServices } from './services/simple-factory';
 import { coreRoutesFromEnv } from './services/core/routing';
 import { mergeUpgradeAppEnv } from './services/core/upgrade-env';
+import { resolveUpgradeTargetFresh } from './services/core/upgrade-target';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
@@ -1225,7 +1226,39 @@ async function route(url: URL, req: Request): Promise<Response> {
       // any draft is built. The detail read above is handed over (#432) so the
       // resolution reuses it rather than re-reading the deployment and
       // re-fetching the catalog version list.
-      const { version: targetVersion, channel } = await services.deployments.resolveUpgradeTarget(deploymentId, body.version, { detail });
+      // #464: `latestVersion` comes from the CACHED catalog index (24h by
+      // default), so "nothing newer" may just be a stale cache. When the inferred
+      // target is missing or equal to what is running, this refreshes once and
+      // asks again before we conclude anything — see resolveUpgradeTargetFresh.
+      const resolved = await resolveUpgradeTargetFresh(
+        { deployments: services.deployments, catalog: services.catalog },
+        deploymentId,
+        body.version,
+        detail,
+        (reason) => logger.info('Refreshing the catalog before concluding an upgrade has no target', {
+          requestId: context?.requestId,
+          deploymentId,
+          reason,
+        }),
+      );
+      const { version: targetVersion, channel } = resolved;
+      // A same-version promote is a legitimate repair, but only when it is what
+      // the caller ASKED for. Inferred, it is the silent no-op of #464: an
+      // upgrade that upgrades nothing while reporting success.
+      if (!body.version && targetVersion && targetVersion === resolved.detail.version) {
+        return json(
+          {
+            error: {
+              code: 'ALREADY_AT_VERSION',
+              message:
+                `${deploymentId} is already on ${targetVersion} — nothing to upgrade to. ` +
+                `Pass an explicit { "version": "${targetVersion}" } to re-promote the version it is already running.`,
+              details: { version: targetVersion, channel },
+            },
+          },
+          { status: 400 },
+        );
+      }
       if (!targetVersion) {
         return json(
           {

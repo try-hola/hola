@@ -105,6 +105,8 @@ prog
 prog
   .command('catalog [query]')
   .describe('Browse the app catalog (optionally filter by query)')
+  .example('catalog --refresh          # re-fetch the sources first (the server caches for 24h)')
+  .option('--refresh', 'Force the server to re-fetch its catalog sources first', false)
   .option('--category', 'Filter by category')
   .option('--source', 'Only list apps from this catalog source id')
   .option('--limit', 'Max apps to list', 100)

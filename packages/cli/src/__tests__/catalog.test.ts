@@ -7,6 +7,7 @@ function makeSdk(items: Array<{ id: string; name: string; description: string; i
   return {
     catalog: {
       apps: vi.fn(async () => ({ items, page: 1, limit: 100, total: items.length })),
+      refresh: vi.fn(async () => ({ success: true, sources: [{ id: 'hola', name: 'Hola', ok: true }] })),
     },
   };
 }
@@ -53,5 +54,32 @@ describe('catalog', () => {
     const sdk = makeSdk([{ id: 'demo', name: 'Demo', description: 'Demo app', icon: '📦', channels: ['stable'] }]);
     await runCatalog(undefined, {}, { sdk: sdk as unknown as HolaSdk });
     expect(logs.join('\n')).not.toContain('channels:');
+  });
+// --- --refresh (#464) -------------------------------------------------------
+
+  it('--refresh re-fetches the sources before listing, and says which', async () => {
+    // The server caches its catalog index for 24h, so a version published moments
+    // ago is invisible without this — to `catalog` and to `upgrade` alike.
+    const sdk = makeSdk([{ id: 'gitea', name: 'Gitea', description: 'Git service', icon: '🍵' }]);
+    await runCatalog(undefined, { refresh: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(sdk.catalog.refresh).toHaveBeenCalledWith(true);
+    expect(logs.join('\n')).toContain('Refreshed hola');
+    expect(sdk.catalog.apps).toHaveBeenCalled();
+  });
+
+  it('without --refresh it never refreshes', async () => {
+    const sdk = makeSdk([{ id: 'gitea', name: 'Gitea', description: 'Git service', icon: '🍵' }]);
+    await runCatalog(undefined, {}, { sdk: sdk as unknown as HolaSdk });
+    expect(sdk.catalog.refresh).not.toHaveBeenCalled();
+  });
+
+  it('a source that fails to refresh is named, and the listing still happens', async () => {
+    const sdk = makeSdk([{ id: 'gitea', name: 'Gitea', description: 'Git service', icon: '🍵' }]);
+    sdk.catalog.refresh = vi.fn(async () => ({ success: false, sources: [{ id: 'pofallon', name: 'p', ok: false, error: 'HTTP 404' }] }));
+    await runCatalog(undefined, { refresh: true }, { sdk: sdk as unknown as HolaSdk });
+
+    expect(logs.join('\n')).toContain('Could not refresh pofallon: HTTP 404');
+    expect(sdk.catalog.apps).toHaveBeenCalled();
   });
 });

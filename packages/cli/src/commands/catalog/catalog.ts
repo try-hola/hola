@@ -5,6 +5,11 @@ import type { GetCatalogAppsResponse } from '@hola/shared';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
 
 export interface CatalogOptions {
+  /** Force the server to re-fetch its catalog sources before listing (#464).
+   *  The server caches the index for 24h by default, so a version published
+   *  moments ago is otherwise invisible — to `hola catalog` and to `hola
+   *  upgrade` alike. */
+  refresh?: boolean;
   category?: string;
   source?: string;
   limit?: number | string;
@@ -19,6 +24,12 @@ export async function runCatalog(
 ): Promise<void> {
   const sdk = injected?.sdk ?? new HolaSdk();
   try {
+    if (opts.refresh) {
+      const res = (await sdk.catalog.refresh(true)) as { sources?: Array<{ id: string; ok: boolean; error?: string }> };
+      for (const src of res.sources ?? []) {
+        if (!opts.json) console.log(src.ok ? `Refreshed ${src.id}` : `Could not refresh ${src.id}: ${src.error ?? 'unknown error'}`);
+      }
+    }
     const limit = opts.limit !== undefined ? Number(opts.limit) : 100;
     const res = (await sdk.catalog.apps({
       q: query,
