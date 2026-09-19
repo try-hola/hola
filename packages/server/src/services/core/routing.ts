@@ -296,6 +296,17 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
         middlewares[basicAuthMwName] = {
           basicAuth: {
             users: [`hola:${hashBypassAuthSecret(rule.forwardAuth.bypassAuthSecret)}`],
+            // STRIP the header once verified. Traefik's basicAuth forwards the
+            // `Authorization` it just checked by default, and this credential is
+            // Hola's edge gate — it means nothing to the app behind it. An app
+            // that does its own per-request auth on the same path (Calibre-Web's
+            // OPDS, verified on a VM) then tries to authenticate a user named
+            // `hola`, finds none, and 401s every reader that got PAST the gate —
+            // so the exemption only ever worked for apps that ignore the header.
+            // Removing it hands the app a clean, unauthenticated-looking request,
+            // which is exactly what a protected bypass is for: Hola proves the
+            // caller may reach the path, the app applies its own model to it.
+            removeHeader: true,
           },
         };
         protectedPrefixes.forEach((prefix, i) => {

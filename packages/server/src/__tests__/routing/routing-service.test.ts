@@ -211,6 +211,11 @@ describe('RoutingService', () => {
     // Fixed username `hola`; the password half is an htpasswd-format bcrypt hash
     // ($2a$/$2b$/$2x$/$2y$ — the prefixes Traefik's basicAuth recognizes).
     expect(basicAuth.users[0]).toMatch(/^hola:\$2[abxy]\$\d{2}\$.+$/);
+    // The verified credential is STRIPPED before the app sees it. Traefik forwards
+    // `Authorization` by default, and an app that does its own per-request auth on
+    // the exempted path (Calibre-Web OPDS) would reject the platform credential and
+    // 401 every caller that just passed the gate.
+    expect(basicAuth.removeHeader).toBe(true);
 
     // Every declared protectedBypassPaths prefix gets its own higher-priority
     // router, matching the same Host && PathPrefix shape as the plain bypass
