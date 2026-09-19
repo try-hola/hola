@@ -38,6 +38,19 @@ export interface DataPushResult {
 
 class PushAbort extends Error {}
 
+/**
+ * Why a remote command failed, in as much detail as we have. A child killed by
+ * a signal reports a null exit code, which the runner normalizes to 1 with
+ * empty output — without naming the signal that reads as "the command failed
+ * and said nothing" (#459).
+ */
+function failureDetail(res: { code: number; stdout: string; stderr: string; signal?: NodeJS.Signals | null }): string {
+  const said = (res.stderr || res.stdout).trim();
+  if (said) return said;
+  if (res.signal) return `killed by ${res.signal}`;
+  return `exit ${res.code}`;
+}
+
 /** Per-run OpenSSH control-socket path for connection multiplexing (#181). */
 function sshControlPath(): string {
   return path.join(os.tmpdir(), `hola-push-${process.pid}-${Date.now().toString(36)}.sock`);
@@ -196,7 +209,7 @@ export async function runAppDataPush(
     const ownership = probe.stdout.trim();
     if (probe.code !== 0 || !/^\d+:\d+$/.test(ownership)) {
       throw new PushAbort(
-        `Could not read ${chosen.destPath} on ${host}: ${(probe.stderr || probe.stdout).trim() || `ssh exit ${probe.code}`}\n` +
+        `Could not read ${chosen.destPath} on ${host}: ${failureDetail(probe)}\n` +
           'The directory must exist (install the app first), and the SSH user needs passwordless sudo (`sudo -n`).'
       );
     }
@@ -214,9 +227,28 @@ export async function runAppDataPush(
       throw new PushAbort(`rsync failed (exit ${rsync.code}): ${(rsync.stderr || rsync.stdout).trim()}`);
     }
 
+    // Restore the ownership the server established, then CHECK rather than
+    // assume. Failing this step used to abort the push (#459) — but by now every
+    // byte is already on disk, and the receiving rsync ran as root with `-a`, so
+    // the files usually arrived correctly owned anyway. Aborting threw away the
+    // post-push hook over a step that often had nothing left to fix, which for an
+    // app that reindexes in its hook means the data lands and the app never sees
+    // it. So: try, re-probe, and only complain if the ownership is genuinely
+    // wrong — then still run the hook and start the app.
     const chown = await runner.ssh(host, `sudo -n chown -R ${ownership} ${shellQuote(chosen.destPath)}`);
     if (chown.code !== 0) {
-      throw new PushAbort(`Could not restore ownership to ${ownership}: ${(chown.stderr || chown.stdout).trim()}`);
+      const after = await runner.ssh(host, statCmd);
+      if (after.code === 0 && after.stdout.trim() === ownership) {
+        out(`  note: the ownership command failed (${failureDetail(chown)}), but ${chosen.destPath} is still ${ownership}`);
+      } else {
+        console.error(
+          `Could not restore ownership to ${ownership}: ${failureDetail(chown)}\n` +
+            `  ${chosen.destPath} is now ${after.code === 0 ? after.stdout.trim() || '(unknown)' : '(unreadable)'}. ` +
+            `The app may not be able to read what was pushed — fix with:\n` +
+            `  ssh ${host} sudo chown -R ${ownership} ${shellQuote(chosen.destPath)}`,
+        );
+        process.exitCode = 1;
+      }
     }
 
     // The bytes are already on disk, so a hook failure is reported, not fatal:

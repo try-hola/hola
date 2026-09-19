@@ -48,9 +48,20 @@ function makeSdk(targets: Target[] = [LIBRARY], overrides: Record<string, unknow
 }
 
 /** Fake runner: records ssh commands and local argv; the stat probe answers 911:911. */
-function makeRunner(over: { statCode?: number; rsyncCode?: number } = {}) {
+function makeRunner(
+  over: {
+    statCode?: number;
+    rsyncCode?: number;
+    /** Make `chown` fail. `signal` reproduces #459: killed child, so the runner
+     *  reports code 1 with nothing on either stream. */
+    chown?: { code: number; stderr?: string; signal?: NodeJS.Signals };
+    /** Ownership the re-probe reports after a failed chown (default: unchanged). */
+    ownershipAfter?: string;
+  } = {},
+) {
   const ssh: string[] = [];
   const local: Array<{ cmd: string; args: string[] }> = [];
+  let statCalls = 0;
   return {
     ssh,
     local,
@@ -58,7 +69,15 @@ function makeRunner(over: { statCode?: number; rsyncCode?: number } = {}) {
       ssh: vi.fn(async (_host: string, cmd: string) => {
         ssh.push(cmd);
         if (cmd.includes('stat -c')) {
+          statCalls += 1;
+          // The second stat is the post-chown verification.
+          if (statCalls > 1 && over.ownershipAfter !== undefined) {
+            return { code: 0, stdout: `${over.ownershipAfter}\n`, stderr: '' };
+          }
           return { code: over.statCode ?? 0, stdout: over.statCode ? '' : '911:911\n', stderr: over.statCode ? 'no such file' : '' };
+        }
+        if (cmd.includes('chown') && over.chown) {
+          return { code: over.chown.code, stdout: '', stderr: over.chown.stderr ?? '', signal: over.chown.signal ?? null };
         }
         return { code: 0, stdout: '', stderr: '' };
       }),
@@ -304,5 +323,50 @@ describe('hola app data push', () => {
     await runAppDataPush('dep1', 'media', localDir, { host: 'me@vm' }, inject(sdk, runner));
 
     expect(sdk.deployments.pushHook).not.toHaveBeenCalled();
+  });
+// --- ownership restore (#459) ----------------------------------------------
+
+  it('a failed chown does not abort the push when the ownership is actually right', async () => {
+    // The real case: rsync ran as root with -a, so the files already landed
+    // owned correctly; only the chown call itself failed (silently killed ssh).
+    const sdk = makeSdk([{ ...LIBRARY, hasPostHook: true }]);
+    const { runner } = makeRunner({ chown: { code: 1, signal: 'SIGHUP' }, ownershipAfter: '911:911' });
+
+    const res = await runAppDataPush('dep1', 'library', localDir, { host: 'me@vm', yes: true }, inject(sdk, runner));
+
+    expect(res).toBeDefined();
+    expect(process.exitCode).toBe(0);
+    // The post-push hook is the thing the old abort threw away.
+    expect(sdk.deployments.pushHook).toHaveBeenCalledWith('dep1', { targetId: 'library' });
+    expect(sdk.actions).toEqual(['stop', 'start']);
+  });
+
+  it('reports the signal when a killed ssh leaves nothing on either stream', async () => {
+    const sdk = makeSdk();
+    const { runner } = makeRunner({ chown: { code: 1, signal: 'SIGHUP' }, ownershipAfter: '911:911' });
+    const logged: string[] = [];
+    (console.log as unknown as ReturnType<typeof vi.fn>).mockImplementation((m: string) => { logged.push(String(m)); });
+
+    await runAppDataPush('dep1', 'library', localDir, { host: 'me@vm', yes: true }, inject(sdk, runner));
+
+    expect(logged.join('\n')).toContain('SIGHUP');
+  });
+
+  it('a genuinely wrong ownership is reported, with the fix, but still starts the app', async () => {
+    const sdk = makeSdk([{ ...LIBRARY, hasPostHook: true }]);
+    const { runner } = makeRunner({ chown: { code: 1, stderr: 'chown: operation not permitted' }, ownershipAfter: '0:0' });
+    const errors: string[] = [];
+    (console.error as unknown as ReturnType<typeof vi.fn>).mockImplementation((m: string) => { errors.push(String(m)); });
+
+    await runAppDataPush('dep1', 'library', localDir, { host: 'me@vm', yes: true }, inject(sdk, runner));
+
+    const said = errors.join('\n');
+    expect(said).toContain('operation not permitted');
+    expect(said).toContain('is now 0:0');
+    expect(said).toContain('sudo chown -R 911:911');
+    expect(process.exitCode).toBe(1);
+    // Still finished the job rather than leaving the app stopped mid-push.
+    expect(sdk.deployments.pushHook).toHaveBeenCalled();
+    expect(sdk.actions).toEqual(['stop', 'start']);
   });
 });
