@@ -72,6 +72,7 @@ import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext, type RequestContext } from './middleware/request';
 import { getServices, resetServices } from './services/simple-factory';
 import { coreRoutesFromEnv } from './services/core/routing';
+import { mergeUpgradeAppEnv } from './services/core/upgrade-env';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
@@ -1255,9 +1256,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       try {
         const carried = await services.deployments.getActiveConfig(deploymentId);
         const draftDetail = await services.drafts.getDraft(draft.draftId);
-        const mergedAppEnv = (draftDetail.appEnv ?? []).map(e =>
-          Object.prototype.hasOwnProperty.call(carried.appEnv, e.key) ? { ...e, value: carried.appEnv[e.key] } : e,
-        );
+        // Keys the operator already set win; a key the NEW version introduces with
+        // a `generate` recipe is minted here rather than refused (#458). See
+        // mergeUpgradeAppEnv for the full rule.
+        const mergedAppEnv = mergeUpgradeAppEnv(draftDetail.appEnv ?? [], carried.appEnv);
         const patch: PatchDraftRequest = {};
         if (mergedAppEnv.length > 0) patch.appEnv = mergedAppEnv;
         if (Object.keys(carried.systemOverrides).length > 0) patch.systemOverrides = carried.systemOverrides;
