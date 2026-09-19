@@ -1151,6 +1151,9 @@ export type AppAuthConfig = {
   // sync endpoint) — rather than exempting it with NO auth, Traefik enforces HTTP
   // Basic auth on it using a single shared credential covering every declared
   // prefix. Same start-with-`/`, never-exactly-`/` validation as `bypassPaths`.
+  // Traefik STRIPS the verified `Authorization` header before the app sees it, so
+  // the platform credential never reaches (and is never rejected by) an app that
+  // does its own per-request auth on the same path.
   //
   // `bypassAuthPasswordEnv` names the env-var KEY (from this app's own
   // `defaultEnv`) whose resolved value is that shared password. The app package
@@ -2323,8 +2326,9 @@ export type ForwardAuthMiddleware = {
   // non-browser client (an e-reader, a webhook) that needs SOME auth but whose app
   // has no credential of its own to enforce it with. The renderer emits ONE
   // `basicAuth` middleware per deployment (shared across every declared prefix,
-  // not one per prefix) hashing `bypassAuthSecret` at render time. From
-  // `auth.forwardAuth.protectedBypassPaths`.
+  // not one per prefix) hashing `bypassAuthSecret` at render time, with
+  // `removeHeader` set so the verified credential is stripped rather than
+  // forwarded to the app. From `auth.forwardAuth.protectedBypassPaths`.
   protectedBypassPaths?: string[];
   // Raw plaintext secret backing the HTTP Basic auth on `protectedBypassPaths` —
   // resolved elsewhere (the deployment's own active `appEnv`, via
