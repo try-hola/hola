@@ -9,7 +9,7 @@
  * honor, in the same style as `coerceManifestAuth` / `coerceConsumes`.
  */
 
-import { CONTRACTS, formatContractRef, parseContractRef } from '@hola/shared/contracts';
+import { CONTRACTS, formatContractRef, parseContractRef, isParticipationMarker } from '@hola/shared/contracts';
 import type { ContractBrokerActivity, ContractParticipant, ContractRollup, DeploymentContracts } from '@hola/shared';
 
 import type { Logger } from '../../lib/logger';
@@ -31,6 +31,22 @@ function coerceRefs(
   const out: string[] = [];
 
   for (const ref of asRefList(raw)) {
+    // Participation markers (spec 007) resolve to no CONTRACTS entry ON PURPOSE:
+    // `restore@1` names a thing the app's author has considered, not a two-sided
+    // integration the server brokers, so giving it a contract definition would be
+    // a lie the provider guard and the grant machinery would both act on.
+    //
+    // It must therefore be carved out BEFORE the unresolvable-ref drop below, and
+    // only for `accepts` — nothing provides a marker. Without this, every
+    // `restore@1` was stripped on catalog read and `createDraft` refused every
+    // restore with `RESTORE_NOT_ACCEPTED`, making the feature inoperable against
+    // a real catalog while every unit test passed (they build manifests directly
+    // and never reach this function).
+    if (role === 'accepts' && isParticipationMarker(ref)) {
+      out.push(ref);
+      continue;
+    }
+
     const def = parseContractRef(ref);
     if (!def) {
       // Forward-compat (ADR 0003): a newer manifest naming a contract this build
