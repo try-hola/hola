@@ -96,13 +96,14 @@ class ExecSpy extends MockDockerService {
   }
 }
 
-function makeCatalog(opts: { accepts?: string[]; backup?: AppBackupDeclaration }): CatalogArg {
+function makeCatalog(opts: { accepts?: string[]; provides?: string[]; backup?: AppBackupDeclaration }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: appId, icon: '📦' }),
     getVersionDetail: async () => ({
       defaultEnv: [],
       defaults: { ports: [], volumes: [] },
       accepts: opts.accepts,
+      provides: opts.provides,
       backup: opts.backup,
     }),
   } as unknown as CatalogArg;
@@ -113,6 +114,15 @@ function makeValidation(): ValidationArg {
     validateDraft: async () => ({ ok: true, errors: [], warnings: [] }),
     preflightCheck: async () => ({ ok: true, checks: [] }),
   } as unknown as ValidationArg;
+}
+
+/** Poll until `predicate` holds, so a timer-driven assertion isn't a fixed sleep. */
+async function waitFor(predicate: () => boolean, what: string, timeoutMs = 3000) {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise(r => setTimeout(r, 10));
+  }
 }
 
 async function waitForJob(jobs: RealJobService, id: string, timeoutMs = 5000) {
@@ -139,7 +149,7 @@ describe('capability contract broker: backup@1', () => {
   });
 
   /** A system whose catalog stub gives every app the same accepts/backup shape. */
-  function makeSystem(opts: { accepts?: string[]; backup?: AppBackupDeclaration }) {
+  function makeSystem(opts: { accepts?: string[]; provides?: string[]; backup?: AppBackupDeclaration }) {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
@@ -152,11 +162,11 @@ describe('capability contract broker: backup@1', () => {
     return { storage, jobs, drafts, deployments };
   }
 
-  async function install(sys: ReturnType<typeof makeSystem>, appId: string): Promise<string> {
+  async function install(sys: ReturnType<typeof makeSystem>, appId: string, grants?: string[]): Promise<string> {
     const { draftId } = await sys.drafts.createDraft({ appId, version: '1.0.0' });
     await sys.drafts.updateDraft(draftId, { composeOverride: COMPOSE });
     await sys.drafts.finalizeDraft(draftId);
-    const created = await sys.deployments.createFromDraft({ draftId, name: appId });
+    const created = await sys.deployments.createFromDraft({ draftId, name: appId, grants });
     expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
     return created.deploymentId;
   }
@@ -376,6 +386,142 @@ describe('capability contract broker: backup@1', () => {
         { deploymentId: postiz, participationId: 'app-db', ok: false, output: expect.any(String) },
         { deploymentId: postiz, participationId: 'temporal-db', ok: true, output: expect.any(String) },
       ]);
+    });
+  });
+
+  /**
+   * ADR 0004 §6: "a per-contract timeout after which `finalize` runs regardless."
+   *
+   * Between prepare and finalize every acceptor is holding a dump in its own data
+   * root — and those roots are exactly what the NEXT backup captures. A provider
+   * that crashed mid-capture never calls finalize, so without an expiry the dump
+   * stays forever and is copied into every later snapshot looking like a fresh
+   * one. backrest's shipped hook script already tells its reader the server
+   * applies this timeout; until #472 it did not.
+   */
+  describe('a prepare the provider never finalizes expires (#472)', () => {
+    const originalTimeout = process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS;
+    afterEach(() => {
+      if (originalTimeout === undefined) delete process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS;
+      else process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = originalTimeout;
+    });
+
+    test('the armed timer releases the apps with no second prepare at all', async () => {
+      // The case the timeout exists for: the provider crashed mid-capture and
+      // nothing else ever happens on this host. Nobody calls finalize; the server
+      // runs the postHooks anyway.
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = '40';
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      await install(sys, 'paperless');
+
+      const first = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
+      expect(docker.execsFor('pre')).toHaveLength(1);
+
+      await waitFor(() => docker.execsFor('post').length === 1, 'the expiry to run postHooks');
+
+      const rollup = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
+      expect(rollup?.activity?.openSince).toBeUndefined();
+    });
+
+    test('the next prepare releases a stranded one first', async () => {
+      // A server restart disarms the timer but not the record, so the check has
+      // to happen on the prepare path too. Modelled by arming a long timeout and
+      // then shortening it — the timer never fires, the next prepare still
+      // notices.
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = String(10 * 60 * 1000);
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      await install(sys, 'paperless');
+
+      const first = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
+      expect(docker.execsFor('pre')).toHaveLength(1);
+      expect(docker.execsFor('post')).toHaveLength(0); // the provider then died
+
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = '1';
+      await new Promise(r => setTimeout(r, 5));
+
+      const second = await sys.deployments.prepareContractBackup();
+      // The stranded dump is cleaned up BEFORE the new run's own pre-hooks.
+      expect(docker.execsFor('post')).toHaveLength(1);
+      expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
+      expect(docker.execsFor('pre')).toHaveLength(2);
+    });
+
+    test('a provider still inside its window is left alone', async () => {
+      // The failure mode that would be worse than the leak: deleting a dump the
+      // provider is still reading turns a slow backup into a corrupt one.
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = String(10 * 60 * 1000);
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      await install(sys, 'paperless');
+
+      const first = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
+
+      const second = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
+      expect(docker.execsFor('post')).toHaveLength(0);
+    });
+
+    test('finalize closes it, so nothing expires afterwards', async () => {
+      // Finalize must also DISARM the timer, or a healthy run has its postHooks
+      // re-run half an hour later for no reason.
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = '40';
+      const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
+      await install(sys, 'paperless');
+
+      const first = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
+      await sys.deployments.finalizeContractBackup();
+      expect(docker.execsFor('post')).toHaveLength(1);
+
+      await new Promise(r => setTimeout(r, 120)); // well past the timeout
+      expect(docker.execsFor('post')).toHaveLength(1); // the timer was disarmed
+
+      const second = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
+      expect(docker.execsFor('post')).toHaveLength(1); // nothing was open to expire
+    });
+
+    test('a prepare with nothing to run opens nothing to expire', async () => {
+      process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = '5';
+      const sys = makeSystem({ accepts: ['backup@1'] }); // no hooks: SQLite app
+      await install(sys, 'uptime-kuma');
+
+      expect(await sys.deployments.prepareContractBackup()).toEqual({ apps: [], participations: [] });
+      await new Promise(r => setTimeout(r, 5));
+      await sys.deployments.prepareContractBackup();
+      expect(docker.execs).toHaveLength(0);
+    });
+
+    test('the rollup reports whether the provider has ever announced a backup', async () => {
+      // The apps#159 signal: an install that DECLARES the provider role makes
+      // every acceptor render as covered, whether or not it has ever called the
+      // broker. These are different facts and the dashboard shows both.
+      const sys = makeSystem({ accepts: ['backup@1'], provides: ['backup@1'], backup: PG_BACKUP });
+      await install(sys, 'backrest', ['backup@1']);
+
+      const before = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
+      expect(before?.providers).toHaveLength(1);
+      expect(before?.activity?.lastPrepareAt).toBeUndefined();
+
+      const prepared = await sys.deployments.prepareContractBackup();
+      expect((await waitForJob(sys.jobs, prepared.jobId!)).status).toBe('completed');
+
+      const during = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
+      expect(during?.activity?.lastPrepareAt).toBeTruthy();
+      expect(during?.activity?.openSince).toBeTruthy();
+
+      await sys.deployments.finalizeContractBackup();
+      const after = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
+      expect(after?.activity?.openSince).toBeUndefined();
+      expect(after?.activity?.lastFinalizeAt).toBeTruthy();
+      expect(after?.activity?.lastFinalizeWasExpiry).toBe(false);
+
+      // A contract with no provider carries no activity — "never announced" would
+      // be trivially true there and would read as a problem.
+      const auth = (await sys.deployments.getContracts()).items.find(i => i.ref === 'auth@1');
+      expect(auth?.activity).toBeUndefined();
     });
   });
 });

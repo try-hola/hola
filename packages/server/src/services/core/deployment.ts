@@ -46,6 +46,7 @@ import type {
   ContractBackupPrepareResponse,
   ContractBackupFinalizeResponse,
   DeploymentContracts,
+  ContractBrokerActivity,
   GetContractsResponse,
   AppBackupHook,
   AppAuthConfig,
@@ -91,6 +92,7 @@ import {
   PLATFORM_LABEL_NAME,
 } from '@hola/shared/contracts';
 import { acceptorBlocksPresent, buildContractRollup } from './contracts';
+import { BackupBrokerStateStore, isPrepareExpired, prepareTimeoutMs } from './backup-broker-state';
 import { parse as parseYaml } from 'yaml';
 import type { ContractTokenService } from '../auth/contract-tokens';
 
@@ -1156,7 +1158,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         contracts: await this.readDeploymentContracts(deployment),
       });
     }
-    return { items: buildContractRollup(entries) };
+    return { items: buildContractRollup(entries, await this.brokerActivity()) };
+  }
+
+  /**
+   * Broker bookkeeping to hang off the rollup. Empty in the base/mock service,
+   * which runs no broker — a row simply carries no `activity`, rather than one
+   * claiming a provider has never announced a backup on a host where announcing
+   * isn't a thing.
+   */
+  protected async brokerActivity(): Promise<Record<string, ContractBrokerActivity | undefined>> {
+    return {};
   }
 
   async getUpdateCheck(deploymentId: string): Promise<GetDeploymentUpdateCheckResponse> {
@@ -1532,7 +1544,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     super(jobService);
     // Perform real Compose lifecycle work when a deployment job runs.
     this.jobService.setExecutor(ctx => this.runLifecycleJob(ctx));
+    this.brokerState = new BackupBrokerStateStore(storageService);
   }
+
+  /** Broker bookkeeping for `backup@1` — see backup-broker-state.ts. */
+  private readonly brokerState: BackupBrokerStateStore;
+  /** Armed when a prepare completes; disarmed by finalize. */
+  private prepareExpiryTimer?: ReturnType<typeof setTimeout>;
 
   /** Post-deploy auth-setup retry tuning (overridable in tests to avoid real waits). */
   authSetupMaxAttempts = 18;
@@ -2549,6 +2567,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * worse than one that visibly didn't run.
    */
   override async prepareContractBackup(): Promise<ContractBackupPrepareResponse> {
+    // A prepare still open from a previous run means that run's provider never
+    // finalized — it crashed, was killed mid-capture, or lost the network. Its
+    // acceptors are still holding dumps, and those dumps sit in exactly the data
+    // roots this new backup is about to capture. Release them before starting,
+    // or the stale dump rides into the snapshot looking like a fresh one.
+    //
+    // Checked here as well as on the armed timer because a server restart
+    // disarms the timer but not the record.
+    await this.expireOpenPrepareIfStale('a new prepare arrived');
+
     const participants = (await this.backupParticipants()).filter((p) => p.preHook);
     if (participants.length === 0) {
       // Nothing to quiesce — every installed app is already safe to copy as-is.
@@ -2609,6 +2637,91 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
 
     await ctx.log('info', `All ${started.length} preHook(s) completed; safe to capture`);
+
+    // From here until finalize, every acceptor is holding a dump. Record that,
+    // and arm the timeout ADR 0004 §6 requires — the provider is now the only
+    // thing that can release them, and it may never come back.
+    await this.openPrepare(ctx.job.id);
+  }
+
+  /** {@inheritDoc DeploymentService.brokerActivity} */
+  protected override async brokerActivity(): Promise<Record<string, ContractBrokerActivity | undefined>> {
+    const state = await this.brokerState.read();
+    // Nothing recorded at all is itself the answer worth showing — "installed,
+    // and has never announced a backup" — so an empty record still produces a
+    // row rather than being omitted.
+    return {
+      [BACKUP_CONTRACT_REF]: {
+        lastPrepareAt: state.lastPrepareAt,
+        lastFinalizeAt: state.lastFinalizeAt,
+        openSince: state.openSince,
+        lastFinalizeWasExpiry: state.lastFinalizeWasExpiry,
+      },
+    };
+  }
+
+  /**
+   * Mark a prepare open and arm its expiry (ADR 0004 §6).
+   *
+   * The timer is armed at completion rather than at enqueue because the clock
+   * that matters starts when acceptors actually begin holding dumps — a prepare
+   * that spent twenty minutes running `pg_dump` has not been "open" for twenty
+   * minutes, and starting the clock earlier would shorten the provider's capture
+   * window by however long its own quiesce took.
+   */
+  private async openPrepare(jobId?: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.brokerState.update((state) => ({
+      ...state,
+      lastPrepareAt: now,
+      openSince: now,
+      openJobId: jobId,
+    }));
+
+    clearTimeout(this.prepareExpiryTimer);
+    const timeout = prepareTimeoutMs();
+    this.prepareExpiryTimer = setTimeout(() => {
+      void this.expireOpenPrepareIfStale('the provider never finalized').catch((err) => {
+        this.logger.error(
+          'Backup prepare expiry failed',
+          err instanceof Error ? err : new Error(String(err)),
+        );
+      });
+    }, timeout);
+    // A backup is not a reason to hold the process open at shutdown.
+    this.prepareExpiryTimer.unref?.();
+  }
+
+  /**
+   * Run finalize on the provider's behalf if the open prepare has aged past the
+   * timeout. A no-op when nothing is open or the provider is still within its
+   * window — which is the common case on the armed timer too, since a healthy
+   * provider finalizes long before it fires.
+   */
+  private async expireOpenPrepareIfStale(reason: string): Promise<void> {
+    const state = await this.brokerState.read();
+    if (!isPrepareExpired(state, prepareTimeoutMs())) return;
+
+    this.logger.warn('Expiring a backup prepare nobody finalized; running postHooks', {
+      reason,
+      openSince: state.openSince,
+      jobId: state.openJobId,
+    });
+
+    // Same postHooks finalize would have run. They remove the dumps; a failed
+    // one is reported by runPostHooks and must not stop the rest.
+    const results = await this.runPostHooks(await this.backupParticipants());
+    await this.brokerState.update((current) => ({
+      ...current,
+      openSince: undefined,
+      openJobId: undefined,
+      lastFinalizeAt: new Date().toISOString(),
+      lastFinalizeWasExpiry: true,
+    }));
+    this.logger.info('Expired backup prepare finalized', {
+      participations: results.length,
+      failed: results.filter((r) => !r.ok).length,
+    });
   }
 
   /**
@@ -2622,6 +2735,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   override async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
     const participants = await this.backupParticipants();
     const results = await this.runPostHooks(participants);
+
+    // Disarm the expiry: the provider came back, so nothing is stranded. Recorded
+    // even when a postHook failed — the run is over either way, and leaving the
+    // prepare "open" would have the server re-run these same hooks half an hour
+    // later for no reason.
+    clearTimeout(this.prepareExpiryTimer);
+    this.prepareExpiryTimer = undefined;
+    await this.brokerState.update((state) => ({
+      ...state,
+      openSince: undefined,
+      openJobId: undefined,
+      lastFinalizeAt: new Date().toISOString(),
+      lastFinalizeWasExpiry: false,
+    }));
+
     return { ok: results.every((r) => r.ok), results };
   }
 

@@ -2,7 +2,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { HardDriveDownload, ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-react';
 
-import type { ContractCoverage, ContractParticipant, ContractRollup } from '@hola/shared';
+import type { ContractBrokerActivity, ContractCoverage, ContractParticipant, ContractRollup } from '@hola/shared';
 import { BACKUP_CONTRACT_REF as BACKUP_REF } from '@hola/shared/contracts';
 
 import { coverageRows, unquiescedServices, COVERAGE_META } from '../utils/backup-coverage';
@@ -43,7 +43,55 @@ const CoverageBadge: React.FC<{ coverage: Coverage; counts?: ContractCoverage }>
   );
 };
 
-const ProviderPanel: React.FC<{ providers: ContractParticipant[]; providerConflict?: boolean }> = ({ providers, providerConflict }) => {
+/**
+ * "Installed" and "has ever actually run" are different facts, and for a long
+ * time only the first was shown. A provider whose hooks were never registered
+ * (try-hola/apps#159) installs cleanly, appears here as the provider, and makes
+ * every accepting app render as quiesced — while it has never once called the
+ * broker. That is the reassuring direction to be wrong in, so the page says it.
+ */
+const BrokerActivity: React.FC<{ activity?: ContractBrokerActivity }> = ({ activity }) => {
+  if (!activity) return null;
+
+  if (!activity.lastPrepareAt) {
+    return (
+      <p className="mt-2 mb-0 text-[12.5px] text-warning">
+        Has never announced a backup. The coverage below describes what <em>would</em> happen
+        on a run — if this app’s backup hooks aren’t wired up, its snapshots are copying live
+        database files and nothing here will say so.
+      </p>
+    );
+  }
+
+  const when = new Date(activity.lastPrepareAt);
+  const label = Number.isNaN(when.getTime()) ? activity.lastPrepareAt : when.toLocaleString();
+
+  if (activity.openSince) {
+    return (
+      <p className="mt-2 mb-0 text-[12.5px] text-text-muted">
+        Backup in progress since {label} — apps are quiesced until it finishes.
+      </p>
+    );
+  }
+
+  return (
+    <p className="mt-2 mb-0 text-[12.5px] text-text-muted">
+      Last announced a backup {label}.
+      {activity.lastFinalizeWasExpiry && (
+        <span className="text-warning">
+          {' '}That run never finished cleanly — Hola released the apps itself after the
+          timeout, so check the provider’s own logs.
+        </span>
+      )}
+    </p>
+  );
+};
+
+const ProviderPanel: React.FC<{
+  providers: ContractParticipant[];
+  providerConflict?: boolean;
+  activity?: ContractBrokerActivity;
+}> = ({ providers, providerConflict, activity }) => {
   if (providers.length === 0) {
     return (
       <div className="px-5 py-10 text-center bg-surface-1 border border-dashed border-border rounded-[14px]">
@@ -109,6 +157,10 @@ const ProviderPanel: React.FC<{ providers: ContractParticipant[]; providerConfli
               Installed but not running — no backups are being taken.
             </p>
           )}
+          {/* Only for a single provider: the record is per host, so attributing it
+              to one of two would be a guess. The conflict banner above is the
+              thing to act on in that case anyway. */}
+          {providers.length === 1 && <BrokerActivity activity={activity} />}
         </div>
       ))}
     </div>
@@ -141,7 +193,11 @@ export const BackupCoverage: React.FC<{
 
   return (
     <div className="flex flex-col gap-[18px]">
-      <ProviderPanel providers={rollup.providers} providerConflict={rollup.providerConflict} />
+      <ProviderPanel
+        providers={rollup.providers}
+        providerConflict={rollup.providerConflict}
+        activity={rollup.activity}
+      />
 
       <div className="bg-surface-1 border border-border rounded-card overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-[18px] py-3 border-b border-border flex-wrap">
