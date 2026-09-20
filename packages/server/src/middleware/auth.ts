@@ -139,7 +139,17 @@ export function getRequiredCapability(path: string, method: string): Capability 
     // contract token deliberately does not have — without this rule the provider
     // could never call its own endpoint, and granting it the default would hand a
     // catalog container the ability to install and delete apps.
+    //
+    // The status GET is listed for the mirror-image reason (#477). It is a read,
+    // and reads normally name no capability — but a contract-scoped principal is
+    // closed by default (`authorizeRequest`), so a route naming no capability is
+    // one it cannot reach. The prepare → poll → finalize loop needs this read, so
+    // the route has to name the capability the provider holds. Scope it to
+    // `/backup/status/` and no wider: `GET /api/contracts` is the dashboard's
+    // rollup of who fills which contract role across the whole install, and a
+    // provider token must stay out of it.
     { pattern: /^\/api\/contracts\/backup\//, method: 'POST', capability: 'contract:backup' },
+    { pattern: /^\/api\/contracts\/backup\/status\//, method: 'GET', capability: 'contract:backup' },
 
     // Backup operations
     { pattern: /^\/api\/backups/, method: 'POST', capability: 'write:backups' },

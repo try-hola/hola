@@ -10,8 +10,10 @@
  *
  * So each provider deployment gets its own token carrying one capability per
  * contract it provides (`contract:backup`), and nothing else. The middleware maps
- * `/api/contracts/backup/*` to that capability; every other route rejects the
- * token, including reads of other apps' data.
+ * the broker routes — the `prepare`/`finalize` POSTs and the `status/:jobId` GET
+ * the provider polls between them — to that capability; every other route rejects
+ * the token, including reads of other apps' data and the `/api/contracts` rollup
+ * of who fills which role across the install.
  *
  * That last sentence was not true until #471. The capability table only names
  * capabilities for *mutating* routes — `getRequiredCapability` returns null for
