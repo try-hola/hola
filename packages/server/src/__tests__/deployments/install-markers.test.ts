@@ -700,11 +700,19 @@ describe('Install identity markers (spec 006)', () => {
     // Roll back to v1 WITH restoreData: true. The lifecycle job wipes and
     // replaces the whole data root from the v1 snapshot (which carries v1's
     // OLD record, with the OLD writtenAt) BEFORE materializeCompose reruns
-    // for the release actually being brought up (v1) — see deployment.ts
-    // ~:3410 (restore) before ~:3414 (materialize). If a refactor ever hoists
-    // the marker write earlier in the lifecycle job, the freshly-written
-    // record would be wiped by the restore and this test would see the STALE
-    // writtenAt from the snapshot survive, rather than a fresh one.
+    // for the release actually being brought up (v1) — in `runLifecycleJob`'s
+    // deploy/start/rollback branch, `restoreAppDataSnapshot` runs before
+    // `materializeCompose`. If a refactor ever hoists the marker write earlier
+    // in the lifecycle job, the freshly-written record would be wiped by the
+    // restore and this test would see the STALE writtenAt from the snapshot
+    // survive, rather than a fresh one.
+    //
+    // Cited by symbol, not line number, deliberately (#485). This comment
+    // previously read "~:3410 (restore) before ~:3414 (materialize)"; a single
+    // intervening feature merge (spec 006, 921c790) moved both by ~380 lines
+    // while the ordering claim itself stayed true. A citation that rots faster
+    // than the invariant it documents is worse than no citation, because the
+    // next reader has to verify it before trusting the sentence around it.
     const rolledBack = await deployments.rollback(created.deploymentId, {
       targetReleaseId: v1ReleaseId,
       restoreData: true,

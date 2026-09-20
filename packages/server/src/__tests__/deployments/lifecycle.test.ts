@@ -309,6 +309,32 @@ describe('Deployment lifecycle (real orchestration wiring)', () => {
     expect(upProfiles).toEqual([['metrics']]);
   });
 
+  test('every composeUp call site states its own timeout rather than inheriting the fallback (#487)', async () => {
+    // `composeUp`'s 300000ms is a FALLBACK for a caller with no opinion, not a
+    // ceiling anyone chose for a deploy or a restart. Both lifecycle call sites
+    // must therefore pass one explicitly: `up -d` blocks on each
+    // `depends_on: service_healthy` gate, so a first install of a large stack
+    // (or a restart whose recreate has to fetch a pruned image) can legitimately
+    // outlast five minutes, and a silent SIGKILL there fails a correct install.
+    const docker = new MockDockerService();
+    const { jobs, drafts, deployments } = makeSystem(docker);
+
+    const created = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts), name: 'gitea' });
+    await waitForJob(jobs, created.jobId!);
+
+    const restart = await deployments.executeAction(created.deploymentId, { action: 'restart' });
+    expect((await waitForJob(jobs, restart.jobId!)).status).toBe('completed');
+
+    // One `up` for the install, one for the restart — and neither omitted the
+    // timeout. Asserting "defined" AND the value keeps the guard honest if the
+    // constant is ever retuned: the point is that a number was chosen here.
+    expect(docker.composeUpCalls).toHaveLength(2);
+    for (const call of docker.composeUpCalls) {
+      expect(call.timeoutMs).toBeDefined();
+      expect(call.timeoutMs).toBe(900_000);
+    }
+  });
+
   test('lifecycle logs are streamed to the deployment log target', async () => {
     const sys = makeSystem();
     const lines: string[] = [];

@@ -14,6 +14,9 @@ import type {
   AppProfileConfig,
   GetSubdomainAvailabilityResponse,
   RefNotAllowedDetails,
+  ListRestoreCandidatesResponse,
+  RestoreCandidate,
+  RestoreChoice,
 } from '@hola/shared';
 import { providerGrantsFor } from '@hola/shared/contracts';
 import { slugifySubdomain, STABLE_CHANNEL } from '@hola/shared';
@@ -26,7 +29,14 @@ import { useDraftFinalization } from '../hooks/useDraftFinalization';
 import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { api } from '../utils/api-hybrid';
 
+// Restore-on-install (spec 007, FR-038): forced to index 0 — Configuration
+// (env, below) renders `appEnv`, and `appEnv` is seeded by the restore choice
+// at draft creation (research R1), so the choice must be made before a draft
+// exists at all. On the install-by-ref path (research R2 — no catalog index
+// to judge a candidate's version against) the step auto-completes with no
+// choice, so its Next/skip proceeds immediately without offering anything.
 const steps = [
+  { id: 'restore', name: 'Restore Data', description: 'Optionally restore this install from an existing copy' },
   { id: 'env', name: 'Configuration', description: 'Configure application settings and permissions' },
   { id: 'compose', name: 'Compose Override', description: 'Upload custom Docker Compose configuration' },
   { id: 'files', name: 'Additional Files', description: 'Upload configuration files and certificates' },
@@ -372,6 +382,62 @@ export const InstallWizard: React.FC = () => {
   // who hasn't enrolled in pre-release discovery (never on by default).
   const enrolled = usePrereleaseEnrolment();
 
+  // Restore-on-install (spec 007). The candidates route is read directly off
+  // the route param (no draft needed — research R6), so it's available
+  // before the mount effect below even creates one.
+  const [restoreCandidatesData, setRestoreCandidatesData] = useState<ListRestoreCandidatesResponse | null>(null);
+  const [restoreCandidatesLoading, setRestoreCandidatesLoading] = useState(false);
+  const [restoreCandidatesError, setRestoreCandidatesError] = useState<string | null>(null);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [restoreCarryEnv, setRestoreCarryEnv] = useState(true);
+  const [ackedRestoreCodes, setAckedRestoreCodes] = useState<Set<string>>(new Set());
+  // Set once the operator has EITHER picked a candidate and confirmed, OR
+  // explicitly chosen to start fresh — this is what gates the draft-creation
+  // mount effect below, since `appEnv` can only be seeded once, at draft
+  // creation, from whatever the choice was (research R1).
+  const [restoreDecided, setRestoreDecided] = useState(false);
+  // The confirmed choice sent on draft creation. `undefined` means "start
+  // fresh" — a candidate existing is never itself consent to use it.
+  const [restoreChoice, setRestoreChoice] = useState<RestoreChoice | undefined>(undefined);
+  const restoreChoiceRef = React.useRef<RestoreChoice | undefined>(undefined);
+  React.useEffect(() => { restoreChoiceRef.current = restoreChoice; }, [restoreChoice]);
+
+  const allRestoreCandidates: RestoreCandidate[] = (restoreCandidatesData?.lineages ?? []).flatMap(l => l.candidates);
+  const selectedRestoreCandidate = allRestoreCandidates.find(c => c.deploymentId === selectedCandidateId) ?? null;
+  // Install-by-ref has no catalog index to judge a candidate's version
+  // against (research R2) — the step auto-completes with nothing offered.
+  // Attempted-once guard. `restoreCandidatesData`/`…Loading` alone are NOT
+  // enough: on a failed read `data` stays null and `loading` flips back to
+  // false, and `loading` is itself a dependency — so the effect re-fires
+  // immediately and retries forever, hammering the server. Exactly the
+  // unbounded-retry shape the draft-creation effect below documents (its
+  // `creatingDraftRef` guard is deliberately left set after a failure).
+  const restoreCandidatesAttemptedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (ociRef) { setRestoreDecided(true); return; }
+    if (!appId || restoreCandidatesData || restoreCandidatesLoading) return;
+    if (restoreCandidatesAttemptedRef.current) return;
+    restoreCandidatesAttemptedRef.current = true;
+    setRestoreCandidatesLoading(true);
+    // `'latest'` is the version the draft this step precedes will be created
+    // with (`createDraft({ appId, source, channel })` sends none, and the
+    // server resolves an absent version to `latest`) — the wizard has no
+    // pinned version to read here, since `version` is only known once a draft
+    // exists. Passing it is load-bearing, not cosmetic: WITHOUT a version the
+    // route has no target to compare against, every candidate's skew comes
+    // back `unknown`, and the step would demand `restore-version-unknown`
+    // from every operator while never surfacing RESTORE_SOURCE_NEWER or
+    // RESTORE_UPGRADE_PATH until the create fails (FR-029/FR-030/FR-032).
+    api.restoreCandidates(appId, 'latest', source, channel)
+      .then((resp) => {
+        setRestoreCandidatesData(resp);
+        // A single matching lineage supplies a default selection (FR-005).
+        if (resp.defaultCandidateId) setSelectedCandidateId(resp.defaultCandidateId);
+      })
+      .catch((err) => setRestoreCandidatesError(err instanceof Error ? err.message : 'Failed to load restore candidates'))
+      .finally(() => setRestoreCandidatesLoading(false));
+  }, [appId, ociRef, source, channel, restoreCandidatesData, restoreCandidatesLoading]);
+
   // Real app metadata, resolved from the catalog when the draft is created.
   // Falls back to the route's appId for the brief window before the draft loads.
   const app = createDraftHook.data?.app ?? { id: appId ?? ociRef ?? '', name: appId ?? ociRef ?? 'app', icon: '📦' };
@@ -438,7 +504,7 @@ export const InstallWizard: React.FC = () => {
   const createAndSeedDraft = async (channelArg: string | undefined) => {
     const result = ociRef
       ? await createDraftHook.createDraft({ ociRef, credentialRef })
-      : await createDraftHook.createDraft({ appId, source, channel: channelArg });
+      : await createDraftHook.createDraft({ appId, source, channel: channelArg, restoreFrom: restoreChoiceRef.current });
 
     // Auto-fill empty secrets that carry a manifest `generate` recipe —
     // these are machine tokens (runner registration keys, app secret
@@ -481,7 +547,11 @@ export const InstallWizard: React.FC = () => {
   };
 
   useEffect(() => {
-    if ((!appId && !ociRef) || createDraftHook.data || creatingDraftRef.current) return;
+    // Restore-on-install (spec 007, FR-038): the restore step comes first and
+    // must be DECIDED (a candidate confirmed, or explicitly skipped) before a
+    // draft is created at all — `appEnv` is seeded by the choice at creation
+    // time and can't be revised afterward except by re-creating the draft.
+    if ((!appId && !ociRef) || createDraftHook.data || creatingDraftRef.current || !restoreDecided) return;
     creatingDraftRef.current = true;
 
     createAndSeedDraft(channel).catch((err) => {
@@ -496,7 +566,7 @@ export const InstallWizard: React.FC = () => {
     // as-is (it's a new reference each render, so the ref guard above — not this
     // list — is what keeps the draft created exactly once).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appId, ociRef, credentialRef, source, draftAttempt, createDraftHook]);
+  }, [appId, ociRef, credentialRef, source, draftAttempt, createDraftHook, restoreDecided]);
 
   // #428: the operator picked a different channel on the summary step. Drop
   // the current (now-wrong-version) draft, reset the per-draft state, and
@@ -545,6 +615,64 @@ export const InstallWizard: React.FC = () => {
       setChannelSwitchError(err instanceof Error ? err.message : 'Failed to switch channel');
     } finally {
       setChannelSwitching(false);
+    }
+  };
+
+  // Restore-on-install (spec 007, FR-039): commit a restore choice. With no
+  // draft yet (the FIRST decision), just record it — the mount effect above
+  // creates the draft once `restoreDecided` is true. With a draft already
+  // existing (the operator went Back and changed the choice), delete +
+  // re-create it — `switchChannel`'s exact pattern, for the same reason: the
+  // choice can only take effect at draft CREATION (research R1), and
+  // re-creating resets consent the same way a channel change does.
+  const [restoreSwitching, setRestoreSwitching] = useState(false);
+  const [restoreSwitchError, setRestoreSwitchError] = useState<string | null>(null);
+  const applyRestoreChoice = async (choice: RestoreChoice | undefined) => {
+    const oldDraftId = createDraftHook.data?.draftId;
+    if (!oldDraftId) {
+      restoreChoiceRef.current = choice;
+      setRestoreChoice(choice);
+      setRestoreDecided(true);
+      return;
+    }
+    // The choice that currently has a working draft, to fall back to if the
+    // re-create fails (see the catch below) — `switchChannel`'s `previousChannel`.
+    const previousChoice = restoreChoiceRef.current;
+    setRestoreSwitching(true);
+    setRestoreSwitchError(null);
+    try {
+      await api.drafts.remove(oldDraftId).catch(() => {});
+      setEnvVars([]);
+      setSystemEnvVars([]);
+      setPorts([]);
+      setVolumes([]);
+      setSecurity(undefined);
+      setProvides(undefined);
+      setProfiles(undefined);
+      setSelectedProfiles(new Set());
+      seededKeysRef.current = new Set();
+      setTouchedKeys(new Set());
+      setAckedGrants(new Set());
+      setComposeOverride('');
+      restoreChoiceRef.current = choice;
+      setRestoreChoice(choice);
+      await createAndSeedDraft(channel);
+    } catch (err) {
+      // Same trap `switchChannel` documents: the old draft is already gone and
+      // `useCreateDraft` clears `data` on failure, so `draftId` goes falsy and
+      // the whole wizard body — the restore step included — unmounts behind the
+      // DraftErrorPanel. Its Retry re-runs the mount path, which reads
+      // `restoreChoiceRef`: leaving it on the choice that just got REFUSED
+      // (RESTORE_SOURCE_NEWER, RESTORE_UPGRADE_PATH, a candidate that went
+      // away) strands the operator on a permanently-failing retry. Put it back
+      // to the last choice that produced a working draft.
+      restoreChoiceRef.current = previousChoice;
+      setRestoreChoice(previousChoice);
+      setSelectedCandidateId(previousChoice?.candidateId ?? null);
+      setAckedRestoreCodes(new Set(previousChoice?.acknowledge ?? []));
+      setRestoreSwitchError(err instanceof Error ? err.message : 'Failed to change the restore choice');
+    } finally {
+      setRestoreSwitching(false);
     }
   };
 
@@ -676,6 +804,24 @@ export const InstallWizard: React.FC = () => {
   const canProceed = () => {
     switch (currentStep) {
       case 0: {
+        // Restore Data. Nothing selected -> starting fresh, always fine once
+        // the candidates read has settled. A selected candidate additionally
+        // needs every acknowledgement it currently requires (FR-037a) — the
+        // same "informed consent gates Next" rule `grants`/`security` use.
+        // Also blocked mid-`applyRestoreChoice` (FR-039's delete-and-recreate
+        // in flight), same as the Channel switch above.
+        if (restoreSwitching) return false;
+        if (!selectedCandidateId) return !restoreCandidatesLoading;
+        // A REFUSED candidate is never acknowledgeable (FR-029/FR-030/FR-034):
+        // its refusal message is already on screen, and the server would throw
+        // the same refusal out of `drafts.create` a moment later. Block Next
+        // here so the operator picks another candidate (or Start fresh)
+        // instead of being bounced into a draft-creation error panel.
+        if (selectedRestoreCandidate?.skew.kind === 'refused') return false;
+        const required = selectedRestoreCandidate?.requiredAcknowledgements ?? [];
+        return !restoreCandidatesLoading && required.every(code => ackedRestoreCodes.has(code));
+      }
+      case 1: {
         // Environment Variables. A completely empty row is an unused placeholder
         // (e.g. a default trailing row or one added via "Add variable") — it must
         // not block Next. Only rows the user actually started filling in are
@@ -699,7 +845,7 @@ export const InstallWizard: React.FC = () => {
         const grantsAcked = providerGrantsFor(provides).every(g => ackedGrants.has(g.ref));
         return !isLoading && requiredOk && noBlockingIssues && permissionsAcked && grantsAcked;
       }
-      case 4: // Validate & Preflight
+      case 5: // Validate & Preflight
         // Allow proceeding if not loading, and either checks haven't run yet OR both have passed
         return !isLoading && (!validationResult || (validationResult?.ok && preflightResult?.ok));
       default:
@@ -708,9 +854,26 @@ export const InstallWizard: React.FC = () => {
   };
 
   const handleNext = async () => {
+    // Restore-on-install (spec 007): leaving the restore step commits the
+    // choice — first decision (no draft yet, the mount effect creates one) OR
+    // a CHANGE to an already-decided choice (FR-039: delete + re-create,
+    // `switchChannel`'s pattern) — `applyRestoreChoice` handles both.
+    let restoreChoiceChanged = false;
+    if (currentStep === 0) {
+      const nextChoice: RestoreChoice | undefined = selectedCandidateId
+        ? { candidateId: selectedCandidateId, carryEnv: restoreCarryEnv, ...(ackedRestoreCodes.size ? { acknowledge: [...ackedRestoreCodes] } : {}) }
+        : undefined;
+      if (!restoreDecided || JSON.stringify(nextChoice) !== JSON.stringify(restoreChoice)) {
+        restoreChoiceChanged = true;
+        await applyRestoreChoice(nextChoice);
+      }
+    }
     if (currentStep < steps.length - 1) {
-      // Update draft with current state before proceeding
-      if (draftId) {
+      // Update draft with current state before proceeding. Skipped right after
+      // a restore-choice change: the draft this closure captured was deleted
+      // and re-created by `applyRestoreChoice`, so `draftId`/`envVars` here are
+      // the pre-change values and the PATCH would target a draft that is gone.
+      if (draftId && !(currentStep === 0 && restoreChoiceChanged)) {
         await updateDraftData({
           systemOverrides,
           appEnv: envVars,
@@ -718,9 +881,9 @@ export const InstallWizard: React.FC = () => {
           composeOverride: composeOverride || undefined
         });
       }
-      
+
       // Run validation and preflight on validate step
-      if (currentStep === 4) {
+      if (currentStep === 5) {
         const isValid = await validateDraft();
         if (isValid) {
           await runPreflight();
@@ -1056,7 +1219,99 @@ services:
 
   const renderStepContent = () => {
     switch (currentStep) {
-      case 0: { // Environment Variables
+      case 0: { // Restore Data (spec 007)
+        return (
+          <div className="space-y-4">
+            <p className="text-[13px] text-text-muted">
+              Optionally restore this install from an existing copy of {app.name} on this host — its data, and its credentials, land before the app starts.
+            </p>
+            {restoreCandidatesLoading && <div className="text-[13px] text-text-faint">Loading restore candidates…</div>}
+            {restoreCandidatesError && <div className="text-[13px] text-danger">{restoreCandidatesError}</div>}
+            {restoreSwitching && <div className="text-[13px] text-text-faint">Applying the restore choice…</div>}
+            {restoreSwitchError && <div className="text-[13px] text-danger">{restoreSwitchError}</div>}
+            {ociRef && (
+              <div className="text-[13px] text-text-muted px-[15px] py-[13px] bg-surface-2 border border-border-soft rounded-[10px]">
+                Restore isn't available when installing directly from a package reference.
+              </div>
+            )}
+            {!ociRef && !restoreCandidatesLoading && allRestoreCandidates.length === 0 && (
+              <div className="text-[13px] text-text-muted px-[15px] py-[13px] bg-surface-2 border border-border-soft rounded-[10px]">
+                No existing copies of {app.name} were found on this host. This will be a fresh install.
+              </div>
+            )}
+            {!ociRef && allRestoreCandidates.length > 0 && (
+              <>
+                <RadioGroup
+                  name="restore-candidate"
+                  value={selectedCandidateId ?? '__fresh__'}
+                  onChange={(v) => { setSelectedCandidateId(v === '__fresh__' ? null : v); setAckedRestoreCodes(new Set()); }}
+                  options={[
+                    { value: '__fresh__', label: 'Start fresh', description: 'No data carried over' },
+                    ...allRestoreCandidates.map((c) => ({
+                      value: c.deploymentId,
+                      label: `${c.name}${c.host ? ` — ${c.host}` : ''}`,
+                      description: `${c.appVersion ? `v${c.appVersion}` : 'unknown version'} · configuration: ${c.carriesEnv ? 'carried' : 'not carried'}${c.capturedAt ? ` · captured ${new Date(c.capturedAt).toLocaleString()}` : ''}`,
+                    })),
+                  ]}
+                />
+                {restoreCandidatesData?.requiresExplicitChoice && !selectedCandidateId && (
+                  <div className="text-[12.5px] text-warning">Two or more unrelated histories match — pick one explicitly (no default is offered).</div>
+                )}
+                {selectedRestoreCandidate && (
+                  <div className="space-y-3 px-[15px] py-[13px] bg-surface-2 border border-border-soft rounded-[10px]">
+                    <label className="flex items-start gap-2.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                        checked={restoreCarryEnv}
+                        onChange={(e) => setRestoreCarryEnv(e.target.checked)}
+                      />
+                      <span className="text-[13px] text-text-strong">
+                        Carry this candidate's configuration
+                        {selectedRestoreCandidate.carriesEnv ? '' : ' (unavailable — no environment record was captured)'}
+                      </span>
+                    </label>
+                    {selectedRestoreCandidate.skew.kind === 'refused' && (
+                      <div className="text-[13px] text-danger">{selectedRestoreCandidate.skew.message}</div>
+                    )}
+                    {selectedRestoreCandidate.skew.kind === 'unknown' && (
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                          checked={ackedRestoreCodes.has('restore-version-unknown')}
+                          onChange={(e) => setAckedRestoreCodes((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add('restore-version-unknown'); else next.delete('restore-version-unknown');
+                            return next;
+                          })}
+                        />
+                        <span className="text-[13px]">The version relationship couldn't be checked, so this app's own upgrade rules weren't applied. I accept the risk.</span>
+                      </label>
+                    )}
+                    {(!restoreCarryEnv || !selectedRestoreCandidate.carriesEnv) && (
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                          checked={ackedRestoreCodes.has('restore-env-not-carried')}
+                          onChange={(e) => setAckedRestoreCodes((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add('restore-env-not-carried'); else next.delete('restore-env-not-carried');
+                            return next;
+                          })}
+                        />
+                        <span className="text-[13px]">Platform-generated secrets will be minted fresh — data encrypted under the originals may be unreadable. I accept this.</span>
+                      </label>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      }
+      case 1: { // Environment Variables
         // Seeded (manifest-declared) rows split into Basic (not `advanced`)
         // and Advanced; anything not seeded is a free-form Custom row (added
         // via "Add app variable", no spec — rendered with the original grid).
@@ -1428,7 +1683,7 @@ services:
         );
       }
 
-      case 1: // Compose Override
+      case 2: // Compose Override
         return (
           <div>
             <div className="text-base font-semibold mb-1">
@@ -1559,7 +1814,7 @@ services:
           </div>
         );
 
-      case 2: // Additional Files
+      case 3: // Additional Files
         return (
           <div>
             <div className="text-base font-semibold mb-1">
@@ -1580,7 +1835,7 @@ services:
           </div>
         );
 
-      case 3: // Advanced Options
+      case 4: // Advanced Options
         return (
           <div>
             <div className="text-base font-semibold mb-1">
@@ -1704,7 +1959,7 @@ services:
           </div>
         );
 
-      case 4: // Validate & Preflight
+      case 5: // Validate & Preflight
         return (
           <div>
             <div className="text-base font-semibold mb-1">Validate &amp; preflight</div>
@@ -1772,7 +2027,7 @@ services:
           </div>
         );
 
-      case 5: // Summary & Confirm
+      case 6: // Summary & Confirm
         return (
           <div>
             <div className="text-base font-semibold mb-1">Summary &amp; confirm</div>
@@ -1803,6 +2058,23 @@ services:
                   {channelSwitchError && (
                     <div className="mt-1.5 text-[12.5px] text-danger">{channelSwitchError}</div>
                   )}
+                </div>
+              )}
+
+              {/* Restore-on-install (spec 007, FR-041): unconditional summary
+                  acknowledgement whenever a restore is happening — naming
+                  data AND credentials, and that jobs/webhooks/integrations
+                  may fire the moment the app starts holding the restored
+                  data (a cron job, a webhook subscription, a sync). */}
+              {restoreChoice && (
+                <div className="px-[15px] py-[13px] bg-warning-weak border border-warning/20 rounded-[10px]">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-warning flex-none mt-0.5" />
+                    <span className="text-[13px] text-text-strong">
+                      This install restores data <strong>and credentials</strong> from an existing copy. Any jobs,
+                      webhooks or integrations the app runs may fire as soon as it starts.
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -2059,8 +2331,11 @@ services:
         />
       )}
 
-      {/* Wizard Content - only show when draft is ready */}
-      {draftId && (
+      {/* Wizard Content - only show when draft is ready. Restore-on-install
+          (spec 007, FR-038): the restore step is the one exception — it must
+          render BEFORE a draft exists, since the choice it collects is what
+          seeds the draft (research R1). */}
+      {(draftId || currentStep === 0) && (
         <>
           {/* Progress Stepper */}
           <div className="flex items-center mb-[26px] overflow-x-auto">

@@ -58,7 +58,12 @@ import {
   type ListCatalogSourcesResponse,
   type RefreshCatalogResponse,
   type GetSubdomainAvailabilityResponse,
+  type ListRestoreCandidatesResponse,
+  type RestoreCandidate,
+  type AppUpgradeMeta,
+  type AppEnvVar,
 } from '@hola/shared';
+import { resolveListedCandidate, groupIntoLineages } from './services/core/restore-candidates';
 
 // Error interface for proper typing
 interface ServiceError extends Error {
@@ -508,6 +513,60 @@ async function route(url: URL, req: Request): Promise<Response> {
       // cause was a blocked registry, a bad credential or an unreachable pull.
       // BundleUnavailableError still maps to 404 (it genuinely is "not there");
       // BundleError carries its own status and reason.
+      return errorResponse(req, error);
+    }
+  }
+
+  // Restore-on-install (spec 007): deployments of `appId` on this host that
+  // can serve as a restore source. Ordinary authenticated platform read — NOT
+  // a capability-contract broker endpoint (FR-047, contracts/api.md §0).
+  const restoreCandidatesMatch = pathname.match(/^\/api\/apps\/([^/]+)\/restore-candidates$/);
+  if (restoreCandidatesMatch && req.method === 'GET') {
+    const appId = decodeURIComponent(restoreCandidatesMatch[1]);
+    const targetVersion = searchParams.get('version') || undefined;
+    // Same (source, channel) the draft this read precedes will be created
+    // with, so both resolve the same concrete version (SDK comment above).
+    const targetSource = searchParams.get('source') || undefined;
+    const targetChannel = searchParams.get('channel') || undefined;
+    try {
+      const services = getServices();
+      const sources = await services.deployments.listRestoreSources(appId);
+
+      // `?version=` lets skew/acknowledgements be judged against a specific
+      // install target; omitted, every candidate's skew reports `unknown`
+      // (no target to compare against) — the route still answers 200 either
+      // way, never 404 (FR-042).
+      let meta: AppUpgradeMeta | undefined;
+      let appEnv: AppEnvVar[] = [];
+      // The version skew is actually judged against — the catalog's RESOLVED
+      // version, never the raw query value. `?version=latest` (what `hola
+      // install --restore-list` sends by default) is not a comparable version:
+      // `compareVersions` parses the word `latest` as `0.0.0`, so comparing a
+      // candidate against it reports every candidate as RESTORE_SOURCE_NEWER.
+      // `draft.ts` already resolves the same way (`defaults.resolvedVersion ??
+      // request.version`), so the listing and the create-time refusal agree.
+      let effectiveTargetVersion = targetVersion;
+      if (targetVersion) {
+        try {
+          const detail = await services.catalog.getVersionDetail(appId, targetVersion, targetSource, targetChannel);
+          meta = detail.upgrade;
+          appEnv = detail.defaultEnv;
+          effectiveTargetVersion = detail.version ?? targetVersion;
+        } catch (error) {
+          logger.warn('Restore candidates: target version detail unavailable; skew reported as unknown', {
+            appId, targetVersion, error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+
+      const candidates: RestoreCandidate[] = sources.map((source) =>
+        resolveListedCandidate(source, effectiveTargetVersion, meta, appEnv),
+      );
+      const { lineages, defaultCandidateId, requiresExplicitChoice } = groupIntoLineages(candidates);
+      const response: ListRestoreCandidatesResponse = { appId, lineages, defaultCandidateId, requiresExplicitChoice };
+      return json(response);
+    } catch (error) {
+      logger.warn('Restore candidates lookup failed', { appId, error: error instanceof Error ? error.message : String(error) });
       return errorResponse(req, error);
     }
   }

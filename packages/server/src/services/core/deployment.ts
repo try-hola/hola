@@ -50,8 +50,19 @@ import type {
   GetContractsResponse,
   AppBackupHook,
   AppAuthConfig,
+  RestoreWarning,
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
+import {
+  isEligibleCandidate,
+  checkCandidateStillEligible,
+  deriveEnvNotCarriedKeys,
+  judgeRestoreChoice,
+  resolveRestoreNameDefaults,
+  classifyNonEmptyTarget,
+  type CandidateSource,
+  type RestoreIdentitySnapshot,
+} from './restore-candidates';
 import { requestsPrivilegeEscalation } from './manifest-security';
 import { resolveContainedDir, isStrictlyInside } from './path-containment';
 import { getHolaVersion } from './system-monitoring';
@@ -60,6 +71,7 @@ import { validateParams } from '@hola/shared/param-validate';
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto } from './snapshot-fs';
+import { rm } from 'node:fs/promises';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { JobService, JobContext } from './jobs';
@@ -125,6 +137,42 @@ const DEFAULT_INTERNAL_API_URL = 'http://hola-server:3001';
 
 /** Default host base for per-app data roots when HOLA_APPS_BIND_ROOT is unset. */
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
+
+/**
+ * `composeUp`'s `--wait` timeout for a restore hook's service (spec 007,
+ * research R12) — deliberately larger than `composeUp`'s default 5-minute
+ * `execAsync` cap. A freshly-`initdb`'d Postgres under `--wait` can exceed
+ * five minutes on a slow disk or a large `shared_buffers`; a restore that is
+ * slow-but-correct must not fail the whole install (FR-022) for a timeout the
+ * server chose, not the operator.
+ */
+const RESTORE_HOOK_WAIT_TIMEOUT_MS = 900_000; // 15 minutes
+
+/**
+ * `composeUp`'s `execFile` ceiling for a full bring-up (#487). Stated at every
+ * call site rather than inherited, because `composeUp`'s own 300000ms default
+ * was never a per-call-site decision — it was whatever the one implementation
+ * happened to hardcode before spec 007 made it a parameter.
+ *
+ * Five minutes is too thin for the bring-up this codebase actually issues.
+ * `up -d` does not just create containers: Compose blocks on every
+ * `depends_on: { condition: service_healthy }` gate before starting the
+ * dependent service, so a first install of a large multi-service stack (Postiz
+ * is the known worst case) waits out an `initdb` plus each dependency's own
+ * healthcheck — the SAME cost research R12 measured for the restore hook's
+ * `--wait`, which is why this deliberately agrees with that number rather than
+ * inventing a third one. A rollback that just replaced the data directory, and
+ * a restore-on-install whose database was handed a large dump moments earlier,
+ * start just as cold.
+ *
+ * This is a ceiling, not a wait: a healthy stack returns as soon as Compose
+ * does. The asymmetry decides the number — too low SIGKILLs a slow-but-correct
+ * install (the failure `composePull`'s own 30-minute ceiling was raised to
+ * stop), while too high only delays reporting a genuinely wedged `up`, and the
+ * job queue already tolerates exactly that for the 30-minute `composePull` a
+ * deploy runs immediately beforehand.
+ */
+const COMPOSE_UP_TIMEOUT_MS = 900_000; // 15 minutes
 
 /**
  * Reserved locations for this feature's platform-authored JSON records (spec
@@ -429,6 +477,17 @@ export interface DeploymentService extends HealthCheckable {
   // Internal management
   getDirectoryLayout(deploymentId: string): Promise<DeploymentDirectoryLayout>;
   updateLifecycleState(deploymentId: string, state: DeploymentLifecycleState): Promise<void>;
+
+  // Restore-on-install (spec 007)
+  /** The raw candidate-source state for ONE deployment id (identity record +
+   *  hasData + carriesEnv), NOT filtered by eligibility — the resolve step
+   *  both draft creation (`draft.ts`) and the deploy job's job-time
+   *  re-resolution (FR-013a) need. `undefined` when the id names no
+   *  deployment at all. */
+  getRestoreSource(deploymentId: string): Promise<CandidateSource | undefined>;
+  /** Every ELIGIBLE restore source for `appId` on this host (data-model.md
+   *  §2), excluding `excludeDeploymentId` — used by the candidates route. */
+  listRestoreSources(appId: string, excludeDeploymentId?: string): Promise<CandidateSource[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +537,11 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     // Whether this app's manifest declares itself multi-instance (spec 005);
     // absent (never `false`) means single-instance. See toListItem.
     ...(d.multiInstance ? { multiInstance: true } : {}),
+    // Restore-on-install (spec 007, contracts/api.md §4): three additive
+    // fields, all optional so a pre-spec-007 record reads them as `undefined`.
+    ...(d.lineageId ? { lineageId: d.lineageId } : {}),
+    ...(d.restoreFrom ? { restoreFrom: d.restoreFrom } : {}),
+    ...(d.restoredAt ? { restoredAt: d.restoredAt } : {}),
   };
 }
 
@@ -757,6 +821,38 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   }
 
   /**
+   * Restore-on-install (spec 007): load the filesystem-derived parts of a
+   * candidate description for ONE deployment — its parsed identity record (or
+   * `null`), whether its data root holds app data, and whether it carries an
+   * environment record. Default is a no-filesystem answer (the mock/in-memory
+   * service has no host data); RealDeploymentService overrides this to read
+   * `.hola/instance.json` and the sibling env record. Never throws: a
+   * corrupt/unparseable identity record degrades to `null` (FR-003 — the
+   * candidate is still offered, described from the deployment record alone).
+   */
+  protected async loadCandidateSource(deployment: EnhancedDeploymentDetail): Promise<CandidateSource> {
+    return { deployment, identity: null, hasData: false, carriesEnv: false };
+  }
+
+  /** @inheritdoc */
+  async getRestoreSource(deploymentId: string): Promise<CandidateSource | undefined> {
+    await this.ensureLoaded();
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) return undefined;
+    return this.loadCandidateSource(deployment);
+  }
+
+  /** @inheritdoc */
+  async listRestoreSources(appId: string, excludeDeploymentId?: string): Promise<CandidateSource[]> {
+    await this.ensureLoaded();
+    const all = Array.from(this.deployments.values()).filter(
+      (d) => d.app === appId && d.id !== excludeDeploymentId,
+    );
+    const sources = await Promise.all(all.map((d) => this.loadCandidateSource(d)));
+    return sources.filter((source) => isEligibleCandidate(source, appId, excludeDeploymentId));
+  }
+
+  /**
    * Preflight the app's declared auth requirement against the active auth backend
    * before any deployment state is created (RealDeploymentService overrides this
    * to consult the provisioner). Default no-op — the in-memory/mock service has no
@@ -938,6 +1034,48 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // hit, but up front so the user gets the clear error instead of a tombstone.
       this.assertAuthProvisionable(artifacts?.manifest.auth, app);
 
+      // Restore-on-install (spec 007, FR-010): re-validate the choice before
+      // any deployment state is created. The candidate may have been deleted
+      // or started a lifecycle action since the draft was made (draft.ts
+      // already validated it once, at draft-creation time — this is NOT
+      // redundant, it's the same check run again against fresher state).
+      // `restoreLineageId` carries the resolved candidate's lineage onto the
+      // deployment record below (T009/R4); absent a restore, a fresh
+      // install's lineage is its own id.
+      let restoreLineageId: string | undefined;
+      // FR-035: the new install's `name`/`subdomain` default from the
+      // candidate when the operator supplied no explicit name.
+      let restoreCandidateName: string | undefined;
+      let restoreCandidateSubdomain: string | null | undefined;
+      // The label the candidate ACTUALLY routes under right now — read from its
+      // deployment record, not its identity record (#490). The identity record's
+      // `subdomain` is a snapshot and can be stale; only the live one tells us
+      // whether FR-035's default would land on an occupied address.
+      let restoreCandidateLiveSubdomain: string | null | undefined;
+      const restoreFrom = artifacts?.manifest.restoreFrom;
+      if (restoreFrom) {
+        const source = await this.getRestoreSource(restoreFrom.candidateId);
+        const requiresEnv = (artifacts?.manifest.restore ?? []).some((d) => d.requiresEnv === true);
+        const envNotCarriedKeys = deriveEnvNotCarriedKeys(artifacts?.manifest.appEnv ?? []);
+        const judged = judgeRestoreChoice({
+          source,
+          appId: app,
+          excludeDeploymentId: deploymentId,
+          choice: restoreFrom,
+          targetVersion: version,
+          meta: artifacts?.manifest.upgrade,
+          requiresEnv,
+          envNotCarriedKeys,
+        });
+        if (!judged.ok) {
+          throw new ConflictError(judged.message, { code: judged.code, ...judged.details });
+        }
+        restoreLineageId = judged.candidate.lineageId;
+        restoreCandidateName = judged.candidate.name;
+        restoreCandidateSubdomain = judged.candidate.subdomain;
+        restoreCandidateLiveSubdomain = source?.deployment.subdomain ?? null;
+      }
+
       // Release channel this deployment follows (#428): copied from the
       // finalized manifest, which already resolved it (explicit request,
       // implied by a pinned version, or `stable`) at draft-create time — no
@@ -986,8 +1124,38 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // declaration, so it can never widen what the manifest asked for.
       const grantedContracts = resolveGrantedContracts(artifacts?.manifest.provides, request.grants);
 
-      // The DNS label this deployment routes under; stable for the install's life.
-      const subdomain = deriveSubdomain(request.name, app);
+      // The DNS label this deployment routes under; stable for the install's
+      // life. Restore-on-install (spec 007, FR-035): with no explicit
+      // `request.name`, default straight to the candidate's own subdomain
+      // slug rather than re-deriving one from its display name — it's
+      // already a valid slug. A `host-divergence` warning names it when the
+      // OPERATOR's own choice (an explicit name, or one that derives to a
+      // different slug) diverges from the candidate's. `resolveRestoreNameDefaults`
+      // is the pure form of this rule (restore-candidates.ts) — unaffected
+      // installs skip it entirely and keep today's plain `deriveSubdomain` call.
+      // When the default would land on the address the candidate itself still
+      // routes under, this REFUSES with `RESTORE_ADDRESS_REQUIRED` (#490)
+      // rather than handing `onBeforeCreate` an address it is certain to
+      // reject with a bare routing conflict that never mentions restore.
+      const restoreNameDefaults = restoreFrom
+        ? resolveRestoreNameDefaults({
+            requestedName: request.name,
+            candidateId: restoreFrom.candidateId,
+            candidateName: restoreCandidateName ?? app,
+            candidateSubdomain: restoreCandidateSubdomain ?? null,
+            candidateLiveSubdomain: restoreCandidateLiveSubdomain ?? null,
+            appId: app,
+            deriveSubdomain,
+          })
+        : undefined;
+      if (restoreNameDefaults && !restoreNameDefaults.ok) {
+        throw new ConflictError(restoreNameDefaults.message, {
+          code: restoreNameDefaults.code,
+          ...restoreNameDefaults.details,
+        });
+      }
+      const subdomain = restoreNameDefaults?.subdomain ?? deriveSubdomain(request.name, app);
+      const restoreWarnings: RestoreWarning[] = restoreNameDefaults?.warnings ?? [];
 
       // Compose profiles to activate for this install (#162): the operator's
       // requested set intersected with what the manifest declares, or the declared
@@ -1007,11 +1175,13 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
       const deployment: EnhancedDeploymentDetail = {
         id: deploymentId,
-        // Default to the catalog product name (e.g. "Uptime Kuma"), falling back
-        // to the app slug — so the UI shows a readable app name without a live
-        // catalog lookup, never an opaque "deployment-<id>". A caller-supplied
-        // name wins.
-        name: request.name || artifacts?.manifest.displayName || app,
+        // A caller-supplied name always wins. Absent one, restore-on-install
+        // (spec 007, FR-035) defaults to the CANDIDATE's name — a more useful
+        // default than the generic catalog product name for a copy of a
+        // specific existing install. Falls back to the catalog product name
+        // (e.g. "Uptime Kuma"), then the app slug, so the UI always shows a
+        // readable name, never an opaque "deployment-<id>".
+        name: request.name || restoreCandidateName || artifacts?.manifest.displayName || app,
         app,
         // The routed DNS label (#246); reconciled from here, never recomputed from
         // the name — so the URL stays put even if the display name later changes.
@@ -1026,6 +1196,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // Release channel this deployment follows (#428); always written for a
         // new record (read as `stable` for pre-feature records with none).
         channel,
+        // Restore-on-install (spec 007, R4): the candidate's lineage on a
+        // restore, else this deployment's own id — always written for a new
+        // record (never left `undefined`), so `writeInstanceMarkers`' fallback
+        // (`deployment.lineageId ?? deployment.id`) is only ever exercised by
+        // a record persisted BEFORE this feature.
+        lineageId: restoreLineageId ?? deploymentId,
+        // The restore choice actually applied (spec 007), re-validated above.
+        // Absent for a fresh install.
+        ...(restoreFrom ? { restoreFrom } : {}),
         // Why this is a permitted second copy of a single-instance app (#428);
         // absent for a first copy or a multi-instance app.
         ...(instanceReason ? { instanceReason } : {}),
@@ -1075,7 +1254,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // `channel` (#428) so the CLI can print "Following channel: <c>" without a
       // further lookup — covers both an explicit --channel and one implied by a
       // pinned pre-release version.
-      return { deploymentId, releaseId, jobId, channel };
+      return { deploymentId, releaseId, jobId, channel, ...(restoreWarnings.length ? { warnings: restoreWarnings } : {}) };
     } catch (error) {
       this.logger.error('Failed to create deployment from draft', error as Error, {
         deploymentId,
@@ -2475,6 +2654,47 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return `${this.appsBindRoot()}/${INSTALL_ENV_ROOT_DIR}/${deploymentId}`;
   }
 
+  /**
+   * Restore-on-install (spec 007): read the filesystem-derived parts of one
+   * deployment's candidate description — `.hola/instance.json` (identity
+   * record first, research R5), whether the data root holds app data (the
+   * same `dirHasContents(..., [INSTALL_MARKERS_DIR])` rule
+   * `capturePreUpgradeSnapshot` applies), and whether the sibling env record
+   * exists. Never throws: an unreadable/malformed identity record degrades to
+   * `identity: null` rather than failing candidate discovery (FR-003).
+   */
+  protected override async loadCandidateSource(deployment: EnhancedDeploymentDetail): Promise<CandidateSource> {
+    const appRoot = this.appRootFor(deployment.id);
+    const hasData = await dirHasContents(appRoot, [INSTALL_MARKERS_DIR]);
+
+    let identity: RestoreIdentitySnapshot | null = null;
+    const identityPath = `${appRoot}/${INSTALL_MARKERS_DIR}/${INSTANCE_RECORD_FILE}`;
+    if (await this.storageService.fileExists(identityPath)) {
+      try {
+        const raw = JSON.parse(await this.storageService.readFileAsString(identityPath)) as Partial<InstallIdentityRecord>;
+        identity = {
+          lineageId: raw.lineageId,
+          app: raw.app,
+          appVersion: raw.appVersion ?? null,
+          channel: raw.channel ?? null,
+          subdomain: raw.subdomain ?? null,
+          host: raw.host ?? null,
+          writtenAt: raw.writtenAt ?? null,
+        };
+      } catch (error) {
+        this.logger.warn('Unreadable install identity record; candidate described from the deployment record alone', {
+          deploymentId: deployment.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const envPath = `${this.envRecordDirFor(deployment.id)}/${ENV_RECORD_FILE}`;
+    const carriesEnv = await this.storageService.fileExists(envPath);
+
+    return { deployment, identity, hasData, carriesEnv };
+  }
+
   // ---- Pre-upgrade snapshots (#284 Phase 1) --------------------------------
 
   private snapshotsDir(deploymentId: string): string {
@@ -3363,15 +3583,15 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         writtenBy: getHolaVersion(),
         writtenAt: new Date().toISOString(),
         deploymentId: deployment.id,
-        // Derived, not persisted (spec FR-008, FR-010; data-model.md
-        // §Lineage Identifier): it always equals `deploymentId` today, so it
-        // needs no storage of its own — Sequence 5 (restore-on-install) is
-        // what forces a `lineageId` onto the deployment record, at which
-        // point this expression becomes `deployment.lineageId ?? deployment.id`.
-        // Writing it now means captures taken before that ships already
-        // carry the field. The platform MUST be its sole writer: no settable
-        // field, request parameter, manifest field, or operator input.
-        lineageId: deployment.id,
+        // Sequence 5 (restore-on-install, spec 007) has now shipped and forced
+        // a `lineageId` onto the deployment record (`createFromDraft`, R4):
+        // the candidate's lineage on a restore, else the deployment's own id.
+        // The `??` fallback is what made this a zero-migration change — a
+        // record persisted before spec 007 reads `lineageId` as `undefined`
+        // and yields exactly the value this expression always wrote. The
+        // platform remains its sole writer: no settable field, request
+        // parameter, manifest field, or operator input.
+        lineageId: deployment.lineageId ?? deployment.id,
         app: deployment.app,
         appVersion: manifest?.version ?? deployment.version ?? null,
         // `channel` INVERTS the manifest-wins order the two fields either side
@@ -3699,6 +3919,273 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await logBoth('info', `Auth: wrote OIDC credentials file ${rel} for the bundle to render`);
   }
 
+  /**
+   * Restore-on-install (spec 007): the one-time restore sequence, run inside
+   * the deploy job's `deploy / start / rollback` branch — after the
+   * cancellation check, before `composeUp` brings up the rest of the app
+   * (research R8). Ten steps, each independently justified in R8 /
+   * data-model.md §8:
+   *
+   *  1. assert the target root holds no app data (FR-014) — and, if it does,
+   *     say WHICH non-empty case it is (`classifyNonEmptyTarget`, #489)
+   *  2. re-resolve the candidate — it may have changed since the draft (FR-013a)
+   *  3. quiesce + capture the source (FR-015, R14)
+   *     3a. persist `restoreStartedAt` — the last read-only moment (#489)
+   *  4. extract into the target root (R7 — root-relative, no intermediate copy)
+   *  5. assert the payload actually landed (FR-016, R9 — a post-condition, not a subtree search)
+   *  6. apply `discard` paths (FR-017, R13)
+   *  7. rewrite `.hola/instance.json` (FR-018, R11 — extraction destroyed it)
+   *  8. write the OIDC credentials file (FR-019, R10 — after extraction, not before)
+   *  9. start each hook's service with `--wait` (FR-020, R12)
+   * 10. run each participation's restore hook, fail-closed (FR-021)
+   *
+   * The caller gates on `deployment.restoreFrom && !deployment.restoredAt &&
+   * !deployment.previousReleaseId` — the two independent guards data-model.md
+   * §8 requires: a restore applies to the deployment's FIRST deploy only
+   * (`!previousReleaseId`, set by `promoteRelease` before this job ever
+   * starts — a promote/rollback always has one), and exactly once
+   * (`!restoredAt`). Either guard alone is enough in the happy path; both
+   * together mean a retried job after a partial failure cannot re-quiesce a
+   * live source. Sets `deployment.restoredAt` on success; throws
+   * `ConflictError` (a `RESTORE_*` `details.code`) on any refusal, which fails
+   * the whole install (FR-022) — there is no partial-success start.
+   */
+  private async performRestoreOnInstall(
+    deployment: EnhancedDeploymentDetail,
+    composeDir: string,
+    projectName: string,
+    registryAuth: PullCredentials[] | undefined,
+    provisioned: { credentials?: ProvisionCredentials; auth: NonNullable<FinalizedManifest['auth']> } | null,
+    logBoth: (level: 'info' | 'warn' | 'error' | 'debug', message: string) => Promise<void>,
+  ): Promise<void> {
+    const choice = deployment.restoreFrom!;
+    const targetAppRoot = this.appRootFor(deployment.id);
+
+    // Step 1 (FR-014): the ignore-list is the same rule candidate eligibility
+    // uses (research R5) — the `.hola` marker the platform itself just wrote
+    // via `materializeCompose` must not count as "already holds app data".
+    //
+    // The refusal is not one refusal (#489): `classifyNonEmptyTarget` splits it
+    // into "something else put data here" (`RESTORE_TARGET_NOT_EMPTY`) and
+    // "this install's own restore half-landed and failed" (`RESTORE_INCOMPLETE`),
+    // which have different recoveries. Both still REFUSE — see that function for
+    // the two retry-and-proceed designs that were considered and rejected.
+    if (await dirHasContents(targetAppRoot, [INSTALL_MARKERS_DIR])) {
+      const refusal = classifyNonEmptyTarget({
+        deploymentId: deployment.id,
+        deploymentName: deployment.name,
+        restoreStartedAt: deployment.restoreStartedAt,
+      });
+      throw new ConflictError(refusal.message, { code: refusal.code, ...refusal.details });
+    }
+
+    // Step 2 (FR-013a): re-resolve rather than trust the draft-time choice —
+    // the candidate may have been deleted or started a lifecycle action since.
+    const source = await this.getRestoreSource(choice.candidateId);
+    const eligibility = checkCandidateStillEligible(source, deployment.app, deployment.id);
+    if (!eligibility.ok) {
+      throw new ConflictError(
+        `Restore source '${choice.candidateId}' is no longer available (${eligibility.code}).`,
+        { code: eligibility.code, candidateId: choice.candidateId },
+      );
+    }
+    const sourceDeployment = source!.deployment;
+    await logBoth('info', `Restoring app data from '${sourceDeployment.name}' (${sourceDeployment.id})…`);
+
+    // Step 3 (FR-015, R14): quiesce + capture the source, reusing the SAME
+    // fail-closed pre/post-hook policy `capturePreUpgradeSnapshot` applies —
+    // read from the SOURCE's own currently-active release.
+    const sourceReleaseId = sourceDeployment.currentReleaseId;
+    const sourceManifest = sourceReleaseId ? await this.readReleaseManifest(sourceDeployment.id, sourceReleaseId) : undefined;
+    // A STOPPED source is an eligible candidate (`SETTLED_STATUSES`), and it
+    // has no containers to `compose exec` into — every hook would fail and,
+    // being fail-closed, would fail the whole install for an app that needs no
+    // quiescing at all: its files aren't changing underneath us, so a plain
+    // file copy is already consistent. This is exactly the rule
+    // `backupParticipants()` applies for the same reason, logged rather than
+    // silent so "no hook ran" is never something the operator has to infer.
+    const sourceIsRunning = sourceDeployment.status === 'running';
+    if (!sourceIsRunning && backupParticipations(sourceManifest?.backup).length > 0) {
+      await logBoth('info', `Restore source '${sourceDeployment.name}' is stopped; skipping its quiesce hooks (its files are static).`);
+    }
+    const participants: BackupParticipant[] = sourceIsRunning
+      ? backupParticipations(sourceManifest?.backup).map((p) => ({
+          deploymentId: sourceDeployment.id,
+          participationId: p.id,
+          preHook: p.preHook,
+          postHook: p.postHook,
+        }))
+      : [];
+    const prepared = await this.runPreHooksFailClosed(participants, (level, message) => {
+      if (level === 'error') this.logger.warn(message, { deploymentId: deployment.id });
+      else this.logger.info(message, { deploymentId: deployment.id });
+    });
+    if (!prepared.ok && prepared.failed) {
+      // Cleanup runs the postHook of every STARTED participation only, same as capturePreUpgradeSnapshot.
+      await this.runPostHooks(prepared.started);
+      throw new ConflictError(
+        `Restore source quiesce failed (${prepared.failed.participationId}): ${prepared.failed.output ?? 'no output'}`,
+        { code: 'RESTORE_HOOK_FAILED', participationId: prepared.failed.participationId },
+      );
+    }
+
+    const sourceAppRoot = this.appRootFor(sourceDeployment.id);
+    // Staging lives under the TARGET deployment's own directory (research
+    // R7) — distinct from the pre-upgrade snapshot store, so it never enters
+    // the SOURCE's `pruneSnapshots` retention or shows up in its snapshot
+    // listing, and is found next to the failed install if anything leaks.
+    // Deleted in a `finally` on success and failure alike.
+    const stagingRelDir = `deployments/${deployment.id}/restore-staging`;
+    const stagingPath = this.storageService.resolveHolaPath('deployments', deployment.id, 'restore-staging', 'data.tar.gz');
+
+    try {
+      try {
+        // `ensureDir` is INSIDE this try, not above it: every preHook has
+        // already run by now (the source is quiesced — a `pg_dump` written, a
+        // maintenance mode entered), so anything that can throw between the
+        // preHooks and the capture must still reach the `postHook` cleanup
+        // below, or the source is left quiesced with nothing to un-quiesce it.
+        await this.storageService.ensureDir(stagingRelDir);
+        await tarGzipDir(sourceAppRoot, stagingPath);
+      } finally {
+        // postHook (clean up the dump) always runs, mirroring capturePreUpgradeSnapshot.
+        await this.runPostHooks(participants);
+      }
+
+      // Record that this install's restore is about to WRITE, and flush it to
+      // disk before the write happens (#489). Everything above this line is
+      // read-only with respect to the target root; everything below it may
+      // leave the root holding a partial payload. Persisting here rather than
+      // relying on the job's own success/catch persist is what keeps the fact
+      // true across a hard server kill mid-extraction. It is a DIAGNOSTIC, not
+      // a gate: `willRestore` is unchanged, so a retry still enters this
+      // sequence and still refuses at step 1 — only now it can say which
+      // refusal it is (`classifyNonEmptyTarget`).
+      deployment.restoreStartedAt = new Date().toISOString();
+      this.deployments.set(deployment.id, deployment);
+      await this.persistDeployment(deployment);
+
+      // Step 4 (R7): extract straight into the target root. Root-relative on
+      // both sides (`tar -C <dir> .` in, `-C <dir>` out) — no intermediate
+      // extracted copy, so peak additional disk cost is one compressed
+      // archive (SC-013). This `rm -rf`s the target root, destroying the
+      // marker `materializeCompose` just wrote — step 7 rewrites it.
+      await restoreTarGzInto(stagingPath, targetAppRoot);
+
+      // Step 5 (FR-016, R9): a POST-CONDITION, not a subtree search. This
+      // codebase's archives are root-relative in both directions (unlike a
+      // provider archive tool, which reproduces the source's absolute path
+      // under the target) — there is no nested path to locate, only an
+      // outcome to assert: the payload must actually be there.
+      if (!(await dirHasContents(targetAppRoot, [INSTALL_MARKERS_DIR]))) {
+        throw new ConflictError(
+          `Restore produced no data: the source's archive was empty.`,
+          { code: 'RESTORE_PAYLOAD_EMPTY', deploymentId: deployment.id },
+        );
+      }
+
+      // Step 6 (FR-017, R13): the app's OWN declaration for the release being
+      // installed, keyed by backup participation id. Every path resolved
+      // through `resolveContainedDir`, exactly as push targets already are
+      // (`buildPushTargets` above) — one that escapes REFUSES the restore
+      // rather than being silently skipped, because this is app-supplied data
+      // naming a filesystem path for deletion.
+      const manifest = await this.readActiveManifest(deployment);
+      const restoreDeclarations = manifest?.restore ?? [];
+      for (const decl of restoreDeclarations) {
+        for (const relPath of decl.discard ?? []) {
+          const resolved = resolveContainedDir(targetAppRoot, relPath);
+          // `resolveContainedDir` proves containment but treats the root
+          // itself as contained (`isInside` returns true for `candidate ===
+          // root`), which is fine for a push TARGET and catastrophic for a
+          // `rm -rf`: a manifest declaring `discard: ["."]` or `["./"]` would
+          // delete the entire just-restored payload and the marker with it,
+          // AFTER the payload post-condition above has already passed. So the
+          // delete also demands STRICT containment — the distinction
+          // `isStrictlyInside` exists for (path-containment.ts).
+          if (!resolved || !isStrictlyInside(targetAppRoot, resolved)) {
+            throw new ConflictError(
+              `Restore discard path escapes the data root: '${relPath}' (participation '${decl.id}').`,
+              { code: 'RESTORE_HOOK_FAILED', participationId: decl.id },
+            );
+          }
+          await rm(resolved, { recursive: true, force: true });
+        }
+      }
+
+      // Step 7 (FR-018, R11): rewrite the instance marker. Two independent
+      // reasons, either sufficient: extraction just destroyed it, AND the
+      // restored tree carries the SOURCE's record (its deploymentId, name,
+      // host) rather than this install's. `writeInstanceMarkers` already
+      // computes every field correctly, including `lineageId` — which, after
+      // `deployment.lineageId` was persisted at `createFromDraft` (R4), reads
+      // the CARRIED lineage rather than this install's own id (SC-007).
+      await this.writeInstanceMarkers(deployment, targetAppRoot, this.routingRuleFor(deployment).host);
+
+      // Step 8 (FR-019, R10): write the OIDC credentials file AFTER
+      // extraction, which just destroyed any earlier write. This restore
+      // path's OWN write — the caller must not also write it at its usual
+      // pre-restore position when a restore is happening (FR-023).
+      if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
+
+      // Steps 9 + 10 (FR-020, FR-021, R12): start ONLY the union of every
+      // participation's hook service, in ONE `--wait` call — `--wait` for
+      // EACH named service's OWN declared healthcheck, never a bespoke
+      // readiness poll (which would need per-app knowledge of what "ready"
+      // means — exactly the branching Constitution V forbids). Then run
+      // every restore hook fail-closed via the SAME
+      // `runPreHooksFailClosed`/`runPostHooks` policy the pre-upgrade
+      // snapshot uses (research R14): declaration order, propagate on the
+      // first failure, clean up (`postHook`, unused here) only the STARTED
+      // set. A hook service that never becomes healthy, or a hook that
+      // fails, fails the whole install.
+      const hookServices = Array.from(
+        new Set(restoreDeclarations.map((d) => d.hook?.service).filter((s): s is string => Boolean(s))),
+      );
+      if (hookServices.length > 0) {
+        await logBoth('info', `Restore: starting ${hookServices.join(', ')}…`);
+        const up = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles, {
+          services: hookServices,
+          wait: true,
+          timeoutMs: RESTORE_HOOK_WAIT_TIMEOUT_MS,
+        });
+        if (!up.success) {
+          throw new ConflictError(
+            `A restore hook service never became healthy: ${up.output}`,
+            { code: 'RESTORE_HOOK_FAILED', service: hookServices.join(',') },
+          );
+        }
+
+        const restoreParticipants: BackupParticipant[] = restoreDeclarations
+          .filter((d) => d.hook)
+          .map((d) => ({ deploymentId: deployment.id, participationId: d.id, preHook: d.hook }));
+        const hookResult = await this.runPreHooksFailClosed(restoreParticipants, (level, message) => {
+          if (level === 'error') this.logger.warn(message, { deploymentId: deployment.id });
+          else this.logger.info(message, { deploymentId: deployment.id });
+        });
+        if (!hookResult.ok && hookResult.failed) {
+          await this.runPostHooks(hookResult.started);
+          throw new ConflictError(
+            `Restore hook failed for participation '${hookResult.failed.participationId}': ${hookResult.failed.output ?? 'no output'}`,
+            {
+              code: 'RESTORE_HOOK_FAILED',
+              participationId: hookResult.failed.participationId,
+              service: restoreDeclarations.find((d) => d.id === hookResult.failed!.participationId)?.hook?.service,
+            },
+          );
+        }
+      }
+
+      deployment.restoredAt = new Date().toISOString();
+      await logBoth('info', 'Restore complete.');
+    } finally {
+      // The whole staging DIRECTORY, not just the archive inside it — deleting
+      // only the file left an empty `restore-staging/` under every restored
+      // deployment forever.
+      await this.storageService.deleteDir(stagingRelDir, true).catch(() => {});
+    }
+  }
+
   private jobTypeToAction(type: Job['type']): string {
     switch (type) {
       case 'stop': return 'stop';
@@ -3769,7 +4256,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // init container is deliberately left exited rather than re-run.
         const before = await this.composeStateById(composeDir, projectName);
         const registryAuth = await this.resolveRegistryAuth(deployment);
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
+        // Timeout stated, not inherited (#487). A restart recreates whatever
+        // the freshly materialized compose changed and clears the same
+        // `depends_on: service_healthy` gates a deploy does, only against warm
+        // data. It is also the ONE `composeUp` with no `composePull` in front
+        // of it — the registryAuth above exists precisely so a recreate that
+        // must fetch a missing image (a pruned host) still authenticates, and
+        // that pull would otherwise run under a cap six times tighter than the
+        // one `composePull` was given for the very same reason.
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles, {
+          timeoutMs: COMPOSE_UP_TIMEOUT_MS,
+        });
         output = res.output;
         if (!res.success) throw new Error(res.output);
         const restarted = await this.restartUntouchedServices(composeDir, projectName, before, deployment.selectedProfiles, logBoth);
@@ -3793,11 +4290,22 @@ export class RealDeploymentService extends InMemoryDeploymentService {
           await this.restoreAppDataSnapshot(deploymentId, targetReleaseId, logBoth);
         }
 
+        // Restore-on-install (spec 007): true for AT MOST one job per
+        // deployment — its very first deploy (`!previousReleaseId`, set by
+        // `promoteRelease` before this job ever starts; a promote/rollback
+        // always has one), and only once (`!restoredAt`). When false, every
+        // line below is byte-for-byte what ran before this feature (FR-023) —
+        // this flag is the ONLY thing that changes about the no-restore path.
+        const willRestore = Boolean(deployment.restoreFrom) && !deployment.restoredAt && !deployment.previousReleaseId;
+
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
         // Drop the provisioned OIDC creds file into the data root before `up` so a
         // bundle sidecar can render the app's SSO config for first boot (e.g. Immich).
-        if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
+        // Restore-on-install (FR-019, research R10): a restore's OWN extraction
+        // would destroy this write, so it happens instead INSIDE
+        // `performRestoreOnInstall`, after extraction — never both places.
+        if (provisioned && !willRestore) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
 
         // Pull first (generous timeout) so `up` isn't gated on download time —
         // large stacks like Postiz used to be SIGKILLed mid-pull by up's 2-min cap.
@@ -3812,7 +4320,24 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // irreversible step) if the job was cancelled during the long pull.
         if (ctx.isCancelled()) throw new JobCancelledError();
 
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
+        // Restore-on-install (spec 007, research R8): between the pull and the
+        // final `composeUp` — the cheaper failure (a bad pull) happens first,
+        // and the restore runs after cancellation is no longer possible, so a
+        // cancelled install never quiesces somebody else's live database.
+        if (willRestore) {
+          await this.performRestoreOnInstall(deployment, composeDir, projectName, registryAuth, provisioned, logBoth);
+        }
+
+        // Timeout stated, not inherited (#487). This is the first install of a
+        // large multi-service stack: the images are already local (the pull
+        // above saw to that), so what remains is `initdb` and every
+        // `depends_on: service_healthy` gate in the app's compose — the
+        // expensive part, and the part five minutes does not reliably cover.
+        // A rollback that just restored a data snapshot, and a restore that
+        // just extracted one, reach this line equally cold.
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles, {
+          timeoutMs: COMPOSE_UP_TIMEOUT_MS,
+        });
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);

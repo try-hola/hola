@@ -64,7 +64,25 @@ export interface DockerService {
    *  Image pulls for large multi-service apps (e.g. Postiz) routinely exceed the
    *  short `up` timeout; pulling first means `up` only has to start local images. */
   composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }>;
-  composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }>;
+  /**
+   * `options.services` starts only the named services (default: every service in
+   * the project, today's behaviour). `options.wait` adds `--wait`, blocking until
+   * each named service's own `healthcheck` reports healthy — used by the restore
+   * sequence to start only a hook's service before running its hook (spec 007,
+   * FR-020). `options.timeoutMs` is the `execFile` ceiling; the 5-minute fallback
+   * below applies only to a caller with no opinion, and every `deployment.ts` call
+   * site now states its own (#487) — `up -d` blocks on each
+   * `depends_on: service_healthy` gate, so a first install, a cold rollback, and a
+   * `--wait` on a freshly-`initdb`'d Postgres (research R12) can all legitimately
+   * exceed five minutes.
+   */
+  composeUp(
+    projectPath: string,
+    projectName: string,
+    registryAuth?: PullCredentials[],
+    profiles?: string[],
+    options?: { services?: string[]; wait?: boolean; timeoutMs?: number },
+  ): Promise<{ success: boolean; output: string }>;
   composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
   composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
@@ -228,11 +246,17 @@ export class RealDockerService implements DockerService, HealthCheckable {
     }
   }
 
-  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
+  async composeUp(
+    projectPath: string,
+    projectName: string,
+    registryAuth?: PullCredentials[],
+    profiles?: string[],
+    options?: { services?: string[]; wait?: boolean; timeoutMs?: number },
+  ): Promise<{ success: boolean; output: string }> {
     const { env: authEnv, dir } = this.makeRegistryAuthEnv(registryAuth);
     const env = this.withComposeProfiles(authEnv, profiles);
     try {
-      this.logger.info('Starting compose project', { projectPath, projectName });
+      this.logger.info('Starting compose project', { projectPath, projectName, services: options?.services, wait: options?.wait });
 
       const composeFile = join(projectPath, 'docker-compose.yml');
       if (!existsSync(composeFile)) {
@@ -240,13 +264,27 @@ export class RealDockerService implements DockerService, HealthCheckable {
       }
 
       // Images are pre-pulled by composePull, so `up` only starts local images.
-      // The 5-minute timeout covers container creation for large stacks (it is
-      // no longer gated on download time). A scoped DOCKER_CONFIG is passed as a
-      // fallback so a recreate that needs to pull still authenticates.
-      const { stdout, stderr } = await execAsync(
-        `docker compose -f "${composeFile}" -p "${projectName}" up -d`,
-        { cwd: projectPath, timeout: 300000, env } // 5 minute timeout
-      );
+      // `--wait` (when requested) blocks until every NAMED service reports
+      // healthy via its own declared healthcheck — no bespoke readiness poll
+      // (Constitution V). `options.timeoutMs` is the caller's own ceiling: a
+      // `--wait` against a freshly-`initdb`'d Postgres can exceed five minutes
+      // (research R12), and so can a plain `up -d` that has to clear a large
+      // stack's `depends_on: service_healthy` gates. The 300000ms below is a
+      // FALLBACK for a caller that expressed no preference, not a considered
+      // ceiling for any operation (#487). A scoped DOCKER_CONFIG is passed as
+      // a fallback so a recreate that needs to pull still authenticates.
+      //
+      // Built as an argv array and run through `execFile` (NO shell), the same
+      // rule `composeExec` already states: `options.services` carries
+      // APP-SUPPLIED names (a bundle manifest's `restore[].hook.service`), and
+      // interpolating those into a shell string would let a manifest with a
+      // `"`/`;`/`$(`/backtick in a service name run arbitrary commands as the
+      // server. Nothing here is shell-quoted because nothing here reaches a shell.
+      const args = ['compose', '-f', composeFile, '-p', projectName, 'up', '-d'];
+      if (options?.wait) args.push('--wait');
+      if (options?.services?.length) args.push(...options.services);
+      const timeout = options?.timeoutMs ?? 300000; // 5 minute fallback (see above)
+      const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout, env });
 
       const output = [stdout, stderr].filter(Boolean).join('\n');
       this.logger.info('Compose project started successfully', {
@@ -706,6 +744,15 @@ export function parseComposeLogs(output: string): DockerLogs['entries'] {
 export class MockDockerService implements DockerService {
   private logger = getLogger().child({ service: 'MockDockerService' });
 
+  /**
+   * Every `composeUp` call this instance has received, in order — so a test
+   * can assert on what was actually requested rather than merely that the
+   * call resolved. A Mock that accepted `services`/`wait` and ignored them
+   * would let a suite go green over a restore that started the wrong
+   * containers (plan.md's "Known trap", Constitution IV).
+   */
+  readonly composeUpCalls: Array<{ projectName: string; services?: string[]; wait?: boolean; timeoutMs?: number }> = [];
+
   async getDockerInfo(): Promise<DockerInfo> {
     return { available: true, version: 'mock', serverVersion: 'mock', apiVersion: 'mock' };
   }
@@ -719,8 +766,15 @@ export class MockDockerService implements DockerService {
     return { success: true, output: `[mock] Project ${projectName} images pulled` };
   }
 
-  async composeUp(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles });
+  async composeUp(
+    projectPath: string,
+    projectName: string,
+    registryAuth?: PullCredentials[],
+    profiles?: string[],
+    options?: { services?: string[]; wait?: boolean; timeoutMs?: number },
+  ): Promise<{ success: boolean; output: string }> {
+    this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles, services: options?.services, wait: options?.wait });
+    this.composeUpCalls.push({ projectName, services: options?.services, wait: options?.wait, timeoutMs: options?.timeoutMs });
     return { success: true, output: `[mock] Project ${projectName} created and started` };
   }
 

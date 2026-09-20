@@ -139,6 +139,13 @@ export function createServices(env: ServiceEnvironment): Services {
     // Mock provisioner in development for safety (no calls to a real auth platform).
     const provisioner = new MockProvisionerService();
 
+    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials);
+    // Restore-on-install (spec 007): wire the back-reference draft-creation
+    // needs to resolve/validate a restoreFrom choice. Set post-construction —
+    // `deployments` itself takes `drafts` as a constructor argument, so this
+    // can't be threaded through either constructor without a cycle.
+    drafts.setDeploymentsService(deployments);
+
     return {
       storage,
       config: new RealConfigService(storage),
@@ -159,7 +166,7 @@ export function createServices(env: ServiceEnvironment): Services {
       validation,
       routing,
       provisioner,
-      deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials),
+      deployments,
     };
   }
 
@@ -216,6 +223,11 @@ export function createServices(env: ServiceEnvironment): Services {
       ? new RealAuthentikProvisionerService(authConfig)
       : new NoneProvisionerService();
 
+  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, contractTokens);
+  // Restore-on-install (spec 007): see the development block above for why
+  // this is a post-construction setter rather than a constructor argument.
+  drafts.setDeploymentsService(deployments);
+
   return {
     storage,
     config: new RealConfigService(storage),
@@ -236,7 +248,7 @@ export function createServices(env: ServiceEnvironment): Services {
     validation,
     routing,
     provisioner,
-    deployments: new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, contractTokens),
+    deployments,
   };
 }
 

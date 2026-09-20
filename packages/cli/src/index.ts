@@ -2,7 +2,7 @@
 import sade from 'sade';
 
 import { CLI_VERSION } from './version';
-import { camelKeys, streamOpts } from './lib/opts';
+import { camelKeys, parseOpts, streamOpts } from './lib/opts';
 
 // Lazy command loaders to avoid unnecessary dependencies until invoked
 const load = async <T,>(p: Promise<T>): Promise<T> => p;
@@ -161,6 +161,16 @@ prog
   .option('--set', 'Override an env var, KEY=VALUE (repeatable)')
   .option('--profile', 'Enable an optional Compose profile the app declares, e.g. elasticsearch (repeatable, or comma-separated)')
   .option('--grant', 'Consent to a privileged capability contract the app declares, e.g. backup@1 (repeatable, or comma-separated)')
+  .option('--restore-from', 'Restore from an existing deployment of this app: a deployment id, or "latest" (refuses across two+ unrelated lineages)')
+  .option('--no-restore', 'Explicitly install with no restore (the default when no restore flag is given at all)', false)
+  .option('--restore-list', 'List restore candidates for this app and exit — installs nothing', false)
+  // Deliberately DEFAULTLESS, unlike every other boolean flag here: `carryEnv`
+  // is tri-state and a `false` default would collapse "not asked" into "no"
+  // (#488). The `parseOpts()` handed to `prog.parse` at the bottom of this file
+  // is what stops mri treating it as value-taking; don't add a default here.
+  .option('--carry-env', 'Carry the restore candidate\'s configuration (default: on when it has an environment record)')
+  .option('--no-carry-env', 'Do not carry the restore candidate\'s configuration (needs --ack restore-env-not-carried)', false)
+  .option('--ack', 'Acknowledge a restore risk by code, e.g. restore-env-not-carried (repeatable, or comma-separated)')
   .option('--allow-multiple', 'Install a second instance of a single-instance app (needs a distinct --name)', false)
   .option('--source', 'Catalog source id to install from (default: hola)')
   .option('--registry-cred', 'Stored registry credential id for a private OCI reference install')
@@ -343,5 +353,8 @@ if (process.argv.length <= 2) {
   console.log('Hola CLI. New here? Set up a server: hola bootstrap --host user@vm');
   console.log('Installed? Try: hola catalog · hola install <app> · hola deployments');
 } else {
-  prog.parse(process.argv);
+  // `parseOpts()` classifies the tri-state `--carry-env` as a boolean without
+  // giving it a default, which a `.option(…, false)` registration cannot do
+  // (#488). See lib/opts.ts.
+  prog.parse(process.argv, parseOpts());
 }

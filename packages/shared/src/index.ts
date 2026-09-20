@@ -18,6 +18,13 @@ export const API = {
   me: '/api/me',
   summary: '/api/summary',
 
+  // Restore-on-install (spec 007): deployments of `appId` on this host that
+  // can serve as a restore source. GET with optional `?version=` (each
+  // candidate's skew/acknowledgements are computed against it). Returns
+  // ListRestoreCandidatesResponse. An ordinary authenticated platform read —
+  // NOT a capability-contract broker endpoint (FR-047, contracts/api.md §0).
+  restoreCandidates: (appId: string) => `/api/apps/${encodeURIComponent(appId)}/restore-candidates`,
+
   catalog: {
     apps: '/api/catalog/apps', // list, query via ?query=&category=&page=&limit=
     refresh: '/api/catalog/refresh',
@@ -333,6 +340,143 @@ export type AppBackupParticipation = {
  * disk (or a test stub) may still be the singular legacy shape.
  */
 export type AppBackupDeclaration = AppBackupConfig | AppBackupParticipation[];
+
+// ------------------------------------------------------
+// Restore-on-install (spec 007)
+// ------------------------------------------------------
+
+/**
+ * Per-participation restore declaration in a bundle manifest's `restore` array,
+ * keyed by the **backup** participation id it restores. Reuses `AppBackupHook`
+ * verbatim for `hook` — a restore hook is a command run in a named service,
+ * exactly what a backup hook already is; a second hook shape would be a second
+ * thing to validate and get wrong for no expressive gain.
+ *
+ * Three declaration states, driven by `accepts`/`restore` together:
+ * - no `restore@1` in `accepts` → not offered as restorable at all.
+ * - `restore@1`, no matching entry here → plain file copy: nothing discarded,
+ *   no hook runs. True for every SQLite/flat-file acceptor.
+ * - `restore@1` + an entry → `discard` paths are removed after extraction and
+ *   before any container starts, then `hook` runs against the started,
+ *   healthy service.
+ *
+ * `restore@1` here names a participation an app declares, not a capability
+ * contract the platform brokers — `CONTRACTS` (`contracts.ts`) gains no entry.
+ */
+export type AppRestoreDeclaration = {
+  /** The backup participation id this restores (`default` for the legacy singular form). */
+  id: string;
+  /** Data-root-relative paths removed after extraction, before any container starts. */
+  discard?: string[];
+  /** Run after discards, against the started-and-healthy service. */
+  hook?: AppBackupHook;
+  /** `true` turns the missing-environment-record warning into a refusal. Default `false`. */
+  requiresEnv?: boolean;
+};
+
+/** The operator's restore decision at draft creation. Created once, consumed once. */
+export type RestoreChoice = {
+  /** The candidate's deployment id — not a lineage id. */
+  candidateId: string;
+  /** Explicit, never defaulted from candidate state — declining is a decision. */
+  carryEnv: boolean;
+  /** Acknowledgement codes (see {@link RestoreAcknowledgementCode}), modelled on `grants`. */
+  acknowledge?: string[];
+};
+
+/**
+ * Closed union of acknowledgement codes a restore choice may need to supply,
+ * computed server-side from the chosen candidate and refused when required and
+ * absent — the same enforcement `grants` already gets.
+ */
+export type RestoreAcknowledgementCode = 'restore-version-unknown' | 'restore-env-not-carried';
+
+/** Closed union of refusal codes a restore can fail with, carried in `details.code`. */
+export type RestoreRefusalCode =
+  | 'RESTORE_SOURCE_NEWER'
+  | 'RESTORE_UPGRADE_PATH'
+  | 'RESTORE_ENV_REQUIRED'
+  | 'RESTORE_CANDIDATE_GONE'
+  | 'RESTORE_CANDIDATE_BUSY'
+  | 'RESTORE_TARGET_NOT_EMPTY'
+  // Distinct from RESTORE_TARGET_NOT_EMPTY on purpose (#489). That one means
+  // "something ELSE put data in this root" — an operator pre-seeded it, or an
+  // uninstall left it behind — and the data is not ours. This one means "THIS
+  // install's own restore already wrote here and then failed": the data IS the
+  // half-landed payload, and the recovery differs (uninstall + reinstall, or
+  // clear the data root, then retry). One code for both would hand every
+  // surface a recovery that is wrong for half the cases it fires on.
+  | 'RESTORE_INCOMPLETE'
+  | 'RESTORE_PAYLOAD_EMPTY'
+  | 'RESTORE_HOOK_FAILED'
+  // FR-035's address default resolved onto an address the chosen candidate
+  // still owns (#490). Refused here, naming the candidate, rather than left to
+  // fall through to the routing layer's bare host conflict, which says nothing
+  // about restore and gives a non-interactive caller nothing to act on.
+  | 'RESTORE_ADDRESS_REQUIRED'
+  | 'RESTORE_NOT_SUPPORTED'
+  // Distinct from RESTORE_NOT_SUPPORTED on purpose: that one means "this
+  // INSTALL PATH cannot restore" (install-by-ref, no catalog index), and its
+  // remedy is "use the catalog path". This one means "this APP has not
+  // declared it can be restored" (no `restore@1` in `accepts`) on a path that
+  // otherwise could. One code for both would hand every surface a hint that
+  // is wrong for half the cases it fires on.
+  | 'RESTORE_NOT_ACCEPTED'
+  | 'RESTORE_ACK_REQUIRED';
+
+/**
+ * The version relationship between a candidate and the version being installed.
+ * Only the `refused` rows guarded by `checkUpgradePath` come from it — a candidate
+ * newer than the target, and an unknown version, are this feature's own rules,
+ * because `checkUpgradePath` returns `ok` for both (see `checkUpgradePath` above).
+ */
+export type RestoreSkewVerdict =
+  | { kind: 'ok' }
+  | { kind: 'unknown' }
+  | { kind: 'refused'; code: RestoreRefusalCode; message: string; suggestedVersion?: string };
+
+/** A proceedable, named, non-fatal risk surfaced with a restore candidate. */
+export type RestoreWarning =
+  | { code: 'env-not-carried'; keys: string[] }
+  | { code: 'host-divergence'; from: string; to: string }
+  | { code: 'no-identity-record' };
+
+/**
+ * A source the operator can pick as a restore-on-install source. Derived on
+ * demand from deployments + identity records + catalog upgrade metadata —
+ * never stored. Returned by `GET /api/apps/:appId/restore-candidates`.
+ */
+export type RestoreCandidate = {
+  deploymentId: string;
+  lineageId: string;
+  app: string;
+  name: string;
+  subdomain: string | null;
+  host: string | null;
+  appVersion: string | null;
+  channel: string | null;
+  carriesEnv: boolean;
+  capturedAt: string | null;
+  hasIdentityRecord: boolean;
+  skew: RestoreSkewVerdict;
+  requiredAcknowledgements: string[];
+  warnings: RestoreWarning[];
+};
+
+/** One family of candidates sharing a `lineageId`, newest-first within it. */
+export type RestoreCandidateLineage = {
+  lineageId: string;
+  candidates: RestoreCandidate[];
+};
+
+export type ListRestoreCandidatesResponse = {
+  appId: string;
+  lineages: RestoreCandidateLineage[];
+  // `null` / `true` whenever two or more distinct lineages match — no default
+  // is offered and the operator must pick explicitly.
+  defaultCandidateId: string | null;
+  requiresExplicitChoice: boolean;
+};
 
 /**
  * How a push overwrites the target directory (#409). `mirror` is rsync
@@ -1016,6 +1160,11 @@ export type GetCatalogAppVersionDetailResponse = {
   // path `hola app data push` can bulk-load into. Optional: most apps take their
   // data through their own UI and omit it.
   push?: AppPushTarget[];
+  // Per-backup-participation restore declarations (spec 007), each naming
+  // `discard` paths and an optional restore `hook`. Optional: an app that
+  // accepts `restore@1` with no entry here restores by plain file copy; an app
+  // that doesn't accept `restore@1` at all isn't offered as restorable.
+  restore?: AppRestoreDeclaration[];
   // Elevated container permissions the app requests (e.g. a browser desktop that
   // needs `sudo`). Each entry is surfaced for explicit operator consent in the
   // install wizard and relaxes the corresponding platform hardening at deploy
@@ -1276,6 +1425,10 @@ export type Draft = {
   // through finalize so `push-targets` can resolve them against the deployment's
   // data root (read-only; not user-editable).
   push?: AppPushTarget[];
+  // Per-backup-participation restore declarations (spec 007) seeded from the
+  // bundle manifest and carried through finalize (read-only; not user-editable)
+  // so the restore sequence can apply discards/hooks without re-reading the bundle.
+  restore?: AppRestoreDeclaration[];
   // Optional Compose profiles the app declares (#162), seeded from the bundle
   // manifest so the install wizard can render a checkbox per profile. The
   // selected keys are sent on create; the declared list itself is read-only.
@@ -1294,6 +1447,10 @@ export type Draft = {
   // absent/false whenever it could not be established (catalog unavailable,
   // install-by-ref, a pre-#431 draft).
   channelPublished?: boolean;
+  // The restore-on-install choice (spec 007), seeded at draft creation and
+  // carried through finalize outside `canonicalSpec` (beside `channel`), never
+  // patchable and never re-derived. Absent means no restore.
+  restoreFrom?: RestoreChoice;
 };
 
 export type CreateDraftRequest = {
@@ -1313,6 +1470,12 @@ export type CreateDraftRequest = {
   // channel is implied by a pinned `version`'s own channel, else `stable`.
   // Install-by-ref drafts ignore this (always `stable`).
   channel?: string;
+  // Restore-on-install choice (spec 007): pick an existing deployment of this
+  // app as a restore source. Accepted on the catalog path only — the
+  // install-by-ref path has no catalog upgrade metadata to judge version skew
+  // against and refuses it with `RESTORE_NOT_SUPPORTED` rather than silently
+  // ignoring it.
+  restoreFrom?: RestoreChoice;
 };
 export type CreateDraftResponse = {
   draftId: string;
@@ -1450,6 +1613,13 @@ export type DeploymentDetail = {
   // projected from the record written at create time. Absent means
   // single-instance.
   multiInstance?: boolean;
+  // Restore-on-install (spec 007), projected from the stored record — see
+  // EnhancedDeploymentDetail below for the full field-by-field description.
+  // All optional; a record written before this feature reads them as
+  // `undefined`.
+  lineageId?: string;
+  restoreFrom?: RestoreChoice;
+  restoredAt?: string;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
@@ -2052,6 +2222,31 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // changed afterward (a later channel change that causes overlap only
   // returns a PATCH warning). Absent for a first copy or a multi-instance app.
   instanceReason?: InstanceReason;
+  // Restore-on-install fields (spec 007). All optional — every record written
+  // before this feature stays valid, reading them as `undefined`.
+  //
+  // `lineageId` identifies the family of installs a chain of restores belongs
+  // to: a candidate's lineage on a restore, else the deployment's own id.
+  // Absence means "equals this deployment's id", which is what
+  // `writeInstanceMarkers` falls back to (`deployment.lineageId ?? deployment.id`)
+  // so a pre-spec-007 record needs no migration.
+  lineageId?: string;
+  // The restore choice that was applied to this install's first deploy, carried
+  // from the finalized manifest. Absent when this install was not restored.
+  restoreFrom?: RestoreChoice;
+  // ISO time the restore began WRITING — persisted immediately before the
+  // extraction that `rm -rf`s the target data root (#489). It is purely a
+  // diagnostic: it never changes which path a later job takes (the gate stays
+  // `restoreFrom && !restoredAt && !previousReleaseId`), it only lets the
+  // refusal that a retry hits say WHICH non-empty-target case it is — this
+  // install's own half-landed payload (`RESTORE_INCOMPLETE`) rather than data
+  // something else put there (`RESTORE_TARGET_NOT_EMPTY`). Server-side only:
+  // not projected onto `DeploymentDetail`.
+  restoreStartedAt?: string;
+  // ISO time the restore completed successfully. Its presence is the
+  // consumption marker: a restart/promote/rollback finds it set and skips the
+  // restore sequence — a restore applies to the first deploy only.
+  restoredAt?: string;
   metadata: {
     createdAt: string;
     owner?: string;
@@ -2296,6 +2491,11 @@ export type CreateDeploymentFromDraftResponse = {
   // client can print/show "Following channel: <c>" without a further lookup.
   // The server always emits it.
   channel?: string;
+  // Restore-on-install (spec 007): proceedable, non-fatal warnings resolved
+  // at create time — today, only `host-divergence` (FR-035, when the
+  // operator's chosen subdomain differs from the restore candidate's).
+  // Absent when no restore happened or nothing diverged.
+  warnings?: RestoreWarning[];
 };
 
 /**

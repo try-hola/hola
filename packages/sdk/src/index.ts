@@ -35,7 +35,9 @@ import {
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
   // System types
-  GetUpdateCheckResponse
+  GetUpdateCheckResponse,
+  // Restore-on-install (spec 007)
+  ListRestoreCandidatesResponse
 } from '@hola/shared';
 
 export type SdkInitOptions = {
@@ -178,6 +180,19 @@ export class HolaSdk {
   // one-offs). Returns the created draft id; finalize + deploy it like any draft.
   installFromRef = (data: InstallFromRefRequest) =>
     this.post<InstallFromRefResponse>(API.installFromRef, data);
+
+  // Restore-on-install (spec 007): deployments of `appId` on this host that can
+  // serve as a restore source. `version` (optional) judges each candidate's
+  // version skew/acknowledgements against a specific install target; omitted,
+  // every candidate's skew reports `unknown`. Reads with no draft created —
+  // powers both the wizard's first step and `hola install --restore-list`.
+  // `source`/`channel` ride along with `version` so the route resolves the SAME
+  // catalog version the draft this call precedes will be created with — without
+  // them a channel-pinned or alternate-source install is judged against the
+  // default source's `latest`, and the skew verdict the caller renders can
+  // disagree with the one `createDraft` enforces.
+  restoreCandidates = (appId: string, version?: string, source?: string, channel?: string) =>
+    this.get<ListRestoreCandidatesResponse>(`${API.restoreCandidates(appId)}${buildQuery({ version, source, channel })}`);
 
   drafts = {
     create: (data: CreateDraftRequest) => this.post<CreateDraftResponse>(API.drafts.create, data),

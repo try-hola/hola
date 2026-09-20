@@ -37,7 +37,9 @@ import type {
   GetSettingsResponse, PatchSettingsRequest, PatchSettingsResponse,
   GetBackupSettingsResponse, PatchBackupSettingsRequest, PatchBackupSettingsResponse,
   // System types
-  GetSystemStatusResponse, GetUpdateCheckResponse
+  GetSystemStatusResponse, GetUpdateCheckResponse,
+  // Restore-on-install (spec 007)
+  ListRestoreCandidatesResponse
 } from '@hola/shared';
 import { globalCache, CacheTTL } from './cache';
 import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
@@ -389,6 +391,13 @@ export class SdkAdapter {
     // (the operator editing a URL expects each probe to actually hit the URL).
     preview: (url: string): Promise<PreviewCatalogSourceResponse> => this.sdk.catalogSources.preview(url),
   };
+
+  // Restore-on-install (spec 007): candidates for one app, read fresh every
+  // call (no cache) — the wizard's restore step wants the CURRENT set, and a
+  // stale "eligible" candidate that quietly became busy/gone is exactly the
+  // failure this feature's job-time re-resolution otherwise catches late.
+  restoreCandidates = (appId: string, version?: string, source?: string, channel?: string): Promise<ListRestoreCandidatesResponse> =>
+    this.sdk.restoreCandidates(appId, version, source, channel);
 
   // Capability contract rollup (ADR 0004 Phase 4). Read-only and derived from the
   // installed set, so it rides the same cache as the rest and is dropped whenever

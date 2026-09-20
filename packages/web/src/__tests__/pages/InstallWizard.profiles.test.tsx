@@ -40,6 +40,12 @@ const draftsApi = {
   finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
 };
 
+// Restore-on-install (spec 007): the wizard's new first step reads this
+// route before a draft exists. No candidates in this fixture set.
+const restoreCandidates = vi.fn(async (appId: string) => ({
+  appId, lineages: [], defaultCandidateId: null, requiresExplicitChoice: false,
+}));
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
@@ -47,14 +53,18 @@ vi.mock('../../utils/api-hybrid', () => ({
       create: (data: unknown) => create(data),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
+    restoreCandidates: (appId: string) => restoreCandidates(appId),
   },
 }));
 
 // Imported after the mock so InstallWizard picks up the mocked api-hybrid.
 const { InstallWizard } = await import('../../pages/InstallWizard');
 
-function renderWizard() {
-  return render(
+/** Render, then advance past the new Restore Data step (spec 007) — no
+ *  candidates in these fixtures, so Next is immediately enabled there. Every
+ *  assertion below predates this step and starts from "the draft now exists". */
+async function renderWizard() {
+  const utils = render(
     <MemoryRouter initialEntries={['/install/testapp']}>
       <Routes>
         <Route path="/install/:appId" element={<InstallWizard />} />
@@ -62,6 +72,9 @@ function renderWizard() {
       </Routes>
     </MemoryRouter>
   );
+  await waitFor(() => expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  return utils;
 }
 
 // Advance one step: click Next and wait for handleNext's pre-advance draft
@@ -77,6 +90,7 @@ beforeEach(() => {
   globalCache.clear();
   create.mockClear();
   draftsApi.create.mockClear();
+  restoreCandidates.mockClear();
 });
 
 afterEach(() => {
@@ -85,7 +99,7 @@ afterEach(() => {
 
 describe('InstallWizard optional Compose profiles (#162)', () => {
   it('renders declared profiles on the summary step and sends the enabled set to create', async () => {
-    renderWizard();
+    await renderWizard();
     // Wait for the draft to resolve (step 0 heading is the app name).
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
