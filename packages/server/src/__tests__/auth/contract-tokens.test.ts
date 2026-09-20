@@ -14,7 +14,8 @@ import { join } from 'path';
 
 import { RealStorageService } from '../../services/core/storage';
 import { RealContractTokenService, createContractTokenAuthProvider, contractCapability } from '../../services/auth/contract-tokens';
-import { getRequiredCapability } from '../../middleware/auth';
+import { authorizeRequest, getRequiredCapability, isContractScoped } from '../../middleware/auth';
+import type { Principal } from '../../services/auth/auth-service';
 
 describe('contract-scoped tokens', () => {
   let dataRoot: string;
@@ -128,5 +129,87 @@ describe('contract-scoped tokens', () => {
     // such route), so a POST there falls through to the generic default rather
     // than the contract-scoped capability nothing would ever check.
     expect(getRequiredCapability('/api/contracts/container-logs/prepare', 'POST')).not.toBe('contract:container-logs');
+  });
+
+  // ADR 0004 §6 says the token is "not usable elsewhere in the API", and the
+  // file's own docstring claimed "every other route rejects the token, including
+  // reads of other apps' data". Neither was true: the capability table names
+  // capabilities only for MUTATING routes, so every GET required none, and the
+  // middleware only enforced when one was named. A credential minted for one
+  // POST could read the whole host.
+  describe('a contract token is closed by default (#471)', () => {
+    const contractPrincipal: Principal = {
+      id: 'contract:backrest-1234',
+      type: 'service',
+      name: 'Contract provider backrest-1234',
+      roles: [],
+      capabilities: ['contract:backup'],
+    };
+    const operator: Principal = {
+      id: 'admin',
+      type: 'user',
+      name: 'Operator',
+      roles: ['admin'],
+      capabilities: ['*'],
+    };
+    // Mirrors ApiKeyAuthProvider: a wildcard holds everything, otherwise exact.
+    const has = (principal: Principal, capability: string) =>
+      principal.capabilities.includes('*') || principal.capabilities.includes(capability);
+
+    test('recognises the contract principal, and only it', () => {
+      expect(isContractScoped(contractPrincipal)).toBe(true);
+      expect(isContractScoped(operator)).toBe(false);
+      // A principal that merely ALSO holds a contract capability is an operator,
+      // not a contract token, and must keep its ordinary read access.
+      expect(isContractScoped({ ...operator, capabilities: ['contract:backup', 'write:deployments'] })).toBe(false);
+      // No capabilities at all is not a contract token either — it is a
+      // principal with nothing, which the ordinary rules already handle.
+      expect(isContractScoped({ ...operator, capabilities: [] })).toBe(false);
+    });
+
+    test('may call its own broker route', () => {
+      const route = getRequiredCapability('/api/contracts/backup/prepare', 'POST');
+      expect(authorizeRequest(contractPrincipal, route, has)).toBe('allow');
+    });
+
+    test.each([
+      // Every one of these was reachable before: an unauthenticated-for-reads
+      // route table plus a credential handed to a catalog container.
+      ['/api/deployments', 'GET'],
+      ['/api/deployments/other-app/logs', 'GET'],
+      ['/api/settings', 'GET'],
+      ['/api/jobs/abc', 'GET'],
+      ['/api/catalog', 'GET'],
+      ['/api/contracts', 'GET'],
+    ])('is refused %s %s, a read no capability guards', (path, method) => {
+      const route = getRequiredCapability(path, method);
+      expect(route).toBeNull(); // the precondition that made this reachable
+      expect(authorizeRequest(contractPrincipal, route, has)).toBe('outside-contract');
+    });
+
+    test('is refused a write it has no capability for', () => {
+      const route = getRequiredCapability('/api/deployments', 'POST');
+      expect(authorizeRequest(contractPrincipal, route, has)).toBe('outside-contract');
+    });
+
+    test('a token for a provisioned contract can reach nothing at all', async () => {
+      // container-logs@1 has no broker route, so its capability guards nothing —
+      // which used to mean "reads everything", and now means "reaches nothing".
+      const token = await service.mint('dozzle-1', ['container-logs@1']);
+      const principal = (await service.authenticateToken(token)).principal!;
+      expect(principal.capabilities).toEqual(['contract:container-logs']);
+      for (const [path, method] of [['/api/deployments', 'GET'], ['/api/contracts/backup/prepare', 'POST']] as const) {
+        expect(authorizeRequest(principal, getRequiredCapability(path, method), has)).toBe('outside-contract');
+      }
+    });
+
+    test('the operator is untouched: reads stay open, writes still checked', () => {
+      expect(authorizeRequest(operator, getRequiredCapability('/api/deployments', 'GET'), has)).toBe('allow');
+      expect(authorizeRequest(operator, getRequiredCapability('/api/deployments', 'POST'), has)).toBe('allow');
+
+      const readOnly: Principal = { ...operator, capabilities: ['read:deployments'] };
+      expect(authorizeRequest(readOnly, getRequiredCapability('/api/deployments', 'GET'), has)).toBe('allow');
+      expect(authorizeRequest(readOnly, getRequiredCapability('/api/deployments', 'POST'), has)).toBe('missing-capability');
+    });
   });
 });
