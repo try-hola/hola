@@ -52,6 +52,11 @@ describe('contract-scoped tokens', () => {
     // would be far too much to grant one.
     expect(getRequiredCapability('/api/contracts/backup/prepare', 'POST')).toBe('contract:backup');
     expect(getRequiredCapability('/api/contracts/backup/finalize', 'POST')).toBe('contract:backup');
+    // The status poll is a READ that still has to name the capability (#477):
+    // reads name none by default, and a contract token is denied every route
+    // that names none — so without this rule the provider cannot observe the
+    // prepare job it was just handed.
+    expect(getRequiredCapability('/api/contracts/backup/status/job-1', 'GET')).toBe('contract:backup');
     expect(getRequiredCapability('/api/deployments', 'POST')).toBe('write:deployments');
     // The Phase 4 read side is an ordinary authenticated GET, like every other
     // dashboard read: it discloses the installed app set and who covers what, which
@@ -167,8 +172,21 @@ describe('contract-scoped tokens', () => {
       expect(isContractScoped({ ...operator, capabilities: [] })).toBe(false);
     });
 
-    test('may call its own broker route', () => {
-      const route = getRequiredCapability('/api/contracts/backup/prepare', 'POST');
+    // The other half of the invariant, and the half whose absence shipped #477:
+    // the denial list below was asserted, this one was not, so a read the broker
+    // protocol depends on could be closed without a single test going red. The
+    // property is two-directional — "reaches every route the broker protocol
+    // requires, and nothing else" — so both directions are pinned the same way.
+    test.each([
+      ['/api/contracts/backup/prepare', 'POST'],
+      // A read, and therefore the one that regressed: `getRequiredCapability`
+      // names no capability for a GET unless a rule says so, and a contract
+      // principal is refused every route that names none.
+      ['/api/contracts/backup/status/job-1', 'GET'],
+      ['/api/contracts/backup/finalize', 'POST'],
+    ])('may call its own broker route %s %s', (path, method) => {
+      const route = getRequiredCapability(path, method);
+      expect(route).toBe('contract:backup'); // the precondition that makes it reachable
       expect(authorizeRequest(contractPrincipal, route, has)).toBe('allow');
     });
 
@@ -180,7 +198,15 @@ describe('contract-scoped tokens', () => {
       ['/api/settings', 'GET'],
       ['/api/jobs/abc', 'GET'],
       ['/api/catalog', 'GET'],
+      // The rollup: who fills which contract role across the whole install. It
+      // shares a prefix with the broker routes, so it is the thing the #477 fix
+      // must not sweep in — a provider learns about its own job, never about the
+      // rest of the host's contract topology.
       ['/api/contracts', 'GET'],
+      // And the broker prefix itself is not a blanket read grant: only the
+      // status route is named, not every GET below `/api/contracts/backup/`.
+      ['/api/contracts/backup', 'GET'],
+      ['/api/contracts/backup/prepare', 'GET'],
     ])('is refused %s %s, a read no capability guards', (path, method) => {
       const route = getRequiredCapability(path, method);
       expect(route).toBeNull(); // the precondition that made this reachable
