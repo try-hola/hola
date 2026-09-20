@@ -453,6 +453,152 @@ services:
     });
   });
 
+  /**
+   * #482: the app-data rule is a *containment* boundary, not a string prefix.
+   * The server materialises `${HOLA_APP_DATA}` by textual substitution, so a
+   * source that merely starts with the token can still resolve to a sibling
+   * directory, to the reserved `.hola` root holding every install's env record,
+   * or to an arbitrary host path (`/var/run`, i.e. the Docker socket the rule
+   * exists to keep out).
+   */
+  describe('app-data containment', () => {
+    const composeWithSource = (source: string) =>
+      `services:\n  web:\n    image: nginx:1.27\n    volumes:\n      - ${source}:/mnt\n`;
+
+    describe('sources that escape the root are rejected', () => {
+      const escaping = [
+        // the spec 006 reserved root: every install's env.json, secrets included
+        '${HOLA_APP_DATA}/../.hola',
+        // every other install's data root, read-write
+        '${HOLA_APP_DATA}/..',
+        // an arbitrary host path
+        '${HOLA_APP_DATA}/../../../etc',
+        // the Docker socket directory — the case the whole rule exists to block
+        '${HOLA_APP_DATA}/../../../var/run',
+        // a `..` that only escapes after the normalisation of what precedes it
+        '${HOLA_APP_DATA}/data/../../peek',
+        // `.` and empty segments must not disguise the climb
+        '${HOLA_APP_DATA}/./../peek',
+        '${HOLA_APP_DATA}//../peek',
+      ];
+
+      test.each(escaping)('%s', (source) => {
+        const issues = validateComposeDocument(composeWithSource(source));
+        expect(codes(issues)).toContain('VOLUME_ESCAPES_APP_DATA');
+        expect(errors(issues).length).toBeGreaterThan(0);
+      });
+
+      test('the error names the offending segment and says what the rule is', () => {
+        const issues = errors(validateComposeDocument(composeWithSource('${HOLA_APP_DATA}/../.hola')));
+        const escape = issues.find((i) => i.code === 'VOLUME_ESCAPES_APP_DATA');
+        expect(escape?.message).toContain("'..' segment at position 1");
+        expect(escape?.message).toContain('may not traverse out of the app data root');
+        expect(escape?.path).toBe('services.web.volumes[0]');
+      });
+
+      test('long syntax escapes are rejected too', () => {
+        const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    volumes:
+      - type: bind
+        source: \${HOLA_APP_DATA}/../../../var/run
+        target: /var/run
+`;
+        expect(codes(validateComposeDocument(yaml))).toContain('VOLUME_ESCAPES_APP_DATA');
+      });
+    });
+
+    test('a token prefix with no separator is a sibling directory, not the root', () => {
+      // `${HOLA_APP_DATA}-sneaky` → `<appsRoot>/<id>-sneaky`: outside the root
+      // entirely, so it is the plain "not under the root" error, not an escape.
+      const issues = validateComposeDocument(composeWithSource('${HOLA_APP_DATA}-sneaky'));
+      expect(codes(issues)).toContain('VOLUME_NOT_UNDER_APP_DATA');
+      expect(codes(issues)).not.toContain('VOLUME_ESCAPES_APP_DATA');
+    });
+
+    describe('sources contained in the root are accepted', () => {
+      const contained = [
+        '${HOLA_APP_DATA}',
+        '${HOLA_APP_DATA}/',
+        '${HOLA_APP_DATA}/data',
+        '${HOLA_APP_DATA}/a/b/c',
+        '${HOLA_APP_DATA}/./ok',
+        // Contained after normalisation: `a/../b` never leaves the root, so it
+        // passes. Pinned deliberately — the rule is containment, not a blanket
+        // ban on the `..` character.
+        '${HOLA_APP_DATA}/a/../b',
+        // a dot-directory inside the root is ordinary storage, not a climb
+        '${HOLA_APP_DATA}/.config',
+        '${HOLA_APP_DATA}/..config',
+      ];
+
+      test.each(contained)('%s', (source) => {
+        expect(validateComposeDocument(composeWithSource(source))).toEqual([]);
+      });
+
+      test('long syntax under the root is accepted', () => {
+        const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    volumes:
+      - type: bind
+        source: \${HOLA_APP_DATA}/data
+        target: /data
+`;
+        expect(validateComposeDocument(yaml)).toEqual([]);
+      });
+    });
+
+    test('named volumes and absolute host paths keep their existing codes', () => {
+      expect(codes(validateComposeDocument(composeWithSource('appdata')))).toContain('NAMED_VOLUME_NOT_ALLOWED');
+      for (const source of ['/etc', '/var/run/docker.sock', './config', '../config', '~/config']) {
+        expect(codes(validateComposeDocument(composeWithSource(source)))).toContain('VOLUME_NOT_UNDER_APP_DATA');
+      }
+    });
+
+    /**
+     * Regression pin for the published catalog (try-hola/apps): every bind
+     * source form in use there, scanned at the time this rule was tightened.
+     * Zero bundles used traversal or a no-separator prefix, so this rule shipped
+     * with no migration — this list is what stops a future tightening from
+     * silently rejecting a published bundle.
+     */
+    describe('live catalog bind-source forms still validate', () => {
+      const catalogSources = [
+        '${HOLA_APP_DATA}',
+        '${HOLA_APP_DATA}/data',
+        '${HOLA_APP_DATA}/config',
+        '${HOLA_APP_DATA}/backups',
+        '${HOLA_APP_DATA}/postgres',
+        '${HOLA_APP_DATA}/redis',
+        '${HOLA_APP_DATA}/initdb',
+        '${HOLA_APP_DATA}/dind-sock',
+        '${HOLA_APP_DATA}/dind-docker',
+        '${HOLA_APP_DATA}/custom-cont-init.d',
+        '${HOLA_APP_DATA}/books',
+        '${HOLA_APP_DATA}/uploads',
+        '${HOLA_APP_DATA}/temporal-postgres',
+        '${HOLA_APP_DATA}/runner',
+        '${HOLA_APP_DATA}/runner-docker',
+        '${HOLA_APP_DATA}/pgdata',
+        '${HOLA_APP_DATA}/model-cache',
+        '${HOLA_APP_DATA}/media',
+        '${HOLA_APP_DATA}/library',
+        '${HOLA_APP_DATA}/guacd',
+        '${HOLA_APP_DATA}/export',
+        '${HOLA_APP_DATA}/consume',
+        '${HOLA_APP_DATA}/cache',
+      ];
+
+      test.each(catalogSources)('%s', (source) => {
+        expect(validateComposeDocument(composeWithSource(source))).toEqual([]);
+      });
+    });
+  });
+
   test('unsupported top-level key warns', () => {
     const yaml = `
 bogus: true
