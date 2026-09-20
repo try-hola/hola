@@ -58,6 +58,28 @@ function isInside(root: string, candidate: string): boolean {
 }
 
 /**
+ * Lexical *strict* containment: is `candidate` a path underneath `root`, and
+ * not `root` itself? Both sides are `resolve`d first, which is the whole point
+ * — a `startsWith(`${root}/`)` check is a string comparison, not a containment
+ * proof, and `<root>/..` or `<root>/x/../../y` both satisfy it while resolving
+ * outside.
+ *
+ * Deliberately lexical only, with no `realpath`: use `resolveContainedDir`
+ * above when the path comes from an untrusted manifest and a planted symlink
+ * must not be able to smuggle a write elsewhere. This one guards a *delete* of
+ * a path the server itself built out of a deployment id, where the question is
+ * only "could a malformed id widen the blast radius?" — adding symlink
+ * resolution there would change what uninstall does to an operator who
+ * symlinked an app's data root onto another disk, which is a separate decision.
+ */
+export function isStrictlyInside(root: string, candidate: string): boolean {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(candidate);
+  if (resolvedCandidate === resolvedRoot) return false;
+  return isInside(resolvedRoot, resolvedCandidate);
+}
+
+/**
  * `realpathSync` for a path whose tail may not exist yet: resolve the deepest
  * existing ancestor and re-attach the segments below it.
  */

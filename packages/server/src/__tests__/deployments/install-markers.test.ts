@@ -784,4 +784,107 @@ describe('Install identity markers (spec 006)', () => {
     expect(existsSync(join(appsRoot, created.deploymentId))).toBe(false);
     expect(existsSync(envDirFor(created.deploymentId))).toBe(false);
   });
+
+  // ---- Containment of the two recursive deletes (review of #478) ----
+  //
+  // `removeAppData` interpolates a deployment id into two host paths and then
+  // `rm -rf`s both. Its original guard was `path.startsWith(`${base}/`)`, which
+  // is a string comparison and not a containment proof — `<base>/..` satisfies
+  // it and resolves to the bind root's PARENT, `<base>/.hola/../<other>`
+  // satisfies it and resolves onto a DIFFERENT install's data root, and the
+  // reserved name `.hola` satisfies it outright while naming the shared root
+  // that holds every install's environment record.
+  //
+  // No server-minted id (`<slug>-<8 hex>`) is any of those, and every id that
+  // reaches here is either freshly minted or a directory name rehydrated from
+  // the platform volume — so these are guard tests, not reachable-exploit
+  // tests. They exist because the delete is recursive and unrecoverable, which
+  // makes "unreachable today" the wrong thing to rely on.
+  //
+  // The bind root is re-pointed at a directory NESTED inside `appsRoot` for
+  // these cases, so a regression destroys a subtree the test already owns
+  // rather than `appsRoot`'s parent (which is `/tmp`).
+  describe('removeAppData containment guard', () => {
+    /** `<appsRoot>/bind` as the bind root, plus the three sentinels a regressed
+     *  guard would destroy: a directory reachable only via `..`, another
+     *  install's data root, and another install's environment record. */
+    async function withNestedBindRoot() {
+      const bindRoot = join(appsRoot, 'bind');
+      const outside = join(appsRoot, 'escape');
+      const otherId = 'otherapp-1234abcd';
+      const otherAppRoot = join(bindRoot, otherId);
+      const otherEnvDir = join(bindRoot, '.hola', otherId);
+
+      await mkdir(outside, { recursive: true });
+      await writeFile(join(outside, 'keep.txt'), 'sentinel');
+      await mkdir(otherAppRoot, { recursive: true });
+      await writeFile(join(otherAppRoot, 'keep.txt'), 'sentinel');
+      await mkdir(otherEnvDir, { recursive: true });
+      await writeFile(join(otherEnvDir, 'env.json'), '{"schema":1}');
+      process.env.HOLA_APPS_BIND_ROOT = bindRoot;
+
+      const { deployments } = makeSystem();
+      const removeAppData = (id: string) =>
+        (deployments as unknown as { removeAppData(id: string): Promise<void> }).removeAppData(id);
+
+      /** Every sentinel still there. Asserted after each refusal, so a guard
+       *  that merely logs a warning and deletes anyway still fails. */
+      function expectNothingDeleted() {
+        expect(existsSync(join(outside, 'keep.txt'))).toBe(true);
+        expect(existsSync(join(otherAppRoot, 'keep.txt'))).toBe(true);
+        expect(existsSync(join(otherEnvDir, 'env.json'))).toBe(true);
+        expect(existsSync(bindRoot)).toBe(true);
+      }
+
+      return { removeAppData, expectNothingDeleted, bindRoot, outside };
+    }
+
+    // `..` → appRoot resolves to the bind root's parent and the env dir
+    // (`<bind>/.hola/..`) resolves to the bind root itself. A `startsWith`
+    // guard passes both.
+    test('refuses `..`, which resolves to the bind root and its parent', async () => {
+      const { removeAppData, expectNothingDeleted } = await withNestedBindRoot();
+      await removeAppData('..');
+      expectNothingDeleted();
+    });
+
+    // `../escape` → a named directory outside the bind root entirely.
+    test('refuses an id that climbs out of the bind root', async () => {
+      const { removeAppData, expectNothingDeleted, outside } = await withNestedBindRoot();
+      await removeAppData('../escape');
+      expectNothingDeleted();
+      expect(existsSync(outside)).toBe(true);
+    });
+
+    // `.hola` is *contained*, so containment alone lets it through — and it
+    // names the shared root holding EVERY install's environment record, so one
+    // uninstall would take out every other install's secrets record.
+    test('refuses the reserved marker name, which is contained but shared', async () => {
+      const { removeAppData, expectNothingDeleted, bindRoot } = await withNestedBindRoot();
+      await removeAppData('.hola');
+      expectNothingDeleted();
+      expect(existsSync(join(bindRoot, '.hola'))).toBe(true);
+    });
+
+    // Positive control: the guard refuses the cases above *because they are
+    // malformed*, not because it refuses everything. A well-formed id sharing
+    // the same bind root still has both of its locations removed.
+    test('still removes both locations for a well-formed id', async () => {
+      const { removeAppData, bindRoot } = await withNestedBindRoot();
+      const id = 'goodapp-9876fedc';
+      const appRoot = join(bindRoot, id);
+      const envDir = join(bindRoot, '.hola', id);
+      await mkdir(appRoot, { recursive: true });
+      await writeFile(join(appRoot, 'data.txt'), 'payload');
+      await mkdir(envDir, { recursive: true });
+      await writeFile(join(envDir, 'env.json'), '{"schema":1}');
+
+      await removeAppData(id);
+
+      expect(existsSync(appRoot)).toBe(false);
+      expect(existsSync(envDir)).toBe(false);
+      // And only that install's: the neighbour is untouched.
+      expect(existsSync(join(bindRoot, 'otherapp-1234abcd', 'keep.txt'))).toBe(true);
+    });
+  });
 });

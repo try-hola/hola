@@ -53,7 +53,7 @@ import type {
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
-import { resolveContainedDir } from './path-containment';
+import { resolveContainedDir, isStrictlyInside } from './path-containment';
 import { getHolaVersion } from './system-monitoring';
 import { validateParams } from '@hola/shared/param-validate';
 
@@ -233,6 +233,29 @@ function makeDeploymentId(appId: string): string {
   const slug = appId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
   const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
   return `${slug}-${suffix}`;
+}
+
+/**
+ * Is this id safe to interpolate into a host path that is about to be deleted
+ * RECURSIVELY? `removeAppData` builds two such paths out of a deployment id,
+ * and a wrong answer there is unrecoverable, so the id is checked rather than
+ * trusted.
+ *
+ * Every id `makeDeploymentId` mints is a single path segment, and every id
+ * `loadFromStorage` rehydrates is a directory name — so nothing reaching here
+ * today fails this. That is exactly why it is cheap to assert: it makes
+ * "a deployment id is one safe segment" a checked precondition of the delete
+ * instead of a property a future reader has to re-derive.
+ *
+ * `.hola` is rejected explicitly: it is a segment, and it is contained, so a
+ * containment check alone would happily let `<appsBindRoot>/.hola` — the shared
+ * root holding EVERY install's environment record — be deleted as if it were
+ * one install's data root.
+ */
+function isSafeDeploymentIdSegment(id: string): boolean {
+  if (id.length === 0 || id === '.' || id === '..') return false;
+  if (id.includes('/') || id.includes('\\') || id.includes('\0')) return false;
+  return id !== INSTALL_MARKERS_DIR && id !== INSTALL_ENV_ROOT_DIR;
 }
 
 /**
@@ -4228,10 +4251,34 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * can't widen the blast radius. Each no-ops when its directory doesn't exist
    * (apps with no `${HOLA_APP_DATA}` mount create neither), keeping the delete
    * path quiet for those (#341).
+   *
+   * Two layers to that guard, because both deletes are recursive and
+   * unrecoverable:
+   *  1. The id must be a single safe path segment and not the reserved marker
+   *     name (`isSafeDeploymentIdSegment`). Containment alone would not catch
+   *     `.hola`, which is contained and would take out EVERY install's
+   *     environment record.
+   *  2. Each derived path must *resolve* strictly inside the apps bind root
+   *     (`isStrictlyInside`). A `startsWith(`${base}/`)` prefix test is a
+   *     string comparison, not a containment proof: `<base>/..` passes it and
+   *     resolves to the bind root's parent, and `<base>/.hola/../<other>`
+   *     passes it and resolves onto a DIFFERENT install's data root.
+   *
+   * Neither is reachable from a server-minted `<slug>-<8 hex>` id, which is the
+   * only kind that exists; they are asserted rather than argued because the
+   * cost of being wrong here is the operator's data.
    */
   protected override async removeAppData(deploymentId: string): Promise<void> {
     const base = this.appsBindRoot();
-    const insideBase = (path: string): boolean => path !== base && path.startsWith(`${base}/`);
+    const insideBase = (path: string): boolean => isStrictlyInside(base, path);
+
+    if (!isSafeDeploymentIdSegment(deploymentId)) {
+      this.logger.warn('Refusing to remove app data for a deployment id that is not a single safe path segment', {
+        deploymentId,
+        base,
+      });
+      return;
+    }
 
     const appRoot = this.appRootFor(deploymentId);
     if (!insideBase(appRoot)) {
