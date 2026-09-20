@@ -44,11 +44,15 @@ retroactively fix a capture taken without these records. Every day this does not
 ship is another day of captures that can never be automatically attributed or
 restored.
 
-So: write two small, platform-authored records into every app data root, on every
-deploy, unconditionally. One describes the install; one carries its resolved
-environment. They follow two precedents already in the deploy path for exactly
-this shape of problem — the app-registry feed and the OIDC credentials file, both
-of which are platform-written JSON placed inside an app's data root.
+So: write two small, platform-authored records per install, on every deploy,
+unconditionally. One describes the install and goes *inside* its data root,
+following two precedents already in the deploy path for exactly this shape of
+problem — the app-registry feed and the OIDC credentials file, both
+platform-written JSON placed inside an app's data root. The other carries the
+install's resolved environment, and therefore its secrets, and goes in a
+reserved sibling directory at the apps root instead: still inside the read-only
+grant a backup provider holds over the whole apps root, but outside the mount
+the app's own containers receive (see the placement clarification below).
 
 Nothing reads them yet, and that is the point: this ships alone, and it has
 standalone value even if neither restore feature is ever built — it makes every
@@ -65,7 +69,9 @@ app data folder self-describing for support and debugging.
   identifier, which a later restore can carry forward so every capture of one
   app-instance shares an identifier across any number of reinstalls.
 - An **install environment record** carrying the install's resolved app
-  environment key/value pairs, with restrictive permissions.
+  environment key/value pairs, with restrictive permissions, written under a
+  reserved directory at the apps root rather than inside the app's own data
+  root — inside the privileged capture surface, outside the app's own mount.
 - Both records refreshed on every materialization, so an upgrade updates the
   recorded version.
 - Unit test coverage over record content, the lineage default, the permission
@@ -140,25 +146,30 @@ minted fresh per install and the old ones are unrecoverable once the platform's
 own volume is gone.
 
 **Independent Test**: Install an app that generates configuration values, read
-the environment record from its data folder alone, and confirm every resolved
-key/value pair the install was running under is present and matches what the
-running containers hold.
+the environment record from a capture of the apps root (the record is a sibling
+of the app's data folder, not inside it), and confirm every resolved key/value
+pair the install was running under is present and matches what the running
+containers hold. Confirm as part of the same test that the record is **not**
+reachable from inside the app's own data folder.
 
 **Acceptance Scenarios**:
 
 1. **Given** an app whose install generated configuration values, **When** its
-   deploy completes, **Then** its data root contains an environment record holding
-   the install's resolved application environment key/value pairs.
+   deploy completes, **Then** an environment record holding the install's
+   resolved application environment key/value pairs exists under the apps root,
+   named by that install and **outside** the install's own data root.
 2. **Given** an environment record, **When** its permissions are inspected,
    **Then** it is readable only by the platform and by a process already
    privileged to read everything under the apps root — never by an ordinary
-   reader of the folder.
+   reader of the folder, and never by the app whose install it describes.
 3. **Given** an install whose environment changes (a reconfiguration), **When**
    the next materialization runs, **Then** the environment record reflects the new
    values.
-4. **Given** an environment record and the app's data, **When** both are restored
-   together onto a new host, **Then** the record alone supplies every generated
-   value needed — no separate copy of the platform's own data volume is required.
+4. **Given** an environment record and the app's data — which a capture of the
+   apps root holds together, though they are not in the same directory — **When**
+   both are restored onto a new host, **Then** the record alone supplies every
+   generated value needed; no separate copy of the platform's own data volume is
+   required.
 
 ---
 
@@ -227,10 +238,61 @@ identifier is unchanged throughout and equals the install's own identifier.
   contains the reserved directory, so uninstall deletes it like any other populated
   root. The end state is identical (no data root either way); only the code path
   differs.
-- **Uninstall.** Removing an install removes its entire data root, and both records
-  with it. Nothing is retained, and this feature adds no retention of its own.
+- **Uninstall.** Removing an install removes **both** locations it owns under the
+  apps root: its entire data root (taking the identity record with it) *and* its
+  environment-record directory, which is not inside that data root. Both are
+  removed unconditionally and independently — an install whose data root was
+  already deleted by hand must still lose its environment record, or one
+  directory of secrets is orphaned for every app ever uninstalled, with nothing
+  left that knows the install identifier needed to find it. Nothing is retained,
+  and this feature adds no retention of its own.
+- **An app that reads its own data directory.** The data root is bind-mounted
+  into the app's own containers, so anything inside it is readable by the app and
+  — for an app that serves, syncs or browses that directory — by the app's end
+  users, who are not the host operator. The identity record carries no secret and
+  is unaffected. The environment record does, which is why it is not there.
 
 ## Clarifications
+
+### Session 2026-09-20 (post-review amendment — environment record placement)
+
+Raised by `/code-review xhigh` after the first implementation landed, filed as
+issue #478, and decided by the operator rather than resolved by default.
+
+- Q: The environment record was written inside the install's own data root
+  (`<apps-root>/<install>/.hola/env.json`, mode `0600`). That directory is
+  bind-mounted into the app's own containers — `${HOLA_APP_DATA}`, overwhelmingly
+  as `/data`. Does an app reading its own data directory therefore read the
+  install's secrets? → A: **Yes, and that is not acceptable. The environment
+  record moves out of the app-visible mount** to
+  `<apps-root>/.hola/<install>/env.json`, mode `0600` in a `0700` directory. The
+  identity record carries no secret and stays exactly where it was.
+
+  **Why the original argument missed it.** FR-014's justification reasoned only
+  about a *consented `apps-data` provider* reading the apps root. It never
+  addressed the app reading the directory it was handed. For an app that serves,
+  syncs or browses its own data directory — a file manager, a sync tool, a media
+  server with a file browser — the record was exposed to **that app's end users**,
+  who are not the host operator. The `0600` mode assumed non-root app containers,
+  and many images run as root, so it was no mitigation.
+
+  **Why this location and not the platform's own data volume.** The `apps-data`
+  grant identity-mounts the *entire* apps root read-only, so a sibling directory
+  at the apps root is still inside what a consented backup provider captures —
+  which is the whole point of writing the record at all. Moving it to the
+  platform volume would put it back outside every grant and re-create the problem
+  the feature exists to solve.
+
+  **Two consequences, both recorded.** (1) FR-014's argument is now actually
+  true rather than merely asserted: a consented privileged reader is the only
+  reader the placement exposes it to. (2) `capturePreUpgradeSnapshot` tars the
+  whole data root into a `data.tar.gz` written under the process umask
+  (world-readable `0644`) and retained to the retention bound; with the record
+  outside that root, those archives no longer carry secrets (issue #478 item 2).
+  And one cost: **SC-003 is narrowed** — a copy of one app's data folder alone no
+  longer recovers its generated configuration; a capture of the apps root does.
+  Captured in FR-011, FR-012, FR-014, SC-003, the uninstall edge case (both
+  locations must be removed) and a new app-reads-its-own-data edge case.
 
 ### Session 2026-09-20
 
@@ -321,23 +383,33 @@ ruling was checked against the code before being accepted.
 
 **Environment record**
 
-- **FR-011**: The platform MUST write an install environment record into the same
-  reserved directory, carrying the install's resolved application environment as
-  key/value pairs.
-- **FR-012**: The environment record MUST be written with restrictive permissions
-  such that it is readable only by the platform and by a process already
-  privileged to read everything under the apps root.
+- **FR-011**: The platform MUST write an install environment record carrying the
+  install's resolved application environment as key/value pairs. It MUST be
+  written **outside every app's own data root** — under a reserved directory at
+  the apps root, keyed by install — and MUST NOT be placed anywhere the app's
+  own containers can reach. It MUST remain inside the apps root, so that the
+  same privileged read-only grant that captures app data captures it too.
+- **FR-012**: The environment record MUST be written with restrictive
+  permissions such that it is readable only by the platform and by a process
+  already privileged to read everything under the apps root. Its containing
+  directory MUST be equally restricted, so that an unprivileged local reader
+  cannot even enumerate which installs have one.
 - **FR-013**: The environment record MUST be rewritten on every materialization,
   so it reflects the environment the install is currently running under.
 - **FR-014**: The code that writes the environment record MUST carry an inline
-  justification for placing resolved configuration values at rest inside the data
-  root — stating that the app's own containers already hold every one of these
-  values, that the backup provider's grant consent text already declares it reads
-  secrets apps keep on disk, that the incremental exposure is therefore
+  justification for placing resolved configuration values at rest on disk —
+  stating that the app's own containers already hold every one of these values;
+  that the record is written outside every app's own data root **specifically so
+  that the app itself, and the app's end users, cannot read it**; that the only
+  reader the placement exposes it to is a consented privileged reader of the
+  whole apps root, whose grant consent text already declares it reads secrets
+  apps keep on disk; that the incremental exposure is therefore
   at-rest-on-disk versus in-container-environment on a host whose operator has
-  already consented to a tool that reads everything, and that the gain is a
-  per-app capture that is self-sufficient without the operator having separately
-  preserved the platform's own data volume.
+  already consented to a tool that reads everything; that the placement also
+  keeps the record out of the pre-upgrade snapshot archive, which is written
+  world-readable and retained; and that the gain is a capture of the apps root
+  that is self-sufficient without the operator having separately preserved the
+  platform's own data volume.
 
 **Boundaries and failure**
 
@@ -365,9 +437,13 @@ ruling was checked against the code before being accepted.
   reached it, which contracts it accepts, and when the description was written.
   Carries no secret. One per install that has a data root.
 - **Install environment record**: A platform-authored capture of the resolved
-  application environment one install is running under, placed beside the identity
-  record and restricted so only the platform and an already-fully-privileged
-  reader can read it. One per install that has a data root.
+  application environment one install is running under. Placed under a reserved
+  directory at the apps root, keyed by install — a *sibling* of that install's
+  data root and deliberately **not inside it**, because the data root is
+  bind-mounted into the app's own containers. Restricted, directory and file
+  both, so only the platform and an already-fully-privileged reader of the whole
+  apps root can read it. It names the install it belongs to, since its location
+  no longer does. One per install that has a data root.
 - **Lineage identifier**: An identifier for the *app instance* as distinct from
   the *install*. Equal to the install identifier at first install; intended to be
   carried forward by a future restore so that captures taken across reinstalls of
@@ -383,10 +459,18 @@ ruling was checked against the code before being accepted.
   it came from, an operator can name the app, the specific install, the version,
   the release channel, the catalog source, the display name and the address it was
   served at — for 100% of such copies.
-- **SC-003**: Given only a copy of one app's data folder, 100% of the generated
-  configuration values that install was running under are recoverable, so a
-  restore can reproduce the environment its data was written under without a
-  separately preserved copy of the platform's own data volume.
+- **SC-003**: Given a capture of the **apps root** — one app's data folder *plus*
+  that install's environment record, which is a sibling of the data folder and
+  not inside it — 100% of the generated configuration values that install was
+  running under are recoverable, so a restore can reproduce the environment its
+  data was written under without a separately preserved copy of the platform's
+  own data volume. A copy of the data folder **alone** is explicitly **not**
+  sufficient: it recovers the install's identity (SC-002) and 0% of its generated
+  configuration. This is a deliberate narrowing (see the 2026-09-20 placement
+  clarification) — the capture surface that satisfies it is still the single
+  read-only grant a backup provider already holds over the whole apps root, and
+  still never the platform's own data volume; what changed is that a restore
+  must capture at that level rather than per app folder.
 - **SC-004**: An install's lineage identifier changes 0 times across upgrade,
   restart, promote, rollback and reconfiguration.
 - **SC-005**: 100% of installs that declare no persistent storage receive zero
@@ -408,17 +492,26 @@ ruling was checked against the code before being accepted.
 Decisions made where the prompt left a reasonable default; recorded here rather
 than blocking.
 
-- **Reserved directory and file names.** The records live in a reserved
-  `.hola/` directory inside the data root, as `instance.json` (identity) and
-  `env.json` (environment). A dot-directory keeps them out of the way of an app's
-  own content and is platform-distinctive enough to make collision negligible.
+- **Reserved directory and file names.** `.hola/` is the reserved name, used at
+  two levels under the apps root: `<apps-root>/<install>/.hola/instance.json`
+  for the identity record (inside the data root, where the app can read it and
+  where a copy of the folder carries it), and
+  `<apps-root>/.hola/<install>/env.json` for the environment record (a sibling
+  of every data root, where no app's mount reaches it). A dot-directory keeps
+  both out of the way of an app's own content, is platform-distinctive enough to
+  make collision negligible, and can never collide with an install identifier,
+  which is `<app-slug>-<8 hex>`.
 - **Permissions.** Identity `0644` (no secret; readable by the app and by any
-  reader of the folder). Environment `0600` (root/platform only — a fully
-  privileged reader such as the consented backup provider still reads it).
+  reader of the folder). Environment `0600` inside a `0700` directory
+  (root/platform only — a fully privileged reader such as the consented backup
+  provider still reads it; the directory mode stops an unprivileged local reader
+  even enumerating which installs have a record).
 - **Write site.** Both records are written during compose materialization, inside
   the existing branch that already detects "this app declares persistent storage"
   and creates the data root. Reusing that branch is what makes FR-015 free rather
-  than a second condition that could drift.
+  than a second condition that could drift — the branch answers "does this
+  install have a data root?", which gates both records even though only one of
+  them is written inside it.
 - **Failure policy.** Warn and continue, following the app-registry feed
   precedent, rather than throw, as the OIDC credentials file does. These records
   are bookkeeping; the OIDC file is a functional dependency of the app booting.

@@ -261,24 +261,95 @@ and cannot decrypt a single stored credential.
 own non-root container, a support engineer poking at the folder — not about the
 provider. A consented provider running as root reads it regardless, by design.
 
+### Amendment, 2026-09-20 (post-review, issue #478)
+
+**The argument above was sound about the reader it considered, and silent about
+the one that mattered.** It reasoned entirely about a consented `apps-data`
+provider. It never asked what the *app itself* can read. `${HOLA_APP_DATA}`
+resolves to `<apps-bind-root>/<deploymentId>` and is bind-mounted into the app's
+own containers, overwhelmingly as `/data`. A record written inside that
+directory is therefore readable by the app — and, for an app that serves, syncs
+or browses its own data directory (a file manager, a sync tool, a media server
+with a file browser), by **that app's end users**, who are not the host
+operator and have consented to nothing. The `0600` mitigation assumed non-root
+app containers; many images run as root, and an app's own backup or sync feature
+typically reads as root regardless.
+
+**The fix is placement, not mode.** `env.json` moves to
+`<apps-bind-root>/.hola/<deploymentId>/env.json` — a sibling of every data root,
+inside no app's mount. `instance.json` carries no secret and stays exactly where
+it was.
+
+**Why up, not out.** Moving the record to the platform's own data volume would
+put it back outside every grant, which is precisely the problem the feature
+exists to solve (see "the gain is decisive" above). The apps bind root is
+identity-mounted **in its entirety**, so a sibling directory at that level is
+still inside what a consented provider captures. One read-only grant, no
+platform volume — unchanged.
+
+**What the amendment costs, stated honestly.** SC-003 is narrowed: a copy of one
+app's data folder alone no longer recovers its generated configuration, because
+the record is no longer in that folder. A capture of the **apps root** does. The
+spec now says this explicitly rather than quietly weakening the claim.
+
+**What it gains beyond the app-reads-own-data fix.** `capturePreUpgradeSnapshot`
+tars the whole data root into `data.tar.gz` under the process umask
+(world-readable `0644`), retained to the retention bound — so the previous
+placement put generated encryption keys and DB passwords into a world-readable
+archive, one per snapshotted upgrade (#478 item 2). With the record outside that
+root the problem disappears rather than needing a `chmod` on the archive.
+
+**The numbered argument as it now stands**, and as FR-014 requires the code
+comment to carry: (a) the app's containers already hold these values; (b) the
+only reader the placement exposes the record to is a consented `apps-data`
+grant holder, whose consent text already declares it reads secrets apps keep on
+disk; (c) writing it one level *up* is what makes (b) true rather than merely
+argued; (d) it also keeps secrets out of the world-readable pre-upgrade archive;
+(e) the gain is a self-sufficient capture of the apps root, with no separately
+preserved platform volume; (f) the `0600` file and `0700` directory are about
+ordinary unprivileged *local* readers, not about the provider.
+
 ---
 
-## R10 — Reserved namespace
+## R10 — Reserved namespace (TWO reserved locations, amended 2026-09-20)
 
-**Decision.** `.hola/` inside the app data root, holding `instance.json` and
-`env.json`. Path fragments are defined as constants once, next to the write
-helper — not as scattered string literals.
+**Decision.** `.hola` is reserved at **two** levels under the apps bind root:
+
+| Reserved path | Holds | Mode |
+| --- | --- | --- |
+| `<apps-bind-root>/<deploymentId>/.hola/` | `instance.json` | dir default, file `0644` |
+| `<apps-bind-root>/.hola/<deploymentId>/` | `env.json` | dir `0700`, file `0600` |
+
+The second was added by the #478 amendment (see R9). Path fragments are defined
+as constants once, next to the write helper — not as scattered string literals —
+and the second reuses the first's name constant so the reserved word exists in
+exactly one place.
 
 **Rationale.** No collision exists: no hits for `.hola`, `hola.json`,
 `instance.json` or `lineage` under any app-data-root path in
 `packages/server/src`, `packages/shared/src` or `packages/compose`.
 
+**`.hola` can never be mistaken for an install.** A deployment id is
+`<app-slug>-<8 hex>` (`newDeploymentId`), and a slug cannot begin with a dot, so
+the reserved entry at the apps root can never collide with a real install
+directory.
+
+**Nothing enumerates the apps bind root** — verified across
+`packages/server/src`, `packages/cli/src` and `packages/shared/src`. Every
+`readdir`/`listDir` in the server is over the platform's own data volume
+(`deployments/`, `drafts/`, per-deployment `snapshots/`, the log dir) or the
+bundle cache; every apps-root path is *constructed* from a known deployment id
+(`appRootFor`, `envRecordDirFor`) rather than discovered. The CLI touches the
+apps root only as a whole (`teardown` removes it, `update` snapshots it). So no
+"every entry here is a deployment" scan exists to exclude the reserved name
+from today — but **any future scan MUST skip it**, and the constant's doc
+comment says so.
+
 **One confusable to flag for future readers.** `getHolaDataDir()`
 (`packages/server/src/config/paths.ts:13`) resolves to `~/.hola` — the *server's
-own* home directory. That is an entirely different location from
-`<apps-bind-root>/<deployment-id>/.hola/`. The name is reused across two scopes;
-the constants exist partly so a reader greps a distinctive symbol rather than the
-ambiguous string.
+own* home directory. That is an entirely different location from either reserved
+path above. The name is now reused across three scopes; the constants exist
+partly so a reader greps a distinctive symbol rather than the ambiguous string.
 
 ---
 

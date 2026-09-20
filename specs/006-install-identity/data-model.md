@@ -2,19 +2,29 @@
 
 **Feature**: `specs/006-install-identity` · **Date**: 2026-09-20
 
-Two JSON documents written into each app's data root. Neither is read by anything
-in this feature (spec FR-018); this file defines them so that Sequence 5 and
-Sequence 6, and any human holding a capture, have an authoritative shape.
+Two JSON documents written per install. Neither is read by anything in this
+feature (spec FR-018); this file defines them so that Sequence 5 and Sequence 6,
+and any human holding a capture, have an authoritative shape.
 
-**Location**: `<apps-bind-root>/<deploymentId>/.hola/`, where `<apps-bind-root>` is
-`$HOLA_APPS_BIND_ROOT` or `/srv/hola/apps` (`DEFAULT_APPS_BIND_ROOT` / `appsBindRoot()` /
-`appRootFor()` in `deployment.ts`).
+**Locations** — two, and the split is load-bearing. `<apps-bind-root>` is
+`$HOLA_APPS_BIND_ROOT` or `/srv/hola/apps` (`DEFAULT_APPS_BIND_ROOT` /
+`appsBindRoot()` / `appRootFor()` / `envRecordDirFor()` in `deployment.ts`):
+
+| Record | Path | Why there |
+| --- | --- | --- |
+| Identity | `<apps-bind-root>/<deploymentId>/.hola/instance.json` | Carries no secret. Inside the data root, so a copy of the folder alone is self-describing. |
+| Environment | `<apps-bind-root>/.hola/<deploymentId>/env.json` | Carries secrets. A **sibling** of every data root, never inside one: `${HOLA_APP_DATA}` resolves to the data root and is bind-mounted into the app's own containers, so a record inside it is readable by the app — and by the end users of any app that serves or browses its own data directory (#478). Still under the apps bind root, which the `apps-data` grant identity-mounts read-only in its entirety, so a consented provider still captures it. |
+
+`.hola` is reserved at both levels and can never be a deployment id, which is
+`<app-slug>-<8 hex>`.
 
 ---
 
 ## Entity: Install Identity Record
 
-**Path**: `.hola/instance.json` · **Mode**: `0644` · **Carries no secret.**
+**Path**: `<apps-bind-root>/<deploymentId>/.hola/instance.json` · **Mode**:
+`0644` · **Carries no secret** — which is why it is the record that stays inside
+the app-visible data root.
 
 Written on every materialization of an install that has a data root.
 
@@ -77,14 +87,18 @@ belongs to (spec FR-004, research R6):
 
 ## Entity: Install Environment Record
 
-**Path**: `.hola/env.json` · **Mode**: `0600` · **Carries secrets by design.**
+**Path**: `<apps-bind-root>/.hola/<deploymentId>/env.json` · **Mode**: `0600`,
+in a `0700` directory (both levels of the reserved tree are `0700`) ·
+**Carries secrets by design.** Deliberately **outside** the app's own data root
+— see the Locations table above and the 2026-09-20 placement clarification in
+`spec.md`.
 
 | Field | Type | Required | Source expression | Notes |
 | --- | --- | --- | --- | --- |
 | `schema` | `number` | yes | literal `1` | Independent of the identity record's schema. |
 | `writtenAt` | `string` (ISO 8601) | yes | `new Date().toISOString()` | |
-| `deploymentId` | `string` | yes | `deployment.id` | Lets the record be attributed if separated from its folder. |
-| `env` | `Record<string, string>` | yes | `readActiveAppEnv(deployment)` (`deployment.ts:2044-2049`) | The install's own resolved app environment. `{}` when the manifest declares none. |
+| `deploymentId` | `string` | yes | `deployment.id` | The link back to the data root. Not redundant with the path: the record's parent directory is named for the install, but the record no longer sits *inside* that install's data folder, so this is what pairs the two in a capture. |
+| `env` | `Record<string, string>` | yes | `appEnvOf(manifest)` — same flattening as `readActiveAppEnv`, from the manifest already read | The install's own resolved app environment. `{}` when the manifest declares none. |
 
 **What `env` contains.** Manifest `defaultEnv` values merged with operator input,
 flattened to `key → value` with `value ?? ''`. Exactly what
@@ -148,16 +162,25 @@ captures taken before Sequence 5 ships already carry the field.
 | Promote | Rewritten for the promoted release. |
 | Rollback (containers only) | Rewritten for the target release. |
 | Rollback (data-aware) | Data root is wiped and replaced from the pre-upgrade archive — which contains *older* records — then materialize rewrites both for the release being brought up (`restoreAppDataSnapshot` before `materializeCompose` in `runLifecycleJob`). |
-| Uninstall | Removed with the whole data root (`removeAppData`). |
-| App with no `${HOLA_APP_DATA}` | Never created; no directory either (FR-015). |
+| Uninstall | **Both locations removed**, independently, by `removeAppData`: the whole data root (identity record with it) *and* `<apps-bind-root>/.hola/<deploymentId>/` (the environment record). The second is not conditional on the first — an install whose data root was deleted by hand must still lose its environment record, or a directory of secrets is orphaned with nothing left that knows the id needed to find it. |
+| App with no `${HOLA_APP_DATA}` | Neither record created; neither directory either (FR-015). |
+| Pre-upgrade snapshot | The archive tars the data root only, so it carries the identity record and **never** the environment record — which is why `data.tar.gz`, written world-readable under the process umask, holds no secrets (#478 item 2). |
 | Write failure | Neither record updated; one warning naming the install; **deploy proceeds** (FR-016). |
 
 ## Invariants
 
-1. `deploymentId` equals the name of the directory two levels up from the record.
-2. `lineageId` is non-empty in every record this feature writes.
-3. `instance.json` contains no secret; `env.json` may contain nothing but.
-4. Both records are complete when observed — never half-written (FR-019, R7).
-5. Both records exist, or neither does. A partial pair means a write failed
-   between them; a reader must tolerate it.
-6. Neither record is read by any Hola code path in this feature.
+1. `instance.json`'s `deploymentId` equals the name of the directory two levels
+   up from it. `env.json`'s equals the name of the directory **one** level up —
+   its locations differ, so the derivation does too.
+2. `env.json` is never at any path under `<apps-bind-root>/<deploymentId>/`. This
+   is the invariant that keeps secrets out of every app's own mount, and out of
+   the pre-upgrade snapshot archive (#478); it has a dedicated test that sweeps
+   the whole data root rather than checking one path.
+3. `lineageId` is non-empty in every record this feature writes.
+4. `instance.json` contains no secret; `env.json` may contain nothing but.
+5. Both records are complete when observed — never half-written (FR-019, R7).
+6. Both records exist, or neither does. A partial pair means a write failed
+   between them; a reader must tolerate it. The identity record is written
+   first, so a half-pair is the identity record alone.
+7. Neither location outlives an uninstall.
+8. Neither record is read by any Hola code path in this feature.

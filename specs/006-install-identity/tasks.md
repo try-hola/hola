@@ -200,3 +200,77 @@ without them. Any design element that implies a reader is a follow-up issue
 (T032–T035), not part of this change.
 
 **There are no GitHub issues to close for this feature.**
+
+---
+
+## Amendment — 2026-09-20, post-review (issue #478)
+
+Appended, not renumbered: T001–T035 shipped as written and the numbering is
+referenced from `spec.md`, `research.md` and the test file's comments.
+
+**What changed.** The install **environment record** moved out of the app's own
+data root:
+
+| | Before | After |
+| --- | --- | --- |
+| Identity record | `<apps-root>/<id>/.hola/instance.json`, `0644` | **unchanged** |
+| Environment record | `<apps-root>/<id>/.hola/env.json`, `0600` | `<apps-root>/.hola/<id>/env.json`, `0600` in a `0700` dir |
+
+**Why.** `${HOLA_APP_DATA}` resolves to the app's data root and is bind-mounted
+into the app's own containers, overwhelmingly as `/data`. A secret-bearing
+record inside it is readable by the app — and, for an app that serves, syncs or
+browses its own data directory, by **that app's end users**, who are not the
+host operator. FR-014's original justification reasoned only about a consented
+`apps-data` provider and never addressed the app reading its own mount; the
+`0600` mode assumed non-root app containers, and many images run as root.
+
+The new location is still inside the apps bind root, which the `apps-data` grant
+identity-mounts read-only **in its entirety**, so a consented backup provider
+still captures the record — which is why the fix is "one level up", not "onto
+the platform's own data volume", where no grant reaches it at all.
+
+**Second defect closed by the same move.** `capturePreUpgradeSnapshot` tars the
+whole data root into `data.tar.gz` under the process umask (world-readable
+`0644`), retained to the retention bound. With the record outside that root, no
+snapshot archive carries secrets — no `chmod` on the archive needed (#478
+item 2).
+
+**The trap this move creates, and how it is handled.** `removeAppData` deleted
+only `<apps-root>/<id>`. Left alone it would have orphaned one directory of
+secrets per app ever uninstalled, unreachable afterwards because nothing else
+knows the install id. It now removes **both** locations, independently (an
+install whose data root was deleted by hand still loses its env record), with
+the existing "strictly inside the apps bind root" containment guard applied to
+each.
+
+**Work done under this amendment** (one commit, on top of T001–T035):
+
+- `deployment.ts`: `INSTALL_ENV_ROOT_DIR` / `INSTALL_ENV_DIR_MODE` constants and
+  an `envRecordDirFor()` path helper beside `appRootFor()`; the env half of
+  `writeInstanceMarkers` rewritten to the sibling path; the FR-014 inline
+  justification **rewritten** (not deleted) around the new placement;
+  `removeAppData` extended to both locations.
+- `storage.ts`: `ensureDir(path, mode?)` — the sibling directories are `0700`,
+  and `mkdir`'s own mode applies only to directories it creates and is
+  umask-masked, so the mode is re-asserted exactly as `writeFile` already does.
+- `install-markers.test.ts`: five new tests — the recursive "no `env.json`
+  anywhere under the data root" sweep, the `0700` directory modes, the
+  snapshot-tarball check, uninstall-with-data-root-already-gone, and uninstall
+  of a dataless app; plus the existing suite updated to the new layout.
+- Spec artefacts: `spec.md` (FR-011, FR-012, FR-014, key entities, edge cases,
+  **SC-003 narrowed**, new Clarifications entry), `data-model.md` (locations,
+  lifecycle, invariants), `contracts/files.md` (paths and "who can read them"),
+  `research.md` (R9 amendment, R10 now two reserved locations), `quickstart.md`
+  (new scenarios 1a/2a/17a/18 and rewritten VM steps).
+
+**Checked and deliberately left alone.** Nothing in the repo enumerates the apps
+bind root and assumes each entry is a deployment id — every `readdir`/`listDir`
+in `packages/server/src` is over the platform's own data volume or the bundle
+cache, and apps-root paths are always *constructed* from a known id. There is
+therefore no scan to exclude `.hola` from today; the constant's doc comment
+records that any future one must. See research R10.
+
+**Still open from #478**: item 3 (a record describes the release being
+*attempted*, since materialize runs before pull/up; and the record carries
+`accepts` but not `provides` or consented grants). Both are scope questions for
+Sequence 5, not defects in this feature, and remain on the issue.

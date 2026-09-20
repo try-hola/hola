@@ -30,7 +30,10 @@ export interface FileMetadata {
 
 export interface StorageService extends HealthCheckable {
   // Directory operations
-  ensureDir(path: string): Promise<void>;
+  // `mode` (e.g. 0o700) restricts permissions for directories holding secrets.
+  // Like `writeFile`'s, it is re-asserted on an existing directory — `mkdir`'s
+  // own `mode` applies only to directories it actually creates.
+  ensureDir(path: string, mode?: number): Promise<void>;
   listDir(path: string): Promise<string[]>;
   deleteDir(path: string, recursive?: boolean): Promise<void>;
   
@@ -132,12 +135,19 @@ export class RealStorageService implements StorageService {
   }
 
   // Directory operations
-  async ensureDir(path: string): Promise<void> {
+  async ensureDir(path: string, mode?: number): Promise<void> {
     path = this.resolveStoragePath(path);
 
     try {
-      await fs.mkdir(path, { recursive: true });
-      this.logger.debug('Directory ensured', { path });
+      await fs.mkdir(path, mode !== undefined ? { recursive: true, mode } : { recursive: true });
+      // `mkdir`'s `mode` is applied only to directories it creates, and is
+      // masked by the process umask even then. Re-assert explicitly so an
+      // already-existing (or umask-widened) directory still ends up restricted
+      // — the same reason `writeFile` chmods after its atomic rename.
+      if (mode !== undefined) {
+        await fs.chmod(path, mode);
+      }
+      this.logger.debug('Directory ensured', { path, mode });
     } catch (error) {
       this.logger.error('Failed to ensure directory', error as Error, { path });
       throw new Error(`Failed to create directory ${path}: ${error}`, { cause: error });
@@ -342,9 +352,12 @@ export class MockStorageService implements StorageService {
     };
   }
 
-  async ensureDir(path: string): Promise<void> {
+  async ensureDir(path: string, mode?: number): Promise<void> {
     this.dirs.add(path);
-    this.logger.debug('Mock directory ensured', { path });
+    // The mode is logged, not retained — the Mock has no filesystem to hold it.
+    // Any test asserting a directory or file mode must use `RealStorageService`
+    // over a real temp dir (see #475).
+    this.logger.debug('Mock directory ensured', { path, mode });
   }
 
   async listDir(path: string): Promise<string[]> {

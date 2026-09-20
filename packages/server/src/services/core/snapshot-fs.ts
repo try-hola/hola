@@ -15,10 +15,11 @@ import { readdir, rm, mkdir, stat } from 'node:fs/promises';
  * (a fresh app has nothing to snapshot).
  *
  * `ignore` exists because the platform writes its own bookkeeping into the app
- * data root (`.hola/`, spec 006), which would otherwise make EVERY materialized
- * install look like it has data. Callers asking "has this app written anything
- * worth capturing?" must exclude it; callers asking "is there anything here at
- * all?" (uninstall) must not, or they would leave the directory behind.
+ * data root (`.hola/instance.json`, spec 006), which would otherwise make EVERY
+ * materialized install look like it has data. Callers asking "has this app
+ * written anything worth capturing?" must exclude it; callers asking "is there
+ * anything here at all?" (uninstall) must not, or they would leave the
+ * directory behind.
  */
 export async function dirHasContents(dir: string, ignore: readonly string[] = []): Promise<boolean> {
   try {

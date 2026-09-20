@@ -1,9 +1,18 @@
 /**
  * Install identity markers (spec 006): two platform-authored JSON records
- * written into every app data root on every materialization —
- * `.hola/instance.json` (install identity, `0644`) and `.hola/env.json`
- * (resolved app environment, `0600`). Nothing in the platform reads them in
- * this feature (FR-018) — see `writeInstanceMarkers` in `deployment.ts`.
+ * written on every materialization, in two DIFFERENT places —
+ *
+ *   <appsRoot>/<id>/.hola/instance.json   install identity, `0644`, no secret
+ *   <appsRoot>/.hola/<id>/env.json        resolved app env, `0600` in a `0700` dir
+ *
+ * The split is the feature's sharpest edge (#478 item 1): `${HOLA_APP_DATA}`
+ * resolves to `<appsRoot>/<id>` and is bind-mounted into the app's own
+ * containers, so a secret-bearing record inside it is readable by the app —
+ * and by the end users of any app that serves or browses its own data
+ * directory. `env.json` therefore lives one level up, a sibling of every data
+ * root, still inside the apps bind root the `apps-data` grant identity-mounts.
+ * Nothing in the platform reads either record in this feature (FR-018) — see
+ * `writeInstanceMarkers` in `deployment.ts`.
  *
  * Harness copied from `backup-hooks.test.ts:65-95` (research R11):
  * `RealStorageService` over a `mkdtemp` dir, `HOLA_APPS_BIND_ROOT` pointed at
@@ -67,6 +76,26 @@ function makeValidation(): ValidationArg {
     validateDraft: async () => ({ ok: true, errors: [], warnings: [] }),
     preflightCheck: async () => ({ ok: true, checks: [] }),
   } as unknown as ValidationArg;
+}
+
+/** Every path under `dir`, relative to it (files and directories alike), so a
+ *  "this file is nowhere under here" assertion can't be defeated by the file
+ *  simply moving to a different subdirectory of the same tree. */
+async function walk(dir: string): Promise<string[]> {
+  return (await readdir(dir, { recursive: true })) as string[];
+}
+
+/** Entry names inside a gzip tarball, via `tar -tzf` — the same `tar` that
+ *  wrote it (`snapshot-fs.ts`), so this reads exactly what a restore would. */
+async function listTar(tarPath: string): Promise<string[]> {
+  const proc = Bun.spawn(['tar', '-tzf', tarPath], { stdout: 'pipe', stderr: 'pipe' });
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`tar -tzf ${tarPath} exited ${code}: ${err.trim()}`);
+  return out.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
 async function waitForJob(jobs: RealJobService, id: string, timeoutMs = 10_000) {
@@ -134,8 +163,16 @@ describe('Install identity markers (spec 006)', () => {
     return created;
   }
 
+  /** `<appsRoot>/<id>/.hola/` — inside the app's own bind mount. Identity
+   *  record only. */
   function holaDirFor(deploymentId: string): string {
     return join(appsRoot, deploymentId, '.hola');
+  }
+
+  /** `<appsRoot>/.hola/<id>/` — a SIBLING of the data root, outside every
+   *  app's `${HOLA_APP_DATA}` mount. Environment record only (#478). */
+  function envDirFor(deploymentId: string): string {
+    return join(appsRoot, '.hola', deploymentId);
   }
 
   // Test-local mirrors of data-model.md's two record shapes — NOT imported
@@ -172,7 +209,7 @@ describe('Install identity markers (spec 006)', () => {
   }
 
   async function readEnvRecord(deploymentId: string): Promise<EnvRecordShape> {
-    const raw = await Bun.file(join(holaDirFor(deploymentId), 'env.json')).text();
+    const raw = await Bun.file(join(envDirFor(deploymentId), 'env.json')).text();
     return JSON.parse(raw) as EnvRecordShape;
   }
 
@@ -220,7 +257,73 @@ describe('Install identity markers (spec 006)', () => {
     const created = await install(deployments, drafts, jobs, {});
 
     expect(await modeOf(join(holaDirFor(created.deploymentId), 'instance.json'))).toBe(0o644);
-    expect(await modeOf(join(holaDirFor(created.deploymentId), 'env.json'))).toBe(0o600);
+    expect(await modeOf(join(envDirFor(created.deploymentId), 'env.json'))).toBe(0o600);
+  });
+
+  // ---- Placement (#478 item 1): the reason this feature was amended ----
+  //
+  // `${HOLA_APP_DATA}` resolves to `<appsRoot>/<id>` and is bind-mounted into
+  // the app's own containers (usually `/data`), so anything under it is
+  // readable by the app itself — and by the end users of an app that serves,
+  // syncs or browses its own data directory. `0600` is no defence: plenty of
+  // images run as root. This is the assertion that fails if a future refactor
+  // moves the env record back inside the mount, and it is deliberately a
+  // RECURSIVE sweep rather than a check of one path: any location under the
+  // data root is the defect, not just the old one.
+  test('env.json is NOT anywhere under the app data root, and instance.json is (#478)', async () => {
+    const { deployments, drafts, jobs } = makeSystem();
+    const created = await install(deployments, drafts, jobs, {});
+    const appRoot = join(appsRoot, created.deploymentId);
+
+    const underAppRoot = await walk(appRoot);
+    expect(underAppRoot).toContain(join('.hola', 'instance.json'));
+    expect(underAppRoot.some((p) => p.endsWith('env.json'))).toBe(false);
+
+    // And it does exist, at the sibling path — so the sweep above passing is
+    // "it moved", never "it was never written".
+    expect(existsSync(join(envDirFor(created.deploymentId), 'env.json'))).toBe(true);
+  });
+
+  // The record is `0600`, but a `0755` parent still lets any local user list
+  // which installs exist by name. Both levels of the reserved sibling tree are
+  // `0700`: `mkdir -p` would otherwise create the outer one under the umask.
+  test('the env record directory and its reserved root are both 0700 (FR-012)', async () => {
+    const { deployments, drafts, jobs } = makeSystem();
+    const created = await install(deployments, drafts, jobs, {});
+
+    expect(await modeOf(envDirFor(created.deploymentId))).toBe(0o700);
+    expect(await modeOf(join(appsRoot, '.hola'))).toBe(0o700);
+  });
+
+  // A pre-upgrade snapshot tars the WHOLE app data root under the process
+  // umask (`data.tar.gz`, world-readable `0644`) and keeps it to the retention
+  // bound (#478 item 2). With the env record outside that root the archive
+  // carries the secret-free identity record and nothing else of ours.
+  test('a pre-upgrade snapshot tarball contains instance.json but no env.json (#478)', async () => {
+    const { storage, deployments, drafts, jobs } = makeSystem();
+    const created = await install(deployments, drafts, jobs, { version: '1.0.0' });
+    // Real app data, so the snapshot is not skipped by the `dirHasContents`
+    // guard (which ignores `.hola/`).
+    await writeFile(join(appsRoot, created.deploymentId, 'real-data.txt'), 'payload');
+
+    const draftId2 = await finalizedDraft(drafts, { version: '2.0.0' });
+    const promoted = await deployments.promote(created.deploymentId, {
+      draftId: draftId2,
+      snapshot: true,
+      options: { autoStart: true },
+    });
+    await waitForJob(jobs, promoted.jobId!);
+
+    const snapshotsDir = join(dataRoot, 'deployments', created.deploymentId, 'snapshots');
+    const snapshotIds = await storage.listDir(snapshotsDir);
+    expect(snapshotIds.length).toBeGreaterThan(0);
+    const tarPath = join(snapshotsDir, snapshotIds[0], 'data.tar.gz');
+    expect(existsSync(tarPath)).toBe(true);
+
+    const listed = await listTar(tarPath);
+    expect(listed.some((e) => e.endsWith('real-data.txt'))).toBe(true);
+    expect(listed.some((e) => e.endsWith('.hola/instance.json'))).toBe(true);
+    expect(listed.some((e) => e.endsWith('env.json'))).toBe(false);
   });
 
   // The first write is the easy half. `fs.writeFile`'s `mode` option is
@@ -236,10 +339,14 @@ describe('Install identity markers (spec 006)', () => {
     const { deployments, drafts, jobs } = makeSystem();
     const created = await install(deployments, drafts, jobs, {});
     const instancePath = join(holaDirFor(created.deploymentId), 'instance.json');
-    const envPath = join(holaDirFor(created.deploymentId), 'env.json');
+    const envDir = envDirFor(created.deploymentId);
+    const envPath = join(envDir, 'env.json');
 
     await chmod(instancePath, 0o666);
     await chmod(envPath, 0o666);
+    // `mkdir -p` never re-modes an existing directory either, so the env dir
+    // needs the same re-assertion its file does.
+    await chmod(envDir, 0o777);
     expect(await modeOf(envPath)).toBe(0o666);
 
     const action = await deployments.executeAction(created.deploymentId, { action: 'restart' });
@@ -247,6 +354,7 @@ describe('Install identity markers (spec 006)', () => {
 
     expect(await modeOf(instancePath)).toBe(0o644);
     expect(await modeOf(envPath)).toBe(0o600);
+    expect(await modeOf(envDir)).toBe(0o700);
   });
 
   // ---- Scenario 3 (T029): fresh install lineageId === deploymentId ----
@@ -265,6 +373,9 @@ describe('Install identity markers (spec 006)', () => {
     const created = await install(deployments, drafts, jobs, { compose: COMPOSE_NO_DATA });
 
     expect(existsSync(join(appsRoot, created.deploymentId))).toBe(false);
+    // The env record moved out of the data root, so "no data root" is no
+    // longer sufficient to prove "no records" — assert the sibling too.
+    expect(existsSync(envDirFor(created.deploymentId))).toBe(false);
   });
 
   // `channel` is the FOLLOWED TRACK (data-model.md), and it is the one field
@@ -539,24 +650,30 @@ describe('Install identity markers (spec 006)', () => {
     const restartAction = await deployments.executeAction(created.deploymentId, { action: 'restart' });
     await waitForJob(jobs, restartAction.jobId!);
 
-    const entries = (await readdir(holaDirFor(created.deploymentId))).sort();
-    expect(entries).toEqual(['env.json', 'instance.json']);
-    expect(entries.some((e) => e.includes('.tmp.'))).toBe(false);
+    // Both directories, because the two records no longer share one.
+    const markerEntries = (await readdir(holaDirFor(created.deploymentId))).sort();
+    expect(markerEntries).toEqual(['instance.json']);
+    const envEntries = (await readdir(envDirFor(created.deploymentId))).sort();
+    expect(envEntries).toEqual(['env.json']);
+    expect([...markerEntries, ...envEntries].some((e) => e.includes('.tmp.'))).toBe(false);
   });
 
-  // ---- Scenario 14 (T020): delete .hola, redeploy -> records reappear (FR-017, SC-001) ----
-  test('deleting .hola and redeploying recreates both records with no operator action (FR-017, SC-001)', async () => {
+  // ---- Scenario 14 (T020): delete both record dirs, redeploy -> records reappear (FR-017, SC-001) ----
+  test('deleting both record directories and redeploying recreates them with no operator action (FR-017, SC-001)', async () => {
     const { deployments, drafts, jobs } = makeSystem();
     const created = await install(deployments, drafts, jobs, {});
     const holaDir = holaDirFor(created.deploymentId);
+    const envDir = envDirFor(created.deploymentId);
     await rm(holaDir, { recursive: true, force: true });
+    await rm(envDir, { recursive: true, force: true });
     expect(existsSync(holaDir)).toBe(false);
+    expect(existsSync(envDir)).toBe(false);
 
     const action = await deployments.executeAction(created.deploymentId, { action: 'restart' });
     await waitForJob(jobs, action.jobId!);
 
     expect(existsSync(join(holaDir, 'instance.json'))).toBe(true);
-    expect(existsSync(join(holaDir, 'env.json'))).toBe(true);
+    expect(existsSync(join(envDir, 'env.json'))).toBe(true);
   });
 
   // ---- Scenario 15 (T021): data-aware rollback rewrites records for the release
@@ -615,15 +732,56 @@ describe('Install identity markers (spec 006)', () => {
     expect((await readEnvRecord(created.deploymentId)).env).toEqual({ FOO: 'two' });
   });
 
-  // ---- Scenario 17 (T032): uninstall removes the whole data root, .hola included ----
-  test('uninstall removes the whole data root, .hola included, with no orphan directory (edge case)', async () => {
+  // ---- Scenario 17 (T032): uninstall removes BOTH locations ----
+  //
+  // The env record is deliberately outside the data root, so a `removeAppData`
+  // that only deleted the data root would leave one directory of secrets
+  // behind per app ever uninstalled — orphaned forever, since nothing else
+  // knows the deployment id afterwards (#478).
+  test('uninstall removes both the data root and the sibling env record, leaving no orphan (edge case)', async () => {
     const { deployments, drafts, jobs } = makeSystem();
     const created = await install(deployments, drafts, jobs, {});
     const appRoot = join(appsRoot, created.deploymentId);
+    const envDir = envDirFor(created.deploymentId);
     expect(existsSync(join(appRoot, '.hola', 'instance.json'))).toBe(true);
+    expect(existsSync(join(envDir, 'env.json'))).toBe(true);
 
     await deployments.deleteDeployment(created.deploymentId);
 
     expect(existsSync(appRoot)).toBe(false);
+    expect(existsSync(envDir)).toBe(false);
+    // Nothing of this install survives anywhere under the apps bind root. The
+    // reserved `.hola/` root itself is shared and stays.
+    const remaining = await walk(appsRoot);
+    expect(remaining.some((p) => p.includes(created.deploymentId))).toBe(false);
+    expect(remaining.some((p) => p.endsWith('env.json'))).toBe(false);
+  });
+
+  // The sibling directory outlives its data root if uninstall consults only
+  // the data root's existence. Delete the data root by hand first, so the
+  // env-record delete is reached on its own.
+  test('uninstall removes the env record even when the data root is already gone (#478)', async () => {
+    const { deployments, drafts, jobs } = makeSystem();
+    const created = await install(deployments, drafts, jobs, {});
+    const appRoot = join(appsRoot, created.deploymentId);
+    const envDir = envDirFor(created.deploymentId);
+    await rm(appRoot, { recursive: true, force: true });
+
+    await deployments.deleteDeployment(created.deploymentId);
+
+    expect(existsSync(envDir)).toBe(false);
+  });
+
+  // An install that declares no `${HOLA_APP_DATA}` gets neither record, so
+  // uninstall must create nothing and warn about nothing.
+  test('uninstalling an app with no data root touches neither location (FR-015)', async () => {
+    const { deployments, drafts, jobs } = makeSystem();
+    const created = await install(deployments, drafts, jobs, { compose: COMPOSE_NO_DATA });
+    expect(existsSync(envDirFor(created.deploymentId))).toBe(false);
+
+    await deployments.deleteDeployment(created.deploymentId);
+
+    expect(existsSync(join(appsRoot, created.deploymentId))).toBe(false);
+    expect(existsSync(envDirFor(created.deploymentId))).toBe(false);
   });
 });
