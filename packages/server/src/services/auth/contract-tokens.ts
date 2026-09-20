@@ -11,7 +11,18 @@
  * So each provider deployment gets its own token carrying one capability per
  * contract it provides (`contract:backup`), and nothing else. The middleware maps
  * `/api/contracts/backup/*` to that capability; every other route rejects the
- * token, including reads of other apps' data. The token is minted when the
+ * token, including reads of other apps' data.
+ *
+ * That last sentence was not true until #471. The capability table only names
+ * capabilities for *mutating* routes — `getRequiredCapability` returns null for
+ * every GET, because a read is open to any authenticated principal — and the
+ * middleware only enforced when a capability was named. A credential meant for
+ * one POST could therefore read `/api/deployments`, another app's logs,
+ * `/api/settings` and every job. `authorizeRequest` in middleware/auth.ts now
+ * closes a contract-scoped principal by default: allowed exactly the routes
+ * demanding a capability it holds, denied everything else, including reads.
+ *
+ * The token is minted when the
  * deployment is created with a consented grant, injected into its containers as
  * `HOLA_CONTRACT_TOKEN`, and revoked when the deployment is deleted — so the
  * credential's lifetime is exactly the install's.

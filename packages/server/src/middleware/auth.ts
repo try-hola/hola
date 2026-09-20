@@ -172,6 +172,57 @@ export function getRequiredCapability(path: string, method: string): Capability 
 }
 
 /**
+ * Whether this principal is a capability-contract token — the credential Hola
+ * injects into a *provider app's* container so it can announce its own work
+ * (ADR 0004 §6).
+ *
+ * Recognised by its capabilities rather than by `type` or `id`: `type: 'service'`
+ * is shared with other machine principals, and a contract token is minted with
+ * exactly one `contract:<id>` capability per contract it provides and nothing
+ * else (`contractCapability` in services/auth/contract-tokens.ts). A principal
+ * holding a capability outside that namespace — an operator key, a wildcard — is
+ * therefore not one of these, and is unaffected by the restriction above.
+ */
+export function isContractScoped(principal: Principal): boolean {
+  return (
+    principal.capabilities.length > 0 &&
+    principal.capabilities.every((capability) => capability.startsWith('contract:'))
+  );
+}
+
+/**
+ * The authorization decision for an authenticated principal on one route.
+ *
+ * Two rules, and the second is the reason this is a function rather than two
+ * lines inline:
+ *
+ * - **Everyone**: a route that names a capability requires it. A route that
+ *   names none (every GET — `getRequiredCapability` returns null for reads) is
+ *   open to any authenticated principal. That is the operator model: if you hold
+ *   a key to this host, you may read it.
+ * - **Contract tokens are closed by default.** That credential is not an
+ *   operator's — it is injected into a *catalog container* so a provider app can
+ *   announce its own work (ADR 0004 §6: "not usable elsewhere in the API"). The
+ *   read rule above handed it `/api/deployments`, another app's logs,
+ *   `/api/settings` and every job. So a contract token is allowed exactly the
+ *   routes that demand a capability it was minted for, and nothing else.
+ *
+ * Closing it at the principal rather than by adding a capability to every read
+ * route means no other caller's access changes, and a route added tomorrow is
+ * closed to contract tokens without anyone having to remember to close it.
+ */
+export function authorizeRequest(
+  principal: Principal,
+  requiredCapability: Capability | null,
+  hasCapability: (principal: Principal, capability: Capability) => boolean,
+): 'allow' | 'outside-contract' | 'missing-capability' {
+  const holds = requiredCapability !== null && hasCapability(principal, requiredCapability);
+  if (isContractScoped(principal)) return holds ? 'allow' : 'outside-contract';
+  if (requiredCapability !== null && !holds) return 'missing-capability';
+  return 'allow';
+}
+
+/**
  * Create authentication middleware
  */
 export function createAuthMiddleware() {
@@ -270,9 +321,32 @@ export function createAuthMiddleware() {
         );
       }
       
-      // Check if principal has required capability for this endpoint
+      // Check if principal is authorized for this endpoint
       const requiredCapability = getRequiredCapability(path, method);
-      if (requiredCapability && !auth.hasCapability(authResult.principal, requiredCapability)) {
+      const decision = authorizeRequest(authResult.principal, requiredCapability, (p, c) =>
+        auth.hasCapability(p, c),
+      );
+
+      if (decision === 'outside-contract') {
+        logger.warn('Contract token used outside its contract', {
+          path,
+          method,
+          principalId: authResult.principal.id,
+          requiredCapability,
+        });
+
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'This credential may only be used for its capability contract.',
+            },
+          }),
+          { status: 403, headers: { 'content-type': 'application/json' } },
+        );
+      }
+
+      if (decision === 'missing-capability' && requiredCapability) {
         logger.warn('Insufficient capabilities', { 
           path, 
           method, 
