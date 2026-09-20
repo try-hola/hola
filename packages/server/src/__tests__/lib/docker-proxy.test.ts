@@ -8,7 +8,7 @@ import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { decide, redactInspect, startDockerProxy } from '../../lib/docker-proxy';
+import { decide, redactInspect, startDockerProxy, redactInfo } from '../../lib/docker-proxy';
 import type { DockerProxyHandle } from '../../lib/docker-proxy';
 
 describe('decide', () => {
@@ -74,11 +74,17 @@ describe('redactInspect', () => {
     expect(config.Hostname).toBe('abc123');
   });
 
-  test('drops Config.Env, Config.Cmd, Config.Entrypoint, HostConfig, Mounts, NetworkSettings', () => {
+  test('empties HostConfig, Mounts and NetworkSettings without dropping them', () => {
+    // Emptied rather than removed: a real daemon always returns these, so
+    // clients walk them unchecked (Dozzle segfaults on a missing HostConfig).
+    // The content is what the grant withholds, not the shape.
     const redacted = redactInspect(FULL_INSPECT) as Record<string, unknown>;
-    expect(redacted.HostConfig).toBeUndefined();
-    expect(redacted.Mounts).toBeUndefined();
-    expect(redacted.NetworkSettings).toBeUndefined();
+    expect(redacted.HostConfig).toEqual({ PortBindings: {} });
+    expect(redacted.Mounts).toEqual([]);
+    expect(redacted.NetworkSettings).toEqual({ Networks: {} });
+    const serialized = JSON.stringify(redacted);
+    expect(serialized).not.toContain('172.18.0.5');
+    expect(serialized).not.toContain('/var/run/docker.sock');
     const config = redacted.Config as Record<string, unknown>;
     expect(config.Env).toBeUndefined();
     expect(config.Cmd).toBeUndefined();
@@ -92,6 +98,7 @@ describe('redactInspect', () => {
     expect(redactInspect({})).toEqual({
       Id: undefined, Name: undefined, Created: undefined, State: undefined, Image: undefined,
       Config: { Tty: undefined, Labels: undefined, Image: undefined, Hostname: undefined },
+      HostConfig: { PortBindings: {} }, Mounts: [], NetworkSettings: { Networks: {} },
     });
   });
 });
@@ -178,15 +185,15 @@ describe('startDockerProxy (integration, fake Docker API on a temp unix socket)'
     expect(await res.json()).toEqual([{ Id: 'c1', Names: ['/app'] }]);
   });
 
-  test('GET /v1.45/containers/{id}/json is redacted (no Env, no HostConfig, no Mounts)', async () => {
+  test('GET /v1.45/containers/{id}/json is redacted (no Env, empty HostConfig and Mounts)', async () => {
     const res = await fetch(proxyUrl('/v1.45/containers/c1/json'));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.Config.Tty).toBe(true);
     expect(body.Config.Labels).toEqual({ app: 'x' });
     expect(body.Config.Env).toBeUndefined();
-    expect(body.HostConfig).toBeUndefined();
-    expect(body.Mounts).toBeUndefined();
+    expect(body.HostConfig).toEqual({ PortBindings: {} });
+    expect(body.Mounts).toEqual([]);
   });
 
   test('GET /containers/{id}/logs streams bytes identical', async () => {
@@ -232,4 +239,138 @@ describe('startDockerProxy (integration, fake Docker API on a temp unix socket)'
     },
     IDLE_GAP_MS + 15_000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// What a real Docker client actually sends (found by running Dozzle, the first
+// container-logs@1 provider, against this proxy on a VM).
+describe('serving a standard Docker client', () => {
+  test('HEAD /_ping is allowed — every Docker client pings with HEAD first', () => {
+    // A GET-only allowlist refuses the very first call any client makes, and
+    // the client reports it as "no Docker engine" rather than as a refusal.
+    expect(decide('HEAD', '/_ping')).toEqual({ allow: true, kind: 'passthrough' });
+    expect(decide('HEAD', '/v1.52/_ping')).toEqual({ allow: true, kind: 'passthrough' });
+  });
+
+  test('HEAD is allowed wherever GET is — it reveals strictly less', () => {
+    expect(decide('HEAD', '/containers/json')).toEqual({ allow: true, kind: 'passthrough' });
+    expect(decide('HEAD', '/containers/abc123/json')).toEqual({ allow: true, kind: 'inspect' });
+  });
+
+  test('HEAD does not open anything GET cannot reach', () => {
+    expect(decide('HEAD', '/containers/abc123/archive')).toEqual({ allow: false });
+    expect(decide('HEAD', '/secrets')).toEqual({ allow: false });
+  });
+
+  test('every mutating verb is still refused', () => {
+    for (const verb of ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      expect(decide(verb, '/containers/abc123/restart')).toEqual({ allow: false });
+      expect(decide(verb, '/containers/json')).toEqual({ allow: false });
+    }
+  });
+
+  test('GET /info is allowed, versioned or not', () => {
+    expect(decide('GET', '/info')).toEqual({ allow: true, kind: 'info' });
+    expect(decide('GET', '/v1.52/info')).toEqual({ allow: true, kind: 'info' });
+  });
+});
+
+describe('redactInfo', () => {
+  const raw = {
+    ID: 'ABCD:EFGH',
+    Name: 'hola-vm-102',
+    ServerVersion: '27.3.1',
+    OSType: 'linux',
+    Architecture: 'x86_64',
+    NCPU: 4,
+    MemTotal: 6221225472,
+    Containers: 9,
+    ContainersRunning: 8,
+    ContainersPaused: 0,
+    ContainersStopped: 1,
+    Images: 12,
+    // Everything below must not survive.
+    HttpProxy: 'http://user:hunter2@proxy.internal:3128',
+    HttpsProxy: 'https://user:hunter2@proxy.internal:3128',
+    RegistryConfig: { IndexConfigs: { 'docker.io': {} } },
+    Labels: ['tier=prod'],
+    Plugins: { Volume: ['local'] },
+    DockerRootDir: '/var/lib/docker',
+    SecurityOptions: ['name=apparmor'],
+    Swarm: { NodeID: 'xyz', LocalNodeState: 'active' },
+    KernelVersion: '6.8.0-45-generic',
+    OperatingSystem: 'Ubuntu 24.04.1 LTS',
+  };
+
+  test('keeps what identifies and sizes the engine', () => {
+    const out = redactInfo(raw) as Record<string, unknown>;
+    expect(out.Name).toBe('hola-vm-102');
+    expect(out.ServerVersion).toBe('27.3.1');
+    expect(out.OSType).toBe('linux');
+    expect(out.NCPU).toBe(4);
+    expect(out.ContainersRunning).toBe(8);
+    // Kept so a client can tell Docker from Podman — Dozzle reads it for exactly
+    // that, and it says no more than OSType already does.
+    expect(out.OperatingSystem).toBe('Ubuntu 24.04.1 LTS');
+  });
+
+  test('drops the proxy URLs, which routinely carry credentials', () => {
+    const out = JSON.stringify(redactInfo(raw));
+    expect(out).not.toContain('hunter2');
+    expect(out).not.toContain('HttpProxy');
+  });
+
+  test('drops host configuration the grant has no business exposing', () => {
+    const out = redactInfo(raw) as Record<string, unknown>;
+    for (const k of ['RegistryConfig', 'Labels', 'Plugins', 'DockerRootDir', 'SecurityOptions', 'Swarm', 'KernelVersion']) {
+      expect(out[k]).toBeUndefined();
+    }
+  });
+
+  test('a non-object body passes through untouched', () => {
+    expect(redactInfo(null)).toBeNull();
+    expect(redactInfo('nope')).toBe('nope');
+  });
+});
+
+describe('redactInspect keeps the response shape a real client expects', () => {
+  const raw = {
+    Id: 'abc123',
+    Name: '/hola-app-1',
+    Created: '2026-09-20T00:00:00Z',
+    State: { Status: 'running' },
+    Image: 'sha256:deadbeef',
+    Config: { Tty: false, Labels: { 'sh.hola.app': 'calibre-web' }, Image: 'app:1', Hostname: 'h', Env: ['SECRET=hunter2'] },
+    HostConfig: { PortBindings: { '8080/tcp': [{ HostPort: '8080' }] }, Binds: ['/etc/passwd:/x'], Privileged: true },
+    Mounts: [{ Source: '/srv/hola/apps/x', Destination: '/data' }],
+    NetworkSettings: { Networks: { hola: { IPAddress: '172.18.0.5' } } },
+  };
+
+  test('structural fields are present but empty — clients walk them without nil checks', () => {
+    // Dozzle segfaults on HostConfig.PortBindings when HostConfig is absent;
+    // anything on Docker's SDK assumes the same shape. Dropping the field denies
+    // the client, not the data.
+    const out = redactInspect(raw) as Record<string, unknown>;
+    expect(out.HostConfig).toEqual({ PortBindings: {} });
+    expect(out.Mounts).toEqual([]);
+    expect(out.NetworkSettings).toEqual({ Networks: {} });
+  });
+
+  test('and they disclose nothing', () => {
+    const out = JSON.stringify(redactInspect(raw));
+    expect(out).not.toContain('8080');           // no host port map
+    expect(out).not.toContain('/etc/passwd');    // no bind sources
+    expect(out).not.toContain('172.18.0.5');     // no network topology
+    expect(out).not.toContain('Privileged');
+    expect(out).not.toContain('hunter2');        // env still gone
+  });
+
+  test('what a log collector needs still comes through', () => {
+    const out = redactInspect(raw) as Record<string, unknown>;
+    expect(out.Id).toBe('abc123');
+    expect(out.State).toEqual({ Status: 'running' });
+    const cfg = out.Config as Record<string, unknown>;
+    expect((cfg.Labels as Record<string, string>)['sh.hola.app']).toBe('calibre-web');
+    expect(cfg.Tty).toBe(false);
+  });
 });
