@@ -351,14 +351,26 @@ export type { AppBackupConfig, AppBackupDeclaration, AppBackupParticipation };
 /**
  * Closed, documented list of database image families whose live file copy is
  * unsafe (relational and document databases). A platform constant, never app
- * data — recognition keys on the image reference only, never an app id, and
- * matches the check the catalog's own CI applies. Caches (Redis) are
- * deliberately absent: a crash-consistent copy of a cache is acceptable.
- * Extend by pull request as the catalog adds database images.
+ * data — recognition keys on the image reference only, never an app id.
+ * Caches (Redis, Valkey) are deliberately absent: a crash-consistent copy of a
+ * cache is acceptable.
+ *
+ * This list has a **twin in the catalog repo** — `DATABASE_IMAGE` in
+ * try-hola/apps `bin/validate-manifest.mjs`, which warns an app author who runs
+ * a database and declares no hooks. The two must name the same families or the
+ * catalog ships an app whose coverage this file then misjudges, which is
+ * exactly what happened with `pgautoupgrade` (the image every catalog Postgres
+ * but immich's runs): absent here, the four apps using it reported `recognised:
+ * 0` and so rendered `quiesced` — the all-clear — rather than being judged at
+ * all. The two checks match *families*, not syntax: this one compares the last
+ * path segment of the image ref, the catalog's is a substring regex over the
+ * whole `image:` line. Extend BOTH by pull request as the catalog adds database
+ * images.
  */
 export const DATABASE_IMAGE_FAMILIES = [
   'postgres',
   'postgresql',
+  'pgautoupgrade',
   'pgvector',
   'postgis',
   'timescaledb',

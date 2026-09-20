@@ -307,6 +307,24 @@ describe('isDatabaseImage (spec 004, FR-015)', () => {
     expect(isDatabaseImage('')).toBe(false);
   });
 
+  // Regression pin: the images the live catalog actually runs. `pgautoupgrade`
+  // is the Postgres image every catalog app but immich uses, and it was absent
+  // from DATABASE_IMAGE_FAMILIES — so guacamole, mealie, paperless-ngx and
+  // postiz each reported `recognised: 0` and rendered `quiesced` (the all-clear)
+  // instead of being judged. A database image the catalog ships that this list
+  // does not know is not a near-miss; it silently disables FR-019 for that app.
+  test.each([
+    // guacamole, mealie, paperless-ngx, postiz
+    ['pgautoupgrade/pgautoupgrade:18-alpine', true],
+    // immich
+    ['ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0', true],
+    // caches the catalog runs, which must stay unrecognised
+    ['docker.io/valkey/valkey:9-alpine', false],
+    ['redis:7.4-alpine', false],
+  ])('live catalog image %s -> %s', (ref, expected) => {
+    expect(isDatabaseImage(ref)).toBe(expected);
+  });
+
   // A companion that merely TALKS to a database holds none of the data. Counting
   // one as a recognised database reports a fully quiesced app as `partial`, which
   // teaches operators to ignore the single warning FR-019 exists to raise.
