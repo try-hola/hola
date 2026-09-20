@@ -215,6 +215,42 @@ export const BACKUP_CONTRACT_REF = 'backup@1';
  */
 export const CONTAINER_LOGS_CONTRACT_REF = 'container-logs@1';
 
+/**
+ * Participation MARKERS — refs an app may name in `accepts` that are **not**
+ * brokered capability contracts and deliberately have no `CONTRACTS` entry.
+ *
+ * `restore@1` (spec 007) is the only one. It has no provider, no acceptor
+ * protocol and no grant; the server never brokers it between two parties. It
+ * says exactly one thing: *this app's author has considered what restoring it
+ * means* — which is why it must be declared rather than derived from the
+ * presence of a `restore` block (the derivation ADR 0004 §2 rejects), and why
+ * `restore@1` with no block is a meaningful third state ("a plain file copy
+ * back is all I need") distinct from an app nobody considered.
+ *
+ * This list exists because `coerceRefs` resolves every `accepts` entry through
+ * `parseContractRef` and drops what it cannot resolve (ADR 0003 forward-compat).
+ * Without an explicit carve-out, `restore@1` was silently stripped from every
+ * manifest on catalog read, and `createDraft` then refused every restore with
+ * `RESTORE_NOT_ACCEPTED` — the feature could not work at all. Unit tests missed
+ * it because they build manifests directly and never traverse the coercion path;
+ * a real catalog fetch on a live host is what exposed it.
+ *
+ * A marker is legal in `accepts` ONLY. Nothing provides one, so `provides`
+ * naming a marker stays a dropped ref, exactly as before.
+ */
+export const PARTICIPATION_MARKERS: readonly string[] = ['restore@1'] as const;
+
+/** The restore participation marker's canonical ref (spec 007). */
+export const RESTORE_PARTICIPATION_REF = 'restore@1';
+
+/**
+ * Whether `ref` is a participation marker legal in `accepts`. Callers coercing
+ * a manifest's `accepts` MUST consult this before dropping an unresolvable ref.
+ */
+export function isParticipationMarker(ref: string): boolean {
+  return PARTICIPATION_MARKERS.includes(ref);
+}
+
 /** Canonical ref for a definition (`backup@1`). */
 export function formatContractRef(def: ContractDefinition): string {
   return `${def.id}@${def.version}`;

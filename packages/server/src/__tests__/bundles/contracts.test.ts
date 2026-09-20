@@ -586,3 +586,39 @@ describe('buildContractRollup (ADR 0004 Phase 4)', () => {
     });
   });
 });
+
+/**
+ * Participation markers (spec 007). Regression tests for a defect that shipped
+ * and was found only on a live host: `coerceRefs` resolves every `accepts` entry
+ * through `parseContractRef`, `restore@1` deliberately has no `CONTRACTS` entry
+ * (it is a marker, not a brokered contract), so it was silently stripped from
+ * every manifest on catalog read. `createDraft` then refused every restore with
+ * `RESTORE_NOT_ACCEPTED` and restore-on-install could not work at all.
+ *
+ * Every spec-007 unit test passed throughout, because they construct manifests
+ * directly and never traverse this function. These tests close that gap.
+ */
+describe('participation markers (spec 007)', () => {
+  const silent = { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never;
+
+  test('accepts KEEPS restore@1 even though it has no CONTRACTS entry', () => {
+    expect(parseContractRef('restore@1')).toBeUndefined();
+    expect(coerceAccepts(['backup@1', 'restore@1'], silent)).toEqual(['backup@1', 'restore@1']);
+  });
+
+  test('restore@1 alone survives coercion', () => {
+    expect(coerceAccepts(['restore@1'], silent)).toEqual(['restore@1']);
+  });
+
+  test('provides still DROPS restore@1 — nothing provides a marker', () => {
+    // `coerceRefs` returns undefined, not [], when nothing survives — its
+    // existing contract (`string[] | undefined`), unchanged by this fix.
+    expect(coerceProvides(['restore@1'], silent)).toBeUndefined();
+  });
+
+  test('a genuinely unknown ref is still dropped (ADR 0003 forward-compat intact)', () => {
+    expect(coerceAccepts(['restore@2'], silent)).toBeUndefined();
+    expect(coerceAccepts(['nonsense@1'], silent)).toBeUndefined();
+    expect(coerceAccepts(['restore'], silent)).toBeUndefined();
+  });
+});
