@@ -147,6 +147,10 @@ function validateEnvironment(env: unknown, basePath: string, issues: ValidationI
  * Hola resolves this token to one stable per-install directory at deploy time,
  * so all of an app's data lands in one backup-friendly folder. Apps mount
  * sub-dirs of it (e.g. `${HOLA_APP_DATA}/data:/data`).
+ *
+ * A bind source must be the token exactly, or the token followed by `/` and a
+ * path that stays inside it — see {@link appDataContainment}. The token is a
+ * containment boundary, not a prefix.
  */
 export const APP_DATA_TOKEN = '${HOLA_APP_DATA}';
 
@@ -195,6 +199,60 @@ function validatePlatformTokens(yamlText: string, issues: ValidationIssue[]): vo
   }
 }
 
+/**
+ * Where a bind source sits relative to the app data root:
+ *  - `contained` — the root itself, or a path that stays inside it;
+ *  - `outside`   — not rooted at the token at all (an absolute host path, a
+ *                  relative path, or a string that merely *starts with* the
+ *                  token but continues without a separator, e.g.
+ *                  `${HOLA_APP_DATA}-sneaky` → a sibling directory);
+ *  - `escapes`   — rooted at the token but walking back out of it with `..`
+ *                  (`${HOLA_APP_DATA}/../.hola`, `${HOLA_APP_DATA}/../../../etc`).
+ */
+type AppDataContainment =
+  | { kind: 'contained' }
+  | { kind: 'outside' }
+  | { kind: 'escapes'; position: number };
+
+/**
+ * Prove a bind source is really *inside* the app data root (#482).
+ *
+ * A `startsWith(APP_DATA_TOKEN)` test is a string comparison, not a containment
+ * proof: the server materialises the token by textual substitution
+ * (`content.replaceAll(APP_DATA_TOKEN, appRoot)`), so `${HOLA_APP_DATA}/../..`
+ * reaches any host path the daemon can bind — including `/var/run`, which holds
+ * the Docker socket the `${HOLA_APP_DATA}` rule exists to keep out of app
+ * compose. So: accept the token exactly or followed by `/`, then walk the
+ * remainder and require the depth never to fall below the root.
+ *
+ * Normalisation is deliberately **lexical** — `.` and empty segments dropped,
+ * `..` popping one level — and uses no `node:path`/`node:fs`: `@hola/shared` is
+ * bundled into the browser build (`packages/web`), so it must stay
+ * dependency-free. Lexical is also the *right* semantics here: the source is a
+ * token plus a catalog-authored suffix, evaluated before any of it exists on
+ * disk, so there is nothing to `realpath`. Symlinks planted inside a data root
+ * are a separate (post-deploy) concern, handled for manifest-declared write
+ * targets by `resolveContainedDir` in the server.
+ */
+function appDataContainment(source: string): AppDataContainment {
+  if (source === APP_DATA_TOKEN) return { kind: 'contained' };
+  if (!source.startsWith(`${APP_DATA_TOKEN}/`)) return { kind: 'outside' };
+
+  let depth = 0;
+  const segments = source.slice(APP_DATA_TOKEN.length + 1).split('/');
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (segment === '' || segment === '.') continue; // `a//b`, `a/./b` — no movement
+    if (segment !== '..') {
+      depth++;
+      continue;
+    }
+    if (depth === 0) return { kind: 'escapes', position: i + 1 };
+    depth--;
+  }
+  return { kind: 'contained' };
+}
+
 function validateVolumes(
   vols: unknown,
   basePath: string,
@@ -228,9 +286,15 @@ function validateVolumes(
         `Named volume '${source}' is not allowed; mount persistent storage under '${APP_DATA_TOKEN}' instead (e.g. '${APP_DATA_TOKEN}/data:/data')`, path));
       return;
     }
-    if (source !== undefined && !source.startsWith(APP_DATA_TOKEN)) {
-      issues.push(issue('VOLUME_NOT_UNDER_APP_DATA', 'error',
-        `Bind source '${source}' must be under '${APP_DATA_TOKEN}' so all of an app's data lives in one root`, path));
+    if (source !== undefined) {
+      const containment = appDataContainment(source);
+      if (containment.kind === 'outside') {
+        issues.push(issue('VOLUME_NOT_UNDER_APP_DATA', 'error',
+          `Bind source '${source}' must be under '${APP_DATA_TOKEN}' so all of an app's data lives in one root`, path));
+      } else if (containment.kind === 'escapes') {
+        issues.push(issue('VOLUME_ESCAPES_APP_DATA', 'error',
+          `Bind source '${source}' traverses out of '${APP_DATA_TOKEN}': the '..' segment at position ${containment.position} walks above the app data root. A bind source may not traverse out of the app data root — mount a sub-directory of '${APP_DATA_TOKEN}' instead`, path));
+      }
     }
   });
 }
