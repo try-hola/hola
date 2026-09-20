@@ -149,6 +149,32 @@ const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
 const RESTORE_HOOK_WAIT_TIMEOUT_MS = 900_000; // 15 minutes
 
 /**
+ * `composeUp`'s `execFile` ceiling for a full bring-up (#487). Stated at every
+ * call site rather than inherited, because `composeUp`'s own 300000ms default
+ * was never a per-call-site decision — it was whatever the one implementation
+ * happened to hardcode before spec 007 made it a parameter.
+ *
+ * Five minutes is too thin for the bring-up this codebase actually issues.
+ * `up -d` does not just create containers: Compose blocks on every
+ * `depends_on: { condition: service_healthy }` gate before starting the
+ * dependent service, so a first install of a large multi-service stack (Postiz
+ * is the known worst case) waits out an `initdb` plus each dependency's own
+ * healthcheck — the SAME cost research R12 measured for the restore hook's
+ * `--wait`, which is why this deliberately agrees with that number rather than
+ * inventing a third one. A rollback that just replaced the data directory, and
+ * a restore-on-install whose database was handed a large dump moments earlier,
+ * start just as cold.
+ *
+ * This is a ceiling, not a wait: a healthy stack returns as soon as Compose
+ * does. The asymmetry decides the number — too low SIGKILLs a slow-but-correct
+ * install (the failure `composePull`'s own 30-minute ceiling was raised to
+ * stop), while too high only delays reporting a genuinely wedged `up`, and the
+ * job queue already tolerates exactly that for the 30-minute `composePull` a
+ * deploy runs immediately beforehand.
+ */
+const COMPOSE_UP_TIMEOUT_MS = 900_000; // 15 minutes
+
+/**
  * Reserved locations for this feature's platform-authored JSON records (spec
  * 006). There are TWO, at two different levels under the apps bind root, and
  * the split is the whole point (#478 item 1):
@@ -4230,7 +4256,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // init container is deliberately left exited rather than re-run.
         const before = await this.composeStateById(composeDir, projectName);
         const registryAuth = await this.resolveRegistryAuth(deployment);
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
+        // Timeout stated, not inherited (#487). A restart recreates whatever
+        // the freshly materialized compose changed and clears the same
+        // `depends_on: service_healthy` gates a deploy does, only against warm
+        // data. It is also the ONE `composeUp` with no `composePull` in front
+        // of it — the registryAuth above exists precisely so a recreate that
+        // must fetch a missing image (a pruned host) still authenticates, and
+        // that pull would otherwise run under a cap six times tighter than the
+        // one `composePull` was given for the very same reason.
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles, {
+          timeoutMs: COMPOSE_UP_TIMEOUT_MS,
+        });
         output = res.output;
         if (!res.success) throw new Error(res.output);
         const restarted = await this.restartUntouchedServices(composeDir, projectName, before, deployment.selectedProfiles, logBoth);
@@ -4292,7 +4328,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
           await this.performRestoreOnInstall(deployment, composeDir, projectName, registryAuth, provisioned, logBoth);
         }
 
-        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles);
+        // Timeout stated, not inherited (#487). This is the first install of a
+        // large multi-service stack: the images are already local (the pull
+        // above saw to that), so what remains is `initdb` and every
+        // `depends_on: service_healthy` gate in the app's compose — the
+        // expensive part, and the part five minutes does not reliably cover.
+        // A rollback that just restored a data snapshot, and a restore that
+        // just extracted one, reach this line equally cold.
+        const res = await this.dockerService.composeUp(composeDir, projectName, registryAuth, deployment.selectedProfiles, {
+          timeoutMs: COMPOSE_UP_TIMEOUT_MS,
+        });
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);

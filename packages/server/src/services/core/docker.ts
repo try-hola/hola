@@ -69,8 +69,12 @@ export interface DockerService {
    * the project, today's behaviour). `options.wait` adds `--wait`, blocking until
    * each named service's own `healthcheck` reports healthy — used by the restore
    * sequence to start only a hook's service before running its hook (spec 007,
-   * FR-020). `options.timeoutMs` overrides the default 5-minute `execAsync` cap,
-   * because a `--wait` on a freshly-`initdb`'d Postgres can exceed it (research R12).
+   * FR-020). `options.timeoutMs` is the `execFile` ceiling; the 5-minute fallback
+   * below applies only to a caller with no opinion, and every `deployment.ts` call
+   * site now states its own (#487) — `up -d` blocks on each
+   * `depends_on: service_healthy` gate, so a first install, a cold rollback, and a
+   * `--wait` on a freshly-`initdb`'d Postgres (research R12) can all legitimately
+   * exceed five minutes.
    */
   composeUp(
     projectPath: string,
@@ -262,10 +266,13 @@ export class RealDockerService implements DockerService, HealthCheckable {
       // Images are pre-pulled by composePull, so `up` only starts local images.
       // `--wait` (when requested) blocks until every NAMED service reports
       // healthy via its own declared healthcheck — no bespoke readiness poll
-      // (Constitution V). `options.timeoutMs` overrides the default 5-minute
-      // cap: a `--wait` against a freshly-`initdb`'d Postgres can exceed it
-      // (research R12). A scoped DOCKER_CONFIG is passed as a fallback so a
-      // recreate that needs to pull still authenticates.
+      // (Constitution V). `options.timeoutMs` is the caller's own ceiling: a
+      // `--wait` against a freshly-`initdb`'d Postgres can exceed five minutes
+      // (research R12), and so can a plain `up -d` that has to clear a large
+      // stack's `depends_on: service_healthy` gates. The 300000ms below is a
+      // FALLBACK for a caller that expressed no preference, not a considered
+      // ceiling for any operation (#487). A scoped DOCKER_CONFIG is passed as
+      // a fallback so a recreate that needs to pull still authenticates.
       //
       // Built as an argv array and run through `execFile` (NO shell), the same
       // rule `composeExec` already states: `options.services` carries
@@ -276,7 +283,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
       const args = ['compose', '-f', composeFile, '-p', projectName, 'up', '-d'];
       if (options?.wait) args.push('--wait');
       if (options?.services?.length) args.push(...options.services);
-      const timeout = options?.timeoutMs ?? 300000; // 5 minute default
+      const timeout = options?.timeoutMs ?? 300000; // 5 minute fallback (see above)
       const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout, env });
 
       const output = [stdout, stderr].filter(Boolean).join('\n');
