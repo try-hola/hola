@@ -53,6 +53,7 @@ import {
   checkCandidateStillEligible,
   judgeRestoreChoice,
   resolveRestoreNameDefaults,
+  classifyNonEmptyTarget,
   type CandidateSource,
 } from '../../services/core/restore-candidates';
 
@@ -732,6 +733,59 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
     expect(await dirHasContents(emptyRoot, ['.hola'])).toBe(false);
   });
 
+  test('scenario 16b: a restore that fails AFTER extraction refuses the retry with RESTORE_INCOMPLETE, never a silent start (#489)', async () => {
+    // Pure half: the discriminator is `restoreStartedAt`, nothing else. Both
+    // rows REFUSE — the difference is which state they name and which recovery
+    // they hand the operator.
+    expect(classifyNonEmptyTarget({ deploymentId: 'd1', deploymentName: 'Target', restoreStartedAt: undefined }))
+      .toMatchObject({ code: 'RESTORE_TARGET_NOT_EMPTY', details: { deploymentId: 'd1' } });
+    const incomplete = classifyNonEmptyTarget({
+      deploymentId: 'd1', deploymentName: 'Target', restoreStartedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(incomplete).toMatchObject({
+      code: 'RESTORE_INCOMPLETE',
+      details: { deploymentId: 'd1', restoreStartedAt: '2026-01-01T00:00:00.000Z' },
+    });
+    // The message has to carry the recovery: this code is job-time only, so it
+    // never reaches a client as `details` it could build a hint from.
+    expect(incomplete.message).toMatch(/uninstall and reinstall/i);
+    expect(incomplete.message).toMatch(/clear its data root/i);
+
+    // End-to-end half: an escaping discard path fails the restore AFTER
+    // extraction (step 6), which is exactly the #489 shape — the payload is on
+    // disk, `restoredAt` was never set.
+    const system = makeSystem();
+    const source = await install(system, { name: 'source' });
+    await writeExtraData(source.deploymentId, 'note.txt', 'hello');
+    acceptsConfig = ['restore@1', 'backup@1'];
+    restoreConfig = [{ id: 'default', discard: ['../escape'] }];
+
+    const failed = await install(system, {
+      name: 'half-restored',
+      restoreFrom: { candidateId: source.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] },
+    });
+    expect(failed.job?.status).toBe('failed');
+    // The payload really did land, and really was left in place (FR-022a).
+    expect(await readExtraData(failed.deploymentId, 'note.txt')).toBe('hello');
+    const afterFailure = await system.deployments.getDeployment(failed.deploymentId);
+    expect(afterFailure.restoredAt).toBeUndefined();
+
+    // Retrying the deploy re-enters the restore sequence (the gate is
+    // unchanged) and refuses at step 1 — now naming the half-landed state and
+    // the way out, instead of the generic "already holds app data".
+    const { jobId } = await system.deployments.executeAction(failed.deploymentId, { action: 'start' });
+    const retried = await waitForJob(system.jobs, jobId!);
+    expect(retried.status).toBe('failed');
+    expect(retried.error).toMatch(/already wrote data here/i);
+    expect(retried.error).toMatch(/uninstall and reinstall/i);
+    // Still a REFUSAL, not a proceed: nothing started, the data is untouched,
+    // and the restore was never marked consumed.
+    const afterRetry = await system.deployments.getDeployment(failed.deploymentId);
+    expect(afterRetry.status).toBe('error');
+    expect(afterRetry.restoredAt).toBeUndefined();
+    expect(await readExtraData(failed.deploymentId, 'note.txt')).toBe('hello');
+  });
+
   // =========================================================================
   // Restore hook service names are APP-SUPPLIED (review, spec 007 target A)
   // =========================================================================
@@ -1026,25 +1080,31 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
 
   test('scenario 40: name/subdomain default from the candidate (pure); a divergent choice warns host-divergence (end-to-end)', async () => {
     // The pure half: defaulting itself, isolated from the routing/collision
-    // machinery a real install exercises (which a SECOND live copy of the
-    // SAME app at the SAME address would correctly refuse — that's Traefik
-    // routing working as intended, not this rule failing).
+    // machinery a real install exercises. `candidateLiveSubdomain: null` is
+    // the case where the default is actually reachable — the candidate no
+    // longer routes under the address its record remembers.
     const defaults = resolveRestoreNameDefaults({
       requestedName: undefined,
+      candidateId: 'demoapp-aaaaaaaa',
       candidateName: 'Recipes',
       candidateSubdomain: 'recipes',
+      candidateLiveSubdomain: null,
       appId: 'demoapp',
       deriveSubdomain: (name, appId) => slugifySubdomain(name || appId),
     });
-    expect(defaults).toEqual({ name: 'Recipes', subdomain: 'recipes', warnings: [] });
+    expect(defaults).toEqual({ ok: true, name: 'Recipes', subdomain: 'recipes', warnings: [] });
 
     const diverging = resolveRestoreNameDefaults({
       requestedName: 'a-totally-different-name',
+      candidateId: 'demoapp-aaaaaaaa',
       candidateName: 'Recipes',
       candidateSubdomain: 'recipes',
+      candidateLiveSubdomain: 'recipes',
       appId: 'demoapp',
       deriveSubdomain: (name, appId) => slugifySubdomain(name || appId),
     });
+    expect(diverging.ok).toBe(true);
+    if (!diverging.ok) throw new Error('unreachable');
     expect(diverging.subdomain).toBe('a-totally-different-name');
     expect(diverging.warnings).toEqual([{ code: 'host-divergence', from: 'recipes', to: 'a-totally-different-name' }]);
 
@@ -1063,6 +1123,71 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
     expect(diverged.warnings).toBeTruthy();
     expect(diverged.warnings?.[0]).toMatchObject({ code: 'host-divergence' });
     await waitForJob(system.jobs, diverged.jobId!);
+  });
+
+  test('scenario 40a: with no name, the FR-035 default onto the live candidate\'s own address refuses RESTORE_ADDRESS_REQUIRED (#490)', async () => {
+    // Pure half: the default resolves onto the address the candidate STILL
+    // routes under, so it is refused rather than returned — no suffixed slug
+    // is invented, because an address is an operator decision.
+    const refused = resolveRestoreNameDefaults({
+      requestedName: undefined,
+      candidateId: 'demoapp-aaaaaaaa',
+      candidateName: 'Recipes',
+      candidateSubdomain: 'recipes',
+      candidateLiveSubdomain: 'recipes',
+      appId: 'demoapp',
+      deriveSubdomain: (name, appId) => slugifySubdomain(name || appId),
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      code: 'RESTORE_ADDRESS_REQUIRED',
+      details: { candidateId: 'demoapp-aaaaaaaa', candidateName: 'Recipes', subdomain: 'recipes' },
+    });
+
+    // It fires ONLY on the default. An operator who names the install has made
+    // the address decision; a collision there is the routing layer's to report.
+    const named = resolveRestoreNameDefaults({
+      requestedName: 'recipes-restored',
+      candidateId: 'demoapp-aaaaaaaa',
+      candidateName: 'Recipes',
+      candidateSubdomain: 'recipes',
+      candidateLiveSubdomain: 'recipes',
+      appId: 'demoapp',
+      deriveSubdomain: (name, appId) => slugifySubdomain(name || appId),
+    });
+    expect(named.ok).toBe(true);
+
+    // A candidate whose recorded subdomain differs from the one it routes
+    // under today: the recorded address is free, so the default still stands.
+    const stale = resolveRestoreNameDefaults({
+      requestedName: undefined,
+      candidateId: 'demoapp-aaaaaaaa',
+      candidateName: 'Recipes',
+      candidateSubdomain: 'old-recipes',
+      candidateLiveSubdomain: 'recipes',
+      appId: 'demoapp',
+      deriveSubdomain: (name, appId) => slugifySubdomain(name || appId),
+    });
+    expect(stale).toMatchObject({ ok: true, subdomain: 'old-recipes' });
+
+    // End-to-end half: the SDK/API shape an omitted `name` actually produces —
+    // a structured CONFLICT naming the candidate, not the routing layer's bare
+    // "Host '...' is already in use" (which carries no details.code at all).
+    const system = makeSystem();
+    const source = await install(system, { name: 'source-recipes' });
+    await writeExtraData(source.deploymentId, 'note.txt', 'hello');
+    const { draftId } = await system.drafts.createDraft({
+      appId: APP_ID, version: '1.0.0',
+      restoreFrom: { candidateId: source.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] },
+    });
+    await system.drafts.updateDraft(draftId, { composeOverride: COMPOSE_WITH_DATA });
+    await system.drafts.finalizeDraft(draftId);
+    await expect(
+      system.deployments.createFromDraft({ draftId, options: { autoStart: false }, allowMultiple: true }),
+    ).rejects.toMatchObject({
+      code: 'CONFLICT',
+      details: { code: 'RESTORE_ADDRESS_REQUIRED', candidateId: source.deploymentId, subdomain: 'source-recipes' },
+    });
   });
 
   test('scenario 42: a required-and-absent acknowledgement fails the create with RESTORE_ACK_REQUIRED', async () => {

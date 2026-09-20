@@ -303,6 +303,10 @@ export interface RestoreNameDefaults {
   warnings: RestoreWarning[];
 }
 
+export type RestoreNameResolution =
+  | ({ ok: true } & RestoreNameDefaults)
+  | { ok: false; code: RestoreRefusalCode; message: string; details: Record<string, unknown> };
+
 /**
  * FR-035: default a restored install's name/subdomain from the candidate
  * when the operator supplied no explicit name, and warn when an explicit
@@ -311,23 +315,117 @@ export interface RestoreNameDefaults {
  * own `deriveSubdomain` is injected rather than imported, so this stays a
  * function of its arguments (Constitution III/V) and is directly testable
  * without the routing/collision machinery a real install exercises.
+ *
+ * **The address the default lands on can be occupied (#490).** A restore
+ * candidate is by definition a deployment that still exists on this host, and
+ * a deployment owns its route whether it is running or stopped — so FR-035's
+ * "default from the candidate's recorded address" resolves, whenever the
+ * candidate still routes under that address, onto an address that is taken.
+ * `candidateLiveSubdomain` is the label the candidate ACTUALLY routes under
+ * right now (its deployment record's, not its identity record's, which can be
+ * stale); when the resolved default equals it, this refuses with
+ * `RESTORE_ADDRESS_REQUIRED` instead of returning an address the create is
+ * guaranteed to reject a few lines later with a bare routing `CONFLICT` that
+ * names no candidate and mentions no restore (FR-037).
+ *
+ * The refusal fires ONLY when the operator supplied nothing. An operator who
+ * names the install has made the address decision, collision included, and
+ * gets the routing layer's own conflict — which names the owning deployment.
+ *
+ * REJECTED alternative, deliberately not implemented: deriving a distinct
+ * (e.g. suffixed) slug so the default always succeeds. That silently creates
+ * an install at a NEW address holding data full of the OLD address's absolute
+ * URLs — manufacturing exactly the divergence the `host-divergence` warning
+ * exists to WARN about, without the operator ever choosing it. An address is
+ * an operator decision; when the default cannot be honoured, the operator has
+ * to make it.
  */
 export function resolveRestoreNameDefaults(input: {
   requestedName: string | undefined;
+  candidateId: string;
   candidateName: string;
   candidateSubdomain: string | null;
+  /** The label the candidate deployment routes under today, or `null` if it routes nowhere. */
+  candidateLiveSubdomain: string | null;
   appId: string;
   deriveSubdomain: (name: string | undefined, appId: string) => string;
-}): RestoreNameDefaults {
+}): RestoreNameResolution {
   const name = input.requestedName || input.candidateName;
   const subdomain = !input.requestedName && input.candidateSubdomain
     ? input.candidateSubdomain
-    : input.deriveSubdomain(input.requestedName || input.candidateName, input.appId);
+    : input.deriveSubdomain(name, input.appId);
+
+  if (!input.requestedName && input.candidateLiveSubdomain && subdomain === input.candidateLiveSubdomain) {
+    return {
+      ok: false,
+      code: 'RESTORE_ADDRESS_REQUIRED',
+      message:
+        `Restoring from '${input.candidateName}' (${input.candidateId}) would default this install to ` +
+        `'${subdomain}', the address that candidate still uses. Give the new install its own name or ` +
+        `subdomain — addresses stored inside the restored data still point at '${subdomain}'.`,
+      details: {
+        candidateId: input.candidateId,
+        candidateName: input.candidateName,
+        subdomain,
+      },
+    };
+  }
+
   const warnings: RestoreWarning[] = [];
   if (input.candidateSubdomain && input.candidateSubdomain !== subdomain) {
     warnings.push({ code: 'host-divergence', from: input.candidateSubdomain, to: subdomain });
   }
-  return { name, subdomain, warnings };
+  return { ok: true, name, subdomain, warnings };
+}
+
+/**
+ * Which "the target data root is not empty" refusal a restore is looking at
+ * (#489, FR-014). Both refuse — FR-022 forbids starting an app on a data root
+ * the platform cannot vouch for, and that is the right answer in both cases —
+ * but they describe different states and have different recoveries, so they
+ * are different codes.
+ *
+ * `restoreStartedAt` is the discriminator: it is persisted immediately before
+ * the extraction that wipes and rewrites the root, so its presence means THIS
+ * install's own restore already wrote here and then failed somewhere after.
+ * Absent, the data predates this install's restore entirely.
+ *
+ * Two REJECTED alternatives, deliberately not implemented — do not re-propose
+ * them:
+ *
+ *  - Persisting an attempted-marker (or `restoredAt`) before extraction so a
+ *    RETRY takes the no-restore path and brings the app up on whatever landed.
+ *    A genuinely half-extracted tree would then start: the silent-empty-app
+ *    failure FR-022 exists to forbid, and the worst outcome named in the
+ *    spec's Executive Summary. `restoreStartedAt` here is a diagnostic only —
+ *    it changes the WORDS of the refusal, never the fact of it.
+ *  - Letting a retry re-run the post-extraction steps only (discards, marker
+ *    rewrite, hooks). Nothing can distinguish "extraction completed and a
+ *    discard failed" from "extraction died halfway", so re-running discards
+ *    and hooks risks operating on a partial tree — the same failure by a
+ *    longer route.
+ */
+export function classifyNonEmptyTarget(input: {
+  deploymentId: string;
+  deploymentName: string;
+  restoreStartedAt: string | undefined;
+}): { code: RestoreRefusalCode; message: string; details: Record<string, unknown> } {
+  if (input.restoreStartedAt) {
+    return {
+      code: 'RESTORE_INCOMPLETE',
+      message:
+        `Cannot restore into '${input.deploymentName}': its own restore already wrote data here at ` +
+        `${input.restoreStartedAt} and then failed, so the data root holds a partially restored copy. ` +
+        `That data is still on disk and is NOT safe to start against. Uninstall and reinstall this app ` +
+        `to retry the restore, or clear its data root first if you want to keep this install.`,
+      details: { deploymentId: input.deploymentId, restoreStartedAt: input.restoreStartedAt },
+    };
+  }
+  return {
+    code: 'RESTORE_TARGET_NOT_EMPTY',
+    message: `Cannot restore into '${input.deploymentName}': its data root already holds app data.`,
+    details: { deploymentId: input.deploymentId },
+  };
 }
 
 export interface RestoreValidationInput {

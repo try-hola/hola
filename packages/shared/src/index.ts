@@ -399,8 +399,21 @@ export type RestoreRefusalCode =
   | 'RESTORE_CANDIDATE_GONE'
   | 'RESTORE_CANDIDATE_BUSY'
   | 'RESTORE_TARGET_NOT_EMPTY'
+  // Distinct from RESTORE_TARGET_NOT_EMPTY on purpose (#489). That one means
+  // "something ELSE put data in this root" — an operator pre-seeded it, or an
+  // uninstall left it behind — and the data is not ours. This one means "THIS
+  // install's own restore already wrote here and then failed": the data IS the
+  // half-landed payload, and the recovery differs (uninstall + reinstall, or
+  // clear the data root, then retry). One code for both would hand every
+  // surface a recovery that is wrong for half the cases it fires on.
+  | 'RESTORE_INCOMPLETE'
   | 'RESTORE_PAYLOAD_EMPTY'
   | 'RESTORE_HOOK_FAILED'
+  // FR-035's address default resolved onto an address the chosen candidate
+  // still owns (#490). Refused here, naming the candidate, rather than left to
+  // fall through to the routing layer's bare host conflict, which says nothing
+  // about restore and gives a non-interactive caller nothing to act on.
+  | 'RESTORE_ADDRESS_REQUIRED'
   | 'RESTORE_NOT_SUPPORTED'
   // Distinct from RESTORE_NOT_SUPPORTED on purpose: that one means "this
   // INSTALL PATH cannot restore" (install-by-ref, no catalog index), and its
@@ -2221,6 +2234,15 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // The restore choice that was applied to this install's first deploy, carried
   // from the finalized manifest. Absent when this install was not restored.
   restoreFrom?: RestoreChoice;
+  // ISO time the restore began WRITING — persisted immediately before the
+  // extraction that `rm -rf`s the target data root (#489). It is purely a
+  // diagnostic: it never changes which path a later job takes (the gate stays
+  // `restoreFrom && !restoredAt && !previousReleaseId`), it only lets the
+  // refusal that a retry hits say WHICH non-empty-target case it is — this
+  // install's own half-landed payload (`RESTORE_INCOMPLETE`) rather than data
+  // something else put there (`RESTORE_TARGET_NOT_EMPTY`). Server-side only:
+  // not projected onto `DeploymentDetail`.
+  restoreStartedAt?: string;
   // ISO time the restore completed successfully. Its presence is the
   // consumption marker: a restart/promote/rollback finds it set and skips the
   // restore sequence — a restore applies to the first deploy only.

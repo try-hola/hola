@@ -121,13 +121,27 @@ through `mergeUpgradeAppEnv`; `name` and `subdomain` default from the candidate
 | `RESTORE_UPGRADE_PATH` | + `suggestedVersion` |
 | `RESTORE_ENV_REQUIRED` | + `missingKeys[]` |
 | `RESTORE_ACK_REQUIRED` | + `required[]` |
+| `RESTORE_ADDRESS_REQUIRED` | FR-035's default would land on the address the candidate still routes under; + `candidateId`, `candidateName`, `subdomain` |
 
-**Three codes are deliberately absent from this table.**
-`RESTORE_TARGET_NOT_EMPTY`, `RESTORE_PAYLOAD_EMPTY` and `RESTORE_HOOK_FAILED`
-(data-model.md §4) are reachable only inside the deploy job, after the create call
-has returned. They surface on the deployment's error state and in the job log, not
-in any HTTP response body. `RESTORE_CANDIDATE_GONE` and `RESTORE_CANDIDATE_BUSY`
-appear in both places, because the job re-resolves the candidate (FR-013a).
+**`RESTORE_ADDRESS_REQUIRED` (#490).** With no `name` in the request, FR-035
+defaults the new install's address to the candidate's own — and the candidate,
+being an existing deployment on this host, still owns it. That default is
+refused here, with the candidate named, rather than allowed to reach
+`routingService.validateRule` and come back as a bare host `CONFLICT` carrying
+no `details.code` and no mention of restore (FR-037). It fires **only** when the
+caller supplied no `name`: an operator who names the install has made the
+address decision and gets the routing layer's own conflict, which names the
+owning deployment. The server never derives a distinct or suffixed slug on the
+operator's behalf — that would put the restored data, full of the old address's
+absolute URLs, at a new address nobody chose.
+
+**Four codes are deliberately absent from this table.**
+`RESTORE_TARGET_NOT_EMPTY`, `RESTORE_INCOMPLETE`, `RESTORE_PAYLOAD_EMPTY` and
+`RESTORE_HOOK_FAILED` (data-model.md §4) are reachable only inside the deploy
+job, after the create call has returned. They surface on the deployment's error
+state and in the job log, not in any HTTP response body.
+`RESTORE_CANDIDATE_GONE` and `RESTORE_CANDIDATE_BUSY` appear in both places,
+because the job re-resolves the candidate (FR-013a).
 
 ---
 

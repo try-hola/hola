@@ -140,23 +140,44 @@ rather than prose (FR-037, and `deploy-flow.ts:137-155`'s established rule).
 | `RESTORE_ENV_REQUIRED` | `restore.requiresEnv` and no environment record | `missingKeys[]` |
 | `RESTORE_CANDIDATE_GONE` | Candidate deleted between choice and deploy | `candidateId` |
 | `RESTORE_CANDIDATE_BUSY` | Candidate not in a settled state | `candidateId`, `status` |
-| `RESTORE_TARGET_NOT_EMPTY` | Target data root already holds app data | `deploymentId` |
+| `RESTORE_TARGET_NOT_EMPTY` | Target data root already holds app data **something else put there** | `deploymentId` |
+| `RESTORE_INCOMPLETE` | This install's own restore wrote into the root and then failed (#489) | `deploymentId`, `restoreStartedAt` |
 | `RESTORE_PAYLOAD_EMPTY` | Post-condition failed: nothing landed (FR-016) | `deploymentId` |
 | `RESTORE_HOOK_FAILED` | A restore hook failed or its service never became healthy | `participationId`, `service` |
 | `RESTORE_NOT_SUPPORTED` | `restoreFrom` supplied on the install-by-ref path | — |
 | `RESTORE_NOT_ACCEPTED` | The target app declares no `restore@1` in `accepts` | `appId` |
 | `RESTORE_ACK_REQUIRED` | A required acknowledgement code was absent | `required[]` |
+| `RESTORE_ADDRESS_REQUIRED` | FR-035's default would land on the address the candidate still routes under (#490) | `candidateId`, `candidateName`, `subdomain` |
 
-**Create-time vs job-time.** Seven of these can be returned synchronously from a
+**`RESTORE_TARGET_NOT_EMPTY` vs `RESTORE_INCOMPLETE` (#489).** Both are FR-014
+refusing to write into a data root that already holds app data, and both stay
+refusals — FR-022 forbids starting an app on a tree the platform cannot vouch
+for. They differ in what the data *is* and therefore in the recovery, so they
+are different codes. The discriminator is `deployment.restoreStartedAt`, an ISO
+timestamp persisted immediately **before** the extraction that wipes and
+rewrites the root: present, this install's own restore half-landed here
+(`RESTORE_INCOMPLETE`, recovery = uninstall + reinstall, or clear the data
+root); absent, the data predates this install's restore (`RESTORE_TARGET_NOT_EMPTY`).
+`restoreStartedAt` is a **diagnostic only** — the job-entry gate stays
+`restoreFrom && !restoredAt && !previousReleaseId`, so a retry still enters the
+restore sequence and still refuses. Two designs that would instead let a retry
+proceed were considered and rejected: persisting an attempted-marker so the
+retry takes the no-restore path, and re-running only the post-extraction steps.
+Both can start an app on a half-extracted tree, which is the silent-empty-app
+outcome the Executive Summary names as the worst in this feature.
+
+**Create-time vs job-time.** Nine of these can be returned synchronously from a
 draft-create or deployment-create call, so a client sees them in a `409` body.
-Three cannot: `RESTORE_TARGET_NOT_EMPTY`, `RESTORE_PAYLOAD_EMPTY` and
-`RESTORE_HOOK_FAILED` are only reachable **inside the deploy job**, long after the
-request returned. They surface on the deployment's error state and in the job log,
-never in a create response — which is why they are absent from the error tables in
-`contracts/api.md` and from the CLI's hint mapping in `contracts/cli.md`. The
-union is one union; the delivery channel differs. `RESTORE_CANDIDATE_GONE` and
-`RESTORE_CANDIDATE_BUSY` are the two that occur in **both** places, because the
-job re-resolves the candidate (FR-013a).
+Four cannot: `RESTORE_TARGET_NOT_EMPTY`, `RESTORE_INCOMPLETE`,
+`RESTORE_PAYLOAD_EMPTY` and `RESTORE_HOOK_FAILED` are only reachable **inside
+the deploy job**, long after the request returned. They surface on the
+deployment's error state and in the job log, never in a create response — which
+is why they are absent from the error tables in `contracts/api.md` and from the
+CLI's hint mapping in `contracts/cli.md`. The union is one union; the delivery
+channel differs. `RESTORE_CANDIDATE_GONE` and `RESTORE_CANDIDATE_BUSY` are the
+two that occur in **both** places, because the job re-resolves the candidate
+(FR-013a). `RESTORE_ADDRESS_REQUIRED` is create-time only: it is raised while
+the deployment's address is being resolved, before any state is created.
 
 ---
 
@@ -186,6 +207,7 @@ migration.
 |---|---|---|---|---|
 | `lineageId` | `string?` | `restoreFrom` ? candidate's `lineageId` : `deployment.id` | yes | **Reading it is the change spec 006 predicted.** `writeInstanceMarkers` becomes `deployment.lineageId ?? deployment.id` (`deployment.ts:3374`). The fallback is what makes this zero-migration: an older record reads `undefined` and yields exactly the value it always had. |
 | `restoreFrom` | `RestoreChoice?` | the finalized manifest | yes | Persisted beside `channel` (`deployment.ts:1028`), **not** in the job payload (R3). |
+| `restoreStartedAt` | `string?` | set **and flushed** by the job immediately before extraction — ISO 8601 | yes | Diagnostic only (#489), never a gate. Persisted before the first write so it survives a hard kill mid-extraction; read only by `classifyNonEmptyTarget` to tell `RESTORE_INCOMPLETE` from `RESTORE_TARGET_NOT_EMPTY`. Not projected onto `DeploymentDetail`. |
 | `restoredAt` | `string?` | set by the job on success — ISO 8601 | yes | Consumption marker. Its presence is what makes FR-012 enforceable: a restart/promote/rollback finds it set and skips. |
 
 **Why the record and not the payload** (R3): the deploy payload is
@@ -241,11 +263,17 @@ createFromDraft ─> re-validated (the candidate may have changed), acknowledgem
 
 deploy job ────> if restoreFrom && !restoredAt:
                    assert target empty · re-resolve candidate · quiesce + capture
-                   · extract · assert payload present · discard · rewrite marker
-                   · write OIDC file · up --wait <hook services> · run hooks
+                   · persist restoreStartedAt · extract · assert payload present
+                   · discard · rewrite marker · write OIDC file
+                   · up --wait <hook services> · run hooks
                  then set restoredAt
 
 later actions ─> restoredAt is set ⇒ skip. The restore is consumed exactly once.
+
+retry after a ─> restoredAt still unset ⇒ the sequence is re-entered and the
+failed restore    "assert target empty" step refuses again — now as
+                  RESTORE_INCOMPLETE, because restoreStartedAt is set, naming
+                  the recovery instead of a bare "already holds app data".
 ```
 
 **Two independent guards enforce FR-012**: the action must be the deployment's

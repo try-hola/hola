@@ -68,6 +68,7 @@ cheapest (one Postgres, one app container, a declared healthcheck on both).
 |---|---|---|---|
 | 15 | The restore runs after `composePull` and before `composeUp`. Assert on call ordering through the Mock docker service. | U | FR-013 |
 | 16 | A target data root that already holds app data aborts with `RESTORE_TARGET_NOT_EMPTY`. A root holding only `.hola/` proceeds — the marker is not app data. | U-fs | FR-014 |
+| 16b | A restore that fails **after** extraction leaves `restoreStartedAt` persisted; a later `start` re-enters the sequence and refuses with `RESTORE_INCOMPLETE` — naming the half-landed state and the recovery — rather than the generic `RESTORE_TARGET_NOT_EMPTY`. It still refuses: the app is never started on a partial tree (#489). | U-fs | FR-014, FR-022, FR-037 |
 | 16a | A candidate deleted, or moved out of a settled state, between the draft and the deploy job fails the install with `RESTORE_CANDIDATE_GONE` / `RESTORE_CANDIDATE_BUSY` — the job re-resolves rather than trusting the draft. | U-fs | FR-013a |
 | 17 | The source's pre-hooks run before the capture, its post-hooks run after, and after the restore the source's data, status and address are unchanged and it is still running. | VM | FR-015, SC-006, US1-AC5 |
 | 18 | After a restore the target data root holds the source's files. With the archive emptied, the install fails with `RESTORE_PAYLOAD_EMPTY` rather than reporting success. **No subtree search** — the post-condition is the mechanism (research R9). | U-fs | FR-016 |
@@ -107,6 +108,7 @@ cheapest (one Postgres, one app container, a declared healthcheck on both).
 | 38 | With no environment record, the warning names exactly the keys that are `isSecret` **and** carry a `generate` recipe — not every secret, not every generated value. | U-fs | FR-033, US2-AC3 |
 | 39 | With `requiresEnv: true` and no environment record, the restore is **refused** (`RESTORE_ENV_REQUIRED`), not warned. | U | FR-034, US3-AC4 |
 | 40 | Name and subdomain default from the candidate; changing the subdomain produces a `host-divergence` warning naming both. | U | FR-035, US1-AC1 |
+| 40a | With no `name` supplied, the FR-035 default lands on the address the candidate still routes under and is refused with `RESTORE_ADDRESS_REQUIRED` naming the candidate — never a bare routing `CONFLICT`, and never an auto-suffixed slug the operator did not choose (#490). | U | FR-035, FR-037 |
 | 41 | Every refusal carries `details.code`; every version refusal that has a next step carries `suggestedVersion`. | U | FR-037, SC-005 |
 | 42 | A required acknowledgement code that is absent fails the create with `RESTORE_ACK_REQUIRED` — the same shape as a missing `grant`. | U | FR-037a, FR-046 |
 | 43 | Declining to carry configuration that **is** available still produces the named warning and still requires the acknowledgement. | U-fs | FR-033, US2-AC4 |

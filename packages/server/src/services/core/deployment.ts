@@ -59,6 +59,7 @@ import {
   deriveEnvNotCarriedKeys,
   judgeRestoreChoice,
   resolveRestoreNameDefaults,
+  classifyNonEmptyTarget,
   type CandidateSource,
   type RestoreIdentitySnapshot,
 } from './restore-candidates';
@@ -1020,6 +1021,11 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // candidate when the operator supplied no explicit name.
       let restoreCandidateName: string | undefined;
       let restoreCandidateSubdomain: string | null | undefined;
+      // The label the candidate ACTUALLY routes under right now — read from its
+      // deployment record, not its identity record (#490). The identity record's
+      // `subdomain` is a snapshot and can be stale; only the live one tells us
+      // whether FR-035's default would land on an occupied address.
+      let restoreCandidateLiveSubdomain: string | null | undefined;
       const restoreFrom = artifacts?.manifest.restoreFrom;
       if (restoreFrom) {
         const source = await this.getRestoreSource(restoreFrom.candidateId);
@@ -1041,6 +1047,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         restoreLineageId = judged.candidate.lineageId;
         restoreCandidateName = judged.candidate.name;
         restoreCandidateSubdomain = judged.candidate.subdomain;
+        restoreCandidateLiveSubdomain = source?.deployment.subdomain ?? null;
       }
 
       // Release channel this deployment follows (#428): copied from the
@@ -1100,15 +1107,27 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // different slug) diverges from the candidate's. `resolveRestoreNameDefaults`
       // is the pure form of this rule (restore-candidates.ts) — unaffected
       // installs skip it entirely and keep today's plain `deriveSubdomain` call.
+      // When the default would land on the address the candidate itself still
+      // routes under, this REFUSES with `RESTORE_ADDRESS_REQUIRED` (#490)
+      // rather than handing `onBeforeCreate` an address it is certain to
+      // reject with a bare routing conflict that never mentions restore.
       const restoreNameDefaults = restoreFrom
         ? resolveRestoreNameDefaults({
             requestedName: request.name,
+            candidateId: restoreFrom.candidateId,
             candidateName: restoreCandidateName ?? app,
             candidateSubdomain: restoreCandidateSubdomain ?? null,
+            candidateLiveSubdomain: restoreCandidateLiveSubdomain ?? null,
             appId: app,
             deriveSubdomain,
           })
         : undefined;
+      if (restoreNameDefaults && !restoreNameDefaults.ok) {
+        throw new ConflictError(restoreNameDefaults.message, {
+          code: restoreNameDefaults.code,
+          ...restoreNameDefaults.details,
+        });
+      }
       const subdomain = restoreNameDefaults?.subdomain ?? deriveSubdomain(request.name, app);
       const restoreWarnings: RestoreWarning[] = restoreNameDefaults?.warnings ?? [];
 
@@ -3881,9 +3900,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * (research R8). Ten steps, each independently justified in R8 /
    * data-model.md §8:
    *
-   *  1. assert the target root holds no app data (FR-014)
+   *  1. assert the target root holds no app data (FR-014) — and, if it does,
+   *     say WHICH non-empty case it is (`classifyNonEmptyTarget`, #489)
    *  2. re-resolve the candidate — it may have changed since the draft (FR-013a)
    *  3. quiesce + capture the source (FR-015, R14)
+   *     3a. persist `restoreStartedAt` — the last read-only moment (#489)
    *  4. extract into the target root (R7 — root-relative, no intermediate copy)
    *  5. assert the payload actually landed (FR-016, R9 — a post-condition, not a subtree search)
    *  6. apply `discard` paths (FR-017, R13)
@@ -3917,11 +3938,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Step 1 (FR-014): the ignore-list is the same rule candidate eligibility
     // uses (research R5) — the `.hola` marker the platform itself just wrote
     // via `materializeCompose` must not count as "already holds app data".
+    //
+    // The refusal is not one refusal (#489): `classifyNonEmptyTarget` splits it
+    // into "something else put data here" (`RESTORE_TARGET_NOT_EMPTY`) and
+    // "this install's own restore half-landed and failed" (`RESTORE_INCOMPLETE`),
+    // which have different recoveries. Both still REFUSE — see that function for
+    // the two retry-and-proceed designs that were considered and rejected.
     if (await dirHasContents(targetAppRoot, [INSTALL_MARKERS_DIR])) {
-      throw new ConflictError(
-        `Cannot restore into '${deployment.name}': its data root already holds app data.`,
-        { code: 'RESTORE_TARGET_NOT_EMPTY', deploymentId: deployment.id },
-      );
+      const refusal = classifyNonEmptyTarget({
+        deploymentId: deployment.id,
+        deploymentName: deployment.name,
+        restoreStartedAt: deployment.restoreStartedAt,
+      });
+      throw new ConflictError(refusal.message, { code: refusal.code, ...refusal.details });
     }
 
     // Step 2 (FR-013a): re-resolve rather than trust the draft-time choice —
@@ -3996,6 +4025,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // postHook (clean up the dump) always runs, mirroring capturePreUpgradeSnapshot.
         await this.runPostHooks(participants);
       }
+
+      // Record that this install's restore is about to WRITE, and flush it to
+      // disk before the write happens (#489). Everything above this line is
+      // read-only with respect to the target root; everything below it may
+      // leave the root holding a partial payload. Persisting here rather than
+      // relying on the job's own success/catch persist is what keeps the fact
+      // true across a hard server kill mid-extraction. It is a DIAGNOSTIC, not
+      // a gate: `willRestore` is unchanged, so a retry still enters this
+      // sequence and still refuses at step 1 — only now it can say which
+      // refusal it is (`classifyNonEmptyTarget`).
+      deployment.restoreStartedAt = new Date().toISOString();
+      this.deployments.set(deployment.id, deployment);
+      await this.persistDeployment(deployment);
 
       // Step 4 (R7): extract straight into the target root. Root-relative on
       // both sides (`tar -C <dir> .` in, `-C <dir>` out) — no intermediate

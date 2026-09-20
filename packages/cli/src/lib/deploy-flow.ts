@@ -151,6 +151,8 @@ export function reportDeployError(err: unknown): undefined {
         missingKeys?: string[];
         required?: string[];
         candidateId?: string;
+        candidateName?: string;
+        subdomain?: string;
       } | undefined)
     : undefined;
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
@@ -191,6 +193,15 @@ export function reportDeployError(err: unknown): undefined {
     console.error('Hint: install-by-ref cannot restore — use the catalog install path instead.');
   } else if (details?.code === 'RESTORE_NOT_ACCEPTED') {
     console.error('Hint: this app has not declared that it can be restored; install it fresh and move data in yourself.');
+  } else if (details?.code === 'RESTORE_ADDRESS_REQUIRED') {
+    // #490: the restore would have defaulted to an address the candidate still
+    // holds. The address is the operator's call, so name what is in the way and
+    // ask for one — never invent a suffixed slug on their behalf.
+    console.error(
+      `Hint: ${details.candidateName ? `'${details.candidateName}'` : 'the restore source'} still uses ` +
+        `${details.subdomain ? `'${details.subdomain}'` : 'that address'}. Give the restored copy its own address ` +
+        `with --name (e.g. --name ${details.subdomain ? `${details.subdomain}-restored` : 'myapp-restored'}).`,
+    );
   }
   // #246: a single-instance app already installed (older/untyped error shape,
   // e.g. a pre-spec-005 server) — the message already names the

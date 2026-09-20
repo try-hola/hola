@@ -139,6 +139,9 @@ describe('restore-on-install CLI (spec 007)', () => {
       { code: 'RESTORE_CANDIDATE_GONE', details: {}, expect: '--restore-list' },
       { code: 'RESTORE_CANDIDATE_BUSY', details: {}, expect: '--restore-list' },
       { code: 'RESTORE_NOT_SUPPORTED', details: {}, expect: 'install-by-ref' },
+      // #490: the hint names the candidate and the address it still holds, and
+      // asks for --name — it never invents a suffixed address as the answer.
+      { code: 'RESTORE_ADDRESS_REQUIRED', details: { candidateId: 'mealie-aaa', candidateName: 'Recipes', subdomain: 'recipes' }, expect: '--name' },
     ];
 
     for (const c of cases) {
@@ -151,5 +154,20 @@ describe('restore-on-install CLI (spec 007)', () => {
       expect(String(hintCall![0])).toContain(c.expect);
       errSpy.mockRestore();
     }
+  });
+
+  // ---- #490: the RESTORE_ADDRESS_REQUIRED hint names what is in the way ----
+  it('the RESTORE_ADDRESS_REQUIRED hint names the candidate and the address it holds', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportDeployError(
+      new HolaApiError('', 409, {
+        details: { code: 'RESTORE_ADDRESS_REQUIRED', candidateId: 'mealie-aaa', candidateName: 'Recipes', subdomain: 'recipes' },
+      }),
+    );
+    const hint = String(errSpy.mock.calls.find(call => String(call[0]).startsWith('Hint:'))?.[0] ?? '');
+    expect(hint).toContain('Recipes');
+    expect(hint).toContain('recipes');
+    expect(hint).toContain('--name');
+    errSpy.mockRestore();
   });
 });

@@ -80,6 +80,18 @@ Mapping from `details.code` to the hint, one row per code
 | `RESTORE_CANDIDATE_GONE` / `_BUSY` | suggest `--restore-list` to re-read the current set |
 | `RESTORE_NOT_SUPPORTED` | install-by-ref cannot restore; use the catalog path |
 | `RESTORE_NOT_ACCEPTED` | this app has not declared it can be restored; install fresh |
+| `RESTORE_ADDRESS_REQUIRED` | `candidateName`, `subdomain` → name what still holds the address, ask for `--name <something>` |
+
+The table lists every code a **create call** can return (api.md §2). The four
+job-time codes — `RESTORE_TARGET_NOT_EMPTY`, `RESTORE_INCOMPLETE`,
+`RESTORE_PAYLOAD_EMPTY`, `RESTORE_HOOK_FAILED` (data-model.md §4) — have no row
+and no hint branch: they arrive after the create returned, as a **failed job**,
+which `hola install` reports by exit code and streamed log, never as a
+`HolaApiError` carrying `details`. A hint branch for one of them would be
+unreachable, and building it from the job's message text instead is exactly the
+prose-sniffing this mapping exists to avoid. Their recovery therefore lives in
+the server's own refusal message — which is why `RESTORE_INCOMPLETE` spells out
+"uninstall and reinstall, or clear the data root" in the message itself (#489).
 
 ## Unchanged
 
