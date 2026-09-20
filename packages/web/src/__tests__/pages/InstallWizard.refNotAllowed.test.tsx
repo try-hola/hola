@@ -55,6 +55,12 @@ const catalogSources = {
   update: vi.fn(async () => ({ id: 'pofallon', name: 'pofallon', type: 'index-url' as const, url: 'https://example.test/catalog.json', trust: 'custom' as const, enabled: true })),
 };
 
+// Restore-on-install (spec 007): the wizard's new first step reads this
+// route before a draft exists. No candidates in this fixture set.
+const restoreCandidates = vi.fn(async (appId: string) => ({
+  appId, lineages: [], defaultCandidateId: null, requiresExplicitChoice: false,
+}));
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
@@ -63,19 +69,27 @@ vi.mock('../../utils/api-hybrid', () => ({
       create: vi.fn(),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
+    restoreCandidates: (appId: string) => restoreCandidates(appId),
   },
 }));
 
 const { InstallWizard } = await import('../../pages/InstallWizard');
 
-function renderWizard(search = '?source=pofallon') {
-  return render(
+/** Render, then advance past the new Restore Data step (spec 007) — no
+ *  candidates in these fixtures (and auto-skipped outright for the
+ *  install-by-ref case), so Next is immediately enabled there. Every
+ *  assertion below predates this step and starts from "the draft now exists". */
+async function renderWizard(search = '?source=pofallon') {
+  const utils = render(
     <MemoryRouter initialEntries={[`/install/get2know-cms${search}`]}>
       <Routes>
         <Route path="/install/:appId" element={<InstallWizard />} />
       </Routes>
     </MemoryRouter>
   );
+  await waitFor(() => expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  return utils;
 }
 
 beforeEach(() => {
@@ -88,7 +102,7 @@ afterEach(() => cleanup());
 
 describe('InstallWizard REF_NOT_ALLOWED recovery', () => {
   it('offers the exact fix and applies it as an additional grant, then retries the install', async () => {
-    renderWizard();
+    await renderWizard();
 
     await waitFor(() => expect(screen.getByText('Registry not allowed')).toBeInTheDocument());
     // The suggestion names the registry to be granted — not the raw ref.
@@ -112,7 +126,7 @@ describe('InstallWizard REF_NOT_ALLOWED recovery', () => {
   it('does not offer to patch a source that has none to patch (install-by-ref)', async () => {
     // `/install/ref?ref=…` has no stored source record, so the only remedy is the
     // server-wide baseline — say so instead of dangling an unusable button.
-    renderWizard('?ref=ghcr.io/pofallon/hola-get2know-cms:0.1.13');
+    await renderWizard('?ref=ghcr.io/pofallon/hola-get2know-cms:0.1.13');
 
     await waitFor(() => expect(screen.getByText('Registry not allowed')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /allow .* for/i })).not.toBeInTheDocument();
@@ -126,7 +140,7 @@ describe('InstallWizard REF_NOT_ALLOWED recovery', () => {
     draftsApi.create.mockImplementation(async () => {
       throw Object.assign(new Error('REF_NOT_ALLOWED: blocked'), { code: 'REF_NOT_ALLOWED', statusCode: 403 });
     });
-    renderWizard();
+    await renderWizard();
 
     await waitFor(() => expect(screen.getByText('REF_NOT_ALLOWED: blocked')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /allow/i })).not.toBeInTheDocument();
@@ -134,7 +148,7 @@ describe('InstallWizard REF_NOT_ALLOWED recovery', () => {
   });
 
   it('does not hammer the server: a failed draft is attempted once until the operator retries', async () => {
-    renderWizard();
+    await renderWizard();
 
     await waitFor(() => expect(screen.getByText('Registry not allowed')).toBeInTheDocument());
     // Settle: the effect re-runs on every render, so a missing guard shows up here.

@@ -61,6 +61,12 @@ const catalogApi = {
   })),
 };
 
+// Restore-on-install (spec 007): the wizard's new first step reads this
+// route before a draft exists. No candidates in this fixture set.
+const restoreCandidates = vi.fn(async (appId: string) => ({
+  appId, lineages: [], defaultCandidateId: null, requiresExplicitChoice: false,
+}));
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
@@ -70,6 +76,7 @@ vi.mock('../../utils/api-hybrid', () => ({
       update: (id: string, data: unknown) => updateDeployment(id, data),
       subdomainAvailable: (subdomain: string) => subdomainAvailable(subdomain),
     },
+    restoreCandidates: (appId: string) => restoreCandidates(appId),
   },
 }));
 
@@ -94,8 +101,11 @@ function mockSettingsFetch() {
   }) as unknown as typeof fetch;
 }
 
-function renderWizard(query = '') {
-  return render(
+/** Render, then advance past the new Restore Data step (spec 007) — no
+ *  candidates in these fixtures, so Next is immediately enabled there. Every
+ *  assertion below predates this step and starts from "the draft now exists". */
+async function renderWizard(query = '') {
+  const utils = render(
     <MemoryRouter initialEntries={[`/install/demo${query}`]}>
       <Routes>
         <Route path="/install/:appId" element={<InstallWizard />} />
@@ -104,6 +114,9 @@ function renderWizard(query = '') {
       </Routes>
     </MemoryRouter>
   );
+  await waitFor(() => expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  return utils;
 }
 
 async function clickNext() {
@@ -136,6 +149,7 @@ beforeEach(() => {
   draftsApi.update.mockClear();
   draftsApi.remove.mockClear();
   catalogApi.appById.mockClear();
+  restoreCandidates.mockClear();
 });
 
 afterEach(() => {
@@ -145,7 +159,7 @@ afterEach(() => {
 
 describe('InstallWizard channel radio (spec 005 US1)', () => {
   it('has no radiogroup when not enrolled and no ?channel=', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -154,7 +168,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
 
   it('shows the radiogroup with Stable/pre-release options when enrolled with 2+ channels', async () => {
     showPrerelease = true;
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -166,7 +180,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
   it('is absent when enrolled but the app has only one channel', async () => {
     showPrerelease = true;
     catalogChannels = ['stable'];
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -174,7 +188,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
   });
 
   it('shows the radiogroup with rc checked when opened with ?channel=rc while NOT enrolled', async () => {
-    renderWizard('?channel=rc');
+    await renderWizard('?channel=rc');
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -185,7 +199,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
 
   it('selecting a radio option deletes the current draft and creates a new one on the chosen channel', async () => {
     showPrerelease = true;
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -212,7 +226,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
   // every retry fails the same way and the operator can never get back.
   it('a failed channel switch falls back to the previous channel so Retry can recover', async () => {
     showPrerelease = true;
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -239,7 +253,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
     });
     channelByDraft.set(id, 'rc');
 
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -248,7 +262,7 @@ describe('InstallWizard channel radio (spec 005 US1)', () => {
   });
 
   it('does not show the non-stable note for a plain stable install', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
 
@@ -260,7 +274,7 @@ describe('InstallWizard opened via a channel link (spec 005 US3)', () => {
   it.each([false, true])('shows beta checked and the empty-data note when opened with ?channel=beta (enrolled=%s)', async (enrolled) => {
     showPrerelease = enrolled;
     catalogChannels = ['stable', 'beta'];
-    renderWizard('?channel=beta');
+    await renderWizard('?channel=beta');
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalledWith(
       expect.objectContaining({ appId: 'demo', channel: 'beta' })
     ));
@@ -287,7 +301,7 @@ describe('InstallWizard already-installed conflict (spec 005 US4)', () => {
 
   async function installAndHitConflict(query = '?channel=beta') {
     catalogChannels = ['stable', 'beta'];
-    renderWizard(query);
+    await renderWizard(query);
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
     await walkToSummary();
     fireEvent.click(screen.getByRole('button', { name: /^install$/i }));

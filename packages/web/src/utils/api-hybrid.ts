@@ -57,6 +57,8 @@ export const api = {
   // Registry credentials + install-by-ref (multi-catalog Slice 1) — SDK-only.
   registryCredentials: sdkAdapter.registryCredentials,
   installFromRef: sdkAdapter.installFromRef,
+  // Restore-on-install (spec 007) — SDK-only.
+  restoreCandidates: sdkAdapter.restoreCandidates,
   // Catalog sources (multi-catalog Slice 2) — SDK-only.
   catalogSources: sdkAdapter.catalogSources,
 

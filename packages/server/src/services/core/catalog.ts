@@ -33,6 +33,7 @@ import { coerceConsumes } from './app-registry';
 import { coerceProvides, coerceAccepts, findUndeclaredAcceptorBlocks } from './contracts';
 import { coerceManifestUpgrade } from './manifest-upgrade';
 import { coerceManifestBackup } from './manifest-backup';
+import { coerceManifestRestore } from './manifest-restore';
 import { coerceManifestPush } from './manifest-push';
 import { validateParamSpec, PARAM_TYPES, GENERATE_KINDS } from '@hola/shared/param-validate';
 import { BundleError, BundleUnavailableError, ValidationError, assertValidChannelName } from '../../middleware/error-mapping';
@@ -646,6 +647,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
         security?: unknown;
         upgrade?: unknown;
         backup?: unknown;
+        restore?: unknown;
         push?: unknown;
         profiles?: unknown;
         ingress?: { service?: unknown; port?: unknown };
@@ -745,6 +747,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
       // the only reader downstream).
       const backup = coerceManifestBackup(manifest.backup, this.logger, { appId, version });
 
+      // Per-backup-participation restore declarations (spec 007). Coerced
+      // narrowly like `backup`; unlike `backup` there is no legacy singular
+      // form to accept — this field is new with this feature.
+      const restore = coerceManifestRestore(manifest.restore, this.logger, { appId, version });
+
       // Directories the app declares as pushable (#409). Coerced narrowly like
       // `auth`; the server resolves each `path` against the deployment's data
       // root (and proves containment) at push time.
@@ -765,7 +772,7 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
           ? manifest.ingress.service.trim()
           : undefined;
 
-      return { ...merged, version, composeOverride, auth, consumes, provides, accepts, multiInstance, security, upgrade, backup, push, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
+      return { ...merged, version, composeOverride, auth, consumes, provides, accepts, multiInstance, security, upgrade, backup, restore, push, profiles, ingressService } satisfies GetCatalogAppVersionDetailResponse;
     } catch (error) {
       this.logger.warn('Failed to read or parse bundle manifest', { version, error: error instanceof Error ? error.message : String(error) });
       // Keep the underlying reason in the message, not just the cause: a missing

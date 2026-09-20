@@ -140,7 +140,18 @@ export function reportDeployError(err: unknown): undefined {
   // these flags itself), so the hint is built from `details`, not sniffed
   // from the message text.
   const details = err instanceof HolaApiError
-    ? (err.details as { code?: string; existing?: { id: string; name: string; channel: string }; channelPublished?: boolean } | undefined)
+    ? (err.details as {
+        code?: string;
+        existing?: { id: string; name: string; channel: string };
+        channelPublished?: boolean;
+        // Restore-on-install (spec 007, contracts/cli.md).
+        candidateVersion?: string;
+        targetVersion?: string;
+        suggestedVersion?: string;
+        missingKeys?: string[];
+        required?: string[];
+        candidateId?: string;
+      } | undefined)
     : undefined;
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
     const { id, name, channel } = details.existing;
@@ -152,6 +163,34 @@ export function reportDeployError(err: unknown): undefined {
         channelClause +
         `or force a second copy with '--allow-multiple --name ${name}-2'.`,
     );
+  }
+  // Restore-on-install refusals (spec 007): one branch per `RESTORE_*` code,
+  // hints built from `details` alone — never from the message, for the same
+  // reason as ALREADY_INSTALLED above (contracts/cli.md's mapping table).
+  else if (details?.code === 'RESTORE_SOURCE_NEWER') {
+    console.error(
+      `Hint: this candidate was captured on ${details.candidateVersion ?? 'a newer version'}, newer than ` +
+        `${details.targetVersion ?? 'the version being installed'}. Install ${details.candidateVersion ?? 'that version'} instead: ` +
+        `--app-version ${details.candidateVersion ?? '<candidateVersion>'}.`,
+    );
+  } else if (details?.code === 'RESTORE_UPGRADE_PATH' && details.suggestedVersion) {
+    console.error(
+      `Hint: install ${details.suggestedVersion} first (--app-version ${details.suggestedVersion}), restore there, then promote.`,
+    );
+  } else if (details?.code === 'RESTORE_ENV_REQUIRED') {
+    console.error(
+      `Hint: this app cannot restore without its captured configuration` +
+        (details.missingKeys?.length ? ` (${details.missingKeys.join(', ')})` : '') +
+        `. Pick a candidate with an environment record, or use --carry-env.`,
+    );
+  } else if (details?.code === 'RESTORE_ACK_REQUIRED' && details.required?.length) {
+    console.error(`Hint: add ${details.required.map(c => `--ack ${c}`).join(' ')} to proceed.`);
+  } else if (details?.code === 'RESTORE_CANDIDATE_GONE' || details?.code === 'RESTORE_CANDIDATE_BUSY') {
+    console.error('Hint: the candidate changed since it was chosen. Re-read the current set with --restore-list.');
+  } else if (details?.code === 'RESTORE_NOT_SUPPORTED') {
+    console.error('Hint: install-by-ref cannot restore — use the catalog install path instead.');
+  } else if (details?.code === 'RESTORE_NOT_ACCEPTED') {
+    console.error('Hint: this app has not declared that it can be restored; install it fresh and move data in yourself.');
   }
   // #246: a single-instance app already installed (older/untyped error shape,
   // e.g. a pre-spec-005 server) — the message already names the

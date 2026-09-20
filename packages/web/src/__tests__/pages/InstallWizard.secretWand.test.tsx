@@ -58,24 +58,37 @@ const draftsApi = {
   finalize: vi.fn(),
 };
 
+// Restore-on-install (spec 007): the wizard's new first step reads this
+// route before a draft exists. No candidates in this fixture set.
+const restoreCandidates = vi.fn(async (appId: string) => ({
+  appId, lineages: [], defaultCandidateId: null, requiresExplicitChoice: false,
+}));
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
     deployments: { create: vi.fn() },
+    restoreCandidates: (appId: string) => restoreCandidates(appId),
   },
 }));
 
 // Imported after the mock so InstallWizard picks up the mocked api-hybrid.
 const { InstallWizard } = await import('../../pages/InstallWizard');
 
-function renderWizard() {
-  return render(
+/** Render, then advance past the new Restore Data step (spec 007) — no
+ *  candidates in these fixtures, so Next is immediately enabled there. Every
+ *  assertion below predates this step and starts from "the draft now exists". */
+async function renderWizard() {
+  const utils = render(
     <MemoryRouter initialEntries={['/install/testapp']}>
       <Routes>
         <Route path="/install/:appId" element={<InstallWizard />} />
       </Routes>
     </MemoryRouter>
   );
+  await waitFor(() => expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  return utils;
 }
 
 beforeEach(() => {
@@ -83,6 +96,7 @@ beforeEach(() => {
   draftsApi.create.mockClear();
   draftsApi.byId.mockClear();
   draftsApi.update.mockClear();
+  restoreCandidates.mockClear();
 });
 
 afterEach(() => {
@@ -100,7 +114,7 @@ function wandFor(labelPattern: RegExp): HTMLElement {
 
 describe('InstallWizard secret wand', () => {
   it('auto-fills a seeded secret with a `generate` recipe on draft load, no click required', async () => {
-    renderWizard();
+    await renderWizard();
 
     await waitFor(() => {
       const generatedInput = screen.getByLabelText(/^Generated secret/) as HTMLInputElement;
@@ -113,7 +127,7 @@ describe('InstallWizard secret wand', () => {
   });
 
   it('does not auto-fill a seeded secret with no generate recipe', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(screen.getByLabelText(/^Generated secret/)).toBeInTheDocument());
 
     const legacyInput = screen.getByLabelText(/^Legacy secret/) as HTMLInputElement;
@@ -121,7 +135,7 @@ describe('InstallWizard secret wand', () => {
   });
 
   it('uses generateSecretValue with the spec recipe when the wand is clicked again', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(screen.getByLabelText(/^Generated secret/)).toBeInTheDocument());
 
     fireEvent.click(wandFor(/^Generated secret/));
@@ -133,7 +147,7 @@ describe('InstallWizard secret wand', () => {
   });
 
   it('falls back to the legacy 32-byte-hex value for a seeded secret with no generate recipe', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(screen.getByLabelText(/^Legacy secret/)).toBeInTheDocument());
 
     fireEvent.click(wandFor(/^Legacy secret/));

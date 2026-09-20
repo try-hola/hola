@@ -5,13 +5,13 @@
  * Drafts are mutable until finalized into immutable releases.
  */
 
-import type { 
-  Draft, 
-  DraftFile, 
-  CreateDraftRequest, 
-  CreateDraftResponse, 
-  GetDraftResponse, 
-  PatchDraftRequest, 
+import type {
+  Draft,
+  DraftFile,
+  CreateDraftRequest,
+  CreateDraftResponse,
+  GetDraftResponse,
+  PatchDraftRequest,
   PatchDraftResponse,
   UploadDraftFileResponse,
   DeleteDraftFileResponse,
@@ -24,8 +24,10 @@ import type {
   AppSecurityConfig,
   AppUpgradeMeta,
   AppBackupDeclaration,
+  AppRestoreDeclaration,
   AppPushTarget,
-  AppProfileConfig
+  AppProfileConfig,
+  RestoreChoice
 } from '@hola/shared';
 
 import { createHash } from 'crypto';
@@ -34,11 +36,14 @@ import { STABLE_CHANNEL } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError, assertValidChannelName } from '../../middleware/error-mapping';
 import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
+import { mergeUpgradeAppEnv } from './upgrade-env';
+import { deriveEnvNotCarriedKeys, judgeRestoreChoice, type CandidateSource } from './restore-candidates';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
 import type { RegistryCredentialService } from './registry-credentials';
 import type { RoutingService } from './routing';
+import type { DeploymentService } from './deployment';
 
 /**
  * Shape of `drafts/<id>/finalized/manifest.json` produced by `finalizeDraft`.
@@ -101,6 +106,10 @@ export interface FinalizedManifest {
   // Per-app pre/post-backup hooks (#121) carried from the bundle manifest so the
   // snapshot path can run them around the file capture.
   backup?: AppBackupDeclaration;
+  // Per-backup-participation restore declarations (spec 007) carried from the
+  // bundle manifest so the restore sequence can apply discards/hooks without
+  // re-reading the bundle.
+  restore?: AppRestoreDeclaration[];
   // Pushable directories (#409) carried from the bundle manifest so `push-targets`
   // can resolve them against the deployment's data root without re-reading the bundle.
   push?: AppPushTarget[];
@@ -118,6 +127,11 @@ export interface FinalizedManifest {
   // read as "not published" (pre-#431 manifests, install-by-ref, a draft built
   // from placeholder defaults because the catalog was unavailable).
   channelPublished?: boolean;
+  // Restore-on-install choice (spec 007), carried outside `canonicalSpec`
+  // beside `channel` — it names a source deployment, not deployable content,
+  // and two finalizes differing only in `restoreFrom` must produce the same
+  // checksum. Absent means no restore.
+  restoreFrom?: RestoreChoice;
   files: FinalizedManifestFile[];
   checksum: string;
   finalizedAt: string;
@@ -297,6 +311,125 @@ export class RealDraftService implements DraftService {
   ) {}
 
   /**
+   * Restore-on-install (spec 007): a reference to `DeploymentService`, needed
+   * to resolve/validate a restore candidate at draft-creation time (R1). NOT a
+   * constructor parameter: `simple-factory.ts` constructs `drafts` BEFORE
+   * `deployments` (`RealDeploymentService` takes `drafts` as an argument), so
+   * threading this the normal way would be circular. Wired via this setter
+   * once both exist. Optional — absent in tests/wiring that don't need
+   * restore, which then simply cannot resolve a `restoreFrom` choice (see
+   * `resolveRestoreChoice` below, which fails closed when it's unset).
+   */
+  private deploymentsService?: DeploymentService;
+  setDeploymentsService(deployments: DeploymentService): void {
+    this.deploymentsService = deployments;
+  }
+
+  /** Same reserved location `deployment.ts` writes the install ENVIRONMENT
+   *  record to (spec 006): `<HOLA_APPS_BIND_ROOT>/.hola/<id>/env.json`, a
+   *  SIBLING of every app's data root — never inside it (#478). Restore-on-
+   *  install (spec 007) reads the SAME record from here; the constants are
+   *  duplicated rather than imported because `deployment.ts`'s copies are
+   *  private implementation details of its own write path (research R17).
+   */
+  private restoreEnvRecordPath(candidateId: string): string {
+    const root = (process.env.HOLA_APPS_BIND_ROOT?.trim() || '/srv/hola/apps').replace(/\/+$/, '');
+    return `${root}/.hola/${candidateId}/env.json`;
+  }
+
+  /**
+   * Read a restore candidate's environment record. `null` when absent,
+   * unparseable, or malformed — carrying nothing is a legitimate candidate
+   * state (`carriesEnv: false`), never a draft-creation failure (FR-008).
+   */
+  private async readRestoreEnvRecord(candidateId: string): Promise<Record<string, string> | null> {
+    const path = this.restoreEnvRecordPath(candidateId);
+    if (!(await this.storageService.fileExists(path))) return null;
+    try {
+      const raw = JSON.parse(await this.storageService.readFileAsString(path)) as { env?: unknown };
+      if (!raw || typeof raw.env !== 'object' || raw.env === null) return null;
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(raw.env as Record<string, unknown>)) {
+        if (typeof v === 'string') env[k] = v;
+      }
+      return env;
+    } catch (error) {
+      this.logger.warn('Unreadable restore environment record', { candidateId, error: error instanceof Error ? error.message : String(error) });
+      return null;
+    }
+  }
+
+  /**
+   * Resolve and validate a `restoreFrom` choice at draft-creation time (R1):
+   * the ONE place a restore choice is judged and turned into a seeded
+   * `appEnv`. Reused verbatim at `createFromDraft`'s re-validation (T018) via
+   * the same `validateRestoreChoice` it calls — only WHEN this runs, and
+   * whether the candidate might have changed since, differs.
+   *
+   * Throws `ConflictError` (`details.code`, the `RESTORE_*` union) on any
+   * refusal — never returns a partial/soft result, matching `PROVIDER_EXISTS`
+   * / `ALREADY_INSTALLED`'s established shape (FR-037).
+   */
+  private async resolveRestoreChoice(
+    choice: RestoreChoice,
+    appId: string,
+    targetVersion: string | undefined,
+    upgrade: AppUpgradeMeta | undefined,
+    restoreDeclarations: AppRestoreDeclaration[] | undefined,
+    appEnv: AppEnvVar[],
+    accepts: string[] | undefined,
+  ): Promise<{ appEnv: AppEnvVar[] }> {
+    if (!this.deploymentsService) {
+      throw new ConflictError(
+        `Cannot resolve restore source '${choice.candidateId}': the deployment registry is unavailable.`,
+        { code: 'RESTORE_CANDIDATE_GONE', candidateId: choice.candidateId },
+      );
+    }
+
+    // data-model.md §7 / contracts/manifest.md: "no restore@1 in accepts" is
+    // NOT the same state as "restore@1 with no block" (the latter is a
+    // deliberate plain-file-copy declaration; the former means nobody
+    // considered restoring this app at all). Its own code, NOT the
+    // install-by-ref path's `RESTORE_NOT_SUPPORTED`: the two refusals have
+    // opposite remedies ("use the catalog path" vs "this app can't be
+    // restored at all"), and a client keying a hint off `details.code` cannot
+    // tell them apart if they share one.
+    if (!(accepts ?? []).includes('restore@1')) {
+      throw new ConflictError(
+        `'${appId}' has not declared that it can be restored (no 'restore@1' in its manifest 'accepts').`,
+        { code: 'RESTORE_NOT_ACCEPTED', appId },
+      );
+    }
+
+    const source = await this.deploymentsService.getRestoreSource(choice.candidateId);
+    const requiresEnv = (restoreDeclarations ?? []).some((d) => d.requiresEnv === true);
+    const envNotCarriedKeys = deriveEnvNotCarriedKeys(appEnv);
+
+    const result = judgeRestoreChoice({
+      source: source as CandidateSource | undefined,
+      appId,
+      // No deployment exists yet at draft-creation time — nothing to exclude.
+      excludeDeploymentId: '',
+      choice,
+      targetVersion,
+      meta: upgrade,
+      requiresEnv,
+      envNotCarriedKeys,
+    });
+    if (!result.ok) {
+      throw new ConflictError(result.message, { code: result.code, ...result.details });
+    }
+
+    let mergedEnv = appEnv;
+    if (choice.carryEnv) {
+      const carried = await this.readRestoreEnvRecord(choice.candidateId);
+      if (carried) mergedEnv = mergeUpgradeAppEnv(appEnv, carried);
+    }
+
+    return { appEnv: mergedEnv };
+  }
+
+  /**
    * Replace `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in seeded env values with
    * this install's concrete values, so the wizard shows a real prefilled URL/
    * domain (e.g. `https://vaultwarden.example.com`) instead of a raw token.
@@ -470,7 +603,34 @@ export class RealDraftService implements DraftService {
       // Resolve `${HOLA_APP_HOST}`/`${HOLA_BASE_DOMAIN}` in the seeded env values
       // to this install's concrete host/domain, so the wizard shows a real
       // prefilled value rather than a raw platform token.
-      const appEnv = this.resolvePlatformTokens(request.appId, defaults.env);
+      let appEnv = this.resolvePlatformTokens(request.appId, defaults.env);
+
+      // Restore-on-install (spec 007, R1): the ONLY point a restore choice is
+      // ever accepted — resolved and validated (candidate exists, settled,
+      // version skew judged, acknowledgements satisfied) BEFORE it can seed
+      // anything. A refusal here throws (ConflictError, `details.code`) and no
+      // draft is created. `name`/`subdomain` default from the candidate
+      // client-side (FR-035): the wizard already holds the full
+      // `RestoreCandidate` from the candidates route it read before this call
+      // (the same reason that route exists at all — research R6), so nothing
+      // further is echoed back here.
+      if (request.restoreFrom) {
+        const resolved = await this.resolveRestoreChoice(
+          request.restoreFrom,
+          request.appId,
+          // Same fallback `draft.version` itself uses below — the catalog's
+          // resolved version when it reported one, else the requested one.
+          // Using only `defaults.resolvedVersion` here would read as "target
+          // version unknown" whenever a test/catalog stub omits it, forcing
+          // an unrelated `restore-version-unknown` acknowledgement.
+          defaults.resolvedVersion ?? request.version,
+          defaults.upgrade,
+          defaults.restore,
+          appEnv,
+          defaults.accepts,
+        );
+        appEnv = resolved.appEnv;
+      }
 
       // Seed the draft's compose from the catalog bundle so it can be deployed
       // without the user pasting compose. Guard it through the same parse check
@@ -511,6 +671,7 @@ export class RealDraftService implements DraftService {
         ingressService: defaults.ingressService,
         upgrade: defaults.upgrade,
         backup: defaults.backup,
+        restore: defaults.restore,
         push: defaults.push,
         profiles: defaults.profiles,
         channel: resolvedChannel,
@@ -523,6 +684,10 @@ export class RealDraftService implements DraftService {
         // FOLLOW an unpublished channel and receive stable-floor offers; it just
         // isn't a free second copy of a single-instance app.
         channelPublished: defaults.channels?.includes(resolvedChannel) === true,
+        // Restore-on-install choice (spec 007), already resolved/validated
+        // above. Carried unchanged onto the finalized manifest (draft.ts
+        // finalizeDraft, outside canonicalSpec beside `channel`).
+        restoreFrom: request.restoreFrom,
         files: [],
       };
 
@@ -588,6 +753,21 @@ export class RealDraftService implements DraftService {
   private async createDraftFromRef(draftId: string, request: CreateDraftRequest): Promise<CreateDraftResponse> {
     const ociRef = request.ociRef!;
     this.logger.info('Creating draft from OCI ref', { draftId, ociRef, credentialRef: request.credentialRef });
+
+    // Restore-on-install (spec 007, R2): REFUSED on install-by-ref, never
+    // silently ignored. A candidate's version skew is judged against catalog
+    // upgrade metadata, and install-by-ref deliberately has no catalog index
+    // to consult (the same reason it already fails closed on channel
+    // resolution, below). Honouring the choice on the catalog path and
+    // dropping it here would be exactly the silent-empty-restore failure this
+    // feature exists to prevent.
+    if (request.restoreFrom) {
+      throw new ConflictError(
+        `Cannot restore on an install-by-ref draft: no catalog index exists to judge the candidate's version against.`,
+        { code: 'RESTORE_NOT_SUPPORTED' },
+      );
+    }
+
     try {
       let credentials;
       if (request.credentialRef) {
@@ -626,6 +806,7 @@ export class RealDraftService implements DraftService {
         ingressService: detail.ingressService,
         upgrade: detail.upgrade,
         backup: detail.backup,
+        restore: detail.restore,
         push: detail.push,
         profiles: detail.profiles,
         // Install-by-ref bypasses the catalog index (#428): always `stable`.
@@ -900,6 +1081,7 @@ export class RealDraftService implements DraftService {
         ingressService: draft.ingressService,
         upgrade: draft.upgrade,
         backup: draft.backup,
+        restore: draft.restore,
         push: draft.push,
         profiles: draft.profiles,
         files: specFiles,
@@ -940,7 +1122,10 @@ export class RealDraftService implements DraftService {
       // a second time. `channelPublished` (#431) rides along with it — the
       // catalog fact about that channel, resolved once at draft-create time and
       // carried so the create-time single-instance guard needs no catalog call.
-      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, channel: draft.channel, channelPublished: draft.channelPublished, checksum, finalizedAt };
+      // `restoreFrom` (spec 007) is the same kind of fact again: it names WHERE
+      // the deployable spec's data comes from, not the spec itself, so two
+      // finalizes differing only in the restore choice produce the same checksum.
+      const manifest = { ...canonicalSpec, icon: draft.icon, displayName: draft.displayName, source: draft.source, credentialRef: draft.credentialRef, channel: draft.channel, channelPublished: draft.channelPublished, restoreFrom: draft.restoreFrom, checksum, finalizedAt };
       await this.storageService.writeFile(
         `${finalizedDir}/manifest.json`,
         JSON.stringify(manifest, null, 2)
@@ -990,7 +1175,7 @@ export class RealDraftService implements DraftService {
     };
   }
 
-  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupDeclaration; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string; channels?: string[] }> {
+  async getDraftDefaults(appId: string, version?: string, source?: string, channel?: string): Promise<{ env: AppEnvVar[]; defaults: DraftDefaults; composeOverride: string; auth?: AppAuthConfig; consumes?: string[]; provides?: string[]; accepts?: string[]; multiInstance?: boolean; security?: AppSecurityConfig; ingressService?: string; upgrade?: AppUpgradeMeta; backup?: AppBackupDeclaration; restore?: AppRestoreDeclaration[]; push?: AppPushTarget[]; profiles?: AppProfileConfig[]; resolvedVersion?: string; resolvedChannel?: string; channels?: string[] }> {
     try {
       const versionDetail = await this.catalogService.getVersionDetail(appId, version || 'latest', source, channel);
       return {
@@ -1006,6 +1191,7 @@ export class RealDraftService implements DraftService {
         ingressService: versionDetail.ingressService,
         upgrade: versionDetail.upgrade,
         backup: versionDetail.backup,
+        restore: versionDetail.restore,
         push: versionDetail.push,
         profiles: versionDetail.profiles,
         // The concrete version the catalog resolved (e.g. "latest" → "1.4.1"), so

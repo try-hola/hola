@@ -37,6 +37,12 @@ const draftsApi = {
   finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
 };
 
+// Restore-on-install (spec 007): the wizard's new first step reads this
+// route before a draft exists. No candidates in this fixture set.
+const restoreCandidates = vi.fn(async (appId: string) => ({
+  appId, lineages: [], defaultCandidateId: null, requiresExplicitChoice: false,
+}));
+
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
@@ -44,14 +50,18 @@ vi.mock('../../utils/api-hybrid', () => ({
       create: (data: unknown) => create(data),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
+    restoreCandidates: (appId: string) => restoreCandidates(appId),
   },
 }));
 
 // Imported after the mock so InstallWizard picks up the mocked api-hybrid.
 const { InstallWizard } = await import('../../pages/InstallWizard');
 
-function renderWizard() {
-  return render(
+/** Render, then advance past the new Restore Data step (spec 007) — no
+ *  candidates in these fixtures, so Next is immediately enabled there. Every
+ *  assertion below predates this step and starts from "the draft now exists". */
+async function renderWizard() {
+  const utils = render(
     <MemoryRouter initialEntries={['/install/backrest']}>
       <Routes>
         <Route path="/install/:appId" element={<InstallWizard />} />
@@ -59,6 +69,9 @@ function renderWizard() {
       </Routes>
     </MemoryRouter>
   );
+  await waitFor(() => expect(screen.getByRole('button', { name: /next/i })).not.toBeDisabled());
+  fireEvent.click(screen.getByRole('button', { name: /next/i }));
+  return utils;
 }
 
 /** Advance one step, using the pre-advance draft save as the transition signal. */
@@ -73,6 +86,7 @@ beforeEach(() => {
   create.mockClear();
   draftsApi.create.mockClear();
   draftsApi.update.mockClear();
+  restoreCandidates.mockClear();
 });
 
 afterEach(() => {
@@ -81,7 +95,7 @@ afterEach(() => {
 
 describe('InstallWizard privileged contract grants (ADR 0004)', () => {
   it('blocks Next until the declared grant is consented to, then sends it to create', async () => {
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
     // The grant is named in the operator's terms, not as a bare contract id.
@@ -120,7 +134,7 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
       defaults: { ports: [], volumes: [] },
     });
 
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
     expect(screen.queryByText(/requests access to other apps/i)).not.toBeInTheDocument();
@@ -137,7 +151,7 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
       provides: ['container-logs@1'],
     });
 
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
     const row = await screen.findByText(/read the logs of every container on this host/i);
@@ -160,7 +174,7 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
       provides: ['backup@1', 'container-logs@1'],
     });
 
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
     expect(await screen.findByText(/read the data of every installed app/i)).toBeInTheDocument();
@@ -183,7 +197,7 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
       provides: ['container-logs@1'],
     });
 
-    renderWizard();
+    await renderWizard();
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalled());
 
     const row = await screen.findByText(/read the logs of every container on this host/i);

@@ -1,9 +1,9 @@
 import { HolaSdk } from '@hola/sdk';
 import { STABLE_CHANNEL } from '@hola/shared';
-import type { CreateDraftResponse, GetDraftResponse, AppEnvVar } from '@hola/shared';
+import type { CreateDraftResponse, GetDraftResponse, AppEnvVar, ListRestoreCandidatesResponse, RestoreCandidate, RestoreChoice } from '@hola/shared';
 import { validateParams, generateSecretValue } from '@hola/shared/param-validate';
 
-import { finalizeAndDeploy, reportDeployError, type DeployResult } from '../../lib/deploy-flow';
+import { finalizeAndDeploy, reportDeployError, DeployAbort, type DeployResult } from '../../lib/deploy-flow';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
 
 export interface InstallOptions {
@@ -68,6 +68,24 @@ export interface InstallOptions {
    * both `--name` and `--as` are given, `--name` wins and a note is printed.
    */
   as?: string;
+  /**
+   * Restore-on-install (spec 007). `restoreFrom` is `--restore-from <id>` (a
+   * candidate deployment id) or the literal string `latest`. `restore` is
+   * `false` only when `--no-restore` was passed — the explicit-intent flag;
+   * its ABSENCE (not passing any restore flag at all) is what FR-044 means by
+   * "the non-interactive default is no restore", so `restore === false` and
+   * `restoreFrom === undefined` are both "no restore", not two cases to
+   * reconcile. `restoreList` is `--restore-list` (list and exit; installs
+   * nothing). `carryEnv` is `true`/`false` only when `--carry-env`/
+   * `--no-carry-env` was explicitly passed — `undefined` means "use the
+   * candidate's own `carriesEnv` as the default" (contracts/cli.md).
+   */
+  restoreFrom?: string;
+  restore?: boolean;
+  restoreList?: boolean;
+  carryEnv?: boolean;
+  /** From `--ack <code>` (repeatable, or comma-separated) — mirrors `--grant`. */
+  ack?: string | string[];
 }
 
 /** Parse repeated/comma-separated `--profile` flags into a deduped key list. */
@@ -90,6 +108,101 @@ export function parseGrants(grant?: string | string[]): string[] | undefined {
   const raw = Array.isArray(grant) ? grant : [grant];
   const refs = raw.flatMap(g => String(g).split(',')).map(g => g.trim()).filter(Boolean);
   return [...new Set(refs)];
+}
+
+/**
+ * Parse repeated/comma-separated `--ack <code>` flags into a deduped
+ * acknowledgement-code list — the exact same shape/parsing as `--grant`
+ * (spec 007, contracts/cli.md), because a scripted install must acknowledge
+ * each specific risk deliberately: it can never satisfy an acknowledgement it
+ * did not name (SC-012).
+ */
+export function parseAcks(ack?: string | string[]): string[] | undefined {
+  if (ack === undefined) return undefined;
+  const raw = Array.isArray(ack) ? ack : [ack];
+  const codes = raw.flatMap(a => String(a).split(',')).map(a => a.trim()).filter(Boolean);
+  return [...new Set(codes)];
+}
+
+/** Every candidate across every lineage in a candidates response, flattened. */
+function allCandidates(resp: ListRestoreCandidatesResponse): RestoreCandidate[] {
+  return resp.lineages.flatMap(l => l.candidates);
+}
+
+/**
+ * Render `--restore-list`'s output (contracts/cli.md): one line per
+ * candidate, newest-first within its lineage, with a `!` warning line under
+ * any candidate that carries one — each warning names the exact flag that
+ * would satisfy it, so the operator's next command is on screen.
+ */
+function renderRestoreList(appId: string, resp: ListRestoreCandidatesResponse): string {
+  const lines: string[] = [`Restore candidates for ${appId}:`, ''];
+  for (const lineage of resp.lineages) {
+    for (const c of lineage.candidates) {
+      const captured = c.capturedAt ? new Date(c.capturedAt).toISOString().replace('T', ' ').slice(0, 16) : 'unknown';
+      lines.push(
+        `  ${c.deploymentId}   ${c.name}   ${c.host ?? c.subdomain ?? '(no host)'}   ${c.appVersion ? `v${c.appVersion}` : 'unknown version'}   env: ${c.carriesEnv ? 'yes' : 'no'}   ${captured}`,
+      );
+      for (const w of c.warnings) {
+        if (w.code === 'env-not-carried') {
+          lines.push(`                    ! configuration cannot be carried: ${w.keys.join(', ')}`);
+          lines.push(`                      requires --ack restore-env-not-carried`);
+        } else if (w.code === 'no-identity-record') {
+          lines.push(`                    ! no install-identity record — described from the deployment record alone`);
+        } else if (w.code === 'host-divergence') {
+          lines.push(`                    ! host would change: ${w.from} → ${w.to}`);
+        }
+      }
+      if (c.skew.kind === 'unknown') {
+        lines.push(`                    ! version relationship unknown — requires --ack restore-version-unknown`);
+      } else if (c.skew.kind === 'refused') {
+        lines.push(`                    ! refused: ${c.skew.message}`);
+      }
+    }
+  }
+  const total = allCandidates(resp).length;
+  lines.push('');
+  lines.push(
+    `${total} candidate${total === 1 ? '' : 's'} in ${resp.lineages.length} lineage${resp.lineages.length === 1 ? '' : 's'}.` +
+      (resp.defaultCandidateId ? ` Default: ${resp.defaultCandidateId}` : resp.requiresExplicitChoice ? ' No default — pick one explicitly with --restore-from <id>.' : ''),
+  );
+  return lines.join('\n');
+}
+
+/**
+ * Resolve `--restore-from <id|latest>` (+ `--carry-env`/`--ack`) into a
+ * `RestoreChoice`, reading the candidates route to resolve `latest` and to
+ * default `carryEnv` from the chosen candidate's own `carriesEnv`
+ * (contracts/cli.md). `latest` REFUSES across two-or-more unrelated lineages
+ * (FR-036) — "latest" is ambiguous across unrelated histories, so this must
+ * fail rather than guess.
+ */
+async function resolveRestoreChoice(
+  sdk: HolaSdk,
+  appId: string,
+  version: string,
+  opts: InstallOptions,
+): Promise<RestoreChoice> {
+  const resp = (await sdk.restoreCandidates(appId, version, opts.source, opts.channel)) as ListRestoreCandidatesResponse;
+
+  let candidateId: string;
+  if (opts.restoreFrom === 'latest') {
+    if (resp.requiresExplicitChoice || !resp.defaultCandidateId) {
+      throw new DeployAbort(
+        `--restore-from latest is ambiguous: ${resp.lineages.length} unrelated lineages match. ` +
+          `Pick one explicitly with --restore-from <id>, or see them with --restore-list.`,
+      );
+    }
+    candidateId = resp.defaultCandidateId;
+  } else {
+    candidateId = opts.restoreFrom!;
+  }
+
+  const candidate = allCandidates(resp).find(c => c.deploymentId === candidateId);
+  const carryEnv = opts.carryEnv === false ? false : opts.carryEnv === true ? true : (candidate?.carriesEnv ?? false);
+  const acknowledge = parseAcks(opts.ack);
+
+  return { candidateId, carryEnv, ...(acknowledge?.length ? { acknowledge } : {}) };
 }
 
 /**
@@ -159,8 +272,44 @@ export async function runInstall(
   if (opts.name && opts.as) out('Note: --name overrides --as');
   const name = opts.name ?? opts.as ?? (isRef ? undefined : appId);
 
+  // Restore-on-install (spec 007): `--restore-list` reads the candidates
+  // route with NO draft created (research R6) and exits — it installs
+  // nothing, so it runs before any of the create-a-draft work below.
+  if (opts.restoreList) {
+    if (isRef) {
+      console.error('--restore-list needs a catalog app id, not an OCI reference.');
+      process.exitCode = 1;
+      return undefined;
+    }
+    try {
+      const resp = (await sdk.restoreCandidates(appId, version, opts.source, opts.channel)) as ListRestoreCandidatesResponse;
+      if (opts.json) console.log(JSON.stringify(resp, null, 2));
+      else console.log(renderRestoreList(appId, resp));
+      return undefined;
+    } catch (err) {
+      return reportDeployError(err);
+    }
+  }
+
   try {
     const overrides = parseSet(opts.set);
+
+    // Restore-on-install (spec 007, FR-044): the non-interactive default is
+    // NO restore — a candidate existing is not consent to use it. Only
+    // `--restore-from` (never `--no-restore`, which is the same "no restore"
+    // outcome stated explicitly) resolves an actual choice, and only on the
+    // catalog path (R2) — install-by-ref refuses client-side here rather
+    // than silently dropping it, matching the server's own fail-closed rule.
+    let restoreFrom: RestoreChoice | undefined;
+    if (opts.restoreFrom) {
+      if (isRef) {
+        console.error('Cannot restore on an install-by-ref install: no catalog index exists to judge the candidate\'s version against.');
+        process.exitCode = 1;
+        return undefined;
+      }
+      out(`Resolving restore source '${opts.restoreFrom}'…`);
+      restoreFrom = await resolveRestoreChoice(sdk, appId, version, opts);
+    }
 
     let draftId: string;
     if (isRef) {
@@ -169,7 +318,8 @@ export async function runInstall(
     } else {
       const from = opts.source && opts.source !== 'hola' ? ` (source: ${opts.source})` : '';
       out(`Creating draft for ${appId}@${version} (from catalog${from})`);
-      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source, channel: opts.channel })) as CreateDraftResponse).draftId;
+      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source, channel: opts.channel, ...(restoreFrom ? { restoreFrom } : {}) })) as CreateDraftResponse).draftId;
+      if (restoreFrom) out(`Restoring from ${restoreFrom.candidateId} (carrying configuration: ${restoreFrom.carryEnv ? 'yes' : 'no'}).`);
     }
 
     // Merge `--set` overrides and auto-fill empty generate-recipe secrets onto

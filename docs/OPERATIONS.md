@@ -332,6 +332,49 @@ existing provider and telling you to uninstall it first. A pair recorded
 before this rule existed (rare) is flagged as a warning on the Backups page
 rather than silently resolved — uninstall one of them.
 
+### Restore-on-install
+
+During an **install**, you can pick an existing deployment of the same app on
+this host as a restore source. The server quiesces it with the same pre/post
+hooks App backups already use, captures its data root, and lays that data down
+into the new install after images are pulled and before any container starts —
+the one moment an app's life when the data root is empty and no process holds
+it open. It closes [#429](https://github.com/try-hola/hola/issues/429): the
+fastest way to get a second, independently-addressable copy of a running app
+holding its data.
+
+**Where it lives.** The install wizard's first step, before Configuration — a
+restore choice determines what configuration gets pre-filled, so it has to
+come first. From the CLI: `hola install <app> --restore-from <id|latest>`
+(`--restore-list` to see candidates first, with no draft created).
+
+**What it carries.** Files, always. Configuration — including secrets — only
+when you ask for it (on by default when the candidate has one recorded); an
+app that generates its own secrets on first boot will mint fresh ones for data
+that was encrypted under the originals unless you carry the recorded values
+forward too. The confirmation step names this explicitly: a restore carries
+**data and credentials**, and any jobs, webhooks or integrations the app runs
+may fire the moment it starts holding that data.
+
+**Why it refuses.** A restore fails the whole install rather than starting an
+app on empty or partial data — there is no partial-success state. Common
+reasons: the candidate was captured on a newer version than you're installing;
+the app's own upgrade rules block the version hop; the candidate no longer
+exists or isn't in a settled (running/stopped) state by the time the install
+actually runs; or a restore hook failed (a database load with `ON_ERROR_STOP`
+enabled reports the load failure, not the app's later confusion about missing
+tables). Every refusal is a specific answer, not a generic install failure — a
+new deployment left in `error` with its data root intact, so you can inspect it
+before deciding to retry.
+
+**What an app has to declare.** Nothing, for the common case: most catalog
+apps (anything SQLite or flat-file) restore correctly with a plain file copy,
+and need no manifest changes at all. A database-backed app declares a small
+`restore` block in its manifest naming which paths to discard after the files
+land (a live database's file-level copy is a smear across the capture window,
+not a snapshot) and the `psql`-style command that reloads the dump — the same
+hook shape the backup declaration already uses.
+
 ### Container logs
 
 `container-logs@1` is a **provisioned** contract: a log collector app from the

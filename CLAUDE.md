@@ -114,6 +114,38 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `ALREADY_INSTALLED` (`details.code`, same `CONFLICT` top-level shape as
   `PROVIDER_EXISTS`) so the wizard/CLI render a choice instead of a
   surface-neutral message the caller has to parse.
+- **Restore-on-install (spec 007).** At install, an operator may name an
+  existing deployment of the same app on this host as a restore source
+  (`CreateDraftRequest.restoreFrom`, catalog path only — install-by-ref
+  refuses it, `RESTORE_NOT_SUPPORTED`, since there's no catalog upgrade
+  metadata to judge the candidate's version against). The choice is resolved
+  and validated once at draft creation (seeding `appEnv` via the existing
+  `mergeUpgradeAppEnv` three-case rule when configuration is carried) and
+  re-validated at `createFromDraft`, because the candidate may have changed
+  since. The restore itself runs inside `runLifecycleJob`, after
+  `composePull` and before `composeUp` — never at create time (Constitution
+  III): assert the target data root is empty, quiesce and capture the source
+  with the existing `backup@1` pre/post hooks, extract into the target
+  (root-relative, no intermediate copy), assert the payload landed (a
+  post-condition, not a subtree search — this codebase's archives are
+  root-relative on both ends), apply the app's declared `discard` paths,
+  rewrite the install-identity marker, write pending OIDC credentials (moved
+  here from its usual pre-restore position so extraction can't destroy it),
+  start only the declared hook's service with `composeUp({ services, wait:
+  true })`, and run the restore hook fail-closed. A failed restore fails the
+  whole install — no partial-success start. An app declares how it wants to
+  be restored per **backup participation** (`restore` block in the bundle
+  manifest, reusing `AppBackupHook` verbatim — no second hook format): no
+  `restore@1` in `accepts` means not offered; `accepts: ["restore@1"]` with no
+  block means a plain file copy is sufficient; a block adds `discard` paths
+  (a live database's file-level copy is a smear across the capture window,
+  not a snapshot) and a reload hook. No capability contract, grant, or
+  contract endpoint is added — `restore@1` here is a participation marker an
+  app declares, not a contract the platform brokers (`CONTRACTS` is
+  unchanged, FR-047). `hola install --restore-from <id|latest>`, with
+  `--restore-list` reading the same candidates route with no draft created;
+  the non-interactive default is always **no restore** — a candidate existing
+  is never itself consent to use it.
 
 ## Conventions
 
@@ -172,5 +204,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/006-install-identity/plan.md`
+`specs/007-restore-on-install/plan.md`
 <!-- SPECKIT END -->
