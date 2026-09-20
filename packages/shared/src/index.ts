@@ -2223,6 +2223,31 @@ export type ContractRollup = {
    * recorded before the rule existed is surfaced here, not auto-removed).
    */
   providerConflict?: true;
+  /**
+   * Whether the provider has ever actually exercised this contract, for a
+   * `brokered` contract that has one (spec 004; try-hola/apps#159).
+   *
+   * `providers` says an install *declares* it performs the capability, and that
+   * declaration alone is what makes every acceptor render as covered. Whether
+   * the provider has ever *called* the broker is a different fact, and it is the
+   * one that catches the failure this field exists for: a provider whose hooks
+   * were never wired up installs cleanly, reports itself as the provider, and
+   * never announces a backup — while the dashboard says every database is
+   * quiesced. Absent when the contract is not brokered or has no provider.
+   */
+  activity?: ContractBrokerActivity;
+};
+
+/** When a brokered contract's provider last used it. */
+export type ContractBrokerActivity = {
+  /** ISO time a prepare last completed, absent if the provider never called one. */
+  lastPrepareAt?: string;
+  /** ISO time a finalize last ran, whether the provider's or the server's expiry. */
+  lastFinalizeAt?: string;
+  /** Set while acceptors are holding dumps — a prepare that finalize has not closed. */
+  openSince?: string;
+  /** True when the last finalize was the server expiring a prepare nobody closed. */
+  lastFinalizeWasExpiry?: boolean;
 };
 
 export type GetContractsResponse = { items: ContractRollup[] };

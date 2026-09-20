@@ -10,7 +10,7 @@
  */
 
 import { CONTRACTS, formatContractRef, parseContractRef } from '@hola/shared/contracts';
-import type { ContractParticipant, ContractRollup, DeploymentContracts } from '@hola/shared';
+import type { ContractBrokerActivity, ContractParticipant, ContractRollup, DeploymentContracts } from '@hola/shared';
 
 import type { Logger } from '../../lib/logger';
 
@@ -126,7 +126,15 @@ export type ContractRollupEntry = {
  * (backrest backs itself up) is a provider AND an acceptor; the buckets aren't
  * exclusive of each other, only `unaffiliated` is exclusive of both.
  */
-export function buildContractRollup(entries: readonly ContractRollupEntry[]): ContractRollup[] {
+export function buildContractRollup(
+  entries: readonly ContractRollupEntry[],
+  /**
+   * Broker bookkeeping per contract ref, when the server has any. Attached only
+   * to a brokered contract that actually has a provider: on every other row
+   * "never announced a backup" would be true and meaningless.
+   */
+  activity?: Readonly<Record<string, ContractBrokerActivity | undefined>>,
+): ContractRollup[] {
   return CONTRACTS.map((def) => {
     const ref = formatContractRef(def);
     const implicit = def.participation === 'implicit';
@@ -187,6 +195,12 @@ export function buildContractRollup(entries: readonly ContractRollupEntry[]): Co
       // Records that predate the one-provider-per-host guard (spec 004 FR-013):
       // surfaced as a warning, never auto-removed or demoted.
       ...(providers.length > 1 ? { providerConflict: true as const } : {}),
+      // Only where the question means something. For auth@1 (platform-provided,
+      // no broker) or a contract nobody provides, "has never announced" is
+      // trivially true and would read as a problem.
+      ...(def.shape === 'brokered' && providers.length > 0 && activity?.[ref]
+        ? { activity: activity[ref] }
+        : {}),
     };
   });
 }
