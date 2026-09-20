@@ -188,6 +188,48 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
   });
 
+  // The test above uses `autoStart: false`, so `materializeCompose` never runs
+  // and the platform's own `.hola/` records (spec 006) are never written — which
+  // means it stopped covering the production path the moment those records
+  // existed. This is the same assertion against a data root that holds ONLY
+  // `.hola/`, i.e. what every started-but-dataless install looks like.
+  //
+  // Without the `[INSTALL_MARKERS_DIR]` exclusion in `dirHasContents`, this app
+  // reads as "has data": a snapshot containing nothing but `.hola/` gets
+  // recorded, and a later data-aware rollback to this release restores it over
+  // whatever real data exists by then — `restoreTarGzInto` wipes the data root
+  // before extracting, so a near-empty archive deletes it.
+  test('a started-but-dataless deployment (data root holds only .hola/) is promoted without a snapshot', async () => {
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+
+    // Exactly what a materialized install with no app data of its own looks like.
+    await mkdir(join(appsRoot, dep.deploymentId, '.hola'), { recursive: true });
+    await writeFile(join(appsRoot, dep.deploymentId, '.hola', 'instance.json'), '{"schema":1}');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+  });
+
+  // The other half of finding A: the short-circuit also guards the #121 backup
+  // preHooks. An install that never wrote data must not have `pg_dump` exec'd
+  // against it — with `preUpgradeBackup: 'required'` a failing preHook is
+  // fail-closed and would block the very upgrade meant to repair the install.
+  test('a started-but-dataless deployment runs no backup preHooks on promote', async () => {
+    upgradeByVersion = { '2.0.0': { preUpgradeBackup: 'required' } };
+    backupByVersion = { '1.0.0': { preHook: { service: 'gitea', command: ['pg_dump'] } } };
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+
+    await mkdir(join(appsRoot, dep.deploymentId, '.hola'), { recursive: true });
+    await writeFile(join(appsRoot, dep.deploymentId, '.hola', 'instance.json'), '{"schema":1}');
+
+    await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), options: { autoStart: false } });
+
+    expect(docker.execs.filter((e) => e.command.includes('pg_dump'))).toHaveLength(0);
+    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+  });
+
   test('data-aware rollback restores the pre-upgrade app data', async () => {
     const { jobs, drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });

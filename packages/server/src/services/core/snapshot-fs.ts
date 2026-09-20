@@ -10,11 +10,21 @@
 import { spawn } from 'node:child_process';
 import { readdir, rm, mkdir, stat } from 'node:fs/promises';
 
-/** True if `dir` exists and holds at least one entry (a fresh app has nothing to snapshot). */
-export async function dirHasContents(dir: string): Promise<boolean> {
+/**
+ * True if `dir` exists and holds at least one entry that isn't in `ignore`
+ * (a fresh app has nothing to snapshot).
+ *
+ * `ignore` exists because the platform writes its own bookkeeping into the app
+ * data root (`.hola/instance.json`, spec 006), which would otherwise make EVERY
+ * materialized install look like it has data. Callers asking "has this app
+ * written anything worth capturing?" must exclude it; callers asking "is there
+ * anything here at all?" (uninstall) must not, or they would leave the
+ * directory behind.
+ */
+export async function dirHasContents(dir: string, ignore: readonly string[] = []): Promise<boolean> {
   try {
     const entries = await readdir(dir);
-    return entries.length > 0;
+    return ignore.length === 0 ? entries.length > 0 : entries.some((e) => !ignore.includes(e));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw err;

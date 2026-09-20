@@ -53,7 +53,8 @@ import type {
 } from '@hola/shared';
 import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import { requestsPrivilegeEscalation } from './manifest-security';
-import { resolveContainedDir } from './path-containment';
+import { resolveContainedDir, isStrictlyInside } from './path-containment';
+import { getHolaVersion } from './system-monitoring';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
@@ -126,6 +127,102 @@ const DEFAULT_INTERNAL_API_URL = 'http://hola-server:3001';
 const DEFAULT_APPS_BIND_ROOT = '/srv/hola/apps';
 
 /**
+ * Reserved locations for this feature's platform-authored JSON records (spec
+ * 006). There are TWO, at two different levels under the apps bind root, and
+ * the split is the whole point (#478 item 1):
+ *
+ *   <HOLA_APPS_BIND_ROOT>/<deploymentId>/.hola/instance.json   (0644, no secret)
+ *   <HOLA_APPS_BIND_ROOT>/.hola/<deploymentId>/env.json        (0600, secrets)
+ *
+ * `${HOLA_APP_DATA}` resolves to `<HOLA_APPS_BIND_ROOT>/<deploymentId>` and is
+ * bind-mounted into the app's own containers (overwhelmingly as `/data`), so
+ * ANYTHING under it is visible to the app — and, for an app that serves, syncs
+ * or browses its own data directory, to that app's end users, who are not the
+ * host operator. The identity record carries no secret and stays there. The
+ * environment record does carry secrets and therefore lives one level UP, as a
+ * sibling of every deployment's data root rather than inside one. See the
+ * FR-014 justification above its write site for why that location and not the
+ * platform's own data volume.
+ *
+ * `.hola` is reserved at BOTH levels and is never a deployment id: a deployment
+ * id is `<app-slug>-<8 hex>` (`newDeploymentId`) and a slug cannot start with a
+ * dot. Nothing enumerates the apps bind root today; anything that starts to
+ * MUST skip this name.
+ *
+ * Distinct from `getHolaDataDir()` (`config/paths.ts:13`), which resolves to
+ * `~/.hola` — the SERVER's own home directory, an unrelated location. Path
+ * fragments are defined once here rather than as scattered string literals
+ * (research R10).
+ */
+const INSTALL_MARKERS_DIR = '.hola';
+/** Same reserved name, one level up: the sibling root holding per-install
+ *  environment records, outside every app's `${HOLA_APP_DATA}` mount. */
+const INSTALL_ENV_ROOT_DIR = INSTALL_MARKERS_DIR;
+/** `0700` on the sibling root and each per-install directory under it: the
+ *  files are `0600`, and a traversable parent would otherwise let an
+ *  unprivileged local reader at least enumerate which installs exist. */
+const INSTALL_ENV_DIR_MODE = 0o700;
+const INSTANCE_RECORD_FILE = 'instance.json';
+const ENV_RECORD_FILE = 'env.json';
+const INSTANCE_RECORD_SCHEMA = 1;
+const ENV_RECORD_SCHEMA = 1;
+
+/**
+ * Install identity record (spec 006, data-model.md §Install Identity Record).
+ * Platform-authored, written unconditionally into every app data root on
+ * every materialization. Module-local and NOT exported to `@hola/shared`:
+ * nothing outside the server reads this record in this feature (FR-018), so
+ * exporting the type would create an API surface the feature deliberately
+ * does not have.
+ */
+interface InstallIdentityRecord {
+  schema: number;
+  writtenBy: string;
+  writtenAt: string;
+  deploymentId: string;
+  lineageId: string;
+  app: string;
+  appVersion: string | null;
+  channel: string | null;
+  source: string | null;
+  name: string;
+  subdomain: string | null;
+  host: string;
+  accepts: string[];
+  /** Backup participation ids keyed by versioned contract ref (research R6),
+   *  e.g. `{ "backup@1": ["app-db"] }`. Key absent when the manifest declares
+   *  no backup block — never present with an empty array. */
+  participations: Record<string, string[]>;
+}
+
+/**
+ * Install environment record (spec 006, data-model.md §Install Environment
+ * Record). Carries the install's resolved application environment, secrets
+ * included — so it is written `0600` into a `0700` directory OUTSIDE the app's
+ * own `${HOLA_APP_DATA}` mount (`<appsBindRoot>/.hola/<id>/env.json`, #478).
+ * See the FR-014 justification above its write site. Module-local for the same
+ * reason as `InstallIdentityRecord` above. `deploymentId` is what re-attaches
+ * it to its data root, which is no longer its parent directory.
+ */
+interface InstallEnvRecord {
+  schema: number;
+  writtenAt: string;
+  deploymentId: string;
+  env: Record<string, string>;
+}
+
+/**
+ * Flatten a finalized manifest's `appEnv` rows to the `key -> value` map the
+ * runtime `.env` and the install environment record both want. Pure, so a
+ * caller holding the manifest already need not read it a second time.
+ */
+function appEnvOf(manifest: FinalizedManifest | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const e of manifest?.appEnv ?? []) out[e.key] = e.value ?? '';
+  return out;
+}
+
+/**
  * Build a human-readable, collision-safe deployment id: the app slug plus a
  * short random suffix (e.g. `gitea-3f9a2c7b`). Stable for the install's life
  * (reused across promote/rollback), so it keys the project name, routing, and
@@ -136,6 +233,29 @@ function makeDeploymentId(appId: string): string {
   const slug = appId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'app';
   const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8);
   return `${slug}-${suffix}`;
+}
+
+/**
+ * Is this id safe to interpolate into a host path that is about to be deleted
+ * RECURSIVELY? `removeAppData` builds two such paths out of a deployment id,
+ * and a wrong answer there is unrecoverable, so the id is checked rather than
+ * trusted.
+ *
+ * Every id `makeDeploymentId` mints is a single path segment, and every id
+ * `loadFromStorage` rehydrates is a directory name — so nothing reaching here
+ * today fails this. That is exactly why it is cheap to assert: it makes
+ * "a deployment id is one safe segment" a checked precondition of the delete
+ * instead of a property a future reader has to re-derive.
+ *
+ * `.hola` is rejected explicitly: it is a segment, and it is contained, so a
+ * containment check alone would happily let `<appsBindRoot>/.hola` — the shared
+ * root holding EVERY install's environment record — be deleted as if it were
+ * one install's data root.
+ */
+function isSafeDeploymentIdSegment(id: string): boolean {
+  if (id.length === 0 || id === '.' || id === '..') return false;
+  if (id.includes('/') || id.includes('\\') || id.includes('\0')) return false;
+  return id !== INSTALL_MARKERS_DIR && id !== INSTALL_ENV_ROOT_DIR;
 }
 
 /**
@@ -1695,6 +1815,30 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     if (content.includes(APP_DATA_TOKEN)) {
       const appRoot = this.appRootFor(deployment.id);
       await this.storageService.ensureDir(appRoot);
+      // Write this feature's platform-authored records (spec 006) HERE, and
+      // only here — pinned by three constraints, none of them movable
+      // (research R1):
+      //   1. This branch condition IS the "does this app have a data root?"
+      //      question FR-015 needs answered. An app with no ${HOLA_APP_DATA}
+      //      never enters it, so it gets no records and no directory, with
+      //      no second condition that could later drift out of agreement
+      //      with this one.
+      //   2. `rule.host` — the public host these records name — exists
+      //      nowhere else in this method; it lives only in the local `rule`
+      //      computed above, for the duration of this call.
+      //   3. A data-aware rollback wipes and replaces the WHOLE data root
+      //      from a pre-upgrade archive (`restoreAppDataSnapshot`) BEFORE
+      //      `materializeCompose` runs — both in `runLifecycleJob`'s
+      //      deploy/start/rollback branch, in that order — so writing here
+      //      means the records always describe the release actually being
+      //      brought up, never the one rolled away from (spec FR-006,
+      //      SC-010). Moving this write earlier in the lifecycle job would
+      //      silently break that guarantee.
+      // Only the IDENTITY record lands under `appRoot`. The environment
+      // record is written to a sibling outside every app's mount — see
+      // `writeInstanceMarkers` — but the gating question, and therefore the
+      // call site, is the same one (#478).
+      await this.writeInstanceMarkers(deployment, appRoot, rule.host);
       content = content.replaceAll(APP_DATA_TOKEN, appRoot);
     }
 
@@ -2040,12 +2184,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /** The active release's app env (manifest `defaultEnv` + any user overrides), as
-   *  a flat map — the source for the runtime `.env` Compose interpolates from. */
+   *  a flat map — the source for the runtime `.env` Compose interpolates from.
+   *  Delegates to the pure `appEnvOf` so a caller that already holds the manifest
+   *  (`writeInstanceMarkers`) can flatten it without re-reading the file. */
   private async readActiveAppEnv(deployment: EnhancedDeploymentDetail): Promise<Record<string, string>> {
-    const manifest = await this.readActiveManifest(deployment);
-    const out: Record<string, string> = {};
-    for (const e of manifest?.appEnv ?? []) out[e.key] = e.value ?? '';
-    return out;
+    return appEnvOf(await this.readActiveManifest(deployment));
   }
 
   /**
@@ -2319,6 +2462,19 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return `${this.appsBindRoot()}/${deploymentId}`;
   }
 
+  /**
+   * Absolute host directory holding one install's environment record (spec
+   * 006): `<HOLA_APPS_BIND_ROOT>/.hola/<id>/`. Deliberately a SIBLING of
+   * `appRootFor(id)`, never a child of it — the app data root is bind-mounted
+   * into the app's own containers, and this record carries secrets (#478).
+   * Still inside the apps bind root, so the `apps-data` grant's read-only
+   * identity mount of the whole root keeps a consented backup provider able to
+   * capture it. Removed by `removeAppData` alongside the data root.
+   */
+  private envRecordDirFor(deploymentId: string): string {
+    return `${this.appsBindRoot()}/${INSTALL_ENV_ROOT_DIR}/${deploymentId}`;
+  }
+
   // ---- Pre-upgrade snapshots (#284 Phase 1) --------------------------------
 
   private snapshotsDir(deploymentId: string): string {
@@ -2339,7 +2495,22 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     fromVersion: string | undefined,
   ): Promise<void> {
     const appRoot = this.appRootFor(deploymentId);
-    if (!(await dirHasContents(appRoot))) {
+    // `.hola/` is EXCLUDED from "has this app written anything?" (spec 006):
+    // the platform writes `instance.json` there on every materialization, so
+    // counting it would make this short-circuit dead for every install that
+    // has ever started — with two consequences, neither of them cosmetic.
+    // (The environment record is NOT here — it lives in a sibling outside the
+    // data root, #478 — so the `data.tar.gz` this method writes under the
+    // process umask carries no secrets. Only the secret-free identity record
+    // is ever archived.)
+    // A #121 `preHook` (`pg_dump`) would start running against apps that have
+    // never written data, and `runPreHooksFailClosed` propagates, so a target
+    // declaring `preUpgradeBackup: required` would BLOCK the upgrade that was
+    // meant to fix a broken install. And a snapshot holding nothing but
+    // `.hola/` would be recorded, which a later data-aware rollback would
+    // restore over real data — `restoreTarGzInto` wipes the data root before
+    // extracting, so a near-empty archive DELETES it. Both are silent.
+    if (!(await dirHasContents(appRoot, [INSTALL_MARKERS_DIR]))) {
       this.logger.info('No app data to snapshot (fresh deployment)', { deploymentId });
       return;
     }
@@ -3121,6 +3292,218 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
+   * Write this feature's two platform-authored JSON records for an install
+   * (spec 006). They land in two DIFFERENT places, and the split is load-bearing:
+   *
+   *   <appRoot>/.hola/instance.json                  — install identity, `0644`
+   *   <appsBindRoot>/.hola/<id>/env.json             — resolved app env, `0600`
+   *
+   * The identity record carries no secret and sits in the app's own data root,
+   * a third precedent alongside the app-registry feed above and
+   * `writeOidcCredentialsFile` below. The environment record carries secrets
+   * and sits OUTSIDE every app's `${HOLA_APP_DATA}` mount — see the FR-014
+   * justification at its write site below.
+   *
+   * Follows the app-registry feed's warn-and-continue behaviour, NOT
+   * `writeOidcCredentialsFile`'s throw: these records are bookkeeping, not a
+   * functional dependency of the app booting (research R8). An unattributed
+   * data root is a worse backup, not a broken install, so a write failure
+   * here must never fail a deploy that would otherwise succeed (spec
+   * FR-016).
+   *
+   * The ENTIRE body below — including the manifest read — is inside the one
+   * try/catch. `readActiveManifest` → `readReleaseManifest` THROWS a
+   * `ServiceError` on a missing-but-corrupt manifest (not on a genuinely
+   * absent one, which resolves to `undefined`). A catch that wrapped only the
+   * two writes would still let a corrupt manifest propagate out of this
+   * method and fail the deploy — exactly what FR-016 forbids, arriving by the
+   * least obvious route.
+   */
+  private async writeInstanceMarkers(
+    deployment: EnhancedDeploymentDetail,
+    appRoot: string,
+    host: string,
+  ): Promise<void> {
+    try {
+      await this.storageService.ensureDir(`${appRoot}/${INSTALL_MARKERS_DIR}`);
+      const manifest = await this.readActiveManifest(deployment);
+
+      // ---- Install identity record (spec 006, US1; FR-001..FR-010) ------
+      //
+      // Field resolution order (research R4): the manifest is the frozen
+      // description of the release actually being materialized and wins for
+      // release facts (version/channel/source); the deployment record is the
+      // mutable description of the install and is the fallback. `source`
+      // lives on `deployment.metadata.source`, NOT top-level
+      // (`@hola/shared/index.ts` ~:2016-2075) — an easy and silent field to
+      // get wrong.
+      // `backupParticipations` normalises both the legacy singular
+      // `{ preHook?, postHook? }` block (one participation named `default`)
+      // and the plural array (spec 004) to the same shape, so this record's
+      // shape is identical for old and new manifests (research R6). Keyed by
+      // the versioned contract ref, never a bare id, so a future reader knows
+      // which contract version an id belongs to (spec FR-004).
+      //
+      // Gated on the RESULT being non-empty, not on `manifest.backup` merely
+      // being present: the data-model invariant is that the key is absent
+      // rather than present-with-an-empty-array, and a block can be present
+      // yet yield nothing — `backup: []`, `backup: {}` (no hooks),
+      // `backup: null` (JSON has no `undefined`, and the manifest is read via
+      // `JSON.parse ... as FinalizedManifest` with no runtime validation), or
+      // a plural array whose every entry is dropped for a missing id or
+      // missing hooks. `backupParticipations` takes `unknown` and answers `[]`
+      // for all of them, so the result is also the null-safe gate.
+      const participations: Record<string, string[]> = {};
+      const backupParticipationIds = backupParticipations(manifest?.backup).map((p) => p.id);
+      if (backupParticipationIds.length > 0) {
+        participations[BACKUP_CONTRACT_REF] = backupParticipationIds;
+      }
+      const identity: InstallIdentityRecord = {
+        schema: INSTANCE_RECORD_SCHEMA,
+        writtenBy: getHolaVersion(),
+        writtenAt: new Date().toISOString(),
+        deploymentId: deployment.id,
+        // Derived, not persisted (spec FR-008, FR-010; data-model.md
+        // §Lineage Identifier): it always equals `deploymentId` today, so it
+        // needs no storage of its own — Sequence 5 (restore-on-install) is
+        // what forces a `lineageId` onto the deployment record, at which
+        // point this expression becomes `deployment.lineageId ?? deployment.id`.
+        // Writing it now means captures taken before that ships already
+        // carry the field. The platform MUST be its sole writer: no settable
+        // field, request parameter, manifest field, or operator input.
+        lineageId: deployment.id,
+        app: deployment.app,
+        appVersion: manifest?.version ?? deployment.version ?? null,
+        // `channel` INVERTS the manifest-wins order the two fields either side
+        // of it use, and deliberately so: it is the only one of the three that
+        // is mutable without minting a new manifest. `manifest.channel` is a
+        // draft-time SEED ("the channel this version was resolved against", so
+        // `createFromDraft` knows which channel the deployment should follow —
+        // `draft.ts`), whereas the FOLLOWED TRACK this record is defined to
+        // carry is `deployment.channel`. Spec 005's Join/Leave is a
+        // metadata-only `PATCH { channel }` (`updateDeployment`) that
+        // writes `deployment.channel` and creates no release — so reading the
+        // manifest first would report the channel the install was created on
+        // for every deploy after a Join, until some unrelated promote happened
+        // to mint a fresh manifest. The manifest stays the fallback for
+        // pre-#428 deployment records that carry no `channel` at all.
+        channel: deployment.channel ?? manifest?.channel ?? null,
+        source: manifest?.source ?? deployment.metadata.source ?? null,
+        name: deployment.name,
+        subdomain: deployment.subdomain ?? null,
+        host,
+        accepts: manifest?.accepts ?? [],
+        participations,
+      };
+      await this.storageService.writeFile(
+        `${appRoot}/${INSTALL_MARKERS_DIR}/${INSTANCE_RECORD_FILE}`,
+        JSON.stringify(identity, null, 2),
+        0o644,
+      );
+
+      // ---- Install environment record (spec 006, US2; FR-011..FR-014) ---
+      //
+      // WRITTEN OUTSIDE THE APP'S OWN MOUNT, AND THAT IS THE POINT.
+      // `<appsBindRoot>/.hola/<id>/env.json`, a SIBLING of the app data root,
+      // never a child of it (#478 item 1). FR-014 requires the justification
+      // for placing resolved configuration values at rest on disk to live in
+      // the code, in full, so a future reader doesn't have to re-litigate it
+      // (research R9 is the source material):
+      //
+      // (a) The app's own containers already hold every one of these values
+      //     as environment variables — this record adds no NEW place these
+      //     values live, only a second one.
+      // (b) The ONLY reader this placement exposes it to is a consented
+      //     `apps-data` grant holder. `injectReadonlyMount`
+      //     (`compose-mounts.ts` ~:152-168, called from the two `apps-data`
+      //     grant sites in `materializeCompose` above) identity-mounts the
+      //     ENTIRE apps bind root read-only into every service of a
+      //     grant-holding deployment, so this sibling directory is inside
+      //     what that provider already captures. And the grant's consent
+      //     text the operator agreed to at install already says it reads "a
+      //     read-only view of all app data — including database files and
+      //     any secrets apps keep on disk"
+      //     (`@hola/shared/src/contracts.ts` ~:160-169).
+      // (c) Writing it one level UP is what makes (b) true rather than
+      //     merely argued. `${HOLA_APP_DATA}` resolves to the app data root
+      //     and is bind-mounted into the app's own containers, overwhelmingly
+      //     as `/data`. A record inside it is readable by the APP — and for
+      //     an app that serves, syncs or browses its own data directory (a
+      //     file manager, a sync tool, a media server with a file browser),
+      //     by that app's END USERS, who are not the host operator. `0600`
+      //     is no defence there: many images run as root. The original
+      //     FR-014 argument reasoned only about the consented provider; this
+      //     placement is what makes that the whole of the exposure.
+      // (d) It also keeps secrets out of the pre-upgrade snapshot tarball.
+      //     `capturePreUpgradeSnapshot` tars the app data root into
+      //     `data.tar.gz` under the process umask (world-readable `0644`),
+      //     retained to the retention bound. With the record outside that
+      //     root, no snapshot archive carries it (#478 item 2).
+      // (e) The gain is decisive: without this record a per-app capture is
+      //     NOT self-sufficient. Generated secrets otherwise live only under
+      //     the platform's own data volume
+      //     (the `deployments/<id>/runtime/.env` write in `materializeCompose`),
+      //     entirely outside the `apps-data` grant — restoring the app's data
+      //     alone would require the operator to have separately preserved the
+      //     `hola-data` volume, a manual `tar` documented at
+      //     `docs/OPERATIONS.md` ~:290-297 that nobody runs. Without it, a
+      //     restored app starts cleanly with a freshly generated key (e.g. an
+      //     encryption key) and silently cannot decrypt a single stored
+      //     credential — no error names the cause. A restore therefore needs
+      //     a capture of the APPS ROOT, not of one app's folder alone
+      //     (spec SC-003) — still one read-only grant, still no platform
+      //     volume.
+      // (f) `0600` on the file and `0700` on its directory are about ordinary
+      //     and unprivileged LOCAL readers — a support engineer browsing the
+      //     host, any non-root process — NOT about the provider, which reads
+      //     it by design regardless of mode.
+      //
+      // `appEnvOf` returns the install's OWN resolved app env only (manifest
+      // `defaultEnv` + operator input); provisioned auth env (OIDC client
+      // id/secret, issuer, redirect URI) is a separate source merged by the
+      // caller in `materializeCompose` (`envToInject`) and is deliberately
+      // excluded here, because those values are re-provisioned against the
+      // identity provider on any future install and capturing them would
+      // only widen the record for nothing.
+      //
+      // Flattened from the manifest ALREADY READ above rather than via
+      // `readActiveAppEnv`, which would re-read and re-parse the same file.
+      //
+      // Written AFTER the identity record so that a failure confined to this
+      // half still leaves the identity record refreshed — data-model.md
+      // invariant 5 already requires a reader to tolerate one present and the
+      // other absent.
+      const envDir = this.envRecordDirFor(deployment.id);
+      // The reserved root is created `0700` in its own right: `ensureDir`'s
+      // recursive `mkdir` would otherwise create the PARENT under the umask
+      // and only mode the leaf, leaving `<appsBindRoot>/.hola/` traversable
+      // and every install's existence enumerable.
+      await this.storageService.ensureDir(
+        `${this.appsBindRoot()}/${INSTALL_ENV_ROOT_DIR}`,
+        INSTALL_ENV_DIR_MODE,
+      );
+      await this.storageService.ensureDir(envDir, INSTALL_ENV_DIR_MODE);
+      const env = appEnvOf(manifest);
+      const envRecord: InstallEnvRecord = {
+        schema: ENV_RECORD_SCHEMA,
+        writtenAt: new Date().toISOString(),
+        deploymentId: deployment.id,
+        env,
+      };
+      await this.storageService.writeFile(
+        `${envDir}/${ENV_RECORD_FILE}`,
+        JSON.stringify(envRecord, null, 2),
+        0o600,
+      );
+    } catch (error) {
+      this.logger.warn('Failed to write install identity/environment records', {
+        deploymentId: deployment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
    * Preflight an app's declared auth requirement against the active auth backend,
    * BEFORE any deployment record/job is created. Mirrors the modes `provisionAuth`
    * will actually provision — the declared mode plus a forward-auth fallback when
@@ -3853,22 +4236,71 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * Remove the deployment's host bind-mount data root (`<HOLA_APPS_BIND_ROOT>/<id>`).
-   * Guarded to only ever delete strictly *within* the apps bind root — never the
-   * root itself nor any path escaping it — so a malformed id can't widen the blast
-   * radius. No-ops when the dir doesn't exist (apps with no `${HOLA_APP_DATA}` mount
-   * never create one), keeping the delete path quiet for those (#341).
+   * Remove BOTH host-side locations an install owns under the apps bind root:
+   * its data root (`<HOLA_APPS_BIND_ROOT>/<id>`) and its environment-record
+   * directory (`<HOLA_APPS_BIND_ROOT>/.hola/<id>`, spec 006).
+   *
+   * The second is not optional tidying. The environment record carries the
+   * install's resolved app env, secrets included, and lives OUTSIDE the data
+   * root precisely so no app can read it (#478) — which also means a delete of
+   * the data root alone would leave it behind forever, orphaning one directory
+   * of secrets per app ever uninstalled.
+   *
+   * Both deletes are guarded to only ever act strictly *within* the apps bind
+   * root — never the root itself nor any path escaping it — so a malformed id
+   * can't widen the blast radius. Each no-ops when its directory doesn't exist
+   * (apps with no `${HOLA_APP_DATA}` mount create neither), keeping the delete
+   * path quiet for those (#341).
+   *
+   * Two layers to that guard, because both deletes are recursive and
+   * unrecoverable:
+   *  1. The id must be a single safe path segment and not the reserved marker
+   *     name (`isSafeDeploymentIdSegment`). Containment alone would not catch
+   *     `.hola`, which is contained and would take out EVERY install's
+   *     environment record.
+   *  2. Each derived path must *resolve* strictly inside the apps bind root
+   *     (`isStrictlyInside`). A `startsWith(`${base}/`)` prefix test is a
+   *     string comparison, not a containment proof: `<base>/..` passes it and
+   *     resolves to the bind root's parent, and `<base>/.hola/../<other>`
+   *     passes it and resolves onto a DIFFERENT install's data root.
+   *
+   * Neither is reachable from a server-minted `<slug>-<8 hex>` id, which is the
+   * only kind that exists; they are asserted rather than argued because the
+   * cost of being wrong here is the operator's data.
    */
   protected override async removeAppData(deploymentId: string): Promise<void> {
     const base = this.appsBindRoot();
-    const appRoot = this.appRootFor(deploymentId);
-    if (appRoot === base || !appRoot.startsWith(`${base}/`)) {
-      this.logger.warn('Refusing to remove app data outside the apps bind root', { deploymentId, appRoot, base });
+    const insideBase = (path: string): boolean => isStrictlyInside(base, path);
+
+    if (!isSafeDeploymentIdSegment(deploymentId)) {
+      this.logger.warn('Refusing to remove app data for a deployment id that is not a single safe path segment', {
+        deploymentId,
+        base,
+      });
       return;
     }
-    if (!(await dirHasContents(appRoot))) return;
-    await this.storageService.deleteDir(appRoot, true);
-    this.logger.info('Removed deployment app data root', { deploymentId, appRoot });
+
+    const appRoot = this.appRootFor(deploymentId);
+    if (!insideBase(appRoot)) {
+      this.logger.warn('Refusing to remove app data outside the apps bind root', { deploymentId, appRoot, base });
+    } else if (await dirHasContents(appRoot)) {
+      await this.storageService.deleteDir(appRoot, true);
+      this.logger.info('Removed deployment app data root', { deploymentId, appRoot });
+    }
+
+    // Independent of the data root above: an install whose data root was
+    // already removed by hand must still lose its environment record.
+    const envDir = this.envRecordDirFor(deploymentId);
+    if (!insideBase(envDir)) {
+      this.logger.warn('Refusing to remove the install environment record outside the apps bind root', { deploymentId, envDir, base });
+      return;
+    }
+    // Existence, not `dirHasContents`: an EMPTY env-record directory (the write
+    // failed after `ensureDir`) is still an orphan under the apps bind root, and
+    // unlike the data root there is no reason to preserve one.
+    if (!(await this.storageService.fileExists(envDir))) return;
+    await this.storageService.deleteDir(envDir, true);
+    this.logger.info('Removed deployment environment record', { deploymentId, envDir });
   }
 }
 
