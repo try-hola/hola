@@ -362,6 +362,9 @@ export const CAPABILITIES = {
   // wildcard semantics being absent here — `*` still matches it, which is what
   // lets an operator exercise the endpoint by hand.
   CONTRACT_BACKUP: 'contract:backup',
+  // restore@1 provider half (spec 008) — held ONLY by a restore provider's
+  // contract-scoped token, mirroring CONTRACT_BACKUP exactly.
+  CONTRACT_RESTORE: 'contract:restore',
 
   // Special capabilities
   ADMIN: 'admin',

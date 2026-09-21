@@ -157,6 +157,16 @@ services:
       # path MUST be identity-mounted below (same path on host and in-container)
       # because the daemon resolves bind sources on the host.
       - HOLA_APPS_BIND_ROOT=${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}
+      # Staging root for restore@1's provider half (spec 008). A consented
+      # restore provider gets this path bind-mounted READ-WRITE into its own
+      # containers; the server mints one destination directory per request
+      # beneath it, then moves the delivered payload into the new install's
+      # data root. A SIBLING of HOLA_APPS_BIND_ROOT, never inside it, so the
+      # provider's own backup plan does not capture its restore output — the
+      # server refuses to start a restore if the two overlap. Like the apps
+      # root, it MUST be identity-mounted below, or the server cannot see
+      # what the provider wrote and every provider restore fails.
+      - HOLA_RESTORE_STAGING_ROOT=${HOLA_RESTORE_STAGING_ROOT:-/srv/hola/restore}
       # Platform defaults applied to every deployed app's compose (the app wins
       # for fill-if-absent fields; hardening is additive). Restart policy, log
       # rotation, and no-new-privileges are on by default; TZ and resource limits
@@ -178,6 +188,13 @@ services:
       # match what the Docker daemon binds into app containers. No-op when the
       # var is blank (defaults to a host dir that simply goes unused).
       - ${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}:${HOLA_APPS_BIND_ROOT:-/srv/hola/apps}
+      # Identity mount for the restore@1 staging root (see
+      # HOLA_RESTORE_STAGING_ROOT). Same reasoning as the apps root above, and
+      # load-bearing for the same reason: the provider writes a capture into
+      # <staging>/<requestId> on the HOST, and the server then reads and moves
+      # it. Without this mount that path does not exist inside hola-server and
+      # every provider-sourced restore fails to locate its payload.
+      - ${HOLA_RESTORE_STAGING_ROOT:-/srv/hola/restore}:${HOLA_RESTORE_STAGING_ROOT:-/srv/hola/restore}
     # Internal only: reached through the web container's /api proxy. Not routed by
     # Traefik (no Docker provider; only core.yml/app routes are served).
 

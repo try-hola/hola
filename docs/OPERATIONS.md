@@ -375,6 +375,56 @@ land (a live database's file-level copy is a smear across the capture window,
 not a snapshot) and the `psql`-style command that reloads the dump — the same
 hook shape the backup declaration already uses.
 
+### Restoring onto a fresh host (disaster recovery)
+
+The restore-on-install feature above picks from **live deployments on this
+host**. It cannot bring back an app that no longer exists here — which is the
+only case that matters after a host is lost. A **restore provider** (Backrest,
+once its catalog bundle gains the role) closes that gap: it holds captures
+taken elsewhere and can serve them back into a fresh install.
+
+**Recovering onto a fresh host plainly requires two things, neither of which
+Hola can supply for you**: installing the provider app itself, and supplying
+the repository password that makes its existing captures readable. Hola never
+holds that password — it is the provider's own secret, entered when you
+install it, not something the platform stores or can recover on your behalf.
+Nothing in the install wizard or the CLI implies recovery can happen without
+these two steps.
+
+Once the provider is installed and pointed at your existing repository,
+installing an app offers its held captures alongside any live siblings on the
+candidate list — picked the same way, subject to the same version-skew and
+acknowledgement rules as a local restore. The provider writes the capture into
+a directory Hola nominates; Hola alone decides when the data is ready to move
+into the new install's data root. No captured byte passes through Hola's own
+API at any point — the provider's write and Hola's move are both local
+filesystem operations.
+
+**The provider's own privilege.** Serving restores requires a second consent,
+separate from the read-only access a backup provider already holds: a writable
+mount of one platform-owned scratch directory (`HOLA_RESTORE_STAGING_ROOT`,
+default `/srv/hola/restore`), and nothing else — not any app's data, not the
+apps directory itself. See [ADR 0006](adr/0006-restore-staging-grant.md) for
+why this is a new, explicit grant rather than an extension of the existing
+read-only one.
+
+**The staging root itself.** Like the apps root, it is created by the Docker
+daemon when the stack's identity bind mount is first established, is owned by
+whatever the daemon creates it as (`root`), and is expected to exist before a
+provider can serve a restore — the server never `mkdir`s it at runtime. It
+must be a **sibling** of `HOLA_APPS_BIND_ROOT`, never the same directory, not
+inside it, and not containing it: it is mounted *writable* into a consented
+provider, so an overlap would silently turn one scratch directory into write
+access to every app's data. Hola refuses rather than accepts that — a
+provider install configured with an overlapping staging root fails its deploy
+job with a message naming both paths, instead of coming up with a wider grant
+than the operator consented to. Both paths are set together in the stack's
+`docker-compose.yml`; changing one means changing the other.
+
+**Restoring the provider itself is out of scope**, and deliberately so: the
+provider's own configuration holds the credentials that make its captures
+readable, so restoring it from one of its own captures is circular.
+
 ### Container logs
 
 `container-logs@1` is a **provisioned** contract: a log collector app from the

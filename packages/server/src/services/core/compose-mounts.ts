@@ -166,3 +166,42 @@ export function injectReadonlyMount(composeYaml: string, opts: { hostPath: strin
 
   return stringify(doc);
 }
+
+/**
+ * Return the compose YAML with `<hostPath>:<hostPath>` (read-WRITE,
+ * identity-mapped — no `:ro`) added to every service's `volumes` (deduped).
+ * Returns the input unchanged when there are no services.
+ *
+ * A DELIBERATELY SEPARATE function from {@link injectReadonlyMount}, not a
+ * read/write flag on it (spec 008, research R21): parameterising a
+ * security-relevant mount helper with a boolean makes one function mean two
+ * things at the exact boundary where that is least acceptable — a stray
+ * `true` at a call site would silently hand out a writable mount. Call ONLY
+ * with the platform-owned restore staging root, never any app's data root and
+ * never the apps root itself (FR-011).
+ */
+export function injectWritableMount(composeYaml: string, opts: { hostPath: string }): string {
+  const mount = `${opts.hostPath}:${opts.hostPath}`;
+  const doc = (parse(composeYaml) ?? {}) as ComposeDoc;
+  const services = doc.services;
+  if (!services || typeof services !== 'object' || Object.keys(services).length === 0) {
+    return composeYaml;
+  }
+
+  for (const [name, service] of Object.entries(services)) {
+    // The container-logs sidecar is PLATFORM infrastructure, not part of the
+    // app, and it already holds the Docker socket. It is injected earlier in
+    // `materializeCompose` than this grant, so without this skip a provider
+    // consenting to both `container-logs@1` and `restore@1` would hand the
+    // socket-holding proxy a writable host mount it has no use for — the
+    // widening ADR 0006 exists to prevent. `injectReadonlyMount` needs no
+    // such skip only because it runs BEFORE the sidecar exists.
+    if (name === CONTAINER_LOGS_PROXY_SERVICE) continue;
+    if (!service || typeof service !== 'object') continue;
+    const existing = Array.isArray(service.volumes) ? service.volumes : [];
+    if (existing.includes(mount)) continue;
+    service.volumes = [...existing, mount];
+  }
+
+  return stringify(doc);
+}

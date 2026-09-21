@@ -797,25 +797,6 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
     responseType: 'GetBackupResponse'
   },
   {
-    path: '/api/backups/{backupId}/restore',
-    method: 'POST',
-    operationId: 'restoreBackup',
-    summary: 'Restore Backup',
-    description: 'Restore a backup to a deployment',
-    tags: ['backups'],
-    parameters: [
-      {
-        name: 'backupId',
-        in: 'path',
-        description: 'Backup identifier',
-        required: true,
-        schema: { type: 'string' }
-      }
-    ],
-    requestBodyType: 'RestoreBackupRequest',
-    responseType: 'RestoreBackupResponse'
-  },
-  {
     path: '/api/backups/{backupId}',
     method: 'DELETE',
     operationId: 'deleteBackup',
@@ -1326,14 +1307,6 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   status: 'completed' | 'failed' | 'running';
   type: 'automatic' | 'manual';
   files?: Array<{ path: string; sizeBytes: number }>;
-}`,
-
-    RestoreBackupRequest: `{
-  targetDeploymentId?: string;
-}`,
-
-    RestoreBackupResponse: `{
-  jobId: string;
 }`,
 
     DeleteBackupResponse: `{

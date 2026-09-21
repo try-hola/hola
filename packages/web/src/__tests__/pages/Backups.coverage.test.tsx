@@ -123,6 +123,18 @@ describe('Backups page coverage', () => {
     expect(screen.queryByRole('button', { name: /create backup/i })).toBeNull();
   });
 
+  // spec 008, T125, quickstart scenario 60: the fabricated restore affordance
+  // (#484) is gone entirely — not merely disabled — so nothing in the
+  // rendered view is clickable and produces no effect.
+  it('offers no "restore" action — the fabricated #484 stub is gone entirely', async () => {
+    contractsList.mockResolvedValue(rollup({ providers: [app('backrest', { granted: true })] }));
+    render(<MemoryRouter><Backups /></MemoryRouter>);
+
+    await screen.findByText('Backup provider');
+    expect(screen.queryByRole('button', { name: /restore/i })).toBeNull();
+    expect(screen.queryByTitle('Restore')).toBeNull();
+  });
+
   it('renders a postiz-shaped acceptor as partially covered, excluded from the covered count (spec 004)', async () => {
     contractsList.mockResolvedValue(rollup({
       providers: [app('backrest', { granted: true })],

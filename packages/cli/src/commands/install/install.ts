@@ -140,9 +140,18 @@ function renderRestoreList(appId: string, resp: ListRestoreCandidatesResponse): 
   for (const lineage of resp.lineages) {
     for (const c of lineage.candidates) {
       const captured = c.capturedAt ? new Date(c.capturedAt).toISOString().replace('T', ' ').slice(0, 16) : 'unknown';
+      // spec 008: `candidateId`, NEVER `deploymentId` — the latter is absent
+      // for a provider-held capture (it has no deployment on this host), and
+      // printing it rendered every provider candidate's id as `undefined`,
+      // leaving the operator nothing to pass to --restore-from.
+      const origin = c.source === 'provider' ? '   (backup provider)' : '';
       lines.push(
-        `  ${c.deploymentId}   ${c.name}   ${c.host ?? c.subdomain ?? '(no host)'}   ${c.appVersion ? `v${c.appVersion}` : 'unknown version'}   env: ${c.carriesEnv ? 'yes' : 'no'}   ${captured}`,
+        `  ${c.candidateId}   ${c.name}   ${c.host ?? c.subdomain ?? '(no host)'}   ${c.appVersion ? `v${c.appVersion}` : 'unknown version'}   env: ${c.carriesEnv ? 'yes' : 'no'}   ${captured}${origin}`,
       );
+      if (c.confidence === 'path') {
+        lines.push(`                    ! identity inferred from where the capture is stored, not read from a record inside it`);
+        lines.push(`                      requires --ack restore-inferred-identity`);
+      }
       for (const w of c.warnings) {
         if (w.code === 'env-not-carried') {
           lines.push(`                    ! configuration cannot be carried: ${w.keys.join(', ')}`);
@@ -188,9 +197,18 @@ async function resolveRestoreChoice(
   let candidateId: string;
   if (opts.restoreFrom === 'latest') {
     if (resp.requiresExplicitChoice || !resp.defaultCandidateId) {
+      // spec 008 FR-052a: a SINGLE lineage can also arrive with no default,
+      // when its newest candidate's identity was inferred rather than read.
+      // Reporting that as "1 unrelated lineages match" points the operator at
+      // a problem they do not have.
+      const inferredOnly = resp.lineages.length === 1 && resp.lineages[0]?.candidates[0]?.confidence === 'path';
       throw new DeployAbort(
-        `--restore-from latest is ambiguous: ${resp.lineages.length} unrelated lineages match. ` +
-          `Pick one explicitly with --restore-from <id>, or see them with --restore-list.`,
+        inferredOnly
+          ? `--restore-from latest cannot pick for you: the only matching capture's identity was inferred from where ` +
+              `it is stored, not read from a record inside it. Name it explicitly with --restore-from <id> and ` +
+              `--ack restore-inferred-identity; see it with --restore-list.`
+          : `--restore-from latest is ambiguous: ${resp.lineages.length} unrelated lineages match. ` +
+              `Pick one explicitly with --restore-from <id>, or see them with --restore-list.`,
       );
     }
     candidateId = resp.defaultCandidateId;
@@ -198,7 +216,7 @@ async function resolveRestoreChoice(
     candidateId = opts.restoreFrom!;
   }
 
-  const candidate = allCandidates(resp).find(c => c.deploymentId === candidateId);
+  const candidate = allCandidates(resp).find(c => c.candidateId === candidateId);
   const carryEnv = opts.carryEnv === false ? false : opts.carryEnv === true ? true : (candidate?.carriesEnv ?? false);
   const acknowledge = parseAcks(opts.ack);
 

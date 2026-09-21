@@ -24,7 +24,122 @@ import {
   type RestoreSkewVerdict,
   type RestoreWarning,
   type RestoreChoice,
+  type RestoreIndexEntry,
 } from '@hola/shared';
+
+/**
+ * Splits a candidate id on the FIRST ':' (spec 008, data-model.md §6c). A
+ * local deployment id (`<slug>-[0-9a-f]{8}`) never contains one, so the
+ * absence of a colon means "this names a deployment on this host" and its
+ * presence means "provider deployment id : capture id" — a provider-held
+ * capture has no deployment on this host to look up.
+ */
+export function parseCandidateId(candidateId: string):
+  | { kind: 'deployment'; deploymentId: string }
+  | { kind: 'provider'; providerDeploymentId: string; captureId: string } {
+  const at = candidateId.indexOf(':');
+  if (at < 0) return { kind: 'deployment', deploymentId: candidateId };
+  return {
+    kind: 'provider',
+    providerDeploymentId: candidateId.slice(0, at),
+    captureId: candidateId.slice(at + 1),
+  };
+}
+
+/** Deployment-id shape (`<slug>-<8 hex>`) an installation's directory name follows (research R19). */
+const INSTALL_NAME_RE = /^(.+)-([0-9a-f]{8})$/i;
+
+/**
+ * Recover an installation's directory-derived name from a provider capture's
+ * `location` (research R19, data-model.md §3a). This is the INSTALLATION's
+ * own name, never a catalog app id — FR-050 forbids treating it as one. A
+ * `location` whose last path segment does not match the shape yields no
+ * `installName` at all; the capture is still offered (FR-049).
+ */
+export function inferInstallNameFromLocation(location: string): string | undefined {
+  const last = installDirFromLocation(location);
+  if (!last) return undefined;
+  const match = INSTALL_NAME_RE.exec(last);
+  return match ? match[1] : undefined;
+}
+
+/**
+ * The capture's install DIRECTORY — the whole last path segment of `location`
+ * (`wiki-1a2b3c4d`), before {@link inferInstallNameFromLocation} strips the
+ * suffix. Unlike the recovered slug this is unique per installation, which is
+ * what makes it usable as a lineage key.
+ */
+export function installDirFromLocation(location: string): string | undefined {
+  const segments = location.split('/').filter((s) => s.length > 0);
+  return segments[segments.length - 1];
+}
+
+/**
+ * One provider capture resolved into candidate shape for a specific queried
+ * `appId` (data-model.md §6b, research R19a). `null` means this entry is not
+ * offered for this `appId` at all — its identity record names a *different*
+ * app, so showing it here would be actively misleading rather than merely
+ * uncertain.
+ */
+export function describeProviderCandidate(input: {
+  entry: RestoreIndexEntry;
+  providerDeploymentId: string;
+  queriedAppId: string;
+}): Omit<RestoreCandidate, 'skew' | 'requiredAcknowledgements' | 'warnings'> | null {
+  const { entry, providerDeploymentId, queriedAppId } = input;
+  const identity = entry.identity;
+  if (identity?.app && identity.app !== queriedAppId) return null;
+
+  const candidateId = `${providerDeploymentId}:${entry.captureId}`;
+  const installName = identity?.installName ?? inferInstallNameFromLocation(entry.location);
+  const confidence: 'marker' | 'path' = identity?.app === queriedAppId ? 'marker' : 'path';
+  // For an inferred identity the lineage key is the capture's full install
+  // DIRECTORY (`wiki-1a2b3c4d`), not the slug `inferInstallNameFromLocation`
+  // recovers for display (`wiki`). Both are derived from the same `location`,
+  // but the slug is shared by every install of the same app: keying the
+  // lineage on it would merge two unrelated lost installations into one
+  // history and offer them as interchangeable captures of the same thing,
+  // which is exactly what FR-043b's lineage grouping must not do.
+  const lineageId = confidence === 'marker'
+    ? (identity?.lineageId ?? candidateId)
+    : (installDirFromLocation(entry.location) ?? installName ?? candidateId);
+
+  return {
+    candidateId,
+    source: 'provider',
+    confidence,
+    lineageId,
+    app: queriedAppId,
+    name: installName ?? entry.location,
+    subdomain: identity?.subdomain ?? null,
+    host: identity?.host ?? null,
+    appVersion: identity?.appVersion ?? null,
+    channel: identity?.channel ?? null,
+    carriesEnv: false, // a provider capture carries no recorded env.json (FR-052)
+    capturedAt: entry.takenAt,
+    hasIdentityRecord: identity !== null && identity?.app === queriedAppId,
+  };
+}
+
+/**
+ * FR-052a, SC-017: an inferred-identity (`confidence: 'path'`) candidate must
+ * never be offered as the default selection, even when its lineage is the
+ * only one that matched. `groupIntoLineages` itself stays unchanged (it has
+ * no notion of confidence); this wraps its result and overrides the default
+ * for exactly this one case.
+ */
+export function suppressInferredDefault(result: {
+  lineages: RestoreCandidateLineage[];
+  defaultCandidateId: string | null;
+  requiresExplicitChoice: boolean;
+}): { lineages: RestoreCandidateLineage[]; defaultCandidateId: string | null; requiresExplicitChoice: boolean } {
+  if (!result.defaultCandidateId) return result;
+  const top = result.lineages[0]?.candidates[0];
+  if (top && top.candidateId === result.defaultCandidateId && top.confidence === 'path') {
+    return { ...result, defaultCandidateId: null, requiresExplicitChoice: true };
+  }
+  return result;
+}
 
 /**
  * The subset of the install identity record (`.hola/instance.json`, spec 006)
@@ -97,7 +212,10 @@ export function describeCandidate(
 ): Omit<RestoreCandidate, 'skew' | 'requiredAcknowledgements' | 'warnings'> {
   const { deployment, identity, carriesEnv } = source;
   return {
+    candidateId: deployment.id,
     deploymentId: deployment.id,
+    source: 'deployment',
+    confidence: 'marker',
     lineageId: identity?.lineageId ?? deployment.lineageId ?? deployment.id,
     app: identity?.app ?? deployment.app,
     name: deployment.name,
@@ -144,7 +262,7 @@ export function groupIntoLineages(candidates: RestoreCandidate[]): {
   lineages.sort((a, b) => compareCapturedAtDesc(a.candidates[0]!, b.candidates[0]!));
 
   const requiresExplicitChoice = lineages.length >= 2;
-  const defaultCandidateId = lineages.length === 1 ? (lineages[0]!.candidates[0]?.deploymentId ?? null) : null;
+  const defaultCandidateId = lineages.length === 1 ? (lineages[0]!.candidates[0]?.candidateId ?? null) : null;
 
   return { lineages, defaultCandidateId, requiresExplicitChoice };
 }
@@ -200,6 +318,8 @@ export interface AcknowledgementInput {
   skew: RestoreSkewVerdict;
   carryEnv: boolean;
   carriesEnv: boolean;
+  /** Spec 008 FR-051: a `confidence: 'path'` candidate's identity is inferred, not read. */
+  confidence?: 'marker' | 'path';
 }
 
 /**
@@ -208,11 +328,16 @@ export interface AcknowledgementInput {
  * `carriesEnv === false` (unavailable) map to the SAME code deliberately —
  * the operator-facing risk is identical either way, and a second code would
  * invite treating one as less serious.
+ *
+ * `confidence === 'path'` (spec 008, FR-051) always requires
+ * `restore-inferred-identity` — a local candidate's `confidence` is always
+ * `'marker'`, so this branch never fires for spec 007's path.
  */
 export function deriveRequiredAcknowledgements(input: AcknowledgementInput): string[] {
   const required: string[] = [];
   if (input.skew.kind === 'unknown') required.push('restore-version-unknown');
   if (!input.carryEnv || !input.carriesEnv) required.push('restore-env-not-carried');
+  if (input.confidence === 'path') required.push('restore-inferred-identity');
   return required;
 }
 
@@ -274,6 +399,39 @@ export function resolveListedCandidate(
     carryEnv: assumedCarryEnv,
     carriesEnv: described.carriesEnv,
     envNotCarriedKeys,
+    hasIdentityRecord: described.hasIdentityRecord,
+  });
+  return { ...described, skew, requiredAcknowledgements, warnings };
+}
+
+/**
+ * The provider-origin sibling of {@link resolveListedCandidate} (spec 008):
+ * resolve one `RestoreIndexEntry` into full listing shape for a specific
+ * queried `appId`. Returns `null` when {@link describeProviderCandidate}
+ * excludes this entry for this `appId` (its identity names a different app).
+ * A provider capture always assumes `carryEnv: false` as its default action —
+ * there is no environment record to carry (FR-052).
+ */
+export function resolveListedProviderCandidate(
+  entry: RestoreIndexEntry,
+  providerDeploymentId: string,
+  queriedAppId: string,
+  targetVersion: string | undefined,
+  meta: AppUpgradeMeta | undefined,
+): RestoreCandidate | null {
+  const described = describeProviderCandidate({ entry, providerDeploymentId, queriedAppId });
+  if (!described) return null;
+  const skew = computeSkewVerdict(described.appVersion, targetVersion, meta);
+  const requiredAcknowledgements = deriveRequiredAcknowledgements({
+    skew,
+    carryEnv: false,
+    carriesEnv: described.carriesEnv,
+    confidence: described.confidence,
+  });
+  const warnings = deriveWarnings({
+    carryEnv: false,
+    carriesEnv: described.carriesEnv,
+    envNotCarriedKeys: [],
     hasIdentityRecord: described.hasIdentityRecord,
   });
   return { ...described, skew, requiredAcknowledgements, warnings };
@@ -485,6 +643,7 @@ export function validateRestoreChoice(input: RestoreValidationInput): RestoreVal
     skew: candidate.skew,
     carryEnv: choice.carryEnv,
     carriesEnv: candidate.carriesEnv,
+    confidence: candidate.confidence,
   });
   const acknowledged = new Set(choice.acknowledge ?? []);
   const missing = required.filter((code) => !acknowledged.has(code));
@@ -525,6 +684,68 @@ export type JudgeRestoreChoiceResult =
  * this runs, and whether `source` might already be stale, differs between
  * callers.
  */
+export interface JudgeProviderRestoreChoiceInput {
+  /** The index entry the candidate id named, or `undefined` if it no longer exists in the index. */
+  entry: RestoreIndexEntry | undefined;
+  providerDeploymentId: string;
+  /** Whether the publishing deployment is STILL the consented `restore@1` provider right now. */
+  providerStillConsented: boolean;
+  queriedAppId: string;
+  choice: RestoreChoice;
+  targetVersion: string | undefined;
+  meta: AppUpgradeMeta | undefined;
+  requiresEnv: boolean;
+  envNotCarriedKeys: string[];
+}
+
+/**
+ * The provider-origin sibling of {@link judgeRestoreChoice} (spec 008). Every
+ * eligibility/skew/acknowledgement rule spec 007 applies to a local candidate
+ * applies identically here (FR-046) because both call the SAME
+ * {@link validateRestoreChoice} — only how the candidate is *resolved* (an
+ * index-entry lookup here, a deployment-registry lookup there) differs. The
+ * index being a stale cache (research R13) is exactly why `RESTORE_CANDIDATE_GONE`
+ * covers both "entry pruned from the repository" and "provider no longer holds
+ * consent" — neither is a version-skew or acknowledgement question.
+ */
+export function judgeProviderRestoreChoice(input: JudgeProviderRestoreChoiceInput): JudgeRestoreChoiceResult {
+  if (!input.entry || !input.providerStillConsented) {
+    return {
+      ok: false,
+      code: 'RESTORE_CANDIDATE_GONE',
+      message: `Restore source '${input.choice.candidateId}' is not available (RESTORE_CANDIDATE_GONE).`,
+      details: { candidateId: input.choice.candidateId },
+    };
+  }
+
+  const described = describeProviderCandidate({
+    entry: input.entry,
+    providerDeploymentId: input.providerDeploymentId,
+    queriedAppId: input.queriedAppId,
+  });
+  if (!described) {
+    return {
+      ok: false,
+      code: 'RESTORE_CANDIDATE_GONE',
+      message: `Restore source '${input.choice.candidateId}' is not available (RESTORE_CANDIDATE_GONE).`,
+      details: { candidateId: input.choice.candidateId },
+    };
+  }
+
+  const skew = computeSkewVerdict(described.appVersion, input.targetVersion, input.meta);
+  const candidate: RestoreCandidate = { ...described, skew, requiredAcknowledgements: [], warnings: [] };
+
+  const result = validateRestoreChoice({
+    candidate,
+    choice: input.choice,
+    requiresEnv: input.requiresEnv,
+    envNotCarriedKeys: input.envNotCarriedKeys,
+    targetVersion: input.targetVersion,
+  });
+  if (!result.ok) return result;
+  return { ok: true, candidate, requiredAcknowledgements: result.requiredAcknowledgements };
+}
+
 export function judgeRestoreChoice(input: JudgeRestoreChoiceInput): JudgeRestoreChoiceResult {
   const eligibility = checkCandidateStillEligible(input.source, input.appId, input.excludeDeploymentId);
   if (!eligibility.ok) {

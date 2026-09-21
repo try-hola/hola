@@ -8,7 +8,10 @@ import type { ListRestoreCandidatesResponse } from '@hola/shared';
 
 function candidate(id: string, lineageId: string, carriesEnv = true) {
   return {
+    candidateId: id,
     deploymentId: id,
+    source: 'deployment' as const,
+    confidence: 'marker' as const,
     lineageId,
     app: 'mealie',
     name: id,
@@ -95,6 +98,127 @@ describe('restore-on-install CLI (spec 007)', () => {
     expect(res).toBeUndefined();
     expect(process.exitCode).toBe(1);
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('ambiguous'));
+    expect(sdk.drafts.create).not.toHaveBeenCalled();
+  });
+
+  // spec 008, T111: --restore-from and --restore-list keep working unchanged
+  // as opaque-string passthroughs now that a candidate id may be a composite
+  // `<providerDeploymentId>:<captureId>` rather than a bare deployment id.
+  it('spec 008: --restore-from accepts a composite provider:capture id verbatim', async () => {
+    const providerCandidate = {
+      ...candidate('backrest-91a2c3d4:cap_20260201T090000Z', 'l1', false),
+      source: 'provider' as const,
+      confidence: 'path' as const,
+      deploymentId: undefined,
+    };
+    const sdk = makeSdk({
+      restoreCandidatesResp: {
+        appId: 'mealie',
+        lineages: [{ lineageId: 'l1', candidates: [providerCandidate] }],
+        defaultCandidateId: null,
+        requiresExplicitChoice: true,
+      },
+    });
+    await runInstall(
+      'mealie',
+      { restoreFrom: 'backrest-91a2c3d4:cap_20260201T090000Z', ack: ['restore-inferred-identity', 'restore-env-not-carried'], noStream: true },
+      { sdk: sdk as unknown as HolaSdk },
+    );
+
+    expect(sdk.drafts.create).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'mealie',
+      restoreFrom: {
+        candidateId: 'backrest-91a2c3d4:cap_20260201T090000Z',
+        carryEnv: false,
+        acknowledge: ['restore-inferred-identity', 'restore-env-not-carried'],
+      },
+    }));
+  });
+
+  it('spec 008: --restore-list prints a composite candidate id verbatim as Default: <id>', async () => {
+    const providerCandidate = {
+      ...candidate('backrest-91a2c3d4:cap_20260201T090000Z', 'l1', false),
+      source: 'provider' as const,
+      confidence: 'path' as const,
+      deploymentId: undefined,
+    };
+    const sdk = makeSdk({
+      restoreCandidatesResp: {
+        appId: 'mealie',
+        lineages: [{ lineageId: 'l1', candidates: [providerCandidate] }],
+        defaultCandidateId: 'backrest-91a2c3d4:cap_20260201T090000Z',
+        requiresExplicitChoice: false,
+      },
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await runInstall('mealie', { restoreList: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Default: backrest-91a2c3d4:cap_20260201T090000Z'));
+    logSpy.mockRestore();
+  });
+
+  // The trailer line above was the ONLY thing asserted about a provider
+  // candidate's id, and it comes from `defaultCandidateId` — the server's
+  // string, echoed. The per-candidate ROW is what an operator copies into
+  // `--restore-from`, and it printed `c.deploymentId`, which is `undefined`
+  // for a provider-held capture (it has no deployment on this host). So
+  // `--restore-list` rendered every provider candidate as `undefined` and
+  // gave the operator nothing to select — US1 was unreachable from the CLI.
+  it('spec 008: the --restore-list ROW prints the candidate id, never an undefined deploymentId', async () => {
+    const providerCandidate = {
+      ...candidate('backrest-91a2c3d4:cap_20260201T090000Z', 'l1', false),
+      source: 'provider' as const,
+      confidence: 'path' as const,
+      deploymentId: undefined,
+    };
+    const sdk = makeSdk({
+      restoreCandidatesResp: {
+        appId: 'mealie',
+        lineages: [{ lineageId: 'l1', candidates: [providerCandidate] }],
+        defaultCandidateId: null,
+        requiresExplicitChoice: true,
+      },
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await runInstall('mealie', { restoreList: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+
+    const output = logSpy.mock.calls.map(c => String(c[0])).join('\n');
+    logSpy.mockRestore();
+
+    const row = output.split('\n').find(l => l.trimStart().startsWith('backrest-91a2c3d4:cap_20260201T090000Z'));
+    expect(row).toBeDefined();
+    expect(output).not.toContain('undefined');
+    // The origin is visible, and the acknowledgement the operator will need
+    // is named on screen rather than discovered by a failed install.
+    expect(output).toContain('backup provider');
+    expect(output).toContain('--ack restore-inferred-identity');
+  });
+
+  // FR-052a: a single lineage can arrive with no default because its top
+  // candidate's identity was INFERRED. Reporting that as "1 unrelated
+  // lineages match" points the operator at a problem they do not have.
+  it('spec 008: --restore-from latest explains an inferred-identity suppression, not a phantom ambiguity', async () => {
+    const providerCandidate = {
+      ...candidate('backrest-91a2c3d4:cap_20260201T090000Z', 'l1', false),
+      source: 'provider' as const,
+      confidence: 'path' as const,
+      deploymentId: undefined,
+    };
+    const sdk = makeSdk({
+      restoreCandidatesResp: {
+        appId: 'mealie',
+        lineages: [{ lineageId: 'l1', candidates: [providerCandidate] }],
+        defaultCandidateId: null,
+        requiresExplicitChoice: true,
+      },
+    });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await runInstall('mealie', { restoreFrom: 'latest', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    const output = errSpy.mock.calls.map(c => String(c[0])).join('\n');
+    errSpy.mockRestore();
+
+    expect(output).toMatch(/identity was inferred/i);
+    expect(output).toContain('--ack restore-inferred-identity');
+    expect(output).not.toMatch(/1 unrelated lineages/);
     expect(sdk.drafts.create).not.toHaveBeenCalled();
   });
 

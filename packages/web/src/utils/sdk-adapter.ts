@@ -30,7 +30,7 @@ import type {
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
   // Backup types  
-  GetBackupsResponse, GetBackupResponse, CreateBackupResponse, RestoreBackupResponse, DeleteBackupResponse,
+  GetBackupsResponse, GetBackupResponse, CreateBackupResponse, DeleteBackupResponse,
   // Notification types
   GetNotificationsResponse, NotificationItem, PatchNotificationResponse, PostNotificationsActionResponse,
   // Settings types
@@ -595,11 +595,6 @@ export class SdkAdapter {
     create: (data: { appId?: string }): Promise<CreateBackupResponse> => {
       const path = '/api/backups';
       return this.enhancedRequest('POST', path, () => this.sdk.post<CreateBackupResponse>(path, data), data, false);
-    },
-    
-    restore: (backupId: string, data?: { targetDeploymentId?: string }): Promise<RestoreBackupResponse> => {
-      const path = `/api/backups/${backupId}/restore`;
-      return this.enhancedRequest('POST', path, () => this.sdk.post<RestoreBackupResponse>(path, data), data, false);
     },
     
     delete: (backupId: string): Promise<DeleteBackupResponse> => {

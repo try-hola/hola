@@ -26,7 +26,7 @@ import { RealLoggingService } from '../../services/core/logging';
 import { RealJobService } from '../../services/core/jobs';
 import { MockDockerService } from '../../services/core/docker';
 import { NoneProvisionerService } from '../../services/core/provisioner';
-import type { AppBackupConfig, AppBackupDeclaration, AppProfileConfig, ContractRollup, GetDeploymentResponse } from '@hola/shared';
+import type { AppBackupConfig, AppBackupDeclaration, AppProfileConfig, AppRestoreDeclaration, ContractRollup, GetDeploymentResponse } from '@hola/shared';
 
 type CatalogArg = ConstructorParameters<typeof RealDraftService>[1];
 type ValidationArg = ConstructorParameters<typeof RealDraftService>[2];
@@ -43,6 +43,7 @@ type AppShape = {
   provides?: string[];
   accepts?: string[];
   backup?: AppBackupConfig | AppBackupDeclaration;
+  restore?: AppRestoreDeclaration[];
   profiles?: AppProfileConfig[];
 };
 
@@ -230,6 +231,83 @@ describe('contract rollup', () => {
     const immich = await install(sys, 'immich');
 
     expect((await sys.deployments.getDeployment(immich)).contracts).toBeUndefined();
+  });
+
+  // restore@1 (spec 008) — quickstart scenarios 3, 5, 57.
+  describe('restore@1 rollup (spec 008)', () => {
+    const restoreOf = (items: ContractRollup[]): ContractRollup => items.find(i => i.ref === 'restore@1')!;
+
+    // Quickstart scenario 3: restore@1 appears in the rollup for the first
+    // time, with a providers/acceptors/unaffiliated split it did not have
+    // pre-spec-008 (it was a marker, entirely absent from CONTRACTS then).
+    test('scenario 3: restore@1 appears in the rollup, with its own provider/acceptor/unaffiliated split', async () => {
+      const sys = makeSystem({
+        backrest: { provides: ['restore@1'] },
+        wiki: { accepts: ['restore@1'] },
+      });
+      const backrest = await install(sys, 'backrest', ['restore@1']);
+      const wiki = await install(sys, 'wiki');
+
+      const { items } = await sys.deployments.getContracts();
+      expect(items.map(i => i.ref)).toContain('restore@1');
+      const restore = restoreOf(items);
+      expect(restore.providers.map(p => p.deploymentId)).toEqual([backrest]);
+      expect(restore.acceptors.map(a => a.deploymentId)).toEqual([wiki]);
+    });
+
+    // Quickstart scenario 5 / SC-014 / SC-015: acceptance is never derived
+    // from backup@1's declaration — flip only the backup BLOCK's presence,
+    // not accepts, and confirm the restore@1 row is unchanged.
+    test('scenario 5: an app accepting backup@1 with no restore@1 in accepts reports unaffiliated for restore@1', async () => {
+      const sys = makeSystem({
+        // Two apps, differing ONLY in whether a `backup` block is present —
+        // neither declares `restore@1` in `accepts`.
+        appWithHooks: { accepts: ['backup@1'], backup: PG_BACKUP },
+        appNoHooks: { accepts: ['backup@1'] },
+      });
+      const withHooks = await install(sys, 'appWithHooks');
+      const noHooks = await install(sys, 'appNoHooks');
+
+      const restore = restoreOf((await sys.deployments.getContracts()).items);
+      expect(restore.acceptors).toEqual([]);
+      expect(restore.unaffiliated.map(a => a.deploymentId).sort()).toEqual([noHooks, withHooks].sort());
+    });
+
+    // Quickstart scenario 57 / SC-011: restoreCoverage is independent of
+    // (backup) coverage — an app can be 'quiesced' for backup and
+    // 'undeclared' for restore on the SAME deployment, simultaneously.
+    test('scenario 57: restoreCoverage and coverage are independent judgements on the same deployment', async () => {
+      const sys = makeSystem({ paperless: { accepts: ['backup@1'], backup: PG_BACKUP } });
+      const paperless = await install(sys, 'paperless');
+
+      const detail = await sys.deployments.getDeployment(paperless);
+      expect(detail.contracts?.coverage?.['backup@1']?.state).toBe('quiesced');
+      // No restore@1 in accepts at all -> restoreCoverage is absent entirely
+      // (mirrors `coverage`'s own "no field when the contract isn't
+      // accepted" convention), never silently defaulted from backup's verdict.
+      expect(detail.contracts?.restoreCoverage).toBeUndefined();
+    });
+
+    test('an app accepting BOTH backup@1 and restore@1, with hooks, judges quiesced AND restorable independently', async () => {
+      const sys = makeSystem({
+        wiki: {
+          accepts: ['backup@1', 'restore@1'],
+          backup: { preHook: { service: 'db', command: ['pg_dump'] } },
+          restore: [{ id: 'default', hook: { service: 'db', command: ['psql'] } }],
+        },
+      });
+      const wiki = await install(sys, 'wiki');
+      const detail = await sys.deployments.getDeployment(wiki);
+      // Compose declares no recognised database image, so neither judgement
+      // has anything to target — but BOTH apps declared hooks, and a declared
+      // hook runs at backup/restore time whether or not this build recognises
+      // the image behind it. So each verdict lands on its own "the author said
+      // what to do and it will be done" state, computed independently:
+      // `quiesced` for capture, `restorable` for restore. `copy-back` would
+      // tell the operator no reload is needed when the author said one is.
+      expect(detail.contracts?.coverage?.['backup@1']?.state).toBe('quiesced');
+      expect(detail.contracts?.restoreCoverage?.['restore@1']?.state).toBe('restorable');
+    });
   });
 
   describe('backup coverage (spec 004, US2)', () => {

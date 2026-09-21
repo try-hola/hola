@@ -93,7 +93,10 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
   // ---- Scenario 5: lineage grouping/ordering, default/explicit choice ----
   test('scenario 5: candidates group by lineage, newest-first; two lineages need an explicit pick', () => {
     const c = (id: string, lineageId: string, capturedAt: string | null): RestoreCandidate => ({
+      candidateId: id,
       deploymentId: id,
+      source: 'deployment',
+      confidence: 'marker',
       lineageId,
       app: 'demoapp',
       name: id,
@@ -176,7 +179,8 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
     expect(required).toEqual(['restore-version-unknown']);
 
     const candidate: RestoreCandidate = {
-      deploymentId: 'x', lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
+      candidateId: 'x', deploymentId: 'x', source: 'deployment', confidence: 'marker',
+      lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
       appVersion: null, channel: null, carriesEnv: true, capturedAt: null, hasIdentityRecord: true,
       skew: { kind: 'unknown' }, requiredAcknowledgements: [], warnings: [],
     };
@@ -190,7 +194,8 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
   // ---- Scenario 39: requiresEnv refuses rather than warns ----
   test('scenario 39: requiresEnv + no environment record refuses (RESTORE_ENV_REQUIRED), never just warns', () => {
     const candidate: RestoreCandidate = {
-      deploymentId: 'x', lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
+      candidateId: 'x', deploymentId: 'x', source: 'deployment', confidence: 'marker',
+      lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
       appVersion: '1.0.0', channel: null, carriesEnv: false, capturedAt: null, hasIdentityRecord: true,
       skew: { kind: 'ok' }, requiredAcknowledgements: [], warnings: [],
     };
@@ -214,7 +219,8 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
   // ---- Scenario 41: every refusal carries details.code (+ suggestedVersion where applicable) ----
   test('scenario 41: every refusal path carries details.code, in the same shape', () => {
     const base: RestoreCandidate = {
-      deploymentId: 'x', lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
+      candidateId: 'x', deploymentId: 'x', source: 'deployment', confidence: 'marker',
+      lineageId: 'x', app: 'demoapp', name: 'x', subdomain: null, host: null,
       appVersion: '2.0.0', channel: null, carriesEnv: true, capturedAt: null, hasIdentityRecord: true,
       skew: { kind: 'refused', code: 'RESTORE_SOURCE_NEWER', message: 'newer' }, requiredAcknowledgements: [], warnings: [],
     };
@@ -275,27 +281,39 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
     }
   });
 
-  // ---- Scenarios 54, 55: the scope boundary (FR-047, research R19) ----
-  test('scenario 54: CONTRACTS is unchanged — exactly auth@1/backup@1/push@1/container-logs@1, no new grant kind', async () => {
+  // ---- Scenarios 54, 55 (spec 007) — superseded by spec 008 ----
+  // Spec 007's scenario 54 asserted `restore@1` was NOT in CONTRACTS (it was a
+  // participation marker). Spec 008 (FR-001-FR-003) deliberately supersedes
+  // that: `restore@1` is now a real, brokered CONTRACTS entry — see
+  // `packages/shared/src/__tests__/contracts.test.ts` and
+  // `bundles/contracts.test.ts` scenario 1 (FR-003's carve-out regression
+  // guard) for the replacement coverage.
+  test('scenario 54 (superseded by spec 008): CONTRACTS now includes restore@1, promoted from a marker to a brokered contract', async () => {
     const { CONTRACTS } = await import('@hola/shared/contracts');
     expect(CONTRACTS.map((c) => `${c.id}@${c.version}`).sort()).toEqual(
-      ['auth@1', 'backup@1', 'container-logs@1', 'push@1'].sort(),
+      ['auth@1', 'backup@1', 'container-logs@1', 'push@1', 'restore@1'].sort(),
     );
   });
 
-  test('scenario 55: the pre-existing dead restore stub is untouched — nothing in this feature imports RestoreBackupRequest', async () => {
-    // Mechanical form of quickstart.md §9's grep: this feature's own new
-    // modules (not the pre-existing stub route itself, which legitimately
-    // names the type) must never reference it.
-    const featureModules = [
-      new URL('../../services/core/restore-candidates.ts', import.meta.url),
-      new URL('../../services/core/manifest-restore.ts', import.meta.url),
-    ];
-    for (const url of featureModules) {
-      const source = await readFile(url, 'utf8');
-      expect(source).not.toContain('RestoreBackupRequest');
-      expect(source).not.toContain('RestoreBackupResponse');
-    }
+  // Spec 007's scenario 55 asserted the dead #484 stub's types were not
+  // imported by this feature's modules. Spec 008 deletes those types entirely
+  // (FR-056), so the meaningful assertion becomes "importing them is a
+  // compile-time error" rather than a runtime string search.
+  test('scenario 55 (superseded by spec 008): RestoreBackupRequest/RestoreBackupResponse no longer exist as exports', async () => {
+    // Runtime half: types are erased, so this only proves the module doesn't
+    // export a same-named VALUE — the load-bearing half is the type-only
+    // check below, verified by `bun run typecheck` (a stray `@ts-expect-error`
+    // that stops erroring, because the type came back, fails typecheck).
+    const shared = await import('@hola/shared');
+    expect('RestoreBackupRequest' in shared).toBe(false);
+    expect('RestoreBackupResponse' in shared).toBe(false);
+
+    // @ts-expect-error RestoreBackupRequest no longer exists (FR-056, #484).
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    type _CheckRequestGone = import('@hola/shared').RestoreBackupRequest;
+    // @ts-expect-error RestoreBackupResponse no longer exists (FR-056, #484).
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    type _CheckResponseGone = import('@hola/shared').RestoreBackupResponse;
   });
 
   // ---- Description fallback (research R5, FR-003): identity record wins, deployment record falls back ----
@@ -877,8 +895,14 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
       restoreFrom: { candidateId: source.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] },
     });
     expect(restored.job?.status).toBe('completed');
-    const stagingPath = join(dataRoot, 'deployments', restored.deploymentId, 'restore-staging', 'data.tar.gz');
-    expect(existsSync(stagingPath)).toBe(false);
+    // spec 008 R7 renamed this directory `restore-staging` -> `capture-staging`
+    // (the provider-facing HOLA_RESTORE_STAGING_ROOT took the old name). Assert
+    // the CURRENT path: asserting the old one passed whether or not the
+    // cleanup ran, which silently voided this whole test.
+    const captureStagingDir = join(dataRoot, 'deployments', restored.deploymentId, 'capture-staging');
+    expect(existsSync(join(captureStagingDir, 'data.tar.gz'))).toBe(false);
+    // The whole DIRECTORY, not just the archive inside it.
+    expect(existsSync(captureStagingDir)).toBe(false);
     // Never appears in the SOURCE's own snapshot listing.
     expect(existsSync(join(dataRoot, 'deployments', source.deploymentId, 'snapshots'))).toBe(false);
 
@@ -891,7 +915,7 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
       restoreFrom: { candidateId: source2.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] },
     });
     expect(failed.job?.status).toBe('failed');
-    expect(existsSync(join(dataRoot, 'deployments', failed.deploymentId, 'restore-staging', 'data.tar.gz'))).toBe(false);
+    expect(existsSync(join(dataRoot, 'deployments', failed.deploymentId, 'capture-staging'))).toBe(false);
   });
 
   test('scenario 20: discard paths are removed before any container starts; an escaping path refuses the restore', async () => {

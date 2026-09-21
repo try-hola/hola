@@ -106,7 +106,6 @@ export const API = {
   backups: {
     base: '/api/backups',
     byId: (backupId: string) => `/api/backups/${backupId}`,
-    restore: (backupId: string) => `/api/backups/${backupId}/restore`,
   },
 
   // Capability contracts (ADR 0004). The `backup*` routes are the broker: called
@@ -121,6 +120,12 @@ export const API = {
     // Status of a prepare job, so a provider's hook script polls inside the
     // contract surface rather than reaching into the platform's job API.
     backupStatus: (jobId: string) => `/api/contracts/backup/status/${jobId}`,
+    // restore@1 provider half (spec 008) — four broker routes, all reached by
+    // the provider's own contract-scoped token, never by the dashboard/CLI.
+    restoreIndex: '/api/contracts/restore/index',
+    restoreRequests: '/api/contracts/restore/requests',
+    restoreRequestClaim: (id: string) => `/api/contracts/restore/requests/${encodeURIComponent(id)}/claim`,
+    restoreRequestComplete: (id: string) => `/api/contracts/restore/requests/${encodeURIComponent(id)}/complete`,
   },
 
   notifications: {
@@ -389,7 +394,14 @@ export type RestoreChoice = {
  * computed server-side from the chosen candidate and refused when required and
  * absent — the same enforcement `grants` already gets.
  */
-export type RestoreAcknowledgementCode = 'restore-version-unknown' | 'restore-env-not-carried';
+export type RestoreAcknowledgementCode =
+  | 'restore-version-unknown'
+  | 'restore-env-not-carried'
+  // Spec 008: required whenever a candidate's identity is `confidence: 'path'`
+  // — inferred from where a provider-held capture sits, not read from a record
+  // inside it. Selecting such a candidate without this acknowledgement is
+  // refused `RESTORE_ACK_REQUIRED` naming this code specifically (FR-051).
+  | 'restore-inferred-identity';
 
 /** Closed union of refusal codes a restore can fail with, carried in `details.code`. */
 export type RestoreRefusalCode =
@@ -445,9 +457,24 @@ export type RestoreWarning =
  * A source the operator can pick as a restore-on-install source. Derived on
  * demand from deployments + identity records + catalog upgrade metadata —
  * never stored. Returned by `GET /api/apps/:appId/restore-candidates`.
+ *
+ * Spec 008 adds `candidateId` (origin-independent identifier), `source` and
+ * `confidence` — a provider-held capture has no deployment on this host, so
+ * identifying candidates by local deployment id (spec 007's original shape)
+ * cannot express one. `deploymentId` survives as a back-compat alias, present
+ * only for a local candidate, so a stale client comparing against it simply
+ * never matches a provider-origin candidate rather than mis-rendering it as a
+ * local deployment (FR-045).
  */
 export type RestoreCandidate = {
-  deploymentId: string;
+  /** Origin-independent identifier (spec 008). The field every caller should key on. */
+  candidateId: string;
+  /** @deprecated back-compat alias for `candidateId`, present only when `source === 'deployment'`. */
+  deploymentId?: string;
+  /** Whether this candidate is a live deployment on this host or a capture held by a provider (spec 008). */
+  source: 'deployment' | 'provider';
+  /** Whether the app identity was read from a record inside the capture, or inferred from its location (spec 008). */
+  confidence: 'marker' | 'path';
   lineageId: string;
   app: string;
   name: string;
@@ -477,6 +504,72 @@ export type ListRestoreCandidatesResponse = {
   defaultCandidateId: string | null;
   requiresExplicitChoice: boolean;
 };
+
+// ---------------------------------------------------------------------------
+// restore@1 provider half (spec 008): snapshot index + request queue.
+// ---------------------------------------------------------------------------
+
+/**
+ * What a restore provider knows about the app inside one capture, read from a
+ * `.hola/instance.json`-shaped identity record when present. Every field is
+ * optional: `app` is present only when an identity record was actually found
+ * (FR-048); `installName` is the installation's own directory-derived name
+ * when the record is absent but a plausible path shape is (FR-049/FR-050) —
+ * NEVER an app id, and never treated as one.
+ */
+export type RestoreCaptureIdentity = {
+  app?: string;
+  installName?: string;
+  lineageId?: string;
+  appVersion?: string | null;
+  channel?: string | null;
+  subdomain?: string | null;
+  host?: string | null;
+  writtenAt?: string | null;
+};
+
+/** One capture a restore provider holds (spec 008). Metadata only — no captured bytes ever travel here. */
+export type RestoreIndexEntry = {
+  /** Provider-assigned, unique within its own index. */
+  captureId: string;
+  /** ISO 8601 — when the capture was taken. */
+  takenAt: string;
+  sizeBytes: number;
+  /**
+   * Where the capture sits in the provider's own repository — the provider's
+   * statement, never a path on this host. The server reads it for exactly two
+   * things and writes it nowhere: inferring an installation name when the
+   * capture carries no identity record (FR-049), and locating the app data
+   * root inside a delivered tree when no `.hola` marker is present to find
+   * (FR-041 — a capture predating spec 006 has none). Both uses resolve it
+   * under the request's own destination and prove strict containment, so a
+   * `..`-carrying or absolute-escaping value is refused, not followed.
+   */
+  location: string;
+  /** `null` when no identity record was found inside the capture at all (FR-048). */
+  identity: RestoreCaptureIdentity | null;
+};
+
+/** Body of `POST /api/contracts/restore/index` (spec 008). Replaces the provider's index wholesale. */
+export type PublishRestoreIndexRequest = { entries: RestoreIndexEntry[] };
+
+/** Lifecycle of one restore request (spec 008, data-model.md §4b). */
+export type RestoreRequestStatus = 'pending' | 'claimed' | 'completed' | 'failed' | 'expired';
+
+/**
+ * What the poll response hands the provider for one pending request —
+ * deliberately minimal: the provider is never told which app or which install
+ * it's serving (data-model.md §4c).
+ */
+export type RestoreRequestForProvider = {
+  id: string;
+  captureId: string;
+  destination: string;
+  deadlineAt: string;
+};
+
+/** Body of `POST /api/contracts/restore/requests/:id/complete` (spec 008). */
+export type CompleteRestoreRequestRequest = { outcome: 'completed' | 'failed'; reason?: string };
 
 /**
  * How a push overwrites the target directory (#409). `mirror` is rsync
@@ -1887,9 +1980,6 @@ export type GetBackupResponse = BackupItem & {
   files?: Array<{ path: string; sizeBytes: number }>;
 };
 
-export type RestoreBackupRequest = { targetDeploymentId?: string };
-export type RestoreBackupResponse = { jobId: string };
-
 export type DeleteBackupResponse = { ok: true };
 
 // ------------------------------------------------------
@@ -2328,6 +2418,27 @@ export type ContractCoverage = {
 };
 
 /**
+ * Server-computed coverage judgement for one deployment's `restore@1`
+ * acceptance (spec 008, data-model.md §7a) — deliberately its OWN vocabulary,
+ * never `BackupCoverageState`'s: the capture vocabulary describes whether an
+ * app is quiesced while being READ, which says nothing about whether it can
+ * be put back, and `'as-is'`'s backup meaning (no hooks — a weaker guarantee)
+ * would silently invert if reused here, since plain-copy restoration of a
+ * non-database app is a COMPLETE answer, not a diminished one (FR-053a).
+ */
+export type RestoreCoverageState = 'undeclared' | 'copy-back' | 'incomplete' | 'restorable';
+
+export type RestoreCoverage = {
+  state: RestoreCoverageState;
+  /** Recognised database participations with a matching, hook-bearing restore declaration. */
+  targeted: number;
+  /** Recognised database participations the deployment actually runs. */
+  recognised: number;
+  participations: Array<{ id: string; service?: string; declared: boolean }>;
+  databases: string[];
+};
+
+/**
  * The contract roles ONE install fills (ADR 0004 Phase 4), read from the release
  * it is actually running rather than the app's newest catalog version — what an
  * install does is a property of its active release, and an upgrade that adds a
@@ -2362,6 +2473,13 @@ export type DeploymentContracts = {
    * isn't accepted or has no coverage concept (e.g. an implicit contract).
    */
   coverage?: Record<string, ContractCoverage>;
+  /**
+   * Restore-coverage judgement per accepted, declared contract (spec 008).
+   * Keyed by ref; only `restore@1` is populated today. Independent of
+   * `coverage` — an app can be `quiesced` for backup and `incomplete` for
+   * restore on the same deployment (FR-053).
+   */
+  restoreCoverage?: Record<string, RestoreCoverage>;
 };
 
 /** One install's appearance in a contract rollup, with the role-specific facts. */
@@ -2380,6 +2498,8 @@ export type ContractParticipant = {
   granted?: boolean;
   /** Acceptors of a declared contract with a coverage concept (`backup@1`): the judgement. */
   coverage?: ContractCoverage;
+  /** Acceptors of `restore@1`: the restore-coverage judgement (spec 008). */
+  restoreCoverage?: RestoreCoverage;
 };
 
 /**

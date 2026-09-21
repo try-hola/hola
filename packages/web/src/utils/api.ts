@@ -439,10 +439,7 @@ export const api = {
     create: (data: { appId?: string }) => 
       apiClient.post(API.backups.base, data),
     
-    restore: (backupId: string, data?: { targetDeploymentId?: string }) => 
-      apiClient.post(API.backups.restore(backupId), data),
-    
-    delete: (backupId: string) => 
+    delete: (backupId: string) =>
       apiClient.delete(API.backups.byId(backupId)),
   },
 
