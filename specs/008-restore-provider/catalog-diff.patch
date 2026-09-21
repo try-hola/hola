@@ -1,0 +1,94 @@
+diff --git a/bin/validate-manifest.mjs b/bin/validate-manifest.mjs
+index bb27067..e3d5a77 100755
+--- a/bin/validate-manifest.mjs
++++ b/bin/validate-manifest.mjs
+@@ -254,11 +254,9 @@ const CONTRACTS = {
+   // server drops an `accepts` naming it with a warning; here it is an error, so
+   // a manifest saying something meaningless fails CI rather than deploying.
+   'container-logs@1': { block: null, blockRequired: false, appProvided: true, impliedByBlock: false, acceptable: false },
+-  // NOT a brokered contract, and the only entry here that isn't: Hola's CONTRACTS
+-  // registry gains no entry for restore@1 and the server never brokers it between
+-  // two parties. It is a participation MARKER (Hola spec 007, restore-on-install)
+-  // meaning "this app has considered being restored", and it lives in this table
+-  // only because `accepts` is where an app declares it.
++  // The acceptor side (`accepts: ["restore@1"]` + the top-level `restore` block)
++  // is exactly Hola spec 007 (restore-on-install) and is untouched by the note
++  // below — an app that only accepts being restored declares nothing new.
+   //
+   // `blockRequired` is false for the same reason backup@1's is, and it is the
+   // whole point: `restore@1` with no `restore` block is the positive claim "a
+@@ -266,11 +264,15 @@ const CONTRACTS = {
+   // — which must stay distinguishable from an app nobody considered. Acceptance
+   // is declared, never derived from the block (ADR 0004 §2).
+   //
+-  // `appProvided: false` because nothing provides restore@1 — not the platform,
+-  // not an app. A manifest naming it in `provides` is an error, which is right,
+-  // though the shared message says "provided by the Hola platform itself" and is
+-  // imprecise for this one ref.
+-  'restore@1': { block: 'restore', blockRequired: false, appProvided: false, impliedByBlock: false },
++  // `appProvided: true` as of Hola spec 008 (restore-provider): restore@1 gained
++  // a real provider side — a catalog app (the `backrest` bundle, upgraded) may
++  // now declare `provides: ["restore@1"]` and is granted a writable staging
++  // mount for it, exactly as `backup@1` already works. Before spec 008 this was
++  // `false` (no provider existed, app or platform, and this table's own comment
++  // said so) — see try-hola/hola specs/008-restore-provider/contracts/manifest.md
++  // §0 for the provider-side shape, and §3 for why this flag and the schema's
++  // `appProvidedContractRef` enum must change together (FR-058).
++  'restore@1': { block: 'restore', blockRequired: false, appProvided: true, impliedByBlock: false },
+ };
+ 
+ /** Manifest fields that take a bare string or an array of them. */
+diff --git a/schemas/manifest.schema.json b/schemas/manifest.schema.json
+index 59de02b..cadd7e4 100644
+--- a/schemas/manifest.schema.json
++++ b/schemas/manifest.schema.json
+@@ -337,7 +337,7 @@
+       ]
+     },
+     "provides": {
+-      "description": "Capability contract(s) this app PERFORMS for other apps (ADR 0004) -- e.g. 'backup@1' for a backup engine. A contract's provider grant is elevated access the server injects because of the role, disclosed to the operator for consent at install: 'backup@1' grants a read-only mount of every app's data. Only contracts with an app-side provider may be declared; 'auth@1' and 'push@1' are provided by the platform itself, and an app claiming them is a manifest error. See Capability contracts in README.md.",
++      "description": "Capability contract(s) this app PERFORMS for other apps (ADR 0004) -- e.g. 'backup@1' for a backup engine, or 'restore@1' (Hola spec 008: restore-provider) for a restore source such as `backrest`. A contract's provider grant is elevated access the server injects because of the role, disclosed to the operator for consent at install: 'backup@1' grants a read-only mount of every app's data; 'restore@1' grants a writable staging mount -- see try-hola/hola specs/008-restore-provider/contracts/manifest.md §0. Only contracts with an app-side provider may be declared; 'auth@1' and 'push@1' are provided by the platform itself, and an app claiming them is a manifest error. See Capability contracts in README.md.",
+       "anyOf": [
+         {
+           "$ref": "#/$defs/appProvidedContractRef"
+@@ -419,7 +419,7 @@
+     },
+     "restore": {
+       "type": "array",
+-      "description": "Per-backup-participation restore declarations (Hola spec 007: restore-on-install). Each entry names the BACKUP participation id it restores (\"default\" for the legacy singular `backup` block above, which every app in this catalog currently uses), the data-root-relative paths to discard after the restored files land and before any container starts, and an optional hook -- reusing the exact `#/$defs/backupHook` shape, run after discards against the started-and-healthy service. An app that declares `accepts: [\"restore@1\"]` with NO entry here is restored by plain file copy (nothing discarded, no hook) -- meaningfully distinct from an app that doesn't declare `restore@1` at all, which isn't offered as restorable. `restore@1` here is a participation marker this feature's app declares, not a brokered capability contract.",
++      "description": "Per-backup-participation restore declarations -- the ACCEPTOR side of `restore@1` (Hola spec 007: restore-on-install), unchanged by Hola spec 008 (restore-provider), which only adds a PROVIDER side (`provides: [\"restore@1\"]`, see #/$defs/appProvidedContractRef and try-hola/hola specs/008-restore-provider/contracts/manifest.md §0) -- nothing here changes for an app that merely accepts being restored. Each entry names the BACKUP participation id it restores (\"default\" for the legacy singular `backup` block above, which every app in this catalog currently uses), the data-root-relative paths to discard after the restored files land and before any container starts, and an optional hook -- reusing the exact `#/$defs/backupHook` shape, run after discards against the started-and-healthy service. An app that declares `accepts: [\"restore@1\"]` with NO entry here is restored by plain file copy (nothing discarded, no hook) -- meaningfully distinct from an app that doesn't declare `restore@1` at all, which isn't offered as restorable.",
+       "minItems": 1,
+       "items": {
+         "type": "object",
+@@ -544,7 +544,7 @@
+   "$defs": {
+     "contractRef": {
+       "type": "string",
+-      "description": "A value an app may declare in a contract list. Most are capability contract refs (`<id>@<version>`) the server BROKERS -- a promise about *server* behavior, so matching two strings does nothing unless Hola implements the middle; those mirror CONTRACTS in try-hola/hola packages/shared/src/contracts.ts, and adding a contract there is what makes one declarable here. `restore@1` is the one exception: a participation MARKER for Hola spec 007 (restore-on-install), NOT a brokered contract -- CONTRACTS gains no entry for it and the server never brokers it between two parties; it only says \"this app has considered being restored\" (see the top-level `restore` block). Enumerated rather than left open because the server drops an unrecognized ref with a warning (ADR 0003 forward-compat), which would make a typo'd `backups@1` a silent no-op instead of a CI failure.",
++      "description": "A value an app may declare in a contract list. Every ref is a capability contract (`<id>@<version>`) the server BROKERS -- a promise about *server* behavior, so matching two strings does nothing unless Hola implements the middle; these mirror CONTRACTS in try-hola/hola packages/shared/src/contracts.ts, and adding a contract there is what makes one declarable here. `restore@1`'s acceptor side (`accepts` + the top-level `restore` block below) is exactly Hola spec 007 (restore-on-install) and is unchanged by this note. As of Hola spec 008 (restore-provider), `restore@1` also has a real provider side -- a catalog app (e.g. `backrest`) may declare it in `provides` -- so it is a brokered contract like the others, not a bare participation marker; see try-hola/hola specs/008-restore-provider/contracts/manifest.md §0. Enumerated rather than left open because the server drops an unrecognized ref with a warning (ADR 0003 forward-compat), which would make a typo'd `backups@1` a silent no-op instead of a CI failure.",
+       "enum": [
+         "auth@1",
+         "backup@1",
+@@ -555,7 +555,7 @@
+     },
+     "acceptableContractRef": {
+       "type": "string",
+-      "description": "The subset of #/$defs/contractRef an app can OPT IN to, i.e. those whose participation is `declared`, plus the `restore@1` participation marker. An `implicit` contract (container-logs@1) has no acceptor side: every install is a subject by virtue of running, and the server drops an `accepts` naming one with a warning, so declaring it here is a manifest error rather than a silent no-op.",
++      "description": "The subset of #/$defs/contractRef an app can OPT IN to, i.e. those whose participation is `declared` -- `restore@1` included, and its acceptor shape unchanged by the provider role Hola spec 008 (restore-provider) adds (see #/$defs/appProvidedContractRef). An `implicit` contract (container-logs@1) has no acceptor side: every install is a subject by virtue of running, and the server drops an `accepts` naming one with a warning, so declaring it here is a manifest error rather than a silent no-op.",
+       "enum": [
+         "auth@1",
+         "backup@1",
+@@ -565,10 +565,11 @@
+     },
+     "appProvidedContractRef": {
+       "type": "string",
+-      "description": "The subset of #/$defs/contractRef whose provider is a catalog app rather than the platform, and which may therefore appear in `provides`.",
++      "description": "The subset of #/$defs/contractRef whose provider is a catalog app rather than the platform, and which may therefore appear in `provides`. `restore@1` joined this list in Hola spec 008 (restore-provider) -- a catalog app (e.g. `backrest`) may now declare `provides: [\"restore@1\"]` to fill the restore-provider role; see try-hola/hola specs/008-restore-provider/contracts/manifest.md §0 for the provider-side shape and what the grant means.",
+       "enum": [
+         "backup@1",
+-        "container-logs@1"
++        "container-logs@1",
++        "restore@1"
+       ]
+     },
+     "backupHook": {

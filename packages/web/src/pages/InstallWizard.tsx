@@ -403,7 +403,7 @@ export const InstallWizard: React.FC = () => {
   React.useEffect(() => { restoreChoiceRef.current = restoreChoice; }, [restoreChoice]);
 
   const allRestoreCandidates: RestoreCandidate[] = (restoreCandidatesData?.lineages ?? []).flatMap(l => l.candidates);
-  const selectedRestoreCandidate = allRestoreCandidates.find(c => c.deploymentId === selectedCandidateId) ?? null;
+  const selectedRestoreCandidate = allRestoreCandidates.find(c => c.candidateId === selectedCandidateId) ?? null;
   // Install-by-ref has no catalog index to judge a candidate's version
   // against (research R2) — the step auto-completes with nothing offered.
   // Attempted-once guard. `restoreCandidatesData`/`…Loading` alone are NOT
@@ -1244,13 +1244,27 @@ services:
                 <RadioGroup
                   name="restore-candidate"
                   value={selectedCandidateId ?? '__fresh__'}
-                  onChange={(v) => { setSelectedCandidateId(v === '__fresh__' ? null : v); setAckedRestoreCodes(new Set()); }}
+                  onChange={(v) => {
+                    setSelectedCandidateId(v === '__fresh__' ? null : v);
+                    setAckedRestoreCodes(new Set());
+                    // Re-derive the carry-configuration default from the newly
+                    // picked candidate. It initialises to `true` for the common
+                    // case, but a candidate with no environment record (every
+                    // provider-held capture — FR-052) would otherwise render
+                    // the box CHECKED next to the label "unavailable — no
+                    // environment record was captured", and post `carryEnv:
+                    // true` for something that demonstrably cannot be carried.
+                    setRestoreCarryEnv(allRestoreCandidates.find(c => c.candidateId === v)?.carriesEnv ?? false);
+                  }}
                   options={[
                     { value: '__fresh__', label: 'Start fresh', description: 'No data carried over' },
                     ...allRestoreCandidates.map((c) => ({
-                      value: c.deploymentId,
-                      label: `${c.name}${c.host ? ` — ${c.host}` : ''}`,
-                      description: `${c.appVersion ? `v${c.appVersion}` : 'unknown version'} · configuration: ${c.carriesEnv ? 'carried' : 'not carried'}${c.capturedAt ? ` · captured ${new Date(c.capturedAt).toLocaleString()}` : ''}`,
+                      // spec 008: the origin-independent identifier — NEVER
+                      // `c.deploymentId`, which is absent for a provider-origin
+                      // candidate (it has no deployment on this host at all).
+                      value: c.candidateId,
+                      label: `${c.name}${c.host ? ` — ${c.host}` : ''}${c.source === 'provider' ? ' (from backup provider)' : ''}`,
+                      description: `${c.appVersion ? `v${c.appVersion}` : 'unknown version'} · configuration: ${c.carriesEnv ? 'carried' : 'not carried'}${c.capturedAt ? ` · captured ${new Date(c.capturedAt).toLocaleString()}` : ''}${c.confidence === 'path' ? ' · identity inferred, not confirmed' : ''}`,
                     })),
                   ]}
                 />
@@ -1273,6 +1287,21 @@ services:
                     </label>
                     {selectedRestoreCandidate.skew.kind === 'refused' && (
                       <div className="text-[13px] text-danger">{selectedRestoreCandidate.skew.message}</div>
+                    )}
+                    {selectedRestoreCandidate.confidence === 'path' && (
+                      <label className="flex items-start gap-2.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                          checked={ackedRestoreCodes.has('restore-inferred-identity')}
+                          onChange={(e) => setAckedRestoreCodes((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add('restore-inferred-identity'); else next.delete('restore-inferred-identity');
+                            return next;
+                          })}
+                        />
+                        <span className="text-[13px]">This capture's identity was inferred from where it's stored, not read from a record inside it. I've confirmed it's the right one.</span>
+                      </label>
                     )}
                     {selectedRestoreCandidate.skew.kind === 'unknown' && (
                       <label className="flex items-start gap-2.5 cursor-pointer">

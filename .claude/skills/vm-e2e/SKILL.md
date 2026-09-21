@@ -209,8 +209,23 @@ don't go through bootstrap for the images — instead:
    baked onto the containers at creation, so a plain `up -d` that decides nothing
    changed leaves both the old image *and* stale routing labels in place.
 
+   **And every later recreate has to carry `HOLA_VERSION` too.** This is the trap
+   that actually bites, because it bites *mid-test*, after you have already
+   confirmed you were on your build. Editing `.env` (to flip `HOLA_USE_AUTH`, say)
+   and running a bare `sudo docker compose up -d --force-recreate server` resolves
+   `${HOLA_VERSION:-latest}` to `latest` and **pulls the published image over your
+   build**, silently. The symptom is not an error — it is routes that answered
+   correctly ten minutes ago now returning clean 404s in 0-2ms with nothing in the
+   log, because you are talking to a release that predates the feature. Diagnosing
+   that from the API end is a dead end; the answer is always
+   `docker inspect -f '{{.Config.Image}}' hola-server`. Either go through
+   `./scripts/up.sh` (which exports `HOLA_VERSION` from the `VERSION` file for you,
+   and accepts `--force-recreate` and a service name as arguments) or pass the
+   variable explicitly, every single time.
+
 4. **Confirm you are actually running your build** before drawing any conclusion
-   from the test — this is the step that makes the whole exercise meaningful:
+   from the test — and re-confirm after *every* recreate, not just the first (see
+   the trap above). This is the step that makes the whole exercise meaningful:
    ```bash
    bin/vm-ssh --vmid "$VMID" -- \
      'cd /opt/hola && sudo docker compose ps --format "{{.Service}} {{.Image}}"'

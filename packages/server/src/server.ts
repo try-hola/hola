@@ -26,8 +26,6 @@ import {
   type GetBackupsResponse,
   type CreateBackupRequest,
   type CreateBackupResponse,
-  type RestoreBackupRequest,
-  type RestoreBackupResponse,
   type DeleteBackupResponse,
   type GetNotificationsResponse,
   type PatchNotificationRequest,
@@ -62,8 +60,11 @@ import {
   type RestoreCandidate,
   type AppUpgradeMeta,
   type AppEnvVar,
+  type PublishRestoreIndexRequest,
+  type CompleteRestoreRequestRequest,
 } from '@hola/shared';
-import { resolveListedCandidate, groupIntoLineages } from './services/core/restore-candidates';
+import { resolveListedCandidate, groupIntoLineages, suppressInferredDefault } from './services/core/restore-candidates';
+import { isWellFormedRestoreIndexEntry, MAX_RESTORE_INDEX_ENTRIES, MAX_RESTORE_INDEX_STRING } from './services/core/restore-index';
 
 // Error interface for proper typing
 interface ServiceError extends Error {
@@ -559,10 +560,20 @@ async function route(url: URL, req: Request): Promise<Response> {
         }
       }
 
-      const candidates: RestoreCandidate[] = sources.map((source) =>
+      const localCandidates: RestoreCandidate[] = sources.map((source) =>
         resolveListedCandidate(source, effectiveTargetVersion, meta, appEnv),
       );
-      const { lineages, defaultCandidateId, requiresExplicitChoice } = groupIntoLineages(candidates);
+      // spec 008: provider-origin candidates (empty when no restore@1
+      // provider is installed/consented — FR-047, SC-013) merge into the
+      // SAME lineages array, not a separate section.
+      // Same `appEnv` the local path already resolves above — a provider
+      // candidate carries no environment record at all (FR-052), so this is
+      // what names the platform-minted secrets its restore re-mints (#503).
+      const providerCandidates = await services.deployments.listProviderRestoreSources(appId, effectiveTargetVersion, meta, appEnv);
+      const candidates: RestoreCandidate[] = [...localCandidates, ...providerCandidates];
+      const grouped = groupIntoLineages(candidates);
+      // FR-052a: never default an inferred-identity candidate, even alone.
+      const { lineages, defaultCandidateId, requiresExplicitChoice } = suppressInferredDefault(grouped);
       const response: ListRestoreCandidatesResponse = { appId, lineages, defaultCandidateId, requiresExplicitChoice };
       return json(response);
     } catch (error) {
@@ -1699,6 +1710,64 @@ async function route(url: URL, req: Request): Promise<Response> {
     return json({ jobId: job.id, status: job.status });
   }
 
+  // restore@1 provider half (spec 008, contracts/api.md). Four routes, all
+  // reached by the provider's own `contract:restore` token — the server never
+  // calls into the provider (R15, FR-021, SC-005).
+  if (pathname === API.contracts.restoreIndex && req.method === 'POST') {
+    try {
+      const body = await req.json().catch(() => ({})) as Partial<PublishRestoreIndexRequest>;
+      const entries = Array.isArray(body.entries) ? body.entries : undefined;
+      if (!entries || entries.length > MAX_RESTORE_INDEX_ENTRIES || !entries.every(isWellFormedRestoreIndexEntry)) {
+        const err = new ValidationError('Malformed restore index entry.');
+        err.code = 'RESTORE_INDEX_INVALID';
+        throw err;
+      }
+      const payload = await getServices().deployments.publishRestoreIndex(entries);
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  if (pathname === API.contracts.restoreRequests && req.method === 'GET') {
+    try {
+      const payload = await getServices().deployments.pollRestoreRequests();
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  const restoreClaimMatch = pathname.match(/^\/api\/contracts\/restore\/requests\/([^/]+)\/claim$/);
+  if (restoreClaimMatch && req.method === 'POST') {
+    try {
+      const payload = await getServices().deployments.claimRestoreRequest(decodeURIComponent(restoreClaimMatch[1]!));
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
+  const restoreCompleteMatch = pathname.match(/^\/api\/contracts\/restore\/requests\/([^/]+)\/complete$/);
+  if (restoreCompleteMatch && req.method === 'POST') {
+    try {
+      const body = await req.json().catch(() => ({})) as Partial<CompleteRestoreRequestRequest>;
+      if (body.outcome !== 'completed' && body.outcome !== 'failed') {
+        throw new ValidationError("'outcome' must be 'completed' or 'failed'.");
+      }
+      const payload = await getServices().deployments.completeRestoreRequest(
+        decodeURIComponent(restoreCompleteMatch[1]!),
+        body.outcome,
+        // Persisted into the broker store and surfaced in the job's error;
+        // truncated so a provider cannot grow platform state through it.
+        typeof body.reason === 'string' ? body.reason.slice(0, MAX_RESTORE_INDEX_STRING) : undefined,
+      );
+      return json(payload);
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
   // Backups. There is no platform backup engine yet (per-app backup is provided
   // by the `backrest` catalog app), so the list is genuinely empty rather than
   // seeded with sample backups. The mutation routes remain as no-op stubs.
@@ -1717,13 +1786,6 @@ async function route(url: URL, req: Request): Promise<Response> {
   if (backupByIdMatch && req.method === 'GET') {
     // No backup store: an id can never resolve to a real backup.
     return notFound();
-  }
-
-  const backupRestoreMatch = pathname.match(/^\/api\/backups\/([^/]+)\/restore$/);
-  if (backupRestoreMatch && req.method === 'POST') {
-    await req.json().catch(() => ({})) as Partial<RestoreBackupRequest>;
-    const payload: RestoreBackupResponse = { jobId: crypto.randomUUID() };
-    return json(payload);
   }
 
   if (backupByIdMatch && req.method === 'DELETE') {

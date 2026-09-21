@@ -37,7 +37,7 @@ import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError, assertValidChannelName } from '../../middleware/error-mapping';
 import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
 import { mergeUpgradeAppEnv } from './upgrade-env';
-import { deriveEnvNotCarriedKeys, judgeRestoreChoice, type CandidateSource } from './restore-candidates';
+import { deriveEnvNotCarriedKeys, judgeRestoreChoice, judgeProviderRestoreChoice, parseCandidateId, type CandidateSource } from './restore-candidates';
 import type { HealthCheckable, ServiceHealth } from './types';
 import type { StorageService } from './storage';
 import type { CatalogService } from './catalog';
@@ -338,11 +338,27 @@ export class RealDraftService implements DraftService {
   }
 
   /**
+   * Whether `candidateId` may be interpolated into {@link restoreEnvRecordPath}.
+   *
+   * The path is ABSOLUTE, and `RealStorageService.resolveStoragePath` passes
+   * absolute paths through unchecked by design (the apps bind root lives
+   * outside the data dir), so the containment proof has to happen here. Since
+   * spec 008 a candidate id may be `<providerDeploymentId>:<captureId>` where
+   * `captureId` is a string the PROVIDER published — untrusted, app-supplied
+   * data. A local deployment id is `<slug>-<8 hex>` and never contains a
+   * separator; anything else is refused rather than resolved.
+   */
+  private static isSafeEnvRecordKey(candidateId: string): boolean {
+    return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(candidateId) && !candidateId.includes('..');
+  }
+
+  /**
    * Read a restore candidate's environment record. `null` when absent,
    * unparseable, or malformed — carrying nothing is a legitimate candidate
    * state (`carriesEnv: false`), never a draft-creation failure (FR-008).
    */
   private async readRestoreEnvRecord(candidateId: string): Promise<Record<string, string> | null> {
+    if (!RealDraftService.isSafeEnvRecordKey(candidateId)) return null;
     const path = this.restoreEnvRecordPath(candidateId);
     if (!(await this.storageService.fileExists(path))) return null;
     try {
@@ -401,28 +417,49 @@ export class RealDraftService implements DraftService {
       );
     }
 
-    const source = await this.deploymentsService.getRestoreSource(choice.candidateId);
     const requiresEnv = (restoreDeclarations ?? []).some((d) => d.requiresEnv === true);
     const envNotCarriedKeys = deriveEnvNotCarriedKeys(appEnv);
 
-    const result = judgeRestoreChoice({
-      source: source as CandidateSource | undefined,
-      appId,
-      // No deployment exists yet at draft-creation time — nothing to exclude.
-      excludeDeploymentId: '',
-      choice,
-      targetVersion,
-      meta: upgrade,
-      requiresEnv,
-      envNotCarriedKeys,
-    });
+    // spec 008: the candidate id may name a provider-held capture rather than
+    // a local deployment (data-model.md §6c) — provider origin weakens NONE
+    // of spec 007's eligibility/skew/acknowledgement rules (FR-046), because
+    // both branches below end in the same `validateRestoreChoice`.
+    const parsed = parseCandidateId(choice.candidateId);
+    const result = parsed.kind === 'deployment'
+      ? judgeRestoreChoice({
+          source: (await this.deploymentsService.getRestoreSource(parsed.deploymentId)) as CandidateSource | undefined,
+          appId,
+          // No deployment exists yet at draft-creation time — nothing to exclude.
+          excludeDeploymentId: '',
+          choice,
+          targetVersion,
+          meta: upgrade,
+          requiresEnv,
+          envNotCarriedKeys,
+        })
+      : judgeProviderRestoreChoice({
+          ...(await this.deploymentsService.getProviderRestoreSource(parsed.providerDeploymentId, parsed.captureId, appId)),
+          providerDeploymentId: parsed.providerDeploymentId,
+          queriedAppId: appId,
+          choice,
+          targetVersion,
+          meta: upgrade,
+          requiresEnv,
+          envNotCarriedKeys,
+        });
     if (!result.ok) {
       throw new ConflictError(result.message, { code: result.code, ...result.details });
     }
 
     let mergedEnv = appEnv;
-    if (choice.carryEnv) {
-      const carried = await this.readRestoreEnvRecord(choice.candidateId);
+    // Only a LOCAL candidate can carry configuration: the environment record
+    // lives beside a deployment's data root on THIS host, and a provider-held
+    // capture has no deployment here — `carriesEnv` is hard-coded `false` for
+    // that origin (FR-052). Skipping the lookup outright is both the honest
+    // answer and what keeps a provider-published capture id off a filesystem
+    // path it has no business naming.
+    if (choice.carryEnv && parsed.kind === 'deployment') {
+      const carried = await this.readRestoreEnvRecord(parsed.deploymentId);
       if (carried) mergedEnv = mergeUpgradeAppEnv(appEnv, carried);
     }
 

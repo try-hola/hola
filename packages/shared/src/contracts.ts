@@ -49,7 +49,7 @@
  * label keys applied to every app container.
  */
 
-import type { AppBackupConfig, AppBackupDeclaration, AppBackupHook, AppBackupParticipation, BackupCoverageState, ContractCoverage } from './index';
+import type { AppBackupConfig, AppBackupDeclaration, AppBackupHook, AppBackupParticipation, AppRestoreDeclaration, BackupCoverageState, ContractCoverage, RestoreCoverage, RestoreCoverageState } from './index';
 
 /**
  * How a contract's two sides actually exchange (ADR 0004 §5).
@@ -96,7 +96,7 @@ export type ContractProviderKind = 'app' | 'platform';
  * least-privilege log source (a redacting Docker API proxy, never a raw socket
  * or log-directory mount) for a trusted log collector.
  */
-export type ProviderGrantKind = 'apps-data' | 'container-logs';
+export type ProviderGrantKind = 'apps-data' | 'container-logs' | 'restore-staging';
 
 export type ProviderGrant = {
   kind: ProviderGrantKind;
@@ -196,6 +196,24 @@ export const CONTRACTS: readonly ContractDefinition[] = [
     },
     summary: 'Continuous read access to every container\'s logs for a trusted collector; every install is a subject.',
   },
+  {
+    id: 'restore',
+    version: 1,
+    shape: 'brokered',
+    providerKind: 'app',
+    participation: 'declared',
+    acceptorBlock: 'restore',
+    providerGrant: {
+      kind: 'restore-staging',
+      label: 'Write into a shared restore staging area',
+      risk:
+        'This app can write files anywhere under one platform-owned scratch directory, used to stage a capture ' +
+        'before Hola moves it into a new install’s data. It cannot write anywhere else on this host — not ' +
+        'into any app’s data, not into Hola’s own files, not into the apps directory itself. Grant it ' +
+        'only to an app you trust to deliver exactly the files a restore expects.',
+    },
+    summary: 'A held capture delivered into the staging root the platform nominates for a restoring install.',
+  },
 ] as const;
 
 /**
@@ -206,6 +224,14 @@ export const CONTRACTS: readonly ContractDefinition[] = [
 export const BACKUP_CONTRACT_REF = 'backup@1';
 
 /**
+ * The restore contract's canonical ref (spec 008 — promoted from spec 007's
+ * participation marker to a real brokered contract). Named for the same
+ * reason as `BACKUP_CONTRACT_REF`: the server matches on it (broker routes,
+ * provider guard, grant) and a typo would silently mean "no provider exists".
+ */
+export const RESTORE_CONTRACT_REF = 'restore@1';
+
+/**
  * The container-logs contract's canonical ref (spec 004), for callers that need
  * to name it — the CLI's `--grant`, a client rendering the rollup, a test.
  * Unlike `BACKUP_CONTRACT_REF`, the server never matches on this string: the
@@ -214,42 +240,6 @@ export const BACKUP_CONTRACT_REF = 'backup@1';
  * label rather than a branch.
  */
 export const CONTAINER_LOGS_CONTRACT_REF = 'container-logs@1';
-
-/**
- * Participation MARKERS — refs an app may name in `accepts` that are **not**
- * brokered capability contracts and deliberately have no `CONTRACTS` entry.
- *
- * `restore@1` (spec 007) is the only one. It has no provider, no acceptor
- * protocol and no grant; the server never brokers it between two parties. It
- * says exactly one thing: *this app's author has considered what restoring it
- * means* — which is why it must be declared rather than derived from the
- * presence of a `restore` block (the derivation ADR 0004 §2 rejects), and why
- * `restore@1` with no block is a meaningful third state ("a plain file copy
- * back is all I need") distinct from an app nobody considered.
- *
- * This list exists because `coerceRefs` resolves every `accepts` entry through
- * `parseContractRef` and drops what it cannot resolve (ADR 0003 forward-compat).
- * Without an explicit carve-out, `restore@1` was silently stripped from every
- * manifest on catalog read, and `createDraft` then refused every restore with
- * `RESTORE_NOT_ACCEPTED` — the feature could not work at all. Unit tests missed
- * it because they build manifests directly and never traverse the coercion path;
- * a real catalog fetch on a live host is what exposed it.
- *
- * A marker is legal in `accepts` ONLY. Nothing provides one, so `provides`
- * naming a marker stays a dropped ref, exactly as before.
- */
-export const PARTICIPATION_MARKERS: readonly string[] = ['restore@1'] as const;
-
-/** The restore participation marker's canonical ref (spec 007). */
-export const RESTORE_PARTICIPATION_REF = 'restore@1';
-
-/**
- * Whether `ref` is a participation marker legal in `accepts`. Callers coercing
- * a manifest's `accepts` MUST consult this before dropping an unresolvable ref.
- */
-export function isParticipationMarker(ref: string): boolean {
-  return PARTICIPATION_MARKERS.includes(ref);
-}
 
 /** Canonical ref for a definition (`backup@1`). */
 export function formatContractRef(def: ContractDefinition): string {
@@ -493,6 +483,63 @@ export function judgeBackupCoverage(input: {
   if (!accepts) state = 'uncovered';
   else if (recognised === 0) state = participations.length > 0 ? 'quiesced' : 'as-is';
   else state = targeted === recognised ? 'quiesced' : 'partial';
+
+  return { state, targeted, recognised, participations: parts, databases: databaseServices };
+}
+
+// ---------------------------------------------------------------------------
+// Restore coverage (spec 008, FR-053-FR-055) — a verdict distinct from,
+// and independent of, judgeBackupCoverage's.
+// ---------------------------------------------------------------------------
+
+/**
+ * The coverage judgement for one deployment's `restore@1` acceptance (spec
+ * 008, data-model.md §7b). Pure, mirroring `judgeBackupCoverage`'s shape but
+ * deliberately its own vocabulary (`RestoreCoverageState`, FR-053a): the
+ * capture vocabulary describes whether an app is quiesced while being READ,
+ * which says nothing about whether it can be put BACK.
+ *
+ * `accepts` MUST be `contracts.accepts?.includes('restore@1')` — NEVER
+ * derived from `backup@1`'s acceptance (R5, FR-006a). Only a
+ * `restoreDeclarations` entry carrying a `hook` counts as covering a
+ * participation, mirroring `judgeBackupCoverage`'s own pre-hook-only rule —
+ * a discard-only declaration removes the smeared data but never loads the
+ * real dump back.
+ */
+export function judgeRestoreCoverage(input: {
+  accepts: boolean;
+  participations: AppBackupParticipation[];
+  restoreDeclarations: AppRestoreDeclaration[];
+  databaseServices: string[];
+}): RestoreCoverage {
+  const { accepts, participations, restoreDeclarations, databaseServices } = input;
+  const recognisedSet = new Set(databaseServices);
+  const hookById = new Map(restoreDeclarations.filter((d) => d.hook).map((d) => [d.id, d]));
+
+  const targetedSet = new Set<string>();
+  const parts = participations.map((p) => {
+    const service = p.preHook?.service;
+    const recognised = service !== undefined && recognisedSet.has(service);
+    const declared = recognised && hookById.has(p.id);
+    if (declared) targetedSet.add(service!);
+    return { id: p.id, service, declared };
+  });
+
+  const recognised = databaseServices.length;
+  const targeted = targetedSet.size;
+
+  let state: RestoreCoverageState;
+  if (!accepts) state = 'undeclared';
+  // Nothing recognised as a database. `copy-back` is the honest verdict only
+  // when the app ALSO declared nothing to do on the way back in; an app that
+  // declared a reload hook has said, explicitly, that a plain file copy is
+  // NOT sufficient for it — and its hooks do run at restore time regardless
+  // of whether this build recognises its database image. Reporting that app
+  // as `copy-back` would tell the operator no reload is needed when its
+  // author said one is. Mirrors `judgeBackupCoverage`'s own
+  // `participations.length > 0` split for exactly this reason.
+  else if (recognised === 0) state = hookById.size > 0 ? 'restorable' : 'copy-back';
+  else state = targeted === recognised ? 'restorable' : 'incomplete';
 
   return { state, targeted, recognised, participations: parts, databases: databaseServices };
 }

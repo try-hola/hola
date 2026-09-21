@@ -8,7 +8,10 @@
  * consistent dumps are the per-app backup hooks tracked in #121.
  */
 import { spawn } from 'node:child_process';
-import { readdir, rm, mkdir, stat } from 'node:fs/promises';
+import { readdir, rm, mkdir, stat, lstat, realpath, rename, cp } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
+import { isStrictlyInside } from './path-containment';
 
 /**
  * True if `dir` exists and holds at least one entry that isn't in `ignore`
@@ -91,4 +94,156 @@ export async function restoreTarGzInto(srcFile: string, destDir: string): Promis
   await rm(destDir, { recursive: true, force: true });
   await mkdir(destDir, { recursive: true });
   await run('tar', ['-xzf', srcFile, '-C', destDir]);
+}
+
+/**
+ * Result of {@link locateAppRootInTree} (spec 008, FR-041, closes #486).
+ * `ok: false` on zero or more than one match — refuse rather than guess.
+ * `via` says WHICH rule identified the root, so the caller can log it: the
+ * install-identity marker, or the capture's own recorded location.
+ */
+export type LocateAppRootResult =
+  | { ok: true; path: string; via: 'marker' | 'location' }
+  | { ok: false; matchCount: number };
+
+/**
+ * Locate the one directory inside `destination` that is the delivered app
+ * data root (spec 008, FR-041, closes #486).
+ *
+ * A restic/borg-shaped repository restore reproduces the SOURCE's absolute
+ * path under the destination — `/srv/hola/apps/wiki-1a2b3c4d` restored into
+ * `<destination>` lands at `<destination>/srv/hola/apps/wiki-1a2b3c4d` — so
+ * this codebase's own root-relative assumption (every OTHER archive helper
+ * in this file) does NOT hold for a provider-delivered tree.
+ *
+ * Two rules, in order, neither of them a guess:
+ *
+ *  1. **Marker.** Exactly one directory in the tree holds the `markerDir`
+ *     subdirectory (`.hola`) AND real content beyond it — the same shape
+ *     `dirHasContents(dir, [markerDir])` already asserts as a post-condition
+ *     once a payload has landed. Bounded, depth-limited; a matched
+ *     directory's own subtree is not descended into (an app's real data may
+ *     coincidentally contain a marker-shaped directory one level down — the
+ *     FIRST match along a path is the one that counts). Two or more matches
+ *     REFUSE rather than pick.
+ *  2. **Location.** No marker anywhere, and the caller supplied the capture's
+ *     own recorded `location` (`RestoreIndexEntry.location`): the app root is
+ *     at that absolute path reproduced under `destination`. This is the ONLY
+ *     rule that can work for a capture taken before install identity existed
+ *     (spec 006) — it has no `.hola` to find, and rule 1 alone would make
+ *     every inference-identified candidate (spec 008 US5, FR-048-FR-052)
+ *     offerable but impossible to actually restore. It is not a guess: it is
+ *     the provider's own statement of where the capture came from, and it is
+ *     the same field the identity inference itself reads.
+ *
+ * Both rules resolve through `realpath` and demand strict containment inside
+ * `destination`, and the walk never descends a symlink — the provider owns a
+ * writable mount of the staging root, so a planted symlink (a `destination`
+ * that IS a symlink to an app's data root, a `location` carrying `..`) must
+ * not be able to point the rename at anything outside the tree it delivered.
+ */
+export async function locateAppRootInTree(
+  destination: string,
+  markerDir: string,
+  opts: { locationHint?: string; maxDepth?: number } = {},
+): Promise<LocateAppRootResult> {
+  const maxDepth = opts.maxDepth ?? 24;
+
+  // The destination itself must be a REAL directory. A provider holding the
+  // staging mount can create `<staging>/<requestId>` as a symlink to any path
+  // it can see (its own `apps-data` mount covers every app's data root);
+  // `readdir` would happily follow it and `rename` would move the link, not
+  // the tree — handing the restoring install another app's live data and
+  // aiming the marker rewrite at it.
+  let realDestination: string;
+  try {
+    if (!(await lstat(destination)).isDirectory()) return { ok: false, matchCount: 0 };
+    realDestination = await realpath(destination);
+  } catch {
+    return { ok: false, matchCount: 0 };
+  }
+
+  const matches: string[] = [];
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > maxDepth) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' || (err as NodeJS.ErrnoException).code === 'ENOTDIR') return;
+      throw err;
+    }
+    const hasMarker = entries.some((e) => e.isDirectory() && e.name === markerDir);
+    if (hasMarker && (await dirHasContents(dir, [markerDir]))) {
+      matches.push(dir);
+      return; // do not descend into a matched root's own subtree
+    }
+    for (const entry of entries) {
+      // `isDirectory()` is false for a symlink, so the walk never follows one.
+      if (entry.isDirectory()) await walk(join(dir, entry.name), depth + 1);
+    }
+  }
+
+  await walk(realDestination, 0);
+  if (matches.length === 1) return { ok: true, path: matches[0]!, via: 'marker' };
+  if (matches.length > 1) return { ok: false, matchCount: matches.length };
+
+  // Rule 2 — no marker anywhere in the delivered tree.
+  const hinted = await resolveLocationHint(realDestination, opts.locationHint, markerDir);
+  return hinted ? { ok: true, path: hinted, via: 'location' } : { ok: false, matchCount: 0 };
+}
+
+/**
+ * `<destination>/<locationHint without its leading separator>`, but only when
+ * that path is a real directory, strictly inside `destination` after both
+ * sides are `realpath`'d, and actually holds content. Anything else — a hint
+ * with `..`, a hint naming the destination itself, a symlinked tail, a path
+ * that doesn't exist or is empty — yields `undefined`, and the caller refuses.
+ */
+async function resolveLocationHint(
+  realDestination: string,
+  locationHint: string | undefined,
+  markerDir: string,
+): Promise<string | undefined> {
+  const relative = locationHint?.trim().replace(/^[/\\]+/, '');
+  if (!relative) return undefined;
+
+  const candidate = resolve(realDestination, relative);
+  if (!isStrictlyInside(realDestination, candidate)) return undefined;
+
+  try {
+    if (!(await lstat(candidate)).isDirectory()) return undefined;
+    const real = await realpath(candidate);
+    if (!isStrictlyInside(realDestination, real)) return undefined;
+    // Same emptiness rule rule 1 applies: a directory holding nothing but the
+    // marker is not a payload (FR-036 — an empty destination is never success).
+    if (!(await dirHasContents(real, [markerDir]))) return undefined;
+    return real;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Move `srcDir`'s CONTENTS into `destDir` (spec 008, FR-040): a rename when
+ * both paths share a filesystem, falling back to a recursive copy (then
+ * removing the source) on `EXDEV` — different filesystems, where `rename`
+ * cannot work. `destDir` is wiped first, mirroring `restoreTarGzInto`'s own
+ * "the restore is exact" contract. Returns which path was taken so the
+ * caller can log it (FR-040 requires the slower path be visible, never silent).
+ */
+export async function landDirInto(srcDir: string, destDir: string): Promise<{ copied: boolean }> {
+  await rm(destDir, { recursive: true, force: true });
+  try {
+    await rename(srcDir, destDir);
+    return { copied: false };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
+      await cp(srcDir, destDir, { recursive: true });
+      await rm(srcDir, { recursive: true, force: true });
+      return { copied: true };
+    }
+    throw err;
+  }
 }

@@ -151,11 +151,20 @@ export function getRequiredCapability(path: string, method: string): Capability 
     { pattern: /^\/api\/contracts\/backup\//, method: 'POST', capability: 'contract:backup' },
     { pattern: /^\/api\/contracts\/backup\/status\//, method: 'GET', capability: 'contract:backup' },
 
+    // restore@1 provider half (spec 008). Same reasoning as backup@1 above, but
+    // FOUR routes rather than one POST + one status GET — each needs its own
+    // row because a contract-scoped principal is closed by default even for
+    // reads, and none of these four share a path prefix distinct enough for
+    // one rule to cover them all without also matching a sibling route.
+    { pattern: /^\/api\/contracts\/restore\/index$/, method: 'POST', capability: 'contract:restore' },
+    { pattern: /^\/api\/contracts\/restore\/requests$/, method: 'GET', capability: 'contract:restore' },
+    { pattern: /^\/api\/contracts\/restore\/requests\/[^/]+\/claim$/, method: 'POST', capability: 'contract:restore' },
+    { pattern: /^\/api\/contracts\/restore\/requests\/[^/]+\/complete$/, method: 'POST', capability: 'contract:restore' },
+
     // Backup operations
     { pattern: /^\/api\/backups/, method: 'POST', capability: 'write:backups' },
     { pattern: /^\/api\/backups/, method: 'DELETE', capability: 'write:backups' },
-    { pattern: /^\/api\/backups\/[^/]+\/restore/, method: 'POST', capability: 'write:backups' },
-    
+
     // Job operations (mostly read, but some control)
     { pattern: /^\/api\/jobs\/[^/]+\/cancel/, method: 'POST', capability: 'write:deployments' },
     

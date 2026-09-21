@@ -238,4 +238,48 @@ describe('contract-scoped tokens', () => {
       expect(authorizeRequest(readOnly, getRequiredCapability('/api/deployments', 'POST'), has)).toBe('missing-capability');
     });
   });
+
+  // restore@1 provider half (spec 008). Quickstart scenario 7.
+  describe('restore@1 (spec 008)', () => {
+    test('a token minted for restore@1 carries contract:restore via the same generic contractCapability(ref) — no new branch', async () => {
+      const token = await service.mint('backrest-1', ['restore@1']);
+      const result = await service.authenticateToken(token);
+      expect(result.principal?.capabilities).toEqual(['contract:restore']);
+      expect(contractCapability('restore@1')).toBe('contract:restore');
+    });
+
+    // Quickstart scenario 29: each of the four routes has its OWN capability row.
+    test.each([
+      ['/api/contracts/restore/index', 'POST'],
+      ['/api/contracts/restore/requests', 'GET'],
+      ['/api/contracts/restore/requests/req-1/claim', 'POST'],
+      ['/api/contracts/restore/requests/req-1/complete', 'POST'],
+    ])('%s %s requires contract:restore', (path, method) => {
+      expect(getRequiredCapability(path, method)).toBe('contract:restore');
+    });
+
+    // Quickstart scenario 30: contract:backup and contract:restore are
+    // mutually exclusive — a token minted for one gets 403 on the other's routes.
+    test('a contract:backup-only token cannot reach any of the four restore routes', async () => {
+      const token = await service.mint('backrest-1', ['backup@1']);
+      const principal = (await service.authenticateToken(token)).principal!;
+      const has = (p: Principal, c: string) => p.capabilities.includes(c);
+      for (const [path, method] of [
+        ['/api/contracts/restore/index', 'POST'],
+        ['/api/contracts/restore/requests', 'GET'],
+        ['/api/contracts/restore/requests/req-1/claim', 'POST'],
+        ['/api/contracts/restore/requests/req-1/complete', 'POST'],
+      ] as const) {
+        expect(authorizeRequest(principal, getRequiredCapability(path, method), has)).toBe('outside-contract');
+      }
+    });
+
+    test('a contract:restore-only token cannot reach the backup broker routes', async () => {
+      const token = await service.mint('backrest-1', ['restore@1']);
+      const principal = (await service.authenticateToken(token)).principal!;
+      const has = (p: Principal, c: string) => p.capabilities.includes(c);
+      expect(authorizeRequest(principal, getRequiredCapability('/api/contracts/backup/prepare', 'POST'), has)).toBe('outside-contract');
+      expect(authorizeRequest(principal, getRequiredCapability('/api/contracts/backup/finalize', 'POST'), has)).toBe('outside-contract');
+    });
+  });
 });

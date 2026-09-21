@@ -2,11 +2,12 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { HardDriveDownload, ShieldCheck, ShieldAlert, AlertTriangle } from 'lucide-react';
 
-import type { ContractBrokerActivity, ContractCoverage, ContractParticipant, ContractRollup } from '@hola/shared';
-import { BACKUP_CONTRACT_REF as BACKUP_REF } from '@hola/shared/contracts';
+import type { ContractBrokerActivity, ContractCoverage, ContractParticipant, ContractRollup, RestoreCoverage } from '@hola/shared';
+import { BACKUP_CONTRACT_REF as BACKUP_REF, RESTORE_CONTRACT_REF as RESTORE_REF } from '@hola/shared/contracts';
 
 import { coverageRows, unquiescedServices, COVERAGE_META } from '../utils/backup-coverage';
 import type { Coverage } from '../utils/backup-coverage';
+import { restoreCoverageFor, unrestoredServices, RESTORE_COVERAGE_META, UNDECLARED_RESTORE_COVERAGE } from '../utils/restore-coverage';
 import { AppIcon } from './ui/AppIcon';
 import { StatusBadge } from './ui/StatusBadge';
 
@@ -39,6 +40,29 @@ const CoverageBadge: React.FC<{ coverage: Coverage; counts?: ContractCoverage }>
       style={{ color: meta.color, background: meta.bg }}
     >
       {coverage === 'partial' && counts ? `${meta.label} · ${counts.targeted} of ${counts.recognised}` : meta.label}
+    </span>
+  );
+};
+
+/**
+ * The restore-coverage badge, alongside — never in place of — `CoverageBadge`.
+ * The two verdicts are independent facts about the same app (spec 008,
+ * FR-053): an app that reads as a clean `Quiesced` for backup can still read
+ * `Not restorable` here, and that disagreement is the entire point of showing
+ * both rather than one "covered" badge.
+ */
+const RestoreBadge: React.FC<{ coverage: RestoreCoverage }> = ({ coverage }) => {
+  const meta = RESTORE_COVERAGE_META[coverage.state];
+  const title = coverage.state === 'incomplete'
+    ? `${meta.title} ${coverage.targeted} of ${coverage.recognised} databases have a restore hook.`
+    : meta.title;
+  return (
+    <span
+      title={title}
+      className="inline-flex items-center h-6 px-[9px] rounded-[7px] text-xs font-semibold"
+      style={{ color: meta.color, background: meta.bg }}
+    >
+      {coverage.state === 'incomplete' ? `${meta.label} · ${coverage.targeted} of ${coverage.recognised}` : meta.label}
     </span>
   );
 };
@@ -169,9 +193,11 @@ const ProviderPanel: React.FC<{
 
 export const BackupCoverage: React.FC<{
   rollup?: ContractRollup;
+  /** The `restore@1` rollup (spec 008) — a separate contract, fetched and passed alongside `rollup`. */
+  restoreRollup?: ContractRollup;
   loading?: boolean;
   error?: string | null;
-}> = ({ rollup, loading, error }) => {
+}> = ({ rollup, restoreRollup, loading, error }) => {
   if (error) {
     return (
       <div className="bg-danger-weak border border-danger/20 text-danger rounded-card p-4 text-sm">
@@ -236,6 +262,7 @@ export const BackupCoverage: React.FC<{
               )}
               <div className="flex-1" />
               <CoverageBadge coverage={coverage} counts={participant.coverage} />
+              <RestoreBadge coverage={restoreCoverageFor(participant.deploymentId, restoreRollup)} />
             </div>
           ))
         )}
@@ -253,7 +280,13 @@ export const BackupCoverage: React.FC<{
  * app can be perfectly prepared for a backup that nobody is taking.
  */
 export const AppBackupCoverage: React.FC<{
-  contracts?: { accepts?: string[]; hooks?: string[]; provides?: string[]; coverage?: Record<string, ContractCoverage> };
+  contracts?: {
+    accepts?: string[];
+    hooks?: string[];
+    provides?: string[];
+    coverage?: Record<string, ContractCoverage>;
+    restoreCoverage?: Record<string, RestoreCoverage>;
+  };
   rollup?: ContractRollup;
   loading?: boolean;
 }> = ({ contracts, rollup, loading }) => {
@@ -266,11 +299,22 @@ export const AppBackupCoverage: React.FC<{
   const runningProvider = rollup?.providers.find(p => p.status === 'running');
   const missing = serverCoverage && coverage === 'partial' ? unquiescedServices(serverCoverage) : [];
 
+  // Restore coverage (spec 008): an INDEPENDENT verdict, alongside the backup
+  // one above rather than in place of it — an app quiesced for backup can
+  // still have nothing declared for the way back in (FR-053).
+  const restoreCoverage = contracts?.restoreCoverage?.[RESTORE_REF] ?? UNDECLARED_RESTORE_COVERAGE;
+  const restoreMeta = RESTORE_COVERAGE_META[restoreCoverage.state];
+  const missingRestore = restoreCoverage.state === 'incomplete' ? unrestoredServices(restoreCoverage) : [];
+  const quiescedForBackup = coverage === 'quiesced' || coverage === 'partial';
+
   return (
     <div className="animate-fadein bg-surface-1 border border-border rounded-card overflow-hidden">
       <div className="flex items-center justify-between gap-3 px-[18px] py-4 border-b border-border-soft flex-wrap">
         <div className="font-semibold text-[15px]">Backups for this app</div>
-        <CoverageBadge coverage={coverage} counts={serverCoverage} />
+        <div className="flex items-center gap-[8px]">
+          <CoverageBadge coverage={coverage} counts={serverCoverage} />
+          <RestoreBadge coverage={restoreCoverage} />
+        </div>
       </div>
 
       <div className="px-[18px] py-[18px] flex flex-col gap-3 text-sm">
@@ -285,6 +329,30 @@ export const AppBackupCoverage: React.FC<{
               </React.Fragment>
             ))}
             {missing.length === 1 ? ' has no pre-backup hook.' : ' have no pre-backup hook.'}
+          </p>
+        )}
+
+        {/* The honest sentence spec 008 exists to make visible: a green backup
+            badge does not mean a recoverable app. Shown only for the exact
+            combination it describes, not as a blanket restore disclaimer. */}
+        {quiescedForBackup && restoreCoverage.state === 'undeclared' && (
+          <p className="m-0 text-warning max-w-[620px]">
+            Quiesced but not restorable — this app declares no restore instructions, so a
+            captured copy has no guaranteed way back in.
+          </p>
+        )}
+
+        <p className="m-0 text-text-muted max-w-[620px]">{restoreMeta.title}</p>
+
+        {missingRestore.length > 0 && (
+          <p className="m-0 text-warning max-w-[620px]">
+            {missingRestore.map((svc, i) => (
+              <React.Fragment key={svc}>
+                {i > 0 && (i === missingRestore.length - 1 ? ' and ' : ', ')}
+                <code className="font-mono">{svc}</code>
+              </React.Fragment>
+            ))}
+            {missingRestore.length === 1 ? ' has no declared restore hook.' : ' have no declared restore hook.'}
           </p>
         )}
 

@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
   Box,
-  History,
   Download,
   Trash2,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
 import type { BackupStatus } from '@hola/shared';
-import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
+import { BACKUP_CONTRACT_REF, RESTORE_CONTRACT_REF } from '@hola/shared/contracts';
 import { useBackupsApi } from '../hooks/useBackupsApi';
 import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
 import { BackupCoverage } from '../components/BackupCoverage';
@@ -41,7 +40,6 @@ export const Backups: React.FC = () => {
     data: backupsData,
     loading,
     error,
-    restoreBackup,
     deleteBackup,
     downloadBackup,
   } = useBackupsApi();
@@ -52,6 +50,10 @@ export const Backups: React.FC = () => {
   // can answer — and the one an operator otherwise answers by reading manifests.
   const { data: contractsData, loading: contractsLoading, error: contractsError } = useContractsApi();
   const backupContract = contractByRef(contractsData, BACKUP_CONTRACT_REF);
+  // The `restore@1` rollup (spec 008) — a separate contract from `backup@1`,
+  // rendered alongside it so an app's restore verdict never rides on its
+  // backup one.
+  const restoreContract = contractByRef(contractsData, RESTORE_CONTRACT_REF);
 
   // Local UI state
   const [currentPage, setCurrentPage] = useState(1);
@@ -59,19 +61,6 @@ export const Backups: React.FC = () => {
 
   // Operations state
   const [operationLoading, setOperationLoading] = useState<{ [key: string]: boolean }>({});
-
-  const handleRestoreBackup = async (backupId: string) => {
-    const operationKey = `restore-${backupId}`;
-    setOperationLoading((prev) => ({ ...prev, [operationKey]: true }));
-
-    try {
-      await restoreBackup(backupId);
-    } catch (err) {
-      console.error('Failed to restore backup:', err);
-    } finally {
-      setOperationLoading((prev) => ({ ...prev, [operationKey]: false }));
-    }
-  };
 
   const handleDeleteBackup = async (backupId: string) => {
     const operationKey = `delete-${backupId}`;
@@ -149,6 +138,7 @@ export const Backups: React.FC = () => {
 
       <BackupCoverage
         rollup={backupContract}
+        restoreRollup={restoreContract}
         loading={contractsLoading}
         error={contractsError}
       />
@@ -212,16 +202,6 @@ export const Backups: React.FC = () => {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1 justify-end">
-                  <button
-                    onClick={() => handleRestoreBackup(backup.id)}
-                    disabled={
-                      operationLoading[`restore-${backup.id}`] || backup.status !== 'completed'
-                    }
-                    title="Restore"
-                    className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-text-strong hover:bg-surface-3 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-muted"
-                  >
-                    <History className="w-4 h-4" />
-                  </button>
                   <button
                     onClick={() => handleDownloadBackup(backup.id)}
                     disabled={operationLoading[`download-${backup.id}`]}

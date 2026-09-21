@@ -139,13 +139,54 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `restore@1` in `accepts` means not offered; `accepts: ["restore@1"]` with no
   block means a plain file copy is sufficient; a block adds `discard` paths
   (a live database's file-level copy is a smear across the capture window,
-  not a snapshot) and a reload hook. No capability contract, grant, or
-  contract endpoint is added — `restore@1` here is a participation marker an
-  app declares, not a contract the platform brokers (`CONTRACTS` is
-  unchanged, FR-047). `hola install --restore-from <id|latest>`, with
-  `--restore-list` reading the same candidates route with no draft created;
-  the non-interactive default is always **no restore** — a candidate existing
-  is never itself consent to use it.
+  not a snapshot) and a reload hook. `hola install --restore-from <id|latest>`,
+  with `--restore-list` reading the same candidates route with no draft
+  created; the non-interactive default is always **no restore** — a candidate
+  existing is never itself consent to use it. Spec 007 shipped `restore@1` as
+  a participation marker with no provider, grant or broker endpoint
+  (`CONTRACTS` unchanged) — **superseded by spec 008** below, which promotes
+  it to a real, brokered contract now that a provider role and its grant
+  machinery exist to act on one.
+- **restore@1, the provider half (spec 008).** `restore@1` is a real,
+  brokered, app-provided `CONTRACTS` entry (`providerKind: 'app'`): the
+  acceptor side is unchanged from spec 007 (the `restore` block, byte-for-byte
+  the same manifests), and a new provider side lets a backup provider (e.g.
+  Backrest) serve captures of apps that no longer exist on this host — the
+  actual disaster-recovery case a local-only restore can't cover. The
+  provider consents to a **new, sibling privilege** — `restore-staging`, a
+  writable mount of ONE platform-owned scratch directory
+  (`HOLA_RESTORE_STAGING_ROOT`, sibling of the apps root, never a descendant)
+  — deliberately a new contract ref rather than a second grant bolted onto
+  `backup@1`, because a grant's *kind* resolves live from `CONTRACTS` while
+  consent is recorded per *ref*: widening an existing ref's grant would
+  silently re-privilege every already-consented install (ADR 0006). All
+  communication is provider-initiated (the server never calls an app): the
+  provider publishes a metadata-only snapshot index
+  (`POST /api/contracts/restore/index`, replaced wholesale each publish,
+  discarded on uninstall or consent revocation) and polls
+  (`GET .../requests`) for restore requests the server queues — each with a
+  server-minted destination under the staging root, claimable exactly once
+  (`POST .../requests/:id/claim`) and reported complete or failed
+  (`POST .../requests/:id/complete`); a claimed-but-unreported request expires
+  on a persisted deadline (default 30 min), failing the install rather than
+  hanging. `performRestoreOnInstall` splits into **acquisition** (steps 1-4,
+  origin-specific: the local path is unchanged; the provider path creates and
+  awaits the request, then must LOCATE the app root inside the delivered
+  tree — a repository restore tool reproduces absolute paths, unlike this
+  codebase's own root-relative archives, so a bounded search refuses
+  (`RESTORE_SOURCE_UNLOCATABLE`) rather than guesses on zero or multiple
+  matches — and rename-or-copy it into place) and **application** (steps
+  5-10, origin-agnostic, reused verbatim from spec 007 — no second restore
+  sequence). Candidates gain an origin-independent `candidateId` (a local
+  deployment id, or `<providerDeploymentId>:<captureId>`), a `source`
+  (`'deployment' | 'provider'`) and a `confidence` (`'marker'` from a read
+  identity record, `'path'` inferred from the capture's location) — an
+  inferred identity names the **installation** directory, never a catalog app
+  id, requires its own acknowledgement, carries no configuration to restore,
+  and is never auto-selected even as the only candidate. Restore coverage
+  (`judgeRestoreCoverage`) is reported with its **own** vocabulary
+  (`'undeclared' | 'copy-back' | 'incomplete' | 'restorable'`), independent of
+  and never derived from backup coverage.
 
 ## Conventions
 
@@ -204,5 +245,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/007-restore-on-install/plan.md`
+`specs/008-restore-provider/plan.md`
 <!-- SPECKIT END -->

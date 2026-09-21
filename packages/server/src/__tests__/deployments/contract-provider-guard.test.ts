@@ -187,4 +187,24 @@ describe('provider cardinality guard (spec 004, US3)', () => {
       (mock as unknown as { assertProviderAllowed(provides: string[] | undefined, appId: string): Promise<void> }).assertProviderAllowed(['backup@1'], 'anything'),
     ).resolves.toBeUndefined();
   });
+
+  // spec 008, quickstart scenario 6: the guard applies to restore@1 exactly
+  // as it already does to backup@1 — no new code, the SAME `assertProviderAllowed`.
+  test('scenario 6: a second restore@1 provider is refused via the unmodified assertProviderAllowed', async () => {
+    const sys = makeSystem({ 'backrest-a': ['restore@1'], 'backrest-b': ['restore@1'] });
+    const a = await install(sys, 'backrest-a', { grants: ['restore@1'] });
+
+    let caught: unknown;
+    try {
+      await install(sys, 'backrest-b', { grants: ['restore@1'] });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ConflictError);
+    const err = caught as InstanceType<typeof ConflictError>;
+    expect((err.details as { code?: string })?.code).toBe('PROVIDER_EXISTS');
+    expect((err.details as { contract?: string })?.contract).toBe('restore@1');
+    expect((err.details as { existing?: { id?: string } })?.existing?.id).toBe(a.deploymentId);
+  });
 });

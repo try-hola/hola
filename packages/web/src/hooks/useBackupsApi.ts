@@ -2,11 +2,10 @@ import React from 'react';
 import { API } from '@hola/shared';
 import { globalCache } from '../utils/cache';
 import { safeFetchEnhanced } from '../utils/error-enhanced';
-import type { 
+import type {
   GetBackupsResponse,
   BackupStatus,
-  CreateBackupRequest,
-  RestoreBackupRequest
+  CreateBackupRequest
 } from '@hola/shared';
 
 /**
@@ -103,22 +102,6 @@ export function useBackupsApi(
     return response.json();
   }, [fetchData]);
 
-  // Restore backup
-  const restoreBackup = React.useCallback(async (backupId: string, targetDeploymentId?: string) => {
-    const request: RestoreBackupRequest = { targetDeploymentId };
-    const response = await safeFetchEnhanced(API.backups.restore(backupId), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to restore backup: ${response.status} ${response.statusText}`);
-    }
-    
-    return response.json();
-  }, []);
-
   // Delete backup
   const deleteBackup = React.useCallback(async (backupId: string) => {
     const response = await safeFetchEnhanced(API.backups.byId(backupId), {
@@ -155,11 +138,10 @@ export function useBackupsApi(
     window.URL.revokeObjectURL(url);
   }, []);
 
-  return { 
-    ...state, 
+  return {
+    ...state,
     refetch: fetchData,
     createBackup,
-    restoreBackup,
     deleteBackup,
     downloadBackup
   };

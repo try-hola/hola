@@ -17,6 +17,7 @@ import {
   backupParticipations,
   isDatabaseImage,
   judgeBackupCoverage,
+  judgeRestoreCoverage,
 } from '@hola/shared/contracts';
 
 import type { ContractParticipant, ContractRollup } from '@hola/shared';
@@ -52,7 +53,7 @@ describe('the contract table', () => {
     expect(new Set(refs).size).toBe(refs.length);
   });
 
-  test('models the four contracts ADR 0004 names, with their shapes', () => {
+  test('models the five contracts ADR 0004/spec 008 name, with their shapes', () => {
     // The shape is the ADR's load-bearing distinction — broker an operation,
     // provision a connection. auth was always provisioned; naming it here is what
     // stops a future contract from being brokered by default.
@@ -64,6 +65,15 @@ describe('the contract table', () => {
       providerKind: 'app',
       participation: 'implicit',
     });
+    // spec 008: restore@1 promoted from a participation marker to a real,
+    // brokered, app-provided contract (FR-001).
+    expect(parseContractRef('restore@1')).toMatchObject({
+      shape: 'brokered',
+      providerKind: 'app',
+      participation: 'declared',
+      acceptorBlock: 'restore',
+    });
+    expect(parseContractRef('restore@1')?.providerGrant?.kind).toBe('restore-staging');
   });
 
   test('every entry declares a participation mode (spec 004)', () => {
@@ -74,6 +84,7 @@ describe('the contract table', () => {
     expect(parseContractRef('backup@1')?.participation).toBe('declared');
     expect(parseContractRef('push@1')?.participation).toBe('declared');
     expect(parseContractRef('container-logs@1')?.participation).toBe('implicit');
+    expect(parseContractRef('restore@1')?.participation).toBe('declared');
   });
 });
 
@@ -422,6 +433,122 @@ describe('judgeBackupCoverage (spec 004, FR-016)', () => {
   });
 });
 
+describe('judgeRestoreCoverage (spec 008, FR-053-FR-055)', () => {
+  const dbParticipation = (id: string, service: string) => ({ id, preHook: { service, command: ['pg_dump'] } });
+
+  // Quickstart scenario 54
+  test('every recognised database participation has a matching hook-bearing restore declaration -> restorable', () => {
+    const result = judgeRestoreCoverage({
+      accepts: true,
+      participations: [dbParticipation('default', 'db')],
+      restoreDeclarations: [{ id: 'default', hook: { service: 'db', command: ['psql'] } }],
+      databaseServices: ['db'],
+    });
+    expect(result.state).toBe('restorable');
+    expect(result.targeted).toBe(1);
+    expect(result.recognised).toBe(1);
+  });
+
+  // Quickstart scenario 55: a genuinely COMPLETE verdict, distinct in MEANING
+  // from backup's structurally-parallel 'as-is' even though both describe
+  // "no recognised database, nothing to quiesce".
+  test('zero recognised database participations -> copy-back, not merely "not incomplete"', () => {
+    const result = judgeRestoreCoverage({
+      accepts: true,
+      participations: [],
+      restoreDeclarations: [],
+      databaseServices: [],
+    });
+    expect(result.state).toBe('copy-back');
+    expect(result.state).not.toBe('incomplete');
+  });
+
+  // `copy-back` is only honest when the author ALSO declared nothing to do on
+  // the way back in. An app that declared a reload hook has said explicitly
+  // that a plain file copy is NOT sufficient for it — and its hook runs at
+  // restore time whether or not this build recognises the image behind its
+  // database. Reporting it as `copy-back` tells the operator no reload is
+  // needed when the author said one is, which is exactly the dishonesty US4
+  // exists to remove. Mirrors judgeBackupCoverage's own quiesced/as-is split.
+  test('zero recognised databases but a declared reload hook -> restorable, never copy-back', () => {
+    const result = judgeRestoreCoverage({
+      accepts: true,
+      participations: [dbParticipation('default', 'db')],
+      restoreDeclarations: [{ id: 'default', hook: { service: 'db', command: ['psql'] } }],
+      databaseServices: [], // the image family is unrecognised
+    });
+    expect(result.state).toBe('restorable');
+    expect(result.state).not.toBe('copy-back');
+
+    // ...and the backup judgement over the same shape agrees in spirit.
+    expect(judgeBackupCoverage({
+      accepts: true,
+      participations: [dbParticipation('default', 'db')],
+      databaseServices: [],
+    }).state).toBe('quiesced');
+  });
+
+  test('a DISCARD-only declaration with nothing recognised stays copy-back — only a hook changes the verdict', () => {
+    const result = judgeRestoreCoverage({
+      accepts: true,
+      participations: [dbParticipation('default', 'db')],
+      restoreDeclarations: [{ id: 'default', discard: ['db/data'] }],
+      databaseServices: [],
+    });
+    expect(result.state).toBe('copy-back');
+  });
+
+  // Quickstart scenario 56: a discard-only declaration (no `hook`) does not count.
+  test('two recognised database participations, only one with a hook-bearing restore declaration -> incomplete', () => {
+    const result = judgeRestoreCoverage({
+      accepts: true,
+      participations: [dbParticipation('a', 'db-a'), dbParticipation('b', 'db-b')],
+      restoreDeclarations: [
+        { id: 'a', hook: { service: 'db-a', command: ['psql'] } },
+        { id: 'b', discard: ['b-data'] }, // no `hook` -> does NOT cover its participation
+      ],
+      databaseServices: ['db-a', 'db-b'],
+    });
+    expect(result.state).toBe('incomplete');
+    expect(result.targeted).toBe(1);
+    expect(result.recognised).toBe(2);
+  });
+
+  test('not accepting restore@1 -> undeclared, regardless of participations or hooks', () => {
+    const result = judgeRestoreCoverage({
+      accepts: false,
+      participations: [dbParticipation('default', 'db')],
+      restoreDeclarations: [{ id: 'default', hook: { service: 'db', command: ['psql'] } }],
+      databaseServices: ['db'],
+    });
+    expect(result.state).toBe('undeclared');
+  });
+
+  // Quickstart scenario 58: purity, mirroring judgeBackupCoverage's own check.
+  test('contains no per-app or per-datastore name in its source', () => {
+    const source = judgeRestoreCoverage.toString();
+    expect(source.toLowerCase()).not.toMatch(/postgres|mealie|immich|gitea|paperless|backrest/);
+  });
+});
+
+describe('the restore-staging grant (spec 008, FR-010, FR-016, scenario 67)', () => {
+  test('restore@1 declares a providerGrant with non-empty, jargon-free copy distinct from the other grant rows', () => {
+    const restore = parseContractRef('restore@1');
+    expect(restore?.providerGrant?.kind).toBe('restore-staging');
+    const grant = restore!.providerGrant!;
+    expect(grant.label.length).toBeGreaterThan(0);
+    expect(grant.risk.length).toBeGreaterThan(0);
+    // No camelCase/snake_case identifier-shaped token in the operator-facing copy.
+    expect(grant.label).not.toMatch(/[a-z][A-Z]|_[a-z]/);
+    expect(grant.risk).not.toMatch(/[a-z][A-Z]|providerGrant|grantedContracts/);
+
+    for (const other of CONTRACTS.filter((c) => c.id !== 'restore' && c.providerGrant)) {
+      expect(grant.label).not.toBe(other.providerGrant!.label);
+      expect(grant.risk).not.toBe(other.providerGrant!.risk);
+    }
+  });
+});
+
 describe('acceptorBlocksPresent', () => {
   test('reports every typed block present, regardless of what is accepted', () => {
     // Deliberately independent of `accepts` — this answers "does work need to run
@@ -598,27 +725,60 @@ describe('buildContractRollup (ADR 0004 Phase 4)', () => {
  * Every spec-007 unit test passed throughout, because they construct manifests
  * directly and never traverse this function. These tests close that gap.
  */
-describe('participation markers (spec 007)', () => {
+describe('restore@1 promoted to a real brokered contract (spec 008, supersedes spec 007 FR-047)', () => {
   const silent = { warn: () => {}, info: () => {}, error: () => {}, debug: () => {} } as never;
 
-  test('accepts KEEPS restore@1 even though it has no CONTRACTS entry', () => {
-    expect(parseContractRef('restore@1')).toBeUndefined();
+  // Quickstart scenario 1 — ★ HIGHEST VALUE. Exercises the REAL manifest
+  // coercion path (`coerceAccepts`), not a hand-built fixture, and asserts
+  // `restore@1` resolves to a real CONTRACTS entry with a provider/acceptor
+  // shape. FR-002, FR-003.
+  //
+  // Verified manually during implementation (not re-run automatically, since
+  // the carve-out no longer exists in source to reintroduce at test time):
+  // temporarily restoring `services/core/contracts.ts`'s deleted
+  // `if (role === 'accepts' && isParticipationMarker(ref)) { out.push(ref); continue; }`
+  // carve-out made this exact test fail, because `parseContractRef('restore@1')`
+  // was never reached — confirming the test exercises the deletion, not merely
+  // the presence of a table row.
+  test('scenario 1: accepts resolves restore@1 through the real CONTRACTS table, not a marker carve-out', () => {
+    expect(parseContractRef('restore@1')).toMatchObject({
+      id: 'restore',
+      version: 1,
+      shape: 'brokered',
+      providerKind: 'app',
+      participation: 'declared',
+      acceptorBlock: 'restore',
+    });
     expect(coerceAccepts(['backup@1', 'restore@1'], silent)).toEqual(['backup@1', 'restore@1']);
+    expect(coerceAccepts(['restore@1'], silent)).toEqual(['restore@1']);
+    // The discriminating assertion: the deleted carve-out pushed the raw ref
+    // unconditionally (`out.push(ref); continue;`), skipping the real path's
+    // `if (!out.includes(canonical))` dedup guard — so a duplicate ref
+    // survives coercion under the carve-out but not under real resolution.
+    // Manually confirmed this line fails when the carve-out is reintroduced.
+    expect(coerceAccepts(['restore@1', 'restore@1'], silent)).toEqual(['restore@1']);
   });
 
-  test('restore@1 alone survives coercion', () => {
+  // FR-006: every app that already declares provides no manifest change.
+  test('scenario 4: restore@1 with no accompanying block still coerces (a plain-file-copy declaration, unchanged from spec 007)', () => {
     expect(coerceAccepts(['restore@1'], silent)).toEqual(['restore@1']);
   });
 
-  test('provides still DROPS restore@1 — nothing provides a marker', () => {
-    // `coerceRefs` returns undefined, not [], when nothing survives — its
-    // existing contract (`string[] | undefined`), unchanged by this fix.
-    expect(coerceProvides(['restore@1'], silent)).toBeUndefined();
+  test('provides now resolves restore@1 — an app CAN declare the provider role (spec 008, unlike spec 007)', () => {
+    expect(coerceProvides(['restore@1'], silent)).toEqual(['restore@1']);
   });
 
   test('a genuinely unknown ref is still dropped (ADR 0003 forward-compat intact)', () => {
     expect(coerceAccepts(['restore@2'], silent)).toBeUndefined();
     expect(coerceAccepts(['nonsense@1'], silent)).toBeUndefined();
     expect(coerceAccepts(['restore'], silent)).toBeUndefined();
+  });
+
+  // FR-002: the marker mechanism no longer exists as exports at all.
+  test('scenario 2: PARTICIPATION_MARKERS / RESTORE_PARTICIPATION_REF / isParticipationMarker no longer exist', async () => {
+    const contracts = await import('@hola/shared/contracts');
+    expect('PARTICIPATION_MARKERS' in contracts).toBe(false);
+    expect('RESTORE_PARTICIPATION_REF' in contracts).toBe(false);
+    expect('isParticipationMarker' in contracts).toBe(false);
   });
 });
