@@ -566,7 +566,10 @@ async function route(url: URL, req: Request): Promise<Response> {
       // spec 008: provider-origin candidates (empty when no restore@1
       // provider is installed/consented — FR-047, SC-013) merge into the
       // SAME lineages array, not a separate section.
-      const providerCandidates = await services.deployments.listProviderRestoreSources(appId, effectiveTargetVersion, meta);
+      // Same `appEnv` the local path already resolves above — a provider
+      // candidate carries no environment record at all (FR-052), so this is
+      // what names the platform-minted secrets its restore re-mints (#503).
+      const providerCandidates = await services.deployments.listProviderRestoreSources(appId, effectiveTargetVersion, meta, appEnv);
       const candidates: RestoreCandidate[] = [...localCandidates, ...providerCandidates];
       const grouped = groupIntoLineages(candidates);
       // FR-052a: never default an inferred-identity candidate, even alone.

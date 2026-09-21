@@ -157,7 +157,13 @@ function renderRestoreList(appId: string, resp: ListRestoreCandidatesResponse): 
           lines.push(`                    ! configuration cannot be carried: ${w.keys.join(', ')}`);
           lines.push(`                      requires --ack restore-env-not-carried`);
         } else if (w.code === 'no-identity-record') {
-          lines.push(`                    ! no install-identity record — described from the deployment record alone`);
+          // #503: the local sentence names a fallback a provider capture does
+          // not have — there is no deployment on this host behind it at all.
+          lines.push(
+            w.source === 'provider'
+              ? `                    ! no install-identity record inside the capture — described from the backup provider's index entry alone`
+              : `                    ! no install-identity record — described from the deployment record alone`,
+          );
         } else if (w.code === 'host-divergence') {
           lines.push(`                    ! host would change: ${w.from} → ${w.to}`);
         }

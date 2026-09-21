@@ -49,6 +49,7 @@ import {
   computeSkewVerdict,
   deriveEnvNotCarriedKeys,
   deriveRequiredAcknowledgements,
+  resolveListedCandidate,
   validateRestoreChoice,
   checkCandidateStillEligible,
   judgeRestoreChoice,
@@ -335,6 +336,34 @@ describe('Restore-on-install (spec 007) — pure resolver', () => {
       { key: 'GENERATED_SECRET', value: '', isSecret: true, generate: { kind: 'hex' } },
     ];
     expect(deriveEnvNotCarriedKeys(appEnv)).toEqual(['GENERATED_SECRET']);
+  });
+
+  // #503 added a `source` discriminator to `no-identity-record` for the
+  // provider origin. The LOCAL candidate's listing shape must be untouched by
+  // that: same codes, same fields, no new ones.
+  test('resolveListedCandidate (local origin) is unchanged by the provider-origin warning work (#503)', () => {
+    const appEnv: AppEnvVar[] = [
+      { key: 'PLAIN', value: '', isSecret: false },
+      { key: 'GENERATED_SECRET', value: '', isSecret: true, generate: { kind: 'hex' } },
+    ];
+
+    // No identity record and no carried env: both warnings fire, and the
+    // identity one carries NO `source` — a local candidate really is described
+    // from its deployment record, which is what the existing wording says.
+    const bare = resolveListedCandidate(fakeSource({ identity: null, carriesEnv: false }), '1.0.0', {}, appEnv);
+    expect(bare.warnings).toEqual([
+      { code: 'env-not-carried', keys: ['GENERATED_SECRET'] },
+      { code: 'no-identity-record' },
+    ]);
+    // No identity record also means no version to compare, hence the skew ack.
+    expect(bare.requiredAcknowledgements).toEqual(['restore-version-unknown', 'restore-env-not-carried']);
+
+    // An identity record plus a carried env: still the defaults-accepted shape.
+    const full = resolveListedCandidate(
+      fakeSource({ identity: { app: 'demoapp', appVersion: '1.0.0' }, carriesEnv: true }), '1.0.0', {}, appEnv,
+    );
+    expect(full.warnings).toEqual([]);
+    expect(full.requiredAcknowledgements).toEqual([]);
   });
 
   // ---- Scenario 54: scope boundary — judgeRestoreChoice composes the whole judgement from already-fetched state ----

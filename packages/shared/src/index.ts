@@ -447,11 +447,21 @@ export type RestoreSkewVerdict =
   | { kind: 'unknown' }
   | { kind: 'refused'; code: RestoreRefusalCode; message: string; suggestedVersion?: string };
 
-/** A proceedable, named, non-fatal risk surfaced with a restore candidate. */
+/**
+ * A proceedable, named, non-fatal risk surfaced with a restore candidate.
+ *
+ * `no-identity-record` carries `source` (spec 008, #503) because the same
+ * missing record means two different things: a LOCAL candidate falls back to
+ * its deployment record, while a PROVIDER capture has no deployment on this
+ * host to fall back to and is described from the provider's index entry alone.
+ * The field is optional so the code itself stays stable — a client that does
+ * not read it renders the local sentence, rather than dropping a warning it
+ * does not recognise.
+ */
 export type RestoreWarning =
   | { code: 'env-not-carried'; keys: string[] }
   | { code: 'host-divergence'; from: string; to: string }
-  | { code: 'no-identity-record' };
+  | { code: 'no-identity-record'; source?: 'deployment' | 'provider' };
 
 /**
  * A source the operator can pick as a restore-on-install source. Derived on

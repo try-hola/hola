@@ -346,6 +346,15 @@ export interface WarningsInput {
   carriesEnv: boolean;
   envNotCarriedKeys: string[];
   hasIdentityRecord: boolean;
+  /**
+   * Which origin's candidate this is (#503). Only `no-identity-record` reads
+   * it, and only to say what the candidate was described from INSTEAD — a
+   * local one has a deployment record on this host to fall back to, a
+   * provider capture has nothing but the provider's index entry. Defaults to
+   * the local reading, so spec 007's path emits exactly the warning it always
+   * has.
+   */
+  source?: 'deployment' | 'provider';
   candidateSubdomain?: string | null;
   chosenSubdomain?: string | null;
 }
@@ -357,7 +366,7 @@ export function deriveWarnings(input: WarningsInput): RestoreWarning[] {
     warnings.push({ code: 'env-not-carried', keys: input.envNotCarriedKeys });
   }
   if (!input.hasIdentityRecord) {
-    warnings.push({ code: 'no-identity-record' });
+    warnings.push(input.source === 'provider' ? { code: 'no-identity-record', source: 'provider' } : { code: 'no-identity-record' });
   }
   if (
     input.candidateSubdomain != null &&
@@ -411,6 +420,14 @@ export function resolveListedCandidate(
  * excludes this entry for this `appId` (its identity names a different app).
  * A provider capture always assumes `carryEnv: false` as its default action —
  * there is no environment record to carry (FR-052).
+ *
+ * `appEnv` is the version-being-installed's declared environment, and it is
+ * what makes the `env-not-carried` warning nameable (#503). FR-052 says a
+ * provider capture carries nothing, so `carryEnv: false` is not a choice here
+ * the way it is for a local candidate — which means the platform-minted
+ * secrets it lists are re-minted on EVERY provider restore, and the operator
+ * is entitled to see which ones before consenting. Hard-coding this empty (as
+ * this function originally did) withheld a fact that was fully derivable.
  */
 export function resolveListedProviderCandidate(
   entry: RestoreIndexEntry,
@@ -418,6 +435,7 @@ export function resolveListedProviderCandidate(
   queriedAppId: string,
   targetVersion: string | undefined,
   meta: AppUpgradeMeta | undefined,
+  appEnv: AppEnvVar[],
 ): RestoreCandidate | null {
   const described = describeProviderCandidate({ entry, providerDeploymentId, queriedAppId });
   if (!described) return null;
@@ -431,8 +449,9 @@ export function resolveListedProviderCandidate(
   const warnings = deriveWarnings({
     carryEnv: false,
     carriesEnv: described.carriesEnv,
-    envNotCarriedKeys: [],
+    envNotCarriedKeys: deriveEnvNotCarriedKeys(appEnv),
     hasIdentityRecord: described.hasIdentityRecord,
+    source: 'provider',
   });
   return { ...described, skew, requiredAcknowledgements, warnings };
 }

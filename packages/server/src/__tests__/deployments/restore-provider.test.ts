@@ -582,7 +582,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   // Quickstart scenario 47
   test('scenario 47: with no restore provider installed, candidates behave exactly as spec 007 (FR-047, SC-013)', async () => {
     const system = makeSystem({ [TARGET_APP]: { accepts: ['restore@1'] } });
-    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined);
+    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
     expect(candidates).toEqual([]);
   });
 
@@ -593,7 +593,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     await system.deployments.publishRestoreIndex([
       { captureId: 'cap-noid', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/lost-wiki-1a2b3c4d', identity: null },
     ]);
-    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined);
+    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       candidateId: `${providerId}:cap-noid`,
@@ -605,13 +605,30 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     expect(candidates[0]!.requiredAcknowledgements).toContain('restore-inferred-identity');
   });
 
+  // #503: the route resolves the target version's declared environment for the
+  // local candidates already; this proves the same `appEnv` reaches the
+  // provider-origin resolver instead of being dropped, so the listing names
+  // the secrets a provider restore re-mints rather than warning about none.
+  test('a provider candidate names the platform-minted secrets its restore re-mints (#503)', async () => {
+    const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
+    await installProvider(system, { provides: ['restore@1'] });
+    await system.deployments.publishRestoreIndex([
+      { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/tgt-1a2b3c4d', identity: { app: TARGET_APP } },
+    ]);
+    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [
+      { key: 'TZ', value: 'UTC', isSecret: false },
+      { key: 'DB_PASSWORD', value: '', isSecret: true, generate: { kind: 'hex' } },
+    ]);
+    expect(candidates[0]!.warnings).toContainEqual({ code: 'env-not-carried', keys: ['DB_PASSWORD'] });
+  });
+
   test('a published entry naming a DIFFERENT app is excluded entirely from this app\'s candidates', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     await installProvider(system, { provides: ['restore@1'] });
     await system.deployments.publishRestoreIndex([
       { captureId: 'cap-other', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: 'some-other-app' } },
     ]);
-    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined);
+    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
     expect(candidates).toEqual([]);
   });
 
@@ -631,7 +648,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     // the provider is not running, so nothing would ever claim the request
     // and the install would hang to the deadline. "Refused rather than
     // half-attempted" (FR-064).
-    const candidates = await system.deployments.listProviderRestoreSources(PROVIDER_APP, undefined, undefined);
+    const candidates = await system.deployments.listProviderRestoreSources(PROVIDER_APP, undefined, undefined, []);
     expect(candidates).toEqual([]);
 
     // And the refusal holds at selection time too, not only in the listing:
@@ -646,7 +663,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       { captureId: 'cap-self', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: PROVIDER_APP } },
       { captureId: 'cap-other', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: { app: TARGET_APP } },
     ]);
-    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined)).toHaveLength(1);
+    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toHaveLength(1);
 
     // The provider app doesn't accept restore@1, so it is not a live local
     // candidate either.
@@ -665,10 +682,10 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     await system.deployments.publishRestoreIndex([
       { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
-    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined)).toHaveLength(1);
+    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toHaveLength(1);
 
     await system.deployments.deleteDeployment(providerId);
-    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined)).toEqual([]);
+    expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toEqual([]);
   });
 
   // =========================================================================
@@ -702,7 +719,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     ]);
 
     // It is offered, marked inferred, and demands the acknowledgement.
-    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined);
+    const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
     expect(candidates).toHaveLength(1);
     expect(candidates[0]!.confidence).toBe('path');
     expect(candidates[0]!.requiredAcknowledgements).toContain('restore-inferred-identity');
@@ -907,7 +924,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     const cold2 = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     const polled = await cold2.deployments.pollRestoreRequests();
     expect(polled.reindex).toBe(false);
-    expect(await cold2.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined)).toHaveLength(1);
+    expect(await cold2.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toHaveLength(1);
     void providerId;
   });
 });

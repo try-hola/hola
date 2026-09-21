@@ -16,7 +16,19 @@ import {
   groupIntoLineages,
   inferInstallNameFromLocation,
 } from '../../services/core/restore-candidates';
-import type { RestoreIndexEntry, RestoreCandidate } from '@hola/shared';
+import type { AppEnvVar, RestoreIndexEntry, RestoreCandidate } from '@hola/shared';
+
+/**
+ * The version-being-installed's declared environment. Only the `isSecret` +
+ * `generate` rows are platform-minted, so only those are re-minted when
+ * nothing is carried — which is every provider restore (FR-052).
+ */
+const appEnv: AppEnvVar[] = [
+  { key: 'TZ', value: 'UTC', isSecret: false },
+  { key: 'OPERATOR_TOKEN', value: 'set-by-hand', isSecret: true },
+  { key: 'DB_PASSWORD', value: '', isSecret: true, generate: { kind: 'hex' } },
+  { key: 'SESSION_SECRET', value: '', isSecret: true, generate: { kind: 'hex' } },
+];
 
 const entry = (overrides: Partial<RestoreIndexEntry> = {}): RestoreIndexEntry => ({
   captureId: 'cap-1',
@@ -99,18 +111,61 @@ describe('describeProviderCandidate (data-model.md §6b — the app-matching rul
 
 describe('resolveListedProviderCandidate (FR-051)', () => {
   test('a confidence: path candidate REQUIRES restore-inferred-identity in requiredAcknowledgements', () => {
-    const candidate = resolveListedProviderCandidate(entry({ identity: null }), 'backrest-1', 'mealie', undefined, undefined);
+    const candidate = resolveListedProviderCandidate(entry({ identity: null }), 'backrest-1', 'mealie', undefined, undefined, []);
     expect(candidate?.requiredAcknowledgements).toContain('restore-inferred-identity');
   });
 
   test('a confidence: marker candidate does not require restore-inferred-identity', () => {
-    const candidate = resolveListedProviderCandidate(entry({ identity: { app: 'mealie', appVersion: '1.0.0' } }), 'backrest-1', 'mealie', '1.0.0', {});
+    const candidate = resolveListedProviderCandidate(entry({ identity: { app: 'mealie', appVersion: '1.0.0' } }), 'backrest-1', 'mealie', '1.0.0', {}, []);
     expect(candidate?.requiredAcknowledgements).not.toContain('restore-inferred-identity');
   });
 
   test('a provider candidate always assumes carryEnv: false — there is no environment record to carry (FR-052)', () => {
-    const candidate = resolveListedProviderCandidate(entry({ identity: { app: 'mealie' } }), 'backrest-1', 'mealie', undefined, undefined);
+    const candidate = resolveListedProviderCandidate(entry({ identity: { app: 'mealie' } }), 'backrest-1', 'mealie', undefined, undefined, []);
     expect(candidate?.carriesEnv).toBe(false);
+  });
+
+  // #503: FR-052 makes "nothing is carried" unconditional for this origin, so
+  // the keys that get re-minted are knowable at listing time — and were being
+  // withheld by a hard-coded empty list.
+  test('a provider candidate NAMES the platform-minted secrets its restore will re-mint', () => {
+    const candidate = resolveListedProviderCandidate(entry({ identity: { app: 'mealie' } }), 'backrest-1', 'mealie', undefined, undefined, appEnv);
+    expect(candidate?.warnings).toContainEqual({ code: 'env-not-carried', keys: ['DB_PASSWORD', 'SESSION_SECRET'] });
+    // Exactly `isSecret && generate` — an operator-supplied secret is not the
+    // platform's to re-mint, and a plain value is not a secret at all.
+    const envWarning = candidate?.warnings.find((w) => w.code === 'env-not-carried');
+    expect(envWarning?.code === 'env-not-carried' && envWarning.keys).not.toContain('OPERATOR_TOKEN');
+    expect(envWarning?.code === 'env-not-carried' && envWarning.keys).not.toContain('TZ');
+    // The acknowledgement was always required; now it can say what for.
+    expect(candidate?.requiredAcknowledgements).toContain('restore-env-not-carried');
+  });
+
+  test('an app with no platform-minted secrets warns about no keys at all', () => {
+    const candidate = resolveListedProviderCandidate(
+      entry({ identity: { app: 'mealie' } }), 'backrest-1', 'mealie', undefined, undefined,
+      [{ key: 'TZ', value: 'UTC', isSecret: false }],
+    );
+    expect(candidate?.warnings.some((w) => w.code === 'env-not-carried')).toBe(false);
+  });
+
+  // #503: a provider capture has no deployment on this host, so the local
+  // wording ("described from the deployment record alone") names a fallback
+  // that does not exist. The code stays the same; `source` is what lets a
+  // renderer tell the operator the truth.
+  test('a provider candidate with no identity record carries no warning that references a deployment record', () => {
+    const candidate = resolveListedProviderCandidate(entry({ identity: null }), 'backrest-1', 'mealie', undefined, undefined, appEnv);
+    expect(candidate?.hasIdentityRecord).toBe(false);
+    expect(candidate?.warnings).toContainEqual({ code: 'no-identity-record', source: 'provider' });
+    const identityWarning = candidate?.warnings.find((w) => w.code === 'no-identity-record');
+    expect(identityWarning?.code === 'no-identity-record' && identityWarning.source).toBe('provider');
+    expect(identityWarning?.code === 'no-identity-record' && identityWarning.source).not.toBe('deployment');
+  });
+
+  test('a provider candidate WITH an identity record emits no no-identity-record warning at all', () => {
+    const candidate = resolveListedProviderCandidate(
+      entry({ identity: { app: 'mealie', appVersion: '1.0.0' } }), 'backrest-1', 'mealie', undefined, undefined, appEnv,
+    );
+    expect(candidate?.warnings.some((w) => w.code === 'no-identity-record')).toBe(false);
   });
 });
 

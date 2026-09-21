@@ -51,6 +51,7 @@ import type {
   AppBackupHook,
   AppAuthConfig,
   RestoreWarning,
+  AppEnvVar,
   AppUpgradeMeta,
   RestoreCandidate,
   RestoreIndexEntry,
@@ -531,11 +532,15 @@ export interface DeploymentService extends HealthCheckable {
   /** Every provider-origin candidate for `appId` from the currently consented
    *  `restore@1` provider's published index, already resolved into candidate
    *  shape (data-model.md §6b) — empty when no provider is installed, or one
-   *  is installed without the role/consent (FR-047). Used by the candidates route. */
+   *  is installed without the role/consent (FR-047). Used by the candidates route.
+   *  `appEnv` is the target version's declared environment — required, not
+   *  defaulted, because it is what names the secrets a provider restore
+   *  re-mints (#503) and an omitted one silently withholds them. */
   listProviderRestoreSources(
     appId: string,
     targetVersion: string | undefined,
     meta: AppUpgradeMeta | undefined,
+    appEnv: AppEnvVar[],
   ): Promise<RestoreCandidate[]>;
   /** Resolve a provider-origin candidate id's index entry + whether its
    *  publisher is STILL the consented `restore@1` provider right now
@@ -923,10 +928,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     appId: string,
     targetVersion: string | undefined,
     meta: AppUpgradeMeta | undefined,
+    appEnv: AppEnvVar[],
   ): Promise<RestoreCandidate[]> {
     void appId;
     void targetVersion;
     void meta;
+    void appEnv;
     return [];
   }
 
@@ -2967,6 +2974,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     appId: string,
     targetVersion: string | undefined,
     meta: AppUpgradeMeta | undefined,
+    appEnv: AppEnvVar[],
   ): Promise<RestoreCandidate[]> {
     await this.ensureLoaded();
     const provider = await this.findConsentedRestoreProviderDeployment();
@@ -2975,7 +2983,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const entries = await this.restoreIndex.entriesFor(provider.id);
     const out: RestoreCandidate[] = [];
     for (const entry of entries) {
-      const candidate = resolveListedProviderCandidate(entry, provider.id, appId, targetVersion, meta);
+      const candidate = resolveListedProviderCandidate(entry, provider.id, appId, targetVersion, meta, appEnv);
       if (candidate) out.push(candidate);
     }
     return out;
