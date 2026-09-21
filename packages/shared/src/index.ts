@@ -18,11 +18,25 @@ export const API = {
   me: '/api/me',
   summary: '/api/summary',
 
-  // Restore-on-install (spec 007): deployments of `appId` on this host that
-  // can serve as a restore source. GET with optional `?version=` (each
-  // candidate's skew/acknowledgements are computed against it). Returns
-  // ListRestoreCandidatesResponse. An ordinary authenticated platform read —
-  // NOT a capability-contract broker endpoint (FR-047, contracts/api.md §0).
+  // Restore-on-install: sources for `appId` on this host — live sibling
+  // deployments (spec 007) and, since spec 008, captures a consented
+  // `restore@1` provider holds.
+  //
+  // `?version=` is OPTIONAL but you almost always want it: skew and the
+  // acknowledgements derived from it are computed AGAINST it, so omitting it
+  // yields `skew: 'unknown'` for every candidate and therefore reports
+  // `restore-version-unknown` as required — an acknowledgement the install
+  // itself will NOT demand once the version resolves. It over-reports rather
+  // than under-reports (a client asking for needless consent, never a restore
+  // slipping past a guard), but a caller that omits it and renders
+  // `requiredAcknowledgements` verbatim will ask the operator for consent that
+  // is not actually needed. Verified on a VM, spec 008.
+  //
+  // Still an ordinary authenticated platform read, NOT a broker endpoint —
+  // unchanged by spec 008 promoting `restore@1` to a brokered contract, whose
+  // broker routes live under `/api/contracts/restore/` (contracts/api.md §0).
+  // (Spec 007 cited its own FR-047 here; that requirement is superseded by
+  // spec 008 FR-001/FR-004, but this route's character is the same.)
   restoreCandidates: (appId: string) => `/api/apps/${encodeURIComponent(appId)}/restore-candidates`,
 
   catalog: {
@@ -381,7 +395,11 @@ export type AppRestoreDeclaration = {
 
 /** The operator's restore decision at draft creation. Created once, consumed once. */
 export type RestoreChoice = {
-  /** The candidate's deployment id — not a lineage id. */
+  /**
+   * The candidate's own id, from `RestoreCandidate.candidateId` — not a lineage
+   * id, and since spec 008 not necessarily a deployment id: a provider-held
+   * capture has no deployment on this host (FR-043a).
+   */
   candidateId: string;
   /** Explicit, never defaulted from candidate state — declining is a decision. */
   carryEnv: boolean;
