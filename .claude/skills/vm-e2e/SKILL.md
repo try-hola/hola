@@ -48,6 +48,17 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    **`VM_IPCONFIG0` is optional — DHCP works fine.** `vm-create` only sends
    `ipconfig0` when the var is set, so leaving it empty just means the VM takes a
    DHCP lease, and `vm-wait-ssh` resolves the address from the guest agent and
+
+   **"SSH not ready after 180s" on a REUSED VMID is usually a stale host key,
+   not a slow boot.** `bin/vm-create` picks the lowest free id, so destroying
+   VM 102 and creating another hands you 102 again — with a different host key.
+   `.devcontainer/.vm-keys/known_hosts` still has the old one, every `ssh` fails
+   the host-key check, and `vm-wait-ssh` reports it as a timeout. Check whether
+   port 22 is actually open (`/dev/tcp/<ip>/22`) and try the key by hand; if that
+   works, the wait is lying to you. Clear the entry and retry:
+   ```bash
+   ssh-keygen -R <ip> -f .devcontainer/.vm-keys/known_hosts
+   ```
    prints it. A static IP is convenient (you can pre-render `hola.env` once and
    reuse it), not required.
 

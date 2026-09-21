@@ -725,6 +725,38 @@ function dotenvValue(v: string): string {
   return `"${s}"`;
 }
 
+/**
+ * Whether `value` is nothing but a Compose interpolation of `key` itself —
+ * `${KEY}`, `${KEY:-default}` or `${KEY-default}`.
+ *
+ * A draft seeds `appEnv` from the bundle's compose `environment` block, so an
+ * app that declares its own fallback (`OIDC_AUTH_ENABLED: "${OIDC_AUTH_ENABLED:-false}"`)
+ * hands us that template TEXT as the value. Writing it to `runtime/.env` is
+ * always wrong, and `dotenvValue` makes it worse by escaping the `$` so Compose
+ * cannot even try: Compose interpolates the compose file, looks the key up in
+ * `.env`, finds the literal `${OIDC_AUTH_ENABLED:-false}`, and puts THAT in the
+ * container. mealie then crash-loops parsing it as a boolean (#506).
+ *
+ * Omitting the key instead lets Compose fall through to the default the app
+ * author declared in its own compose file, which is the value they intended.
+ *
+ * Deliberately narrow — a SELF-reference and the whole value. `dotenvValue`
+ * escapes `$` on purpose so a password containing `${` survives intact, and a
+ * value merely *containing* a token (`${OIDC_ISSUER_URL}.well-known/...`) is
+ * keyed to a DIFFERENT variable, which Compose resolves correctly from the
+ * compose file. Only the self-referential bare token is unconditionally broken,
+ * and it can only have come from harvesting the compose file in the first place.
+ *
+ * Why this hid for so long: under `HOLA_AUTH_MODE=authentik` the provisioner's
+ * `injectedEnv` spreads AFTER `appEnv` and overwrites every one of these keys
+ * with a real value. Only a `mode=none` host — where nothing overwrites them —
+ * ever sees the literal reach a container.
+ */
+function isSelfReferentialInterpolation(key: string, value: string): boolean {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^\\$\\{${escaped}(?::?-[^}]*)?\\}$`).test(value.trim());
+}
+
 /** Map a deployment action to the job type that performs it. */
 function mapActionToJobType(action: DeploymentAction): Job['type'] {
   switch (action) {
@@ -2304,6 +2336,10 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // still carry the literal token; this is the last chance to resolve it before
       // it leaks into the running container's env.
       const dotenv = interpKeys
+        // #506: drop a key whose value is only a Compose interpolation of
+        // itself — see `isSelfReferentialInterpolation`. Writing it would hand
+        // the container the literal `${KEY:-default}` instead of `default`.
+        .filter(k => !isSelfReferentialInterpolation(k, interp[k]))
         .map(k => `${k}=${dotenvValue(
           interp[k]
             .replaceAll(USER_EMAIL_TOKEN, userEmail)
