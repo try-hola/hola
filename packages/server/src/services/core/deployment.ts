@@ -4604,10 +4604,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       createdAt,
       deadlineAt: new Date(Date.parse(createdAt) + restoreRequestTimeoutMs()).toISOString(),
     };
-    await this.restoreBroker.update((store) => ({ ...store, [requestId]: record }));
-    await logBoth('info', `Restore: waiting for the provider to deliver capture '${parsed.captureId}' into ${destination}…`);
-
+    // #502: pin this record against retention pruning for as long as the loop
+    // below can still read it. `get()` returning `undefined` is read three
+    // lines down as "the provider never answered", so a record pruned between
+    // the provider reporting success and this job's next tick would fail a
+    // restore that actually worked. Taken BEFORE the record exists so no
+    // window opens between creating it and protecting it.
+    const releaseWait = this.restoreBroker.retainWhileWaiting(requestId);
     try {
+      await this.restoreBroker.update((store) => ({ ...store, [requestId]: record }));
+      await logBoth('info', `Restore: waiting for the provider to deliver capture '${parsed.captureId}' into ${destination}…`);
+
       let final: RestoreRequestRecord | undefined;
       let providerGone = false;
       for (;;) {
@@ -4682,6 +4689,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
           : 'Restore: moved captured data into place.',
       );
     } finally {
+      // Nothing re-reads the record after this point, so retention may have it.
+      releaseWait();
       // FR-037: the request's destination directory is cleaned up whether the
       // restore succeeded or failed; a cleanup failure is logged but never
       // masks the restore's own outcome.

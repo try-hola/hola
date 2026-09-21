@@ -12,9 +12,12 @@ import { join } from 'node:path';
 import {
   RestoreBrokerStateStore,
   isRestoreRequestExpired,
+  pruneTerminalRequests,
   restoreRequestTimeoutMs,
   DEFAULT_RESTORE_REQUEST_TIMEOUT_MS,
+  TERMINAL_RECORD_RETENTION_MS,
   type RestoreRequestRecord,
+  type RestoreRequestStore,
 } from '../../services/core/restore-broker-state';
 import { RealStorageService } from '../../services/core/storage';
 
@@ -77,6 +80,82 @@ describe('isRestoreRequestExpired (spec 008, R11 — fail-closed on an unparseab
   test('an unparseable deadline reads as expired (fail-closed, mirrors isPrepareExpired)', () => {
     const now = Date.parse('2026-02-01T09:10:00.000Z');
     expect(isRestoreRequestExpired(record({ status: 'pending', deadlineAt: 'not-a-date' }), now)).toBe(true);
+  });
+});
+
+describe('pruneTerminalRequests (#502 — the store must not grow without bound)', () => {
+  const NOW = Date.parse('2026-03-01T12:00:00.000Z');
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** The newest terminal record is always kept as the activity anchor, so every
+   *  fixture below carries one that is NOT the record under test. */
+  const anchor = record({ id: 'anchor', status: 'completed', completedAt: ago(60_000) });
+  const build = (...records: RestoreRequestRecord[]): RestoreRequestStore =>
+    Object.fromEntries(records.map((r) => [r.id, r]));
+
+  test('a terminal record past the retention window is pruned', () => {
+    const store = build(
+      anchor,
+      record({ id: 'done', status: 'completed', completedAt: ago(3 * DAY) }),
+      record({ id: 'failed', status: 'failed', completedAt: ago(2 * DAY), failureReason: 'repository unreachable' }),
+      // An expiry is recorded by flipping the status alone, so its terminal
+      // moment is the deadline it blew, not a `completedAt`.
+      record({ id: 'expired', status: 'expired', deadlineAt: ago(2 * DAY) }),
+    );
+    const result = pruneTerminalRequests(store, { now: NOW });
+    expect(result.pruned.sort()).toEqual(['done', 'expired', 'failed']);
+    expect(Object.keys(result.store)).toEqual(['anchor']);
+  });
+
+  test('a terminal record within the retention window is kept', () => {
+    const store = build(
+      anchor,
+      record({ id: 'done', status: 'completed', completedAt: ago(TERMINAL_RECORD_RETENTION_MS - 60_000) }),
+    );
+    const result = pruneTerminalRequests(store, { now: NOW });
+    expect(result.pruned).toEqual([]);
+    expect(Object.keys(result.store).sort()).toEqual(['anchor', 'done']);
+  });
+
+  test('a non-terminal record is never pruned, however old', () => {
+    const store = build(
+      anchor,
+      // Both are long past any deadline; only the expiry path may close them,
+      // and until it does the install waiting on one still needs it there.
+      record({ id: 'pending', status: 'pending', createdAt: ago(30 * DAY), deadlineAt: ago(30 * DAY) }),
+      record({ id: 'claimed', status: 'claimed', createdAt: ago(30 * DAY), deadlineAt: ago(30 * DAY), claimedAt: ago(30 * DAY) }),
+    );
+    const result = pruneTerminalRequests(store, { now: NOW });
+    expect(result.pruned).toEqual([]);
+    expect(Object.keys(result.store).sort()).toEqual(['anchor', 'claimed', 'pending']);
+  });
+
+  test('a retained record is never pruned, however old or terminal', () => {
+    const store = build(
+      anchor,
+      record({ id: 'waited-on', status: 'completed', completedAt: ago(30 * DAY) }),
+      record({ id: 'nobody-waiting', status: 'completed', completedAt: ago(30 * DAY) }),
+    );
+    const result = pruneTerminalRequests(store, { now: NOW, retain: new Set(['waited-on']) });
+    expect(result.pruned).toEqual(['nobody-waiting']);
+    expect(Object.keys(result.store).sort()).toEqual(['anchor', 'waited-on']);
+  });
+
+  test('the newest terminal record survives at any age — it is all `brokerActivity` has to report the last restore from', () => {
+    const store = build(
+      record({ id: 'newest', status: 'expired', deadlineAt: ago(90 * DAY) }),
+      record({ id: 'older', status: 'completed', completedAt: ago(120 * DAY) }),
+    );
+    const result = pruneTerminalRequests(store, { now: NOW });
+    expect(result.pruned).toEqual(['older']);
+    expect(Object.keys(result.store)).toEqual(['newest']);
+  });
+
+  test('a store with nothing to prune is returned unchanged, so no write is provoked', () => {
+    const store = build(anchor, record({ id: 'pending', status: 'pending' }));
+    const result = pruneTerminalRequests(store, { now: NOW });
+    expect(result.store).toBe(store);
   });
 });
 
@@ -174,6 +253,52 @@ describe('RestoreBrokerStateStore (spec 008)', () => {
       const read = await store.get(id);
       expect(read?.destination).toBe(`/srv/hola/restore/${id}`);
     }
+  });
+
+  // #502, the case that matters most: the deploy job polls `get(requestId)`
+  // and reads `undefined` as "the provider never answered". Pruning a record
+  // the job is still waiting on would fail a restore that actually succeeded.
+  test('a record a deploy job is still waiting on is never pruned out from under it', async () => {
+    const store = new RestoreBrokerStateStore(new RealStorageService({ holaDir: dataRoot }));
+    const stale = new Date(Date.now() - TERMINAL_RECORD_RETENTION_MS - 60_000).toISOString();
+    const waited = record({ id: 'waited', status: 'completed', completedAt: stale });
+    const newer = record({ id: 'newer', status: 'completed', completedAt: new Date().toISOString() });
+
+    // Pinned BEFORE the record exists, exactly as the job does — otherwise the
+    // very write that creates it is also the write that collects it.
+    const release = store.retainWhileWaiting('waited');
+    await store.update((s) => ({ ...s, waited, newer }));
+    expect((await store.get('waited'))?.status).toBe('completed');
+
+    // A provider poll tick prunes too, and it runs every couple of seconds
+    // while the job waits — this is the window the pin exists to cover.
+    await store.pendingFor('backrest-1');
+    expect((await store.get('waited'))?.status).toBe('completed');
+
+    // Released once the job has read its outcome: now it may be collected.
+    release();
+    await store.pendingFor('backrest-1');
+    expect(await store.get('waited')).toBeUndefined();
+    expect((await store.get('newer'))?.status).toBe('completed');
+  });
+
+  test('creating a request collects the terminal records earlier ones left behind', async () => {
+    const store = new RestoreBrokerStateStore(new RealStorageService({ holaDir: dataRoot }));
+    const stale = (n: number) => new Date(Date.now() - TERMINAL_RECORD_RETENTION_MS - n * 60_000).toISOString();
+    const old: RestoreRequestStore = {};
+    for (let i = 0; i < 20; i++) {
+      old[`done-${i}`] = record({ id: `done-${i}`, status: 'completed', completedAt: stale(i + 1) });
+    }
+    // Seeded through `write` so the accumulation this reproduces is the one a
+    // pre-#502 host already has on disk, not one `update` would have collected.
+    await store.write(old);
+
+    await store.update((s) => ({ ...s, 'req-new': record({ id: 'req-new' }) }));
+
+    // The newest terminal record is kept as the activity anchor; everything
+    // else terminal and past retention is gone, alongside the live request.
+    const remaining = await store.read();
+    expect(Object.keys(remaining).sort()).toEqual(['done-0', 'req-new']);
   });
 
   // A rejecting operation must not wedge the chain for everything after it.
