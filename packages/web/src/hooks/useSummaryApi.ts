@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { globalCache, type TimestampedEntry } from '../utils/cache';
 import type { GetSummaryResponse } from '@hola/shared';
 
 // This hook will be EXACTLY like VerySimpleStrictTest but extracted
@@ -20,14 +20,14 @@ export function useSummaryApi() {
     console.log('useSummaryApi: fetchData called');
     
     const cacheKey = 'summary-test';
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetSummaryResponse>>(cacheKey);
     const now = Date.now();
     
     // Check cache (5 second TTL for testing)
     if (cached && (now - cached.timestamp) < 5000) {
       console.log('useSummaryApi: Using cached data');
       setState({
-        data: cached.data as GetSummaryResponse,
+        data: cached.data,
         loading: false,
         error: null,
       });

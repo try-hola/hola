@@ -118,6 +118,8 @@ export function createCatalogAppFixture(overrides?: Partial<CatalogApp>): Catalo
     downloads: '10M+',
     tags: ['web-server', 'reverse-proxy', 'load-balancer'],
     featured: true,
+    source: 'hola',
+    trust: 'verified',
     ...overrides
   };
 }

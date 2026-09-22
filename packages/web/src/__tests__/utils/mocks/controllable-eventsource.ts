@@ -136,24 +136,23 @@ class ControllableEventSourceControllerImpl implements ControllableEventSourceCo
 // Global controller instance
 const globalController = new ControllableEventSourceControllerImpl();
 
-// Mock EventSource constructor that creates controllable instances
-export const ControllableEventSource = function(this: ControllableEventSourceInstance, url: string) {
-  const instance = new ControllableEventSourceImpl(url, globalController);
-  
-  // Copy properties to 'this' to match EventSource behavior
-  Object.assign(this, instance);
-  
-  return instance;
-} as new (url: string) => ControllableEventSourceInstance & {
-  readonly CONNECTING: 0;
-  readonly OPEN: 1;
-  readonly CLOSED: 2;
-};
+/**
+ * Mock EventSource constructor that creates controllable instances.
+ *
+ * The three readyState constants are STATIC on `EventSource`, not instance
+ * members. The previous declaration asserted them onto the instance type and
+ * then assigned them to the constructor, which is why assigning them was an
+ * error — invisible while the web typecheck traversed no files.
+ */
+export class ControllableEventSource extends ControllableEventSourceImpl {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
 
-// Add static constants
-ControllableEventSource.CONNECTING = 0;
-ControllableEventSource.OPEN = 1;
-ControllableEventSource.CLOSED = 2;
+  constructor(url: string) {
+    super(url, globalController);
+  }
+}
 
 // Export the controller for test use
 export const eventSourceController = globalController;

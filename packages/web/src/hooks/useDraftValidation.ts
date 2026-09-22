@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import type { ValidateDraftResponse, PreflightResponse } from '@hola/shared';
+import type { ValidateDraftResponse, EnhancedPreflightResponse } from '@hola/shared';
 
 // StrictMode-compatible hook for draft validation and preflight checks
 export function useDraftValidation() {
@@ -15,7 +15,7 @@ export function useDraftValidation() {
   });
 
   const [preflightState, setPreflightState] = React.useState<{
-    data: PreflightResponse | null;
+    data: EnhancedPreflightResponse | null;
     loading: boolean;
     error: string | null;
   }>({
@@ -53,7 +53,7 @@ export function useDraftValidation() {
     setPreflightState(prev => ({ ...prev, loading: true, error: null }));
     
     try {
-      const result = await api.drafts.preflight(draftId) as PreflightResponse;
+      const result = await api.drafts.preflight(draftId);
       
       setPreflightState({
         data: result,

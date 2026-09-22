@@ -1,7 +1,6 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
-import type { CatalogSourceRecord } from '@hola/shared';
+import type { AddCatalogSourceRequest, CatalogSourceRecord, UpdateCatalogSourceRequest } from '@hola/shared';
 
 /**
  * A catalog source added without `allowRegistries` blocks every install from it
@@ -26,8 +25,8 @@ const PREVIEW = {
 
 const catalogSources = {
   list: vi.fn(async () => ({ items: SOURCES })),
-  add: vi.fn(async () => SOURCES[1]),
-  update: vi.fn(async () => SOURCES[1]),
+  add: vi.fn(async (_body: AddCatalogSourceRequest) => SOURCES[1]),
+  update: vi.fn(async (_id: string, _patch: UpdateCatalogSourceRequest) => SOURCES[1]),
   remove: vi.fn(async () => ({ success: true })),
   preview: vi.fn(async () => PREVIEW),
 };
@@ -76,7 +75,7 @@ describe('Settings → Catalog Sources editing', () => {
     expect(catalogSources.add).not.toHaveBeenCalled();
     expect(catalogSources.remove).not.toHaveBeenCalled();
 
-    const [id, patch] = catalogSources.update.mock.calls[0] as [string, { allowRegistries: string[]; url: string; name: string }];
+    const [id, patch] = catalogSources.update.mock.calls[0]!;
     expect(id).toBe('pofallon');
     // Comma-separated input is split and trimmed, matching the server's parser.
     expect(patch.allowRegistries).toEqual(['ghcr.io/pofallon/*', 'ghcr.io/pofallon-labs/*']);
@@ -97,7 +96,7 @@ describe('Settings → Catalog Sources editing', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(catalogSources.update).toHaveBeenCalled());
-    expect((catalogSources.update.mock.calls[0][1] as { allowRegistries: string[] }).allowRegistries).toEqual([]);
+    expect(catalogSources.update.mock.calls[0]![1].allowRegistries).toEqual([]);
   });
 
   it('offers no edit for the built-in source, which has no stored record to patch', async () => {
@@ -141,7 +140,7 @@ describe('Settings → Catalog Sources editing', () => {
 
     await waitFor(() => expect(catalogSources.add).toHaveBeenCalled());
     // Only the ticked one — never the already-covered baseline registry.
-    expect(catalogSources.add.mock.calls[0][0]).toMatchObject({ allowRegistries: ['ghcr.io/pofallon/*'] });
+    expect(catalogSources.add.mock.calls[0]![0]).toMatchObject({ allowRegistries: ['ghcr.io/pofallon/*'] });
   });
 
   it('unticking a registry withdraws it from the grant', async () => {

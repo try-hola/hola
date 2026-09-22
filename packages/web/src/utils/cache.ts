@@ -8,6 +8,19 @@ export interface CacheEntry<T = unknown> {
   lastAccessed: number;
 }
 
+/**
+ * The `{ data, timestamp }` envelope the data hooks store inside a cache entry.
+ * The cache keeps its own `timestamp`/`ttl` for LRU and expiry; these callers
+ * additionally enforce a shorter per-hook freshness window, so they carry their
+ * own capture time in the value. `get` is generic with no inference site, so
+ * calling it without a type argument silently yields `unknown` — name this type
+ * at the call site instead.
+ */
+export type TimestampedEntry<T> = {
+  data: T;
+  timestamp: number;
+};
+
 export interface CacheStats {
   size: number;
   maxSize: number;

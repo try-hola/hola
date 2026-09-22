@@ -11,9 +11,23 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { SidebarVersion } from './SidebarVersion';
 
-const navigationItems = [
+type NavigationItem = {
+  name: string;
+  path: string;
+  icon: LucideIcon;
+  /**
+   * Optional count rendered as a pill when expanded and as a dot when
+   * collapsed. No item sets one today — the render path below is the hook the
+   * notification count was built against, and typing it optional is what keeps
+   * that path honest rather than an unreachable property access.
+   */
+  badge?: number | string;
+};
+
+const navigationItems: NavigationItem[] = [
   { name: 'Apps', path: '/apps', icon: LayoutGrid },
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { name: 'Catalog', path: '/catalog', icon: Package },

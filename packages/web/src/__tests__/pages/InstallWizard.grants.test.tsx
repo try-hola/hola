@@ -1,8 +1,7 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { CreateDraftResponse, Draft } from '@hola/shared';
+import type { CreateDeploymentFromDraftRequest, CreateDraftResponse, Draft } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 
 // ADR 0004: an app that declares a privileged capability contract role (a backup
@@ -15,10 +14,15 @@ import { globalCache } from '../../utils/cache';
 const draftId = 'draft-grants-test';
 
 function makeDraft(overrides: Partial<Draft> = {}): Draft {
-  return { draftId, appId: 'backrest', version: '1.0.0', systemOverrides: {}, appEnv: [], ports: [], ...overrides };
+  return { draftId, appId: 'backrest', version: '1.0.0', systemOverrides: {}, appEnv: [], ports: [], files: [], ...overrides };
 }
 
-const create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' }));
+// Declare the request parameter: without it `vi.fn` infers a zero-argument
+// function and every `create.mock.calls[n][0]` assertion below indexes an
+// empty tuple.
+const create = vi.fn(
+  async (_req: CreateDeploymentFromDraftRequest) => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' })
+);
 
 const draftsApi = {
   create: vi.fn(async (): Promise<CreateDraftResponse> => ({
@@ -47,7 +51,7 @@ vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
     deployments: {
-      create: (data: unknown) => create(data),
+      create: (data: CreateDeploymentFromDraftRequest) => create(data),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
     restoreCandidates: (appId: string) => restoreCandidates(appId),
@@ -121,7 +125,7 @@ describe('InstallWizard privileged contract grants (ADR 0004)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^install$/i }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
-    const arg = create.mock.calls[0][0] as { grants?: string[] };
+    const arg = create.mock.calls[0]![0];
     expect(arg.grants).toEqual(['backup@1']);
   });
 

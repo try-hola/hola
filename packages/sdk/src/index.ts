@@ -34,6 +34,8 @@ import {
   GetContractsResponse,
   // Job types
   DeleteJobsRequest, DeleteJobsResponse,
+  // Shared response shapes
+  GetMeResponse, GetLogsResponse,
   // System types
   GetUpdateCheckResponse,
   // Restore-on-install (spec 007)
@@ -128,7 +130,7 @@ export class HolaSdk {
   // --- Convenience methods using shared API constants ---
 
   health() { return this.get(API.health); }
-  me() { return this.get(API.me); }
+  me() { return this.get<GetMeResponse>(API.me); }
   summary() { return this.get(API.summary); }
 
   catalog = {
@@ -221,7 +223,7 @@ export class HolaSdk {
     action: (deploymentId: string, action: PostDeploymentActionRequest) => this.post<PostDeploymentActionResponse>(API.deployments.actions(deploymentId), action),
     rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),
     promote: (deploymentId: string, promote: PromoteDeploymentRequest = {}) => this.post<PromoteDeploymentResponse>(API.deployments.promote(deploymentId), promote),
-    logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
+    logs: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetLogsResponse>(`${API.deployments.logs(deploymentId)}${buildQuery(qs)}`),
     config: (deploymentId: string) => this.get<GetDeploymentConfigResponse>(API.deployments.config(deploymentId)),
     // On-demand richer update check for one deployment (#299): safe-bump vs.
     // guided-upgrade, with the target's breaking/backup/notes + a path verdict.
@@ -237,7 +239,7 @@ export class HolaSdk {
 
   jobs = {
     byId: (jobId: string) => this.get(API.jobs.byId(jobId)),
-    logs: (jobId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get(`${API.jobs.logs(jobId)}${buildQuery(qs)}`),
+    logs: (jobId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetLogsResponse>(`${API.jobs.logs(jobId)}${buildQuery(qs)}`),
     // Clear finished (completed/failed/cancelled) jobs, optionally scoped by
     // deployment and/or a single terminal status. Never removes running/queued jobs.
     clear: (qs?: DeleteJobsRequest) => this.delete<DeleteJobsResponse>(`${API.jobs.base}${buildQuery(qs as Record<string, string | number | boolean | undefined>)}`),
@@ -261,9 +263,18 @@ export class HolaSdk {
 
 // --- helpers ---
 
+// The SDK is consumed from Node (CLI, server) AND from the browser bundle
+// (packages/web imports this source directly), so `process` may genuinely not
+// exist. Read it off `globalThis` with its absence in the type rather than
+// relying on an ambient Node declaration the browser consumer does not load.
+function nodeEnv(): Record<string, string | undefined> | undefined {
+  return (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+}
+
 function inferBaseUrl() {
   // Prefer CLI/server env var first
-  if (typeof process !== 'undefined' && process.env?.HOLA_API_URL) return process.env.HOLA_API_URL;
+  const apiUrl = nodeEnv()?.HOLA_API_URL;
+  if (apiUrl) return apiUrl;
   // Vite-style for future web integration
   try {
     const viteUrl = (import.meta as { env?: { VITE_API_BASE_URL?: string } })?.env?.VITE_API_BASE_URL;
@@ -275,8 +286,7 @@ function inferBaseUrl() {
 }
 
 function inferToken() {
-  if (typeof process !== 'undefined' && process.env?.HOLA_TOKEN) return process.env.HOLA_TOKEN;
-  return undefined;
+  return nodeEnv()?.HOLA_TOKEN || undefined;
 }
 
 async function parseJson<T>(res: Response): Promise<T> {

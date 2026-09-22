@@ -1,15 +1,23 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { CreateDeploymentFromDraftRequest, FinalizeDraftResponse } from '@hola/shared';
 
 // #246: finalizeDraft must pass the chosen instance name (→ subdomain) and the
 // allow-multiple override through to the deployment create call.
-const finalize = vi.fn(async () => ({ ok: true }));
-const create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' }));
+// Declare the parameters: `vi.fn(async () => ...)` infers a zero-argument
+// function, so calling these through the mocked api below was a type error and
+// every `toHaveBeenCalledWith` assertion was checking an untyped call record.
+const finalize = vi.fn(
+  async (_draftId: string): Promise<FinalizeDraftResponse> => ({ spec: {}, checksum: 'x' })
+);
+const create = vi.fn(
+  async (_req: CreateDeploymentFromDraftRequest) => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' })
+);
 
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: { finalize: (id: string) => finalize(id) },
-    deployments: { create: (data: unknown) => create(data) },
+    deployments: { create: (data: CreateDeploymentFromDraftRequest) => create(data) },
   },
 }));
 

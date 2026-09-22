@@ -1,0 +1,26 @@
+{
+  /* The test environment. Everything the application project says still
+     applies (same strictness, same paths) — the only difference is that these
+     files run under vitest in Node-backed jsdom, so they get the Node globals
+     and the vitest globals that browser code must not have. Application
+     sources are pulled in here as imports, not as root files, so the strict
+     browser-only check in ./tsconfig.app.json remains the one that judges
+     them. */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    /* Application sources arrive here as imports; this one is a pure ambient
+       declaration (`vite/client`, for `import.meta.env`) that nothing imports,
+       so it has to be named explicitly or the test program loses it. */
+    "src/vite-env.d.ts",
+    "src/setupTests.ts",
+    "src/__tests__",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/**/*.spec.ts",
+    "src/**/*.spec.tsx"
+  ],
+  "exclude": []
+}

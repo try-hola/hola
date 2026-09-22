@@ -79,8 +79,11 @@ export function useOptimisticUpdates<T>() {
 
         setPendingUpdates(prev => new Map(prev.set(updateId, update)));
 
-        // Set up rollback timeout if specified
-        let rollbackTimer: number | undefined;
+        // Set up rollback timeout if specified. `ReturnType<typeof setTimeout>`
+        // rather than `number`: the browser returns a number and Node returns a
+        // Timeout object, and this module is compiled under both (jsdom tests
+        // run it with Node's timer types in scope).
+        let rollbackTimer: ReturnType<typeof setTimeout> | undefined;
         if (options.rollbackTimeout) {
           rollbackTimer = setTimeout(() => {
             rollbackUpdate(updateId);

@@ -2,6 +2,7 @@ import { API } from '@hola/shared';
 import type { ErrorResponse } from '@hola/shared';
 import { safeFetchEnhanced } from './error-enhanced';
 import { globalCache, CacheTTL } from './cache';
+import { nodeEnv, nodeProcess } from './runtime-env';
 
 // Environment-based configuration
 const getBaseUrl = (): string => {
@@ -11,10 +12,11 @@ const getBaseUrl = (): string => {
   }
   
   // Check for Node.js environment variable (for tests)
-  if (typeof process !== 'undefined' && process.env?.VITE_API_BASE_URL) {
-    return process.env.VITE_API_BASE_URL;
+  const fromNode = nodeEnv()?.VITE_API_BASE_URL;
+  if (fromNode) {
+    return fromNode;
   }
-  
+
   // In development with Vite, use the proxy (empty base URL)
   if (
     typeof import.meta !== 'undefined' && 
@@ -24,7 +26,7 @@ const getBaseUrl = (): string => {
   }
   
   // For tests or any environment without import.meta, use direct connection
-  if (typeof import.meta === 'undefined' || typeof process !== 'undefined') {
+  if (typeof import.meta === 'undefined' || nodeProcess() !== undefined) {
     return 'http://localhost:3001';
   }
   

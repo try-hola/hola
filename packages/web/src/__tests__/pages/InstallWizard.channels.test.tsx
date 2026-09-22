@@ -1,8 +1,13 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { CreateDraftRequest, CreateDraftResponse, Draft } from '@hola/shared';
+import type {
+  CreateDeploymentFromDraftRequest,
+  CreateDraftRequest,
+  CreateDraftResponse,
+  Draft,
+  PatchDeploymentRequest,
+} from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 
 // Spec 005 (beta channel UX), US1/US3/US4. Supersedes the old #428
@@ -28,6 +33,7 @@ function makeDraft(id: string, version: string): Draft {
     systemOverrides: {},
     appEnv: [],
     ports: [],
+    files: [],
   };
 }
 
@@ -48,8 +54,15 @@ const draftsApi = {
   finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
 };
 
-const create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' }));
-const updateDeployment = vi.fn(async () => ({ ok: true as const }));
+// Declare the request parameter: without it `vi.fn` infers a zero-argument
+// function and every `create.mock.calls[n][0]` assertion below indexes an
+// empty tuple.
+const create = vi.fn(
+  async (_req: CreateDeploymentFromDraftRequest) => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' })
+);
+const updateDeployment = vi.fn(
+  async (_deploymentId: string, _body: PatchDeploymentRequest) => ({ ok: true as const })
+);
 const subdomainAvailable = vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true }));
 
 // The app's declared channels, for the Channel radio group — mutable per test.
@@ -72,8 +85,8 @@ vi.mock('../../utils/api-hybrid', () => ({
     drafts: draftsApi,
     catalog: catalogApi,
     deployments: {
-      create: (data: unknown) => create(data),
-      update: (id: string, data: unknown) => updateDeployment(id, data),
+      create: (data: CreateDeploymentFromDraftRequest) => create(data),
+      update: (id: string, data: PatchDeploymentRequest) => updateDeployment(id, data),
       subdomainAvailable: (subdomain: string) => subdomainAvailable(subdomain),
     },
     restoreCandidates: (appId: string) => restoreCandidates(appId),
@@ -364,7 +377,7 @@ describe('InstallWizard already-installed conflict (spec 005 US4)', () => {
     fireEvent.click(installSeparate);
 
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
-    const secondCallArg = create.mock.calls[1][0] as { allowMultiple?: boolean };
+    const secondCallArg = create.mock.calls[1]![0];
     expect(secondCallArg.allowMultiple).toBe(true);
   });
 
