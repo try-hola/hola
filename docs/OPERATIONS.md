@@ -176,6 +176,84 @@ hola refresh    # web UI refresh button hits the same force-refresh endpoint
 hola install <appId>
 ```
 
+#### Bundle signature verification
+
+**Read this first: no bundle Hola ships with is signed.** The official
+`try-hola/apps` catalog does not sign its OCI bundles, so there is nothing for
+signature verification to check, and **no bundle should be understood as
+cryptographically verified today.** What the allowlist above gives you is a
+typo-squat guard plus registry TLS and GHCR's own integrity — not publisher
+authentication.
+
+Until [#527](https://github.com/try-hola/hola/issues/527) lands (the catalog
+publishing cosign signatures), the platform's job is to say so honestly rather
+than to imply a guarantee it cannot make. Before F05 it did the opposite:
+`verifySignature` ran `cosign version` and reported every bundle verified.
+
+`HOLA_SIGNATURE_POLICY` decides what the host does with the verdict:
+
+| Value | What happens | Blocks an install? |
+| --- | --- | --- |
+| `none` | No verification is attempted and nothing is claimed. | No |
+| `optional` *(default)* | Verification is attempted; the verdict is logged, with a **warning** whenever a bundle is not verified. | No |
+| `required` | Only a `verified` verdict may install. `unsigned` and `unverifiable` both fail the pull — on a warm cache as well as a fresh one. | Yes |
+
+Be clear-eyed about `optional`: over a corpus that carries no signatures it
+**gates exactly like `none`**. The only difference is that you are told. It is
+the default because it is the setting that starts enforcing the day the catalog
+starts signing, and because the warning is the honest report of the current
+state.
+
+A verdict is one of three things, because a boolean cannot say "nothing was
+checked" — and that conflation was the bug:
+
+- **`verified`** — a signature over *this manifest digest* matched the trust
+  root you configured. Verification is always pinned to `<repo>@sha256:...`,
+  never to a tag; a mutable tag is not a verifiable identity.
+- **`unsigned`** — a determinate negative: the registry holds no signature over
+  this digest that your trust root accepts. (Both "no signature at all" and "a
+  signature we do not trust" land here; the log message distinguishes them.)
+- **`unverifiable`** — unknown: no trust root configured, no digest resolvable,
+  cosign missing, registry unreachable. Never treated as success.
+
+**Configuring a trust root.** There is deliberately no default — a built-in key
+or identity would look like verification while proving nothing about who signed.
+Set **either** key-based **or** keyless trust, never both:
+
+```bash
+# key-based
+HOLA_SIGNATURE_TRUST_KEY=/etc/hola/cosign.pub
+
+# keyless (Sigstore); an identity with no issuer is not a trust root, so both
+# are required
+HOLA_SIGNATURE_TRUST_IDENTITY=https://github.com/try-hola/apps/.github/workflows/release.yml@refs/heads/main
+HOLA_SIGNATURE_TRUST_ISSUER=https://token.actions.githubusercontent.com
+```
+
+Verification provenance is stamped beside the bundle in the cache
+(`.signature-verdict.json`, alongside the existing `.oras-digest` marker). Only
+a `verified` decision is ever persisted, and it is reused only while **both** the
+bundle's digest and the trust material's fingerprint are unchanged — so
+re-pointing `HOLA_SIGNATURE_TRUST_*`, rotating the key file in place, or a
+same-tag republish all force re-evaluation. A negative verdict is never
+persisted, so it can never go stale into a false refusal.
+
+**What `required` costs you today.** It needs all three of a signed catalog, a
+configured trust root, and cosign in the server image — and the stock image
+deliberately ships without cosign (see `packages/server/Dockerfile`). Setting
+`required` now therefore stops every new install, with an error naming the
+missing piece; already-installed apps keep running and stay manageable. That is
+the intended fail-closed behaviour, not a bug. The server does **not** refuse to
+start on it: the setting only affects bundle pulls, and taking the host down
+would also remove start/stop/logs/backup for apps you already run. An
+unsatisfiable configuration is instead logged at `error` on startup, reported by
+the bundle service's health check, and repeated in every install it blocks.
+
+An unrecognised `HOLA_SIGNATURE_POLICY` value (a typo like `requird`) resolves
+to **`required`**, not to the default — it used to be cast blindly and behave as
+`optional`, so a typo silently downgraded the host. Refusing installs is
+recoverable; quietly not verifying is not.
+
 You don't have to know the glob up front. Adding a source in the dashboard reads
 the catalog first and lists the registries its apps actually publish from, with
 a tick box per registry — grant them there and the source works from its first

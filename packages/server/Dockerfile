@@ -9,9 +9,23 @@ WORKDIR /app
 # none of these, so install them here — before the source COPY so this layer
 # caches independently of application changes.
 #
-# Signing (cosign) is intentionally NOT installed: the default signaturePolicy is
-# 'optional', under which a missing cosign only warns (verifySignature degrades
-# gracefully). If signaturePolicy='required' is ever adopted, install cosign too.
+# Signing (cosign) is intentionally NOT installed — and the reason this comment
+# used to give was dangerous (F05). It said a missing cosign "degrades
+# gracefully" and that adopting signaturePolicy=required just meant installing
+# cosign. The opposite was true: `verifySignature` ran `cosign version` and
+# returned verified=true, so cosign ABSENT failed closed while cosign PRESENT
+# passed having checked nothing. Installing it was what converted a safe error
+# into a false pass — the posture degraded the more diligent the operator was.
+#
+# That inversion is fixed (cosign present with no configured trust root now
+# yields `unverifiable`, which `required` refuses), so cosign is no longer
+# harmful here — it is simply not yet useful: no bundle in the shipped catalog
+# is signed, so there is nothing for it to verify. Satisfying
+# HOLA_SIGNATURE_POLICY=required needs all three of a signed catalog, a
+# configured trust root (HOLA_SIGNATURE_TRUST_*), and cosign in this image; an
+# operator who has the first two can add the third in a derived image. Adding it
+# here before the catalog signs would only grow the image and imply a capability
+# the platform cannot yet use. See docs/OPERATIONS.md#bundle-signature-verification.
 #
 # GHCR auth: try-hola/* app packages are public, so no credentials / `oras login`
 # are needed. Pulling private packages would require a GHCR token + `oras login`

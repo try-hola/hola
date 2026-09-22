@@ -7,9 +7,20 @@ import { suggestRegistryGlob, type RefNotAllowedDetails } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
 import { getHolaDataDir } from '../../config/paths';
 import type { ServiceHealth, HealthCheckable } from './types';
-import { catalogConfig } from '../../config/catalog';
+import { catalogConfig, type CatalogConfig, type SignaturePolicy, type SignatureTrust } from '../../config/catalog';
 import { BundleError } from '../../middleware/error-mapping';
 import { BundleCacheManager } from './bundle-cache';
+import {
+  buildCosignVerifyCommand,
+  classifyCosignFailure,
+  describeTrust,
+  evaluateSignatureConfig,
+  isTrustConfigured,
+  pinRefToDigest,
+  shellEscape,
+  trustFingerprint,
+  type SignatureVerdict,
+} from './bundle-signature';
 
 const execAsync = promisify(exec);
 
@@ -53,10 +64,23 @@ export type EnsurePulledOpts = {
   extraAllowlist?: string[];
 };
 
+/**
+ * What to verify. Verification is a question about a REGISTRY artifact — a
+ * repository plus a manifest digest — not about a local directory, which is why
+ * this no longer takes a bundle path: the old `verifySignature(bundlePath)`
+ * signature could not express the thing cosign actually checks.
+ */
+export type VerifySignatureRequest = {
+  ociRef: string;
+  /** The manifest digest to pin verification to. Absent => `unverifiable`. */
+  digest?: string;
+  credentials?: PullCredentials;
+};
+
 export interface BundleService {
   ensurePulled(opts: EnsurePulledOpts): Promise<BundleInfo>;
   validateLayout(bundlePath: string): Promise<{ ok: boolean; errors: string[]; warnings: string[] }>;
-  verifySignature?(bundlePath: string): Promise<{ verified: boolean; error?: string }>;
+  verifySignature?(req: VerifySignatureRequest): Promise<SignatureVerdict>;
   cleanup?(): Promise<{ evicted: number; freedBytes: number }>;
   healthCheck(): Promise<ServiceHealth>;
 }
@@ -64,19 +88,75 @@ export interface BundleService {
 /** Command runner seam so tests can stub the `oras`/`cosign` invocations. */
 export type CommandRunner = (cmd: string) => Promise<{ stdout: string; stderr: string }>;
 
+/**
+ * The host's signature posture, resolved once and injectable so a test can
+ * exercise every policy without cosign installed (which is how F05's evidence
+ * was produced in the first place).
+ */
+export interface SignatureSettings {
+  policy: SignaturePolicy;
+  trust: SignatureTrust;
+  /**
+   * The configuration cannot do what it claims (e.g. `required` with no trust
+   * root). Reported at construction, in `healthCheck`, and in every install it
+   * blocks — but deliberately NOT fatal at startup: see `enforceSignaturePolicy`.
+   */
+  configError?: string;
+}
+
+export function resolveSignatureSettings(cfg: Pick<CatalogConfig, 'signaturePolicy' | 'signatureTrust' | 'signaturePolicyConfigError'> = catalogConfig): SignatureSettings {
+  const policy = cfg.signaturePolicy;
+  const trust = cfg.signatureTrust;
+  return {
+    policy,
+    trust,
+    configError: cfg.signaturePolicyConfigError ?? evaluateSignatureConfig(policy, trust),
+  };
+}
+
+/** Provenance of a signature decision, persisted beside the bundle. */
+type VerdictMarker = {
+  status: 'verified';
+  /** The digest the verdict is about — a different digest is a different artifact. */
+  digest: string;
+  /** Fingerprint of the trust material that produced it — rotated trust invalidates it. */
+  trust: string;
+  verifiedAt: string;
+};
+
 export class RealBundleService implements BundleService, HealthCheckable {
   private logger = getLogger().child({ service: 'RealBundleService' });
   private baseCache: string;
   private cacheManager: BundleCacheManager;
   private run: CommandRunner;
+  private signature: SignatureSettings;
 
-  constructor(baseCache = join(getHolaDataDir(), 'cache', 'bundles'), run: CommandRunner = execAsync) {
+  constructor(
+    baseCache = join(getHolaDataDir(), 'cache', 'bundles'),
+    run: CommandRunner = execAsync,
+    signature: SignatureSettings = resolveSignatureSettings(),
+  ) {
     this.baseCache = baseCache;
     this.cacheManager = new BundleCacheManager(baseCache);
     this.run = run;
+    this.signature = signature;
+    if (signature.configError) {
+      // At `error`, not `debug`. The predecessor's one admission that it verified
+      // nothing was a debug line, which is why nobody noticed for so long.
+      this.logger.error('Bundle signature configuration is unsatisfiable', undefined, {
+        policy: signature.policy,
+        trust: describeTrust(signature.trust),
+        configError: signature.configError,
+      });
+    }
   }
 
   async healthCheck(): Promise<ServiceHealth> {
+    // An unsatisfiable signature configuration is a health fact, not just a
+    // per-install surprise: it means every install from now on will be refused.
+    if (this.signature.configError) {
+      return { healthy: false, lastCheck: new Date(), error: this.signature.configError };
+    }
     try {
       await this.getOrasVersion();
       return { healthy: true, lastCheck: new Date() };
@@ -130,7 +210,15 @@ export class RealBundleService implements BundleService, HealthCheckable {
         const cachedDigest = this.readDigestMarker(dest);
         if (!remoteDigest || !cachedDigest || remoteDigest === cachedDigest) {
           this.logger.debug('Bundle already cached', { appId: opts.appId, version: opts.version });
-          return { localPath: dest, digest: cachedDigest ?? remoteDigest, ...this.safeStat(dest) };
+          // F05: the signature gate runs on the cache hit too. It used to sit
+          // only on the fresh-pull path below, so tightening the policy on a host
+          // with a warm cache enforced nothing — every already-cached bundle
+          // returned here first. (The cache path was never "trusts file
+          // presence": it re-resolves the remote digest and re-pulls when stale.
+          // The gap was specifically that policy was never evaluated.)
+          const served = cachedDigest ?? remoteDigest;
+          await this.enforceSignaturePolicy({ dest, ociRef: opts.ociRef, digest: served, credentials: opts.credentials });
+          return { localPath: dest, digest: served, ...this.safeStat(dest) };
         }
         this.logger.info('Cached bundle digest is stale; re-pulling', {
           appId: opts.appId, version: opts.version, cachedDigest, remoteDigest,
@@ -171,29 +259,20 @@ export class RealBundleService implements BundleService, HealthCheckable {
         if (authDir) { try { rmSync(authDir, { recursive: true, force: true }); } catch { /* best effort */ } }
       }
 
-      // Optional signature verify-if-present
-      if (catalogConfig.signaturePolicy !== 'none') {
-        const verifyResult = await this.verifySignature(dest);
-        if (catalogConfig.signaturePolicy === 'required' && !verifyResult.verified) {
-          this.logger.error('Bundle signature verification failed', undefined, { ref: opts.ociRef, error: verifyResult.error });
-          rmSync(dest, { recursive: true, force: true });
-          throw new BundleError(
-            'SIGNATURE_VERIFICATION_FAILED',
-            `SIGNATURE_VERIFICATION_FAILED: ${opts.ociRef}${verifyResult.error ? `: ${verifyResult.error}` : ''}`,
-          );
-        } else if (!verifyResult.verified) {
-          this.logger.warn('Bundle signature verification failed but policy is optional', { ref: opts.ociRef, error: verifyResult.error });
-        }
-      }
-
       // Stamp the digest we just pulled so a FUTURE call can tell a same-tag
       // republish apart from an untouched cache. Reuse the digest resolved
       // above when this was a stale-cache re-pull; resolve fresh otherwise
       // (first-ever pull for this version). Best-effort: a resolve/write
       // failure here just means the next call re-verifies via a full pull
       // comparison rather than trusting a marker — never fails the install.
+      //
+      // Resolved BEFORE the signature gate (it used to come after): the digest
+      // is what verification is pinned to, since a tag is mutable and therefore
+      // not a verifiable identity.
       const pulledDigest = remoteDigest ?? await this.resolveDigest(opts.ociRef, opts.credentials);
       if (pulledDigest) this.writeDigestMarker(dest, pulledDigest);
+
+      await this.enforceSignaturePolicy({ dest, ociRef: opts.ociRef, digest: pulledDigest, credentials: opts.credentials });
 
       return { localPath: dest, digest: pulledDigest, ...this.safeStat(dest) };
     } finally {
@@ -267,26 +346,159 @@ export class RealBundleService implements BundleService, HealthCheckable {
   }
 
   /**
-   * Optional signature verification using cosign (if available)
+   * Verify a bundle's signature against the configured trust root.
+   *
+   * Returns a three-state verdict (see `bundle-signature.ts`) because a boolean
+   * cannot say "nothing was checked" — and that conflation was F05: the
+   * predecessor ran `cosign version` and returned `verified: true`.
+   *
+   * This never throws for a verification outcome; a failure IS a verdict. Only
+   * the policy gate decides whether a verdict blocks an install.
    */
-  async verifySignature(bundlePath: string): Promise<{ verified: boolean; error?: string }> {
-    try {
-      // Check if cosign is available
-      await this.run('cosign version');
-      
-      // For now, just return verified=true since we don't have a specific signature to verify
-      // In a real implementation, this would verify against a known public key
-      this.logger.debug('Signature verification skipped (not implemented)', { bundlePath });
-      return { verified: true };
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      
-      if (errorMessage.includes('command not found') || errorMessage.includes('not found')) {
-        return { verified: false, error: 'cosign not available' };
-      }
-      
-      return { verified: false, error: errorMessage };
+  async verifySignature(req: VerifySignatureRequest): Promise<SignatureVerdict> {
+    const { trust, configError } = this.signature;
+
+    if (configError) {
+      return { status: 'unverifiable', digest: req.digest, reason: configError };
     }
+    if (!isTrustConfigured(trust)) {
+      // No invented trust root: a hardcoded key or identity would look like
+      // verification while proving nothing about who signed.
+      return {
+        status: 'unverifiable',
+        digest: req.digest,
+        reason:
+          'no signing trust root is configured, so there is nothing to verify against. Set ' +
+          'HOLA_SIGNATURE_TRUST_KEY (a cosign public key), or both HOLA_SIGNATURE_TRUST_IDENTITY and ' +
+          'HOLA_SIGNATURE_TRUST_ISSUER.',
+      };
+    }
+    if (!req.digest) {
+      return {
+        status: 'unverifiable',
+        reason:
+          `could not resolve a manifest digest for ${req.ociRef}, and a mutable tag is not a verifiable ` +
+          'identity (the registry may be unreachable)',
+      };
+    }
+
+    const pinned = pinRefToDigest(req.ociRef, req.digest);
+    // cosign has no `--registry-config`; a private artifact's credentials travel
+    // via DOCKER_CONFIG pointing at the same kind of scoped 0o600 auth dir the
+    // `oras` path uses, so the token never lands on argv where `ps` shows it.
+    let authDir: string | undefined;
+    try {
+      if (req.credentials) authDir = this.writeRegistryAuth(req.credentials);
+      const cmd = buildCosignVerifyCommand(pinned, trust, { dockerConfigDir: authDir });
+      const { stdout, stderr } = await this.run(cmd);
+      this.logger.debug('cosign verify output', { stdout: stdout?.slice(0, 500), stderr: stderr?.slice(0, 500) });
+      return { status: 'verified', digest: req.digest, trust: trustFingerprint(trust) };
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const { status, reason } = classifyCosignFailure(raw);
+      return { status, digest: req.digest, reason };
+    } finally {
+      if (authDir) { try { rmSync(authDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+    }
+  }
+
+  /**
+   * Apply `signaturePolicy` to a bundle sitting at `dest`. Runs on BOTH the
+   * fresh-pull and cache-hit paths — a policy that only bit on a fresh pull
+   * enforced nothing on a host with a warm cache.
+   *
+   * Deliberately not fatal at startup when the configuration is unsatisfiable:
+   * this server also manages already-installed apps (start/stop/logs/backups),
+   * and refusing to boot over a catalog-pull setting would remove that
+   * management for a setting whose only effect is installs. `required` is also
+   * not intrinsically unsatisfiable — a signed catalog plus a trust root plus a
+   * cosign-bearing image satisfies it — so a hard startup refusal would forbid
+   * the correct configuration too. Instead: loud at construction, loud in
+   * `healthCheck`, and loud on every install it blocks.
+   */
+  private async enforceSignaturePolicy(args: {
+    dest: string;
+    ociRef: string;
+    digest?: string;
+    credentials?: PullCredentials;
+  }): Promise<SignatureVerdict | undefined> {
+    const { policy, trust, configError } = this.signature;
+    if (policy === 'none') return undefined; // nothing attempted, nothing claimed
+
+    // Reuse persisted provenance only when it is about THIS digest and THIS
+    // trust material. Only `verified` is ever persisted, so a stale negative
+    // can never be reused as a decision — every non-verified outcome is
+    // re-evaluated on every pull.
+    let verdict = this.readVerdictMarker(args.dest, args.digest);
+    let fromCache = Boolean(verdict);
+    if (!verdict) {
+      verdict = await this.verifySignature({ ociRef: args.ociRef, digest: args.digest, credentials: args.credentials });
+      if (verdict.status === 'verified') this.writeVerdictMarker(args.dest, verdict);
+      else this.clearVerdictMarker(args.dest);
+      fromCache = false;
+    }
+
+    if (verdict.status === 'verified') {
+      this.logger.info('Bundle signature verified', {
+        ref: args.ociRef, digest: verdict.digest, trust: describeTrust(trust), policy, provenance: fromCache ? 'cached' : 'fresh',
+      });
+      return verdict;
+    }
+
+    if (policy === 'required') {
+      this.logger.error('Bundle refused: signature policy is `required` and the bundle is not verified', undefined, {
+        ref: args.ociRef, digest: args.digest, status: verdict.status, reason: verdict.reason, trust: describeTrust(trust),
+      });
+      rmSync(args.dest, { recursive: true, force: true });
+      throw new BundleError(
+        'SIGNATURE_VERIFICATION_FAILED',
+        `SIGNATURE_VERIFICATION_FAILED: ${args.ociRef} is ${verdict.status} under HOLA_SIGNATURE_POLICY=required: ${verdict.reason}`,
+        { details: { ref: args.ociRef, digest: args.digest, status: verdict.status, reason: verdict.reason, policy, configError } },
+      );
+    }
+
+    // `optional`: report, never block. Said plainly, because the honest state
+    // used to be a debug line and the platform reported every bundle verified.
+    this.logger.warn('Bundle is NOT cryptographically verified; HOLA_SIGNATURE_POLICY=optional does not block it', {
+      ref: args.ociRef, digest: args.digest, status: verdict.status, reason: verdict.reason, trust: describeTrust(trust),
+    });
+    return verdict;
+  }
+
+  private verdictMarkerPath(dest: string): string {
+    return join(dest, '.signature-verdict.json');
+  }
+
+  /**
+   * Read persisted provenance, accepting it only if it is still about the same
+   * artifact and the same trust material. Anything else (different digest,
+   * rotated key, changed identity, missing/corrupt file) returns undefined and
+   * forces re-evaluation — which is what makes a trust change invalidate a
+   * previous decision.
+   */
+  private readVerdictMarker(dest: string, digest: string | undefined): SignatureVerdict | undefined {
+    if (!digest) return undefined;
+    try {
+      const parsed = JSON.parse(readFileSync(this.verdictMarkerPath(dest), 'utf8')) as VerdictMarker;
+      if (parsed?.status !== 'verified') return undefined;
+      if (parsed.digest !== digest) return undefined;
+      if (parsed.trust !== trustFingerprint(this.signature.trust)) return undefined;
+      return { status: 'verified', digest: parsed.digest, trust: parsed.trust };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private writeVerdictMarker(dest: string, verdict: SignatureVerdict): void {
+    if (verdict.status !== 'verified' || !verdict.digest || !verdict.trust) return;
+    const marker: VerdictMarker = {
+      status: 'verified', digest: verdict.digest, trust: verdict.trust, verifiedAt: new Date().toISOString(),
+    };
+    try { writeFileSync(this.verdictMarkerPath(dest), JSON.stringify(marker), { mode: 0o644 }); } catch { /* best effort */ }
+  }
+
+  private clearVerdictMarker(dest: string): void {
+    try { rmSync(this.verdictMarkerPath(dest), { force: true }); } catch { /* best effort */ }
   }
 
   /**
@@ -396,9 +608,4 @@ export function matchesAllowlist(pattern: string, ref: string): boolean {
   const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\\\*/g, '.*');
   const re = new RegExp('^' + escaped + '(?:$|[:/])');
   return re.test(ref);
-}
-
-function shellEscape(s: string): string {
-  if (/^[A-Za-z0-9@%_+=:,./-]*$/.test(s)) return s;
-  return `'${s.replace(/'/g, "'\\''")}'`;
 }

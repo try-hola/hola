@@ -141,33 +141,9 @@ describe('Catalog Refresh and OCI Integration', () => {
     });
   });
 
-  describe('Signature Verification', () => {
-    test('should verify signatures when policy is enabled', async () => {
-      try {
-        const services = getServices();
-        const bundles = services.bundles;
-
-        // Test signature verification if available
-        if ('verifySignature' in bundles) {
-          try {
-            const testRef = 'ghcr.io/try-hola/oci-test:latest';
-            const info = await bundles.ensurePulled({ appId: 'sig-test', version: 'latest', ociRef: testRef });
-            await bundles.verifySignature!(info.localPath);
-            // If no error, signature verification passed
-            expect(true).toBe(true);
-          } catch (error) {
-            // Signature verification may fail due to missing signature or cosign
-            console.warn('Signature verification test skipped:', error);
-            expect(true).toBe(true);
-          }
-        } else {
-          console.log('Signature verification not implemented in current bundle service');
-          expect(true).toBe(true);
-        }
-      } catch (error) {
-        console.warn('Signature verification test skipped:', error);
-        expect(true).toBe(true);
-      }
-    });
-  });
+  // Signature verification used to be "tested" here by a block whose every
+  // branch ended in `expect(true).toBe(true)` — it asserted nothing, which is
+  // part of how F05 survived. The real, revert-proof assertions live in
+  // `signature-verification.test.ts`: they drive RealBundleService through the
+  // CommandRunner seam, so they need neither a network nor cosign.
 });
