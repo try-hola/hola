@@ -13,8 +13,8 @@
  * REQUEST id, not a single record.
  */
 
-import { getLogger } from '../../lib/logger';
 import type { StorageService } from './storage';
+import { JsonRecordStore } from './json-record-store';
 import type { RestoreRequestStatus } from '@hola/shared';
 
 const STORE_PATH = 'config/restore-broker.json';
@@ -170,9 +170,19 @@ export function pruneTerminalRequests(
  * crash.
  */
 export class RestoreBrokerStateStore {
-  private logger = getLogger().child({ service: 'RestoreBrokerState' });
+  // Read/write only (#497). Everything below — the serialising lock, retention
+  // pruning, `transition`'s compare-and-set, and the per-request queries — is
+  // this store's own model and deliberately not shared: a capture has one open
+  // operation per host, a restore has several.
+  private readonly records: JsonRecordStore<RestoreRequestStore>;
 
-  constructor(private storage: StorageService) {}
+  constructor(storage: StorageService) {
+    this.records = new JsonRecordStore<RestoreRequestStore>(storage, {
+      path: STORE_PATH,
+      label: 'restore broker state',
+      service: 'RestoreBrokerState',
+    });
+  }
 
   /**
    * Serialises every read-modify-write against the store (spec 008, FR-028).
@@ -223,25 +233,11 @@ export class RestoreBrokerStateStore {
   }
 
   async read(): Promise<RestoreRequestStore> {
-    try {
-      if (!(await this.storage.fileExists(STORE_PATH))) return {};
-      return JSON.parse(await this.storage.readFileAsString(STORE_PATH)) as RestoreRequestStore;
-    } catch (err) {
-      this.logger.warn('Unreadable restore broker state; treating it as empty', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return {};
-    }
+    return this.records.read();
   }
 
   async write(state: RestoreRequestStore): Promise<void> {
-    try {
-      await this.storage.writeFile(STORE_PATH, JSON.stringify(state, null, 2));
-    } catch (err) {
-      this.logger.warn('Could not persist restore broker state', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    return this.records.write(state);
   }
 
   /**

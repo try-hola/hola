@@ -34,8 +34,8 @@
  * (`assertProviderAllowed`), so "the open prepare" is unambiguous.
  */
 
-import { getLogger } from '../../lib/logger';
 import type { StorageService } from './storage';
+import { JsonRecordStore } from './json-record-store';
 
 const STORE_PATH = 'config/backup-broker.json';
 
@@ -92,33 +92,28 @@ export function isPrepareExpired(state: BackupBrokerState, timeoutMs: number, no
  * and the cost of forgetting one is at worst a dump cleaned up one backup later.
  */
 export class BackupBrokerStateStore {
-  private logger = getLogger().child({ service: 'BackupBrokerState' });
+  // Read/write only. `update()` below stays here because it is this store's
+  // own semantics — a bare read-modify-write, with no lock and no pruning,
+  // because there is one record and one open operation per host (#497).
+  private readonly records: JsonRecordStore<BackupBrokerState>;
 
-  constructor(private storage: StorageService) {}
+  constructor(storage: StorageService) {
+    this.records = new JsonRecordStore<BackupBrokerState>(storage, {
+      path: STORE_PATH,
+      label: 'backup broker state',
+      service: 'BackupBrokerState',
+    });
+  }
 
   async read(): Promise<BackupBrokerState> {
-    try {
-      if (!(await this.storage.fileExists(STORE_PATH))) return {};
-      return JSON.parse(await this.storage.readFileAsString(STORE_PATH)) as BackupBrokerState;
-    } catch (err) {
-      this.logger.warn('Unreadable backup broker state; treating it as empty', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return {};
-    }
+    return this.records.read();
   }
 
   async write(state: BackupBrokerState): Promise<void> {
-    try {
-      await this.storage.writeFile(STORE_PATH, JSON.stringify(state, null, 2));
-    } catch (err) {
-      // Losing the record costs bookkeeping, never correctness of the hooks
-      // themselves — so it must not fail the backup the provider is mid-way
-      // through announcing.
-      this.logger.warn('Could not persist backup broker state', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    // Losing the record costs bookkeeping, never correctness of the hooks
+    // themselves — so a failed write must not fail the backup the provider is
+    // mid-way through announcing. That policy lives in JsonRecordStore.
+    return this.records.write(state);
   }
 
   async update(patch: (current: BackupBrokerState) => BackupBrokerState): Promise<BackupBrokerState> {
