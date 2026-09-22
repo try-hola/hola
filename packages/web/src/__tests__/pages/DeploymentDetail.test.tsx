@@ -987,6 +987,35 @@ describe('DeploymentDetail backup coverage + grants (spec 004)', () => {
 
     await screen.findByText('App'); // details card has rendered
     expect(screen.queryByText('Grants')).not.toBeInTheDocument();
+    expect(screen.queryByText('Legacy grants')).not.toBeInTheDocument();
+  });
+
+  // F06: a migrated legacy privilege had NO operator-facing surface before —
+  // an app could hold read access to every app's data and every stored env
+  // record, and the only trace was a server-side `warn`.
+  it('shows a Legacy grants fact, distinct from Grants, for a migrated legacy privilege', async () => {
+    deploymentsApi.byId.mockResolvedValueOnce({
+      ...deployment,
+      contracts: { legacyGranted: ['apps-data'] },
+    });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=overview`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(await screen.findByText('Legacy grants')).toBeInTheDocument();
+    // The privilege is named in the same words the consent step uses, and the
+    // row says the thing the operator could not previously know.
+    expect(
+      screen.getByText(/Read the data of every installed app.*never consented to/),
+    ).toBeInTheDocument();
+    // Never folded into "Grants" — nobody approved this one.
+    expect(screen.queryByText('Grants')).not.toBeInTheDocument();
   });
 });
 

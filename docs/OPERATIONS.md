@@ -474,6 +474,29 @@ existing provider and telling you to uninstall it first. A pair recorded
 before this rule existed (rare) is flagged as a warning on the Backups page
 rather than silently resolved — uninstall one of them.
 
+#### Legacy grants (upgrading from a pre-contract backup app)
+
+Before the contract model, a backup app asked for its read-only view of every
+app's data with a manifest line (`consumes: apps-data`) that you were never
+shown — no consent step, no record on the install. That route is closed:
+installing an app whose bundle still declares it is now **refused**, naming
+`backup@1` as what the bundle should declare instead.
+
+An app that already held that access when you upgrade Hola **keeps it**, so a
+working backup does not silently stop covering things. The upgrade records it
+once, on that install, and the app's detail page now shows a **Legacy grants**
+row — "Read the data of every installed app — never consented to". That row is
+the first time this privilege has ever been visible; if you do not recognise
+the app holding it, uninstall it. To put it under normal consent instead,
+upgrade the app to a release that declares `provides: ["backup@1"]` and
+re-install it, approving the grant when the wizard asks. The legacy grant stops
+applying the moment the app is running a release that no longer declares the
+old line, so it cannot outlive the declaration that earned it.
+
+The one-time upgrade leaves `config/legacy-apps-data-migration.json` in Hola's
+data directory, listing what it migrated. Do not delete it — it is what stops
+the migration running a second time.
+
 ### Restore-on-install
 
 During an **install**, you can pick an existing deployment of the same app on

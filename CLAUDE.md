@@ -78,8 +78,11 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   change (a bundle bolt-on renders it, e.g. Homepage's dashboard). `apps-data` →
   the server injects a **read-only** identity mount of the apps root
   (`materializeCompose` → `compose-mounts.ts`), granting a trusted app (e.g. the
-  `backrest` backup app) read access to all app data. `apps-data` is privileged;
-  reserve it for trusted catalog apps.
+  `backrest` backup app) read access to all app data. `apps-data` is **no longer
+  requestable this way** (see F06 below) — ADR 0004 §4 made it the provider grant
+  of `backup@1`, and a manifest still declaring it is refused at install;
+  `app-registry`, which publishes a feed into the app's own data root and grants
+  nothing cross-app, is unaffected.
 - **Capability contracts (ADR 0004; cardinality + container-logs in spec 004).**
   A contract names a two-sided integration: a **provider** performs it
   (`provides`), **acceptors** opt in to being a subject (`accepts`). Acceptor
@@ -109,7 +112,43 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `providerGrant` cannot widen an existing install (the new kind is dropped and
   warned about, naming the deployment, the ref and both kinds). A record
   carrying refs but no privileges is pre-#496 and is backfilled once from
-  today's table, then held.
+  today's table, then held. A privilege reaches a container by exactly two
+  routes — consented (`grantedPrivileges`) or migrated-legacy
+  (`legacyGrantedPrivileges`, F06); a manifest alone is never one of them.
+- **The legacy apps-data declaration is not a self-service grant (F06).**
+  `materializeCompose` had a compatibility branch honouring ADR 0002's
+  `consumes: apps-data` straight off the active manifest, so **any** bundle —
+  including one installed today — could take a read-only identity mount of the
+  whole apps root from one manifest line, with nothing shown to the operator but
+  a server-side `warn`. That root holds every app's data root *and* the sibling
+  `.hola/<id>/` environment records, which carry secrets (#478), so this was
+  cross-app credential access on self-declaration. The shim's own comment named
+  the condition for its deletion ("once the catalog has shipped `provides:
+  backup@1`"), which the catalog now meets — but deleting it outright would
+  silently un-mount a backup app installed *before* that, and a backup that
+  quietly stops covering things is the failure the contract model exists to
+  prevent. So the behaviour is kept and the **self-service** removed, in three
+  parts. (1) `createFromDraft` **refuses** a new install whose finalized manifest
+  declares the capability (`LEGACY_CAPABILITY_REFUSED`), naming `backup@1` —
+  refused rather than silently unmounted for the same reason
+  `GRANT_CONSENT_REQUIRED` refuses: an app that asks for cross-app data and is
+  quietly given none looks healthy and protects nothing. (2) A **one-shot
+  migration** (`migrateLegacyAppsDataGrants`, shaped after #496's backfill) runs
+  at the first rehydration after the upgrade — the deployments in the map at that
+  instant *are* the pre-existing ones — and stamps each qualifying record with
+  `legacyGrantedPrivileges: ['apps-data']`. It is fenced by a persisted marker
+  (`config/legacy-apps-data-migration.json`) written **before** any record is
+  touched: the fence, not the per-record condition, is what stops a `promote`
+  onto a legacy-declaring release from being stamped on a later boot (`promote`
+  has no consent step of its own), and marker-first is the fail-closed order — a
+  crash costs an install its mount (loud, recoverable) rather than handing out
+  privilege. (3) Materialisation grants the legacy route only on `stamp ∩ what
+  the active release still declares`, so it **decays**: once the app runs a
+  release declaring `provides` instead, consent is the only way back in. The
+  privilege is surfaced for the first time as
+  `DeploymentContracts.legacyGranted`, rendered as its own "Legacy grants" row on
+  the detail page — deliberately never folded into "Grants", because nobody
+  consented to it.
 - **Auth/SSO (Authentik).** `ProvisionerService` (`services/core/provisioner.ts`)
   provisions per-app auth at deploy time for three modes declared in the app
   manifest's `auth` block: `native-oidc` (env injection and/or a post-deploy setup

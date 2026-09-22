@@ -520,24 +520,6 @@ describe('Auth provisioning lifecycle', () => {
     }
   });
 
-  test('legacy shim: `consumes: apps-data` still injects the mount for an app installed before ADR 0004', async () => {
-    const prev = process.env.HOLA_APPS_BIND_ROOT;
-    const base = join(dataRoot, 'apps');
-    process.env.HOLA_APPS_BIND_ROOT = base;
-    try {
-      const sys = makeSystem({ consumes: ['apps-data'] });
-      const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
-      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
-
-      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
-      const doc = parse(raw) as { services: Record<string, { volumes?: string[] }> };
-      expect(doc.services.gitea.volumes).toContain(`${base}:${base}:ro`);
-    } finally {
-      if (prev === undefined) delete process.env.HOLA_APPS_BIND_ROOT;
-      else process.env.HOLA_APPS_BIND_ROOT = prev;
-    }
-  });
-
   test('no apps-data capability: no apps-root mount injected', async () => {
     const sys = makeSystem({ auth: undefined });
     const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
