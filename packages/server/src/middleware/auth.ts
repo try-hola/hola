@@ -257,7 +257,12 @@ export function getRequiredCapability(path: string, method: string): Capability 
     { pattern: /^\/api\/contracts\/restore\/requests\/[^/]+\/claim$/, method: 'POST', capability: 'contract:restore' },
     { pattern: /^\/api\/contracts\/restore\/requests\/[^/]+\/complete$/, method: 'POST', capability: 'contract:restore' },
 
-    // Backup operations
+    // Backup operations. No such route exists today — both mutations were
+    // deleted for reporting success without performing one (F12) — but the
+    // rules stay deliberately: they are the one place this host records that
+    // a backup mutation is privileged, and without them the generic
+    // mutating-method default below would silently guard any future real
+    // implementation with `write:deployments` instead of `write:backups`.
     { pattern: /^\/api\/backups/, method: 'POST', capability: 'write:backups' },
     { pattern: /^\/api\/backups/, method: 'DELETE', capability: 'write:backups' },
 

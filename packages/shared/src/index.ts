@@ -2084,17 +2084,20 @@ export type BackupItem = {
   type: BackupType;
 };
 
+// Reads only. `CreateBackupRequest`/`CreateBackupResponse`/`DeleteBackupResponse`
+// were deleted with the routes that returned them (F12): both mutations answered
+// success without calling a service, and there is no platform backup engine for
+// them to have called — `backup@1` is provider-initiated (ADR 0004), so the
+// server has no way to command a capture and never will in this shape. A typed
+// client method that cannot work is the affordance that made the lie reachable,
+// so the types went with the routes, as spec 008 did for the backup-restore
+// pair it deleted (#504). Surfacing the provider's snapshots is #160.
 export type GetBackupsRequest = PageRequest & { appId?: string; status?: BackupStatus };
 export type GetBackupsResponse = PageResponse<BackupItem>;
-
-export type CreateBackupRequest = { appId?: string };
-export type CreateBackupResponse = { jobId: string; backupId?: string };
 
 export type GetBackupResponse = BackupItem & {
   files?: Array<{ path: string; sizeBytes: number }>;
 };
-
-export type DeleteBackupResponse = { ok: true };
 
 // ------------------------------------------------------
 // Notifications

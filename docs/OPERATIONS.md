@@ -538,6 +538,17 @@ installed app:
 Each app's own detail page shows the same judgement under its **Backups** tab,
 naming which database is missing a hook when the state is partial.
 
+**It is a view, not a control panel.** Hola offers no "take a backup now" and no
+"delete this backup": it brokers captures, it does not perform them, and the
+provider app runs on its own schedule. Both actions previously existed in the API
+and reported success without doing anything — no capture was taken, no archive
+was deleted — so they were removed rather than left to mislead. `POST
+/api/backups` and `DELETE /api/backups/:id` now return **404**; if you have a
+script calling either, it was never doing what it appeared to. Take or remove a
+capture in the provider app's own UI. Surfacing the provider's snapshots here,
+with actions that work, is
+[#160](https://github.com/try-hola/hola/issues/160).
+
 **One provider per host.** A contract has at most one provider; installing a
 second app that also provides `backup@1` is refused at install, naming the
 existing provider and telling you to uninstall it first. A pair recorded

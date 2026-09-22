@@ -765,20 +765,6 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
     responseType: 'GetBackupsResponse'
   },
   {
-    path: '/api/backups',
-    method: 'POST',
-    operationId: 'createBackup',
-    summary: 'Create Backup',
-    description: 'Create a new backup for an application',
-    tags: ['backups'],
-    requestBodyType: 'CreateBackupRequest',
-    responseType: 'CreateBackupResponse',
-    examples: {
-      request: { appId: 'nextcloud' },
-      response: { jobId: 'job-uuid', backupId: 'backup-uuid' }
-    }
-  },
-  {
     path: '/api/backups/{backupId}',
     method: 'GET',
     operationId: 'getBackup',
@@ -796,25 +782,11 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
     ],
     responseType: 'GetBackupResponse'
   },
-  {
-    path: '/api/backups/{backupId}',
-    method: 'DELETE',
-    operationId: 'deleteBackup',
-    summary: 'Delete Backup',
-    description: 'Delete a backup permanently',
-    tags: ['backups'],
-    parameters: [
-      {
-        name: 'backupId',
-        in: 'path',
-        description: 'Backup identifier',
-        required: true,
-        schema: { type: 'string' }
-      }
-    ],
-    responseType: 'DeleteBackupResponse'
-  },
-  
+  // No POST /api/backups and no DELETE /api/backups/{backupId}: Hola brokers
+  // backups, it does not perform them (ADR 0004), and both verbs used to answer
+  // success having done nothing (F12). Documenting a route the server refuses
+  // is how a caller ends up writing automation against it.
+
   // Notifications
   {
     path: '/api/notifications',
@@ -1291,15 +1263,6 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   total: number;
 }`,
 
-    CreateBackupRequest: `{
-  appId?: string;
-}`,
-
-    CreateBackupResponse: `{
-  jobId: string;
-  backupId?: string;
-}`,
-
     GetBackupResponse: `{
   id: string;
   app: string;
@@ -1310,10 +1273,6 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   status: 'completed' | 'failed' | 'running';
   type: 'automatic' | 'manual';
   files?: Array<{ path: string; sizeBytes: number }>;
-}`,
-
-    DeleteBackupResponse: `{
-  ok: true;
 }`,
 
     // Notification schemas

@@ -4,13 +4,18 @@ import { globalCache } from '../utils/cache';
 import { safeFetchEnhanced } from '../utils/error-enhanced';
 import type {
   GetBackupsResponse,
-  BackupStatus,
-  CreateBackupRequest
+  BackupStatus
 } from '@hola/shared';
 
 /**
  * Hook for fetching backups with filtering and pagination
  * Follows StrictMode-compatible patterns with parameterized requests
+ *
+ * Read-only, deliberately (F12). `createBackup` and `deleteBackup` used to live
+ * here, posting to routes that reported success without taking or deleting
+ * anything — `createBackup` was never even wired to a control, and `deleteBackup`
+ * drove a button. Hola brokers backups rather than performing them (ADR 0004),
+ * so there is no server verb for either to call; both went with the routes.
  */
 export function useBackupsApi(
   statusFilter: BackupStatus | 'all' = 'all',
@@ -82,43 +87,6 @@ export function useBackupsApi(
     fetchData();
   }, [fetchData]);
 
-  // Create backup
-  const createBackup = React.useCallback(async (appId?: string) => {
-    const request: CreateBackupRequest = { appId };
-    const response = await safeFetchEnhanced(API.backups.base, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to create backup: ${response.status} ${response.statusText}`);
-    }
-    
-    // Invalidate backup caches and refetch
-    globalCache.deleteByPattern(/^backups-/);
-    await fetchData();
-    
-    return response.json();
-  }, [fetchData]);
-
-  // Delete backup
-  const deleteBackup = React.useCallback(async (backupId: string) => {
-    const response = await safeFetchEnhanced(API.backups.byId(backupId), {
-      method: 'DELETE'
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Failed to delete backup: ${response.status} ${response.statusText}`);
-    }
-    
-    // Invalidate backup caches and refetch
-    globalCache.deleteByPattern(/^backups-/);
-    await fetchData();
-    
-    return response.json();
-  }, [fetchData]);
-
   // Download backup
   const downloadBackup = React.useCallback(async (backupId: string) => {
     const response = await safeFetchEnhanced(API.backups.byId(backupId));
@@ -141,8 +109,6 @@ export function useBackupsApi(
   return {
     ...state,
     refetch: fetchData,
-    createBackup,
-    deleteBackup,
     downloadBackup
   };
 }

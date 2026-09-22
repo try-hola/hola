@@ -24,9 +24,6 @@ import {
   type GetJobsResponse,
   type DeleteJobsResponse,
   type GetBackupsResponse,
-  type CreateBackupRequest,
-  type CreateBackupResponse,
-  type DeleteBackupResponse,
   type GetNotificationsResponse,
   type PatchNotificationRequest,
   type PatchNotificationResponse,
@@ -1905,17 +1902,25 @@ export async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
-  // Backups. There is no platform backup engine yet (per-app backup is provided
-  // by the `backrest` catalog app), so the list is genuinely empty rather than
-  // seeded with sample backups. The mutation routes remain as no-op stubs.
+  // Backups — READS ONLY, and both of them are honest about having nothing.
+  // There is no platform backup engine: per-app backup is performed by a
+  // provider app (`backrest`) through `backup@1`, which is provider-initiated
+  // by design (ADR 0004 — the server never calls an app), so the list is
+  // genuinely empty rather than seeded with samples, and an id can never
+  // resolve to a real backup.
+  //
+  // The MUTATIONS are gone (F12). `POST /api/backups` used to answer 200 with a
+  // minted `jobId`/`backupId` and `DELETE /api/backups/:id` with `{ ok: true }`,
+  // neither having called a service — no job, no archive, no deletion. The
+  // `jobId` was the worst of it: `GET /api/jobs/<it>` 404s forever, so polling
+  // automation waited on a backup that was never started. There is nothing for
+  // them to route to — commanding a provider to capture would invert the
+  // contract's direction — so they were deleted rather than stubbed with a 501,
+  // exactly as spec 008 deleted this block's equally fictitious third sibling,
+  // the backup-restore stub (#504, #484). Surfacing the provider's own
+  // snapshots here is #160; whatever verbs that earns will be real ones.
   if (pathname === API.backups.base && req.method === 'GET') {
     const payload: GetBackupsResponse = { items: [], page: 1, limit: 10, total: 0 };
-    return json(payload);
-  }
-
-  if (pathname === API.backups.base && req.method === 'POST') {
-    await req.json().catch(() => ({})) as Partial<CreateBackupRequest>;
-    const payload: CreateBackupResponse = { jobId: crypto.randomUUID(), backupId: crypto.randomUUID() };
     return json(payload);
   }
 
@@ -1923,11 +1928,6 @@ export async function route(url: URL, req: Request): Promise<Response> {
   if (backupByIdMatch && req.method === 'GET') {
     // No backup store: an id can never resolve to a real backup.
     return notFound();
-  }
-
-  if (backupByIdMatch && req.method === 'DELETE') {
-    const payload: DeleteBackupResponse = { ok: true };
-    return json(payload);
   }
 
   // Notifications. No notification store exists yet, so the feed is empty rather

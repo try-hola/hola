@@ -31,7 +31,7 @@ import type {
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
   // Backup types  
-  GetBackupsResponse, GetBackupResponse, CreateBackupResponse, DeleteBackupResponse,
+  GetBackupsResponse, GetBackupResponse,
   // Notification types
   GetNotificationsResponse, NotificationItem, PatchNotificationResponse, PostNotificationsActionResponse,
   // Settings types
@@ -597,7 +597,9 @@ export class SdkAdapter {
     },
   };
 
-  // Backups with cache management
+  // Backups — reads only. `create`/`delete` were removed with the routes they
+  // called (F12): both reported success having done nothing, and Hola has no
+  // backup engine to give them (ADR 0004). See #160.
   backups = {
     list: (params?: { appId?: string; status?: string; page?: number; limit?: number }): Promise<GetBackupsResponse> => {
       const query = this.buildQuery(params || {});
@@ -608,16 +610,6 @@ export class SdkAdapter {
     byId: (backupId: string): Promise<GetBackupResponse> => {
       const path = `/api/backups/${backupId}`;
       return this.getWithCache(path, () => this.sdk.get<GetBackupResponse>(path));
-    },
-    
-    create: (data: { appId?: string }): Promise<CreateBackupResponse> => {
-      const path = '/api/backups';
-      return this.enhancedRequest('POST', path, () => this.sdk.post<CreateBackupResponse>(path, data), data, false);
-    },
-    
-    delete: (backupId: string): Promise<DeleteBackupResponse> => {
-      const path = `/api/backups/${backupId}`;
-      return this.enhancedRequest('DELETE', path, () => this.sdk.delete<DeleteBackupResponse>(path), undefined, false);
     },
   };
 
