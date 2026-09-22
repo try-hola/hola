@@ -80,7 +80,7 @@ import { getHolaVersion } from './system-monitoring';
 import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
-import { NotFoundError, ConflictError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
+import { NotFoundError, ConflictError, ForbiddenError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto, locateAppRootInTree, landDirInto } from './snapshot-fs';
 import { rm } from 'node:fs/promises';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -474,27 +474,56 @@ export interface DeploymentService extends HealthCheckable {
    *  no-op success; a hook that fails reports `ok: false` rather than throwing —
    *  the data is already on disk. */
   runPushHook(deploymentId: string, targetId: string): Promise<PostDeploymentPushHookResponse>;
+  // ---- Brokered-contract calls (#501) -------------------------------------
+  //
+  // Every one of them starts with `callerDeploymentId`: the deployment the
+  // presented `hct_*` contract token was minted for.
+  //
+  // It is an explicit argument, not something the service reaches for, because
+  // the service layer has no request scope and must not acquire one — the route
+  // handler reads it off the authenticated principal and passes it in. Each
+  // method then verifies THAT deployment is a consented provider of THAT
+  // contract and acts as it. Nothing here re-derives "the provider" by scanning
+  // the host: a singleton lookup agrees with the calling token only while there
+  // is exactly one provider, and the legacy `providerConflict` state (two
+  // installs both declaring the role, predating `assertProviderAllowed`) is
+  // precisely where it stops agreeing — B's token would reach A's queue.
+  //
+  // A caller that is not a consented provider of the contract is refused with
+  // `FORBIDDEN` / `NOT_CONTRACT_PROVIDER`: the credential is real and already
+  // capability-gated by the middleware, so this is "you are not the provider
+  // you are claiming to be", not "you lack a capability".
   /** Capability contract broker (ADR 0004 §6, #298): a backup provider announces
    *  its run so every accepting app's `preHook` (e.g. `pg_dump`) executes before
    *  the provider reads the files, and its `postHook` after. Enqueued as a job —
    *  see ContractBackupPrepareResponse for why. */
-  prepareContractBackup(): Promise<ContractBackupPrepareResponse>;
-  finalizeContractBackup(): Promise<ContractBackupFinalizeResponse>;
+  prepareContractBackup(callerDeploymentId: string): Promise<ContractBackupPrepareResponse>;
+  finalizeContractBackup(callerDeploymentId: string): Promise<ContractBackupFinalizeResponse>;
+  /** Verify `callerDeploymentId` is a consented provider of `contractRef` and
+   *  nothing more — for a broker route with no state of its own to act on (the
+   *  prepare-job status poll), which still must not answer a caller that isn't
+   *  the provider. Throws `FORBIDDEN` / `NOT_CONTRACT_PROVIDER` otherwise. */
+  assertContractProvider(callerDeploymentId: string, contractRef: string): Promise<void>;
   /**
    * restore@1's request queue, the provider's four broker calls (spec 008,
-   * contracts/api.md). One provider per host (`assertProviderAllowed`), so —
-   * exactly like `prepareContractBackup` above — none of these need the
-   * caller's identity: only the consented `restore@1` provider's own token
-   * can reach them (`contract:restore`), and there is only ever one.
+   * contracts/api.md), each performed AS `callerDeploymentId`.
    */
-  publishRestoreIndex(entries: RestoreIndexEntry[]): Promise<{ ok: true; count: number }>;
-  /** Every `pending` request addressed to the consented provider; `reindex:
+  publishRestoreIndex(callerDeploymentId: string, entries: RestoreIndexEntry[]): Promise<{ ok: true; count: number }>;
+  /** Every `pending` request addressed to the calling provider; `reindex:
    *  true` when the server holds no index for it at all (FR-034). */
-  pollRestoreRequests(): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }>;
-  /** Exactly-once claim (FR-028). Throws on not-found/already-claimed/expired. */
-  claimRestoreRequest(requestId: string): Promise<{ ok: true }>;
-  /** Provider-reported outcome (FR-029). Throws on not-found/not-claimed/expired. */
-  completeRestoreRequest(requestId: string, outcome: 'completed' | 'failed', reason?: string): Promise<{ ok: true }>;
+  pollRestoreRequests(callerDeploymentId: string): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }>;
+  /** Exactly-once claim (FR-028). Throws on not-found/already-claimed/expired —
+   *  and on a request addressed to a DIFFERENT provider, which is reported as
+   *  not-found (a provider has no business learning another's queue exists). */
+  claimRestoreRequest(callerDeploymentId: string, requestId: string): Promise<{ ok: true }>;
+  /** Provider-reported outcome (FR-029). Throws on not-found/not-claimed/expired,
+   *  with the same cross-provider rule as `claimRestoreRequest`. */
+  completeRestoreRequest(
+    callerDeploymentId: string,
+    requestId: string,
+    outcome: 'completed' | 'failed',
+    reason?: string,
+  ): Promise<{ ok: true }>;
   /** Who fills which side of every capability contract, across all installs
    *  (ADR 0004 Phase 4) — the platform-wide answer to "is a backup provider
    *  installed, and which apps does it cover?". */
@@ -1718,30 +1747,56 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return { ok: true };
   }
 
-  /** Base: no containers to exec in, so no app participates. Real overrides. */
-  async prepareContractBackup(): Promise<ContractBackupPrepareResponse> {
+  /**
+   * Base: no containers to exec in, so no app participates. Real overrides.
+   *
+   * The caller id is accepted and ignored here, exactly as
+   * `assertProviderAllowed` is a no-op in this class: the in-memory/mock
+   * service reads no manifests, so it cannot tell a provider from anything
+   * else, and enforcing a guess would make unrelated mock-based tests fail for
+   * reasons that have nothing to do with them. Every enforcing implementation
+   * is in RealDeploymentService below.
+   */
+  async prepareContractBackup(callerDeploymentId: string): Promise<ContractBackupPrepareResponse> {
+    void callerDeploymentId;
     return { apps: [], participations: [] };
   }
 
   /** Base: nothing was prepared, so there is nothing to clean up. Real overrides. */
-  async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
+  async finalizeContractBackup(callerDeploymentId: string): Promise<ContractBackupFinalizeResponse> {
+    void callerDeploymentId;
     return { ok: true, results: [] };
   }
 
+  /** Base: no manifests to read a `provides` role from, so permissive. Real overrides. */
+  async assertContractProvider(callerDeploymentId: string, contractRef: string): Promise<void> {
+    void callerDeploymentId;
+    void contractRef;
+  }
+
   /** Base: no restore broker exists (mock/in-memory). Real overrides. */
-  async publishRestoreIndex(entries: RestoreIndexEntry[]): Promise<{ ok: true; count: number }> {
+  async publishRestoreIndex(callerDeploymentId: string, entries: RestoreIndexEntry[]): Promise<{ ok: true; count: number }> {
+    void callerDeploymentId;
     return { ok: true, count: entries.length };
   }
 
-  async pollRestoreRequests(): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }> {
+  async pollRestoreRequests(callerDeploymentId: string): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }> {
+    void callerDeploymentId;
     return { requests: [], reindex: false };
   }
 
-  async claimRestoreRequest(requestId: string): Promise<{ ok: true }> {
+  async claimRestoreRequest(callerDeploymentId: string, requestId: string): Promise<{ ok: true }> {
+    void callerDeploymentId;
     throw new NotFoundError(`Restore request not found: ${requestId}`);
   }
 
-  async completeRestoreRequest(requestId: string, outcome: 'completed' | 'failed', reason?: string): Promise<{ ok: true }> {
+  async completeRestoreRequest(
+    callerDeploymentId: string,
+    requestId: string,
+    outcome: 'completed' | 'failed',
+    reason?: string,
+  ): Promise<{ ok: true }> {
+    void callerDeploymentId;
     void outcome;
     void reason;
     throw new NotFoundError(`Restore request not found: ${requestId}`);
@@ -3143,32 +3198,31 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * The deployment id currently PROVIDING and CONSENTED to `restore@1` (spec
-   * 008) — the same one-provider-per-host scan `assertProviderAllowed` uses,
-   * but reading `granted` too, since a declared-but-unconsented provider role
+   * The deployment currently PROVIDING and CONSENTED to `restore@1` (spec 008)
+   * — the same one-provider-per-host scan `assertProviderAllowed` uses, but
+   * reading `granted` too, since a declared-but-unconsented provider role
    * serves nothing (data-model.md §1). `undefined` when no such install exists.
-   */
-  private async findConsentedRestoreProvider(): Promise<string | undefined> {
-    return (await this.findConsentedRestoreProviderDeployment())?.id;
-  }
-
-  /**
-   * As above, but the whole deployment — callers needing its `app` too (FR-064).
    *
-   * `ensureLoaded()` FIRST, without exception: the four broker routes are the
-   * natural thing a provider container calls the instant it starts, which on a
-   * host reboot is before anything has touched a route that lazily loads the
-   * deployment registry. Scanning an empty map would answer "no restore
-   * provider is installed" on a host that has one — the provider's `publish`
-   * would be refused `RESTORE_NOT_ACCEPTED` and its `poll` would report no
-   * work, indefinitely.
+   * **Read side only.** The two callers are the install-time candidate paths
+   * (`listProviderRestoreSources`, `getProviderRestoreSource`), which are
+   * answering an OPERATOR's question — "is a provider installed, and what can
+   * it offer this install?" — where a host-wide singleton is exactly the
+   * question being asked, and no credential is being scoped. The broker routes
+   * deliberately do NOT come through here (#501): a provider calling about its
+   * own work is identified by its own token, via
+   * `requireConsentedProvider`, so that two consented providers cannot be
+   * confused for one another.
+   *
+   * `ensureLoaded()` FIRST, without exception: on a host reboot these can be
+   * reached before anything has touched a route that lazily loads the
+   * deployment registry, and scanning an empty map would answer "no restore
+   * provider is installed" on a host that has one.
    *
    * `readActiveGrantedContracts` rather than `readDeploymentContracts`: it
    * answers exactly this question (the active release's `provides`
    * intersected with recorded consent) from the manifest alone, where the
    * fuller read also parses every accepting release's compose to compute a
-   * coverage judgement this caller discards. That cost is paid on every poll
-   * tick, claim and completion.
+   * coverage judgement this caller discards.
    */
   private async findConsentedRestoreProviderDeployment(): Promise<EnhancedDeploymentDetail | undefined> {
     await this.ensureLoaded();
@@ -3482,6 +3536,86 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return results;
   }
 
+  // ---- Who is calling a broker route (#501) -------------------------------
+
+  /**
+   * The deployment behind a brokered-contract call, proven to be a consented
+   * provider of that contract — the one identity check every broker method
+   * starts with.
+   *
+   * This replaces the singleton "find the host's provider" scan the broker path
+   * used to do (#501). Both answers are identical while a host has one provider,
+   * which `assertProviderAllowed` guarantees for anything installed since spec
+   * 004 — but in the legacy `providerConflict` state (two installs declaring the
+   * same provider role, surfaced as a warning rather than auto-resolved) the scan
+   * returns whichever one it finds first, regardless of whose token authenticated
+   * the request. Verifying the caller instead is correct with one provider and
+   * with two, and it needs no guard of its own.
+   *
+   * Consent is read the way every other privileged path reads it —
+   * `readActiveGrantedContracts`: the ACTIVE release's declared `provides`
+   * intersected with the refs recorded at consent time. So a provider role an
+   * upgrade added but the operator never consented to grants nothing here
+   * either, and revoking consent closes the broker in the same breath as the
+   * data mount.
+   *
+   * `ensureLoaded()` first, without exception: a broker route is the natural
+   * thing a provider container calls the instant it starts, which on a host
+   * reboot can be before anything has touched a route that lazily rehydrates
+   * the deployment registry. Scanning an empty map would refuse the real
+   * provider indefinitely.
+   */
+  private async requireConsentedProvider(
+    callerDeploymentId: string,
+    contractRef: string,
+  ): Promise<EnhancedDeploymentDetail> {
+    const deployment = await this.findConsentedProvider(callerDeploymentId, contractRef);
+    if (!deployment) {
+      this.logger.warn('Refused a contract broker call from a deployment that does not provide the contract', {
+        callerDeploymentId,
+        contractRef,
+      });
+      // FORBIDDEN, not UNAUTHORIZED: the token authenticated, and the middleware
+      // already checked it carries this contract's capability. What fails here is
+      // narrower — it is not the provider of this contract on this host. Nothing
+      // about the contract's own state is disclosed either way.
+      const err = new ForbiddenError(
+        `This credential is not a consented '${contractRef}' provider on this host.`,
+      );
+      err.code = 'NOT_CONTRACT_PROVIDER';
+      throw err;
+    }
+    return deployment;
+  }
+
+  /** {@inheritDoc DeploymentService.assertContractProvider} */
+  override async assertContractProvider(callerDeploymentId: string, contractRef: string): Promise<void> {
+    await this.requireConsentedProvider(callerDeploymentId, contractRef);
+  }
+
+  /**
+   * One named deployment's provider standing for one contract: the deployment
+   * itself when it declares `contractRef` in the ACTIVE release's `provides`
+   * AND holds recorded consent for it, `undefined` otherwise (including when no
+   * such deployment is installed at all).
+   *
+   * Deliberately asks about a NAMED deployment rather than searching for "the"
+   * provider. Every caller here has a specific id in hand — the token's, or a
+   * restore request's recorded `providerDeploymentId` — and answering the
+   * singleton question instead would give the wrong answer for exactly those
+   * hosts where the two differ (#501).
+   */
+  private async findConsentedProvider(
+    deploymentId: string,
+    contractRef: string,
+  ): Promise<EnhancedDeploymentDetail | undefined> {
+    await this.ensureLoaded();
+    const deployment = deploymentId ? this.deployments.get(deploymentId) : undefined;
+    if (!deployment) return undefined;
+    const granted = await this.readActiveGrantedContracts(deployment);
+    return granted.includes(contractRef) ? deployment : undefined;
+  }
+
   /**
    * Broker entry point: a backup provider announcing it is about to capture.
    *
@@ -3496,7 +3630,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * backup the operator believes is transaction-consistent, but isn't, is
    * worse than one that visibly didn't run.
    */
-  override async prepareContractBackup(): Promise<ContractBackupPrepareResponse> {
+  override async prepareContractBackup(callerDeploymentId: string): Promise<ContractBackupPrepareResponse> {
+    // #501: the caller is the provider it authenticated as, or it is refused.
+    // The participations below are host-wide (every accepting app), so there is
+    // nothing provider-scoped to act "as" — but announcing a backup run on this
+    // host is the provider's act, and only a consented provider may perform it.
+    await this.requireConsentedProvider(callerDeploymentId, BACKUP_CONTRACT_REF);
+
     // A prepare still open from a previous run means that run's provider never
     // finalized — it crashed, was killed mid-capture, or lost the network. Its
     // acceptors are still holding dumps, and those dumps sit in exactly the data
@@ -3697,7 +3837,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * provider has already finished reading. Never throws: the capture happened, so
    * a failed cleanup is something to report, not a reason to fail the caller.
    */
-  override async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
+  override async finalizeContractBackup(callerDeploymentId: string): Promise<ContractBackupFinalizeResponse> {
+    // #501: same rule as prepare. Releasing every acceptor's dump is the
+    // provider's act; a non-provider must not be able to end a run it never
+    // started (which would strand the real provider mid-capture).
+    await this.requireConsentedProvider(callerDeploymentId, BACKUP_CONTRACT_REF);
+
     const participants = await this.backupParticipants();
     const results = await this.runPostHooks(participants);
 
@@ -3722,18 +3867,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /**
    * `POST /api/contracts/restore/index` (FR-022, FR-024). Replaces the
-   * calling provider's index WHOLESALE. `findConsentedRestoreProvider()`
-   * resolves who "the calling provider" is exactly the way
-   * `prepareContractBackup` does — one provider per host, so nothing about
-   * the request itself needs to say who's calling; only that provider's own
-   * token can reach this route at all.
+   * CALLING provider's index WHOLESALE — the caller is the deployment its
+   * token was minted for (#501), verified to be a consented `restore@1`
+   * provider, never a provider the server picks by scanning the host.
+   *
+   * Refusing a non-provider here subsumes the old "no consented provider is
+   * installed" conflict: on a host with no provider at all, no caller can be
+   * one. What the caller learns is the same fact either way, stated about
+   * itself.
    */
-  override async publishRestoreIndex(entries: RestoreIndexEntry[]): Promise<{ ok: true; count: number }> {
-    const providerDeploymentId = await this.findConsentedRestoreProvider();
-    if (!providerDeploymentId) {
-      throw new ConflictError('No consented restore@1 provider is installed on this host.', { code: 'RESTORE_NOT_ACCEPTED' });
-    }
-    await this.restoreIndex.publish(providerDeploymentId, entries);
+  override async publishRestoreIndex(
+    callerDeploymentId: string,
+    entries: RestoreIndexEntry[],
+  ): Promise<{ ok: true; count: number }> {
+    const provider = await this.requireConsentedProvider(callerDeploymentId, RESTORE_CONTRACT_REF);
+    await this.restoreIndex.publish(provider.id, entries);
     return { ok: true, count: entries.length };
   }
 
@@ -3741,12 +3889,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * `GET /api/contracts/restore/requests` (FR-026, FR-034). `reindex: true`
    * signals "the server holds no index for you" — read by the provider, never
    * a call the server makes (R15's corollary: no HTTP client is invoked here).
+   *
+   * Scoped to the CALLER's own queue and index (#501): with two providers, one
+   * must never be handed the other's pending requests.
    */
-  override async pollRestoreRequests(): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }> {
-    const providerDeploymentId = await this.findConsentedRestoreProvider();
-    if (!providerDeploymentId) return { requests: [], reindex: false };
-    const pending = await this.restoreBroker.pendingFor(providerDeploymentId);
-    const reindex = !(await this.restoreIndex.hasPublished(providerDeploymentId));
+  override async pollRestoreRequests(
+    callerDeploymentId: string,
+  ): Promise<{ requests: RestoreRequestForProvider[]; reindex: boolean }> {
+    const provider = await this.requireConsentedProvider(callerDeploymentId, RESTORE_CONTRACT_REF);
+    const pending = await this.restoreBroker.pendingFor(provider.id);
+    const reindex = !(await this.restoreIndex.hasPublished(provider.id));
     return {
       requests: pending.map((r) => ({ id: r.id, captureId: r.captureId, destination: r.destination, deadlineAt: r.deadlineAt })),
       reindex,
@@ -3754,18 +3906,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /** `POST /api/contracts/restore/requests/:id/claim` (FR-028). Exactly-once. */
-  override async claimRestoreRequest(requestId: string): Promise<{ ok: true }> {
+  override async claimRestoreRequest(callerDeploymentId: string, requestId: string): Promise<{ ok: true }> {
+    // Who is calling, first: a caller that is not a consented provider is
+    // refused before any request is looked up, so it learns nothing about the
+    // queue's contents (FR-038 — revoked consent lands here too).
+    const provider = await this.requireConsentedProvider(callerDeploymentId, RESTORE_CONTRACT_REF);
     const record = await this.restoreBroker.get(requestId);
-    if (!record) {
-      const err = new NotFoundError(`Restore request not found: ${requestId}`);
-      err.code = 'RESTORE_REQUEST_NOT_FOUND';
-      throw err;
-    }
-    // FR-038: consent revoked between request creation and claim renders the
-    // request unservable — treated as not-found from the caller's side rather
-    // than a distinct code, since a provider that is no longer the consented
-    // one has no business learning a request for it still exists.
-    if ((await this.findConsentedRestoreProvider()) !== record.providerDeploymentId) {
+    // A request addressed to a DIFFERENT provider is not-found for this one
+    // (#501). `providerDeploymentId` already scopes the record; this is what
+    // makes that scoping load-bearing rather than decorative — with two
+    // consented providers, knowing an id must not be enough to claim it.
+    if (!record || record.providerDeploymentId !== provider.id) {
       const err = new NotFoundError(`Restore request not found: ${requestId}`);
       err.code = 'RESTORE_REQUEST_NOT_FOUND';
       throw err;
@@ -3793,20 +3944,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /** `POST /api/contracts/restore/requests/:id/complete` (FR-029). */
   override async completeRestoreRequest(
+    callerDeploymentId: string,
     requestId: string,
     outcome: 'completed' | 'failed',
     reason?: string,
   ): Promise<{ ok: true }> {
+    // FR-038 and #501, exactly as `claimRestoreRequest` above: a caller that is
+    // not a consented provider cannot report an outcome, and a provider cannot
+    // report one for another provider's request.
+    const provider = await this.requireConsentedProvider(callerDeploymentId, RESTORE_CONTRACT_REF);
     const record = await this.restoreBroker.get(requestId);
-    if (!record) {
-      const err = new NotFoundError(`Restore request not found: ${requestId}`);
-      err.code = 'RESTORE_REQUEST_NOT_FOUND';
-      throw err;
-    }
-    // FR-038, same rule as `claimRestoreRequest` above: a caller that is no
-    // longer the consented provider cannot report an outcome for a request it
-    // can no longer serve, and learns nothing about its existence.
-    if ((await this.findConsentedRestoreProvider()) !== record.providerDeploymentId) {
+    if (!record || record.providerDeploymentId !== provider.id) {
       const err = new NotFoundError(`Restore request not found: ${requestId}`);
       err.code = 'RESTORE_REQUEST_NOT_FOUND';
       throw err;
@@ -4861,7 +5009,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // `pollRestoreRequests` already returns it to nobody. Without this
         // the install sits for the full thirty minutes before failing with a
         // message blaming an unresponsive provider that is simply gone.
-        if ((await this.findConsentedRestoreProvider()) !== parsed.providerDeploymentId) {
+        //
+        // Asked of THIS request's own provider, not of "the" host provider
+        // (#501): the question is whether the deployment this request is
+        // addressed to can still serve it, and on a host with two consented
+        // providers a singleton scan could answer "gone" about a provider that
+        // is still installed and still consented.
+        if (!(await this.findConsentedProvider(parsed.providerDeploymentId, RESTORE_CONTRACT_REF))) {
           providerGone = true;
           break;
         }

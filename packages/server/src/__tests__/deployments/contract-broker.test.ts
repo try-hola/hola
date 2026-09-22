@@ -96,16 +96,31 @@ class ExecSpy extends MockDockerService {
   }
 }
 
+/**
+ * The app id `makeSystem` installs as the host's `backup@1` provider (#501).
+ *
+ * Every broker call now names the deployment it is made by, and a caller that
+ * is not a consented provider is refused — so these tests need a provider
+ * installed to have anything to call the broker AS. It gets its own catalog
+ * entry (`provides` only, never `accepts`/`backup`) so it never lands in the
+ * acceptor set a test is asserting about, and an id no test uses as an app of
+ * its own.
+ */
+const BROKER_PROVIDER_APP = 'broker-provider';
+
 function makeCatalog(opts: { accepts?: string[]; provides?: string[]; backup?: AppBackupDeclaration }): CatalogArg {
   return {
     getApp: async (appId: string) => ({ id: appId, name: appId, icon: '📦' }),
-    getVersionDetail: async () => ({
-      defaultEnv: [],
-      defaults: { ports: [], volumes: [] },
-      accepts: opts.accepts,
-      provides: opts.provides,
-      backup: opts.backup,
-    }),
+    getVersionDetail: async (appId: string) =>
+      appId === BROKER_PROVIDER_APP
+        ? { defaultEnv: [], defaults: { ports: [], volumes: [] }, provides: ['backup@1'] }
+        : {
+            defaultEnv: [],
+            defaults: { ports: [], volumes: [] },
+            accepts: opts.accepts,
+            provides: opts.provides,
+            backup: opts.backup,
+          },
   } as unknown as CatalogArg;
 }
 
@@ -159,7 +174,35 @@ describe('capability contract broker: backup@1', () => {
     const deployments = new RealDeploymentService(
       storage, jobs, docker, drafts, routing, logging, new NoneProvisionerService(),
     );
-    return { storage, jobs, drafts, deployments };
+
+    /**
+     * Install the `backup@1` provider once per system, on first broker call
+     * (#501). Lazy and memoised so a test that never announces a backup pays
+     * nothing, and so the provider is installed at the point the test acts as
+     * it rather than ahead of assertions about the acceptors.
+     */
+    let providerId: Promise<string> | undefined;
+    const provider = () => {
+      providerId ??= (async () => {
+        const { draftId } = await drafts.createDraft({ appId: BROKER_PROVIDER_APP, version: '1.0.0' });
+        await drafts.updateDraft(draftId, { composeOverride: COMPOSE });
+        await drafts.finalizeDraft(draftId);
+        const created = await deployments.createFromDraft({
+          draftId, name: BROKER_PROVIDER_APP, grants: ['backup@1'],
+        });
+        expect((await waitForJob(jobs, created.jobId!)).status).toBe('completed');
+        return created.deploymentId;
+      })();
+      return providerId;
+    };
+
+    return {
+      storage, jobs, drafts, deployments,
+      /** `prepareContractBackup`, called as the host's consented provider. */
+      prepare: async () => deployments.prepareContractBackup(await provider()),
+      /** `finalizeContractBackup`, called as the host's consented provider. */
+      finalize: async () => deployments.finalizeContractBackup(await provider()),
+    };
   }
 
   async function install(sys: ReturnType<typeof makeSystem>, appId: string, grants?: string[]): Promise<string> {
@@ -176,7 +219,7 @@ describe('capability contract broker: backup@1', () => {
     const paperless = await install(sys, 'paperless');
     const mealie = await install(sys, 'mealie');
 
-    const prepared = await sys.deployments.prepareContractBackup();
+    const prepared = await sys.prepare();
     expect(prepared.apps.sort()).toEqual([mealie, paperless].sort());
     expect((await waitForJob(sys.jobs, prepared.jobId!)).status).toBe('completed');
 
@@ -188,7 +231,7 @@ describe('capability contract broker: backup@1', () => {
     expect(dumped.some(p => p.includes(mealie))).toBe(true);
     expect(docker.execsFor('post')).toHaveLength(0); // not yet — the capture happens here
 
-    const finalized = await sys.deployments.finalizeContractBackup();
+    const finalized = await sys.finalize();
     expect(finalized.ok).toBe(true);
     expect(finalized.results.map(r => r.deploymentId).sort()).toEqual([mealie, paperless].sort());
     expect(docker.execsFor('post')).toHaveLength(2);
@@ -201,7 +244,7 @@ describe('capability contract broker: backup@1', () => {
     const sys = makeSystem({ accepts: ['backup@1'] });
     await install(sys, 'uptime-kuma');
 
-    const prepared = await sys.deployments.prepareContractBackup();
+    const prepared = await sys.prepare();
     expect(prepared.apps).toEqual([]);
     expect(prepared.jobId).toBeUndefined(); // no job at all, so the provider just proceeds
     expect(docker.execs).toHaveLength(0);
@@ -214,7 +257,7 @@ describe('capability contract broker: backup@1', () => {
     const sys = makeSystem({ backup: PG_BACKUP });
     await install(sys, 'immich');
 
-    const prepared = await sys.deployments.prepareContractBackup();
+    const prepared = await sys.prepare();
     expect(prepared.apps).toEqual([]);
     expect(docker.execs).toHaveLength(0);
   });
@@ -227,7 +270,7 @@ describe('capability contract broker: backup@1', () => {
     const action = await sys.deployments.executeAction(stopped, { action: 'stop' });
     expect((await waitForJob(sys.jobs, action.jobId!)).status).toBe('completed');
 
-    const prepared = await sys.deployments.prepareContractBackup();
+    const prepared = await sys.prepare();
     expect(prepared.apps).toEqual([paperless]);
   });
 
@@ -245,7 +288,7 @@ describe('capability contract broker: backup@1', () => {
     const broken = await install(sys, 'z-app-broken');
     docker.failFor = [broken];
 
-    const prepared = await sys.deployments.prepareContractBackup();
+    const prepared = await sys.prepare();
     const job = await waitForJob(sys.jobs, prepared.jobId!);
     expect(job.status).toBe('failed');
 
@@ -255,8 +298,8 @@ describe('capability contract broker: backup@1', () => {
 
   test('with no apps installed at all, prepare is a no-op rather than an error', async () => {
     const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
-    expect(await sys.deployments.prepareContractBackup()).toEqual({ apps: [], participations: [] });
-    expect(await sys.deployments.finalizeContractBackup()).toEqual({ ok: true, results: [] });
+    expect(await sys.prepare()).toEqual({ apps: [], participations: [] });
+    expect(await sys.finalize()).toEqual({ ok: true, results: [] });
   });
 
   describe('plural participation (spec 004, US1)', () => {
@@ -264,7 +307,7 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PLURAL_BACKUP });
       const postiz = await install(sys, 'postiz');
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       expect(prepared.apps).toEqual([postiz]);
       expect(prepared.participations).toEqual([
         { deploymentId: postiz, participationId: 'app-db' },
@@ -275,7 +318,7 @@ describe('capability contract broker: backup@1', () => {
       const preExecs = docker.execs.filter((e) => e.command.join(' ').includes('pg_dump'));
       expect(preExecs.map((e) => e.service)).toEqual(['postiz-postgres', 'temporal-postgres']);
 
-      const finalized = await sys.deployments.finalizeContractBackup();
+      const finalized = await sys.finalize();
       expect(finalized.ok).toBe(true);
       expect(finalized.results).toEqual([
         { deploymentId: postiz, participationId: 'app-db', ok: true, output: expect.any(String) },
@@ -288,7 +331,7 @@ describe('capability contract broker: backup@1', () => {
       const postiz = await install(sys, 'postiz');
       docker.failForServices = ['temporal-postgres'];
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       expect(prepared.participations.map((p) => p.participationId)).toEqual(['app-db', 'temporal-db', 'third-db']);
       const job = await waitForJob(sys.jobs, prepared.jobId!);
       expect(job.status).toBe('failed');
@@ -314,7 +357,7 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: TRIPLE_BACKUP });
       await install(sys, 'postiz');
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       // Cancel as soon as the FIRST dump has run: the next loop checkpoint sees
       // the flag, so app-db is started and temporal-db/third-db never are.
       docker.onExec = async (e) => {
@@ -341,7 +384,7 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PLURAL_BACKUP });
       const postiz = await install(sys, 'postiz');
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       expect(prepared.apps).toEqual([postiz]);
       expect(prepared.participations).toHaveLength(2);
       await waitForJob(sys.jobs, prepared.jobId!);
@@ -355,7 +398,7 @@ describe('capability contract broker: backup@1', () => {
       const alpha = await install(sys, 'aaa-app');
       expect(alpha < zebra).toBe(true);
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       expect(prepared.apps).toEqual([alpha, zebra]);
       await waitForJob(sys.jobs, prepared.jobId!);
 
@@ -367,11 +410,11 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
       const paperless = await install(sys, 'paperless');
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.prepare();
       expect(prepared.participations).toEqual([{ deploymentId: paperless, participationId: 'default' }]);
       await waitForJob(sys.jobs, prepared.jobId!);
 
-      const finalized = await sys.deployments.finalizeContractBackup();
+      const finalized = await sys.finalize();
       expect(finalized.results).toEqual([{ deploymentId: paperless, participationId: 'default', ok: true, output: expect.any(String) }]);
     });
 
@@ -380,7 +423,7 @@ describe('capability contract broker: backup@1', () => {
       const postiz = await install(sys, 'postiz');
       docker.failForServices = ['postiz-postgres'];
 
-      const finalized = await sys.deployments.finalizeContractBackup();
+      const finalized = await sys.finalize();
       expect(finalized.ok).toBe(false);
       expect(finalized.results).toEqual([
         { deploymentId: postiz, participationId: 'app-db', ok: false, output: expect.any(String) },
@@ -414,7 +457,7 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
       await install(sys, 'paperless');
 
-      const first = await sys.deployments.prepareContractBackup();
+      const first = await sys.prepare();
       expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
       expect(docker.execsFor('pre')).toHaveLength(1);
 
@@ -433,7 +476,7 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
       await install(sys, 'paperless');
 
-      const first = await sys.deployments.prepareContractBackup();
+      const first = await sys.prepare();
       expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
       expect(docker.execsFor('pre')).toHaveLength(1);
       expect(docker.execsFor('post')).toHaveLength(0); // the provider then died
@@ -441,7 +484,7 @@ describe('capability contract broker: backup@1', () => {
       process.env.HOLA_BACKUP_PREPARE_TIMEOUT_MS = '1';
       await new Promise(r => setTimeout(r, 5));
 
-      const second = await sys.deployments.prepareContractBackup();
+      const second = await sys.prepare();
       // The stranded dump is cleaned up BEFORE the new run's own pre-hooks.
       expect(docker.execsFor('post')).toHaveLength(1);
       expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
@@ -455,10 +498,10 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
       await install(sys, 'paperless');
 
-      const first = await sys.deployments.prepareContractBackup();
+      const first = await sys.prepare();
       expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
 
-      const second = await sys.deployments.prepareContractBackup();
+      const second = await sys.prepare();
       expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
       expect(docker.execsFor('post')).toHaveLength(0);
     });
@@ -470,15 +513,15 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'], backup: PG_BACKUP });
       await install(sys, 'paperless');
 
-      const first = await sys.deployments.prepareContractBackup();
+      const first = await sys.prepare();
       expect((await waitForJob(sys.jobs, first.jobId!)).status).toBe('completed');
-      await sys.deployments.finalizeContractBackup();
+      await sys.finalize();
       expect(docker.execsFor('post')).toHaveLength(1);
 
       await new Promise(r => setTimeout(r, 120)); // well past the timeout
       expect(docker.execsFor('post')).toHaveLength(1); // the timer was disarmed
 
-      const second = await sys.deployments.prepareContractBackup();
+      const second = await sys.prepare();
       expect((await waitForJob(sys.jobs, second.jobId!)).status).toBe('completed');
       expect(docker.execsFor('post')).toHaveLength(1); // nothing was open to expire
     });
@@ -488,9 +531,9 @@ describe('capability contract broker: backup@1', () => {
       const sys = makeSystem({ accepts: ['backup@1'] }); // no hooks: SQLite app
       await install(sys, 'uptime-kuma');
 
-      expect(await sys.deployments.prepareContractBackup()).toEqual({ apps: [], participations: [] });
+      expect(await sys.prepare()).toEqual({ apps: [], participations: [] });
       await new Promise(r => setTimeout(r, 5));
-      await sys.deployments.prepareContractBackup();
+      await sys.prepare();
       expect(docker.execs).toHaveLength(0);
     });
 
@@ -499,20 +542,24 @@ describe('capability contract broker: backup@1', () => {
       // every acceptor render as covered, whether or not it has ever called the
       // broker. These are different facts and the dashboard shows both.
       const sys = makeSystem({ accepts: ['backup@1'], provides: ['backup@1'], backup: PG_BACKUP });
-      await install(sys, 'backrest', ['backup@1']);
+      // This test installs its OWN provider (an app that both provides and
+      // accepts), so it calls the broker as that one rather than through
+      // `sys.prepare()` — which would install a second provider of the same
+      // contract and be refused `PROVIDER_EXISTS`.
+      const backrest = await install(sys, 'backrest', ['backup@1']);
 
       const before = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
       expect(before?.providers).toHaveLength(1);
       expect(before?.activity?.lastPrepareAt).toBeUndefined();
 
-      const prepared = await sys.deployments.prepareContractBackup();
+      const prepared = await sys.deployments.prepareContractBackup(backrest);
       expect((await waitForJob(sys.jobs, prepared.jobId!)).status).toBe('completed');
 
       const during = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
       expect(during?.activity?.lastPrepareAt).toBeTruthy();
       expect(during?.activity?.openSince).toBeTruthy();
 
-      await sys.deployments.finalizeContractBackup();
+      await sys.deployments.finalizeContractBackup(backrest);
       const after = (await sys.deployments.getContracts()).items.find(i => i.ref === 'backup@1');
       expect(after?.activity?.openSince).toBeUndefined();
       expect(after?.activity?.lastFinalizeAt).toBeTruthy();

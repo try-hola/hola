@@ -211,7 +211,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-old', identity: { app: TARGET_APP } },
     ]);
 
@@ -220,7 +220,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
 
     // The deploy job is now running in the background; act as the provider.
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     expect(requests).toHaveLength(1);
@@ -229,9 +229,9 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     // FR-027: the destination is server-minted, under the staging root.
     expect(req.destination.startsWith(restoreRoot)).toBe(true);
 
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     await deliverAtRoot(req.destination);
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('completed');
@@ -249,20 +249,20 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-deep', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: { app: TARGET_APP } },
     ]);
 
     const created = await installTarget(system, { name: 'wiki-deep', restoreFrom: { candidateId: `${providerId}:cap-deep`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     // The absolute-path shape a real repository restore tool produces.
     await deliverAtAbsolutePath(req.destination, '/srv/hola/apps/wiki-1a2b3c4d', { 'deep.txt': 'found me' });
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('completed');
@@ -277,19 +277,19 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-ambiguous', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-ambiguous', identity: { app: TARGET_APP } },
     ]);
     const created = await installTarget(system, { name: 'wiki-ambiguous', restoreFrom: { candidateId: `${providerId}:cap-ambiguous`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     await deliverAtAbsolutePath(req.destination, '/srv/hola/apps/wiki-a', { 'x.txt': 'a' });
     await deliverAtAbsolutePath(req.destination, '/srv/hola/apps/wiki-b', { 'x.txt': 'b' });
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('failed');
@@ -303,25 +303,25 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-claim', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
     const created = await installTarget(system, { name: 'wiki-claim', restoreFrom: { candidateId: `${providerId}:cap-claim`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
 
-    await system.deployments.claimRestoreRequest(req.id);
-    await expect(system.deployments.claimRestoreRequest(req.id)).rejects.toMatchObject({
+    await system.deployments.claimRestoreRequest(providerId, req.id);
+    await expect(system.deployments.claimRestoreRequest(providerId, req.id)).rejects.toMatchObject({
       details: { code: 'RESTORE_REQUEST_ALREADY_CLAIMED' },
     });
-    await expect(system.deployments.claimRestoreRequest('does-not-exist')).rejects.toMatchObject({ code: 'RESTORE_REQUEST_NOT_FOUND' });
+    await expect(system.deployments.claimRestoreRequest(providerId, 'does-not-exist')).rejects.toMatchObject({ code: 'RESTORE_REQUEST_NOT_FOUND' });
 
     // Finish it cleanly so the background job doesn't outlive the test.
     await deliverAtRoot(req.destination);
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
     await waitForJob(system.jobs, created.jobId!);
   });
 
@@ -332,17 +332,17 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-fail', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
     const created = await installTarget(system, { name: 'wiki-fail', restoreFrom: { candidateId: `${providerId}:cap-fail`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
-    await system.deployments.completeRestoreRequest(req.id, 'failed', 'repository unreachable');
+    await system.deployments.claimRestoreRequest(providerId, req.id);
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'failed', 'repository unreachable');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('failed');
@@ -360,18 +360,18 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-empty', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
     const created = await installTarget(system, { name: 'wiki-empty', restoreFrom: { candidateId: `${providerId}:cap-empty`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     // Deliberately deliver NOTHING — report completed anyway.
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('failed');
@@ -405,18 +405,18 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-act', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
     const created = await installTarget(system, { name: 'wiki-act', restoreFrom: { candidateId: `${providerId}:cap-act`, carryEnv: false } });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     await deliverAtRoot(req.destination);
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
     await waitForJob(system.jobs, created.jobId!);
 
     const { items } = await system.deployments.getContracts();
@@ -439,7 +439,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
         [TARGET_APP]: { accepts: ['restore@1'] },
       });
       const providerId = await installProvider(system, { provides: ['restore@1'] });
-      await system.deployments.publishRestoreIndex([
+      await system.deployments.publishRestoreIndex(providerId, [
         { captureId: 'cap-expire', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
       ]);
       const created = await installTarget(system, { name: 'wiki-expire', restoreFrom: { candidateId: `${providerId}:cap-expire`, carryEnv: false } });
@@ -457,8 +457,8 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   // Quickstart scenario 31 + FR-034
   test('scenario 31: polling with no index published signals reindex: true and requests no HTTP', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
-    await installProvider(system, { provides: ['restore@1'] });
-    const result = await system.deployments.pollRestoreRequests();
+    const providerId = await installProvider(system, { provides: ['restore@1'] });
+    const result = await system.deployments.pollRestoreRequests(providerId);
     expect(result).toEqual({ requests: [], reindex: true });
   });
 
@@ -469,7 +469,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-x', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
       { captureId: 'cap-y', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/y', identity: { app: TARGET_APP } },
     ]);
@@ -477,15 +477,15 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     const c2 = await installTarget(system, { name: 'wiki-two', restoreFrom: { candidateId: `${providerId}:cap-y`, carryEnv: false } });
 
     const both = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length >= 2 ? r.requests : undefined;
     });
     expect(new Set(both.map((r) => r.destination)).size).toBe(2);
 
     for (const req of both) {
-      await system.deployments.claimRestoreRequest(req.id);
+      await system.deployments.claimRestoreRequest(providerId, req.id);
       await deliverAtRoot(req.destination, { marker: req.id });
-      await system.deployments.completeRestoreRequest(req.id, 'completed');
+      await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
     }
     await waitForJob(system.jobs, c1.jobId!);
     await waitForJob(system.jobs, c2.jobId!);
@@ -590,7 +590,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   test('scenario 42/48: a published entry with no identity is offered for the queried app, confidence path', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-noid', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/lost-wiki-1a2b3c4d', identity: null },
     ]);
     const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
@@ -611,8 +611,8 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   // the secrets a provider restore re-mints rather than warning about none.
   test('a provider candidate names the platform-minted secrets its restore re-mints (#503)', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
-    await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    const providerId = await installProvider(system, { provides: ['restore@1'] });
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/tgt-1a2b3c4d', identity: { app: TARGET_APP } },
     ]);
     const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [
@@ -624,8 +624,8 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
 
   test('a published entry naming a DIFFERENT app is excluded entirely from this app\'s candidates', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
-    await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    const providerId = await installProvider(system, { provides: ['restore@1'] });
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-other', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: 'some-other-app' } },
     ]);
     const candidates = await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, []);
@@ -636,7 +636,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   test('scenario 64: the provider\'s own deployment never appears among its own candidates (restoring the provider is out of scope)', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-self', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: PROVIDER_APP } },
     ]);
     // Querying candidates FOR the provider's own app: a capture naming it
@@ -659,7 +659,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
 
     // A DIFFERENT app still sees the provider's index normally — the refusal
     // is scoped to the circular case, not a blanket disablement.
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-self', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: PROVIDER_APP } },
       { captureId: 'cap-other', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: { app: TARGET_APP } },
     ]);
@@ -679,7 +679,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
   test('scenario 20: uninstalling the provider discards its index entirely', async () => {
     const system = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/x', identity: { app: TARGET_APP } },
     ]);
     expect(await system.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toHaveLength(1);
@@ -713,7 +713,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       // `identity: null` — the defining property of a pre-identity capture.
       { captureId: 'cap-legacy', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: null },
     ]);
@@ -729,13 +729,13 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       restoreFrom: { candidateId: `${providerId}:cap-legacy`, carryEnv: false },
     });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     await deliverMarkerless(req.destination, '/srv/hola/apps/wiki-1a2b3c4d', { 'legacy.txt': 'from before identity existed' });
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('completed');
@@ -750,21 +750,21 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-legacy', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: null },
     ]);
     const created = await installTarget(system, {
       name: 'wiki-wrong', restoreFrom: { candidateId: `${providerId}:cap-legacy`, carryEnv: false },
     });
     const { requests } = await waitFor(async () => {
-      const r = await system.deployments.pollRestoreRequests();
+      const r = await system.deployments.pollRestoreRequests(providerId);
       return r.requests.length > 0 ? r : undefined;
     });
     const req = requests[0]!;
-    await system.deployments.claimRestoreRequest(req.id);
+    await system.deployments.claimRestoreRequest(providerId, req.id);
     // Delivered under a path the index never named — a guess would find it.
     await deliverMarkerless(req.destination, '/somewhere/else/entirely', { 'x.txt': 'x' });
-    await system.deployments.completeRestoreRequest(req.id, 'completed');
+    await system.deployments.completeRestoreRequest(providerId, req.id, 'completed');
 
     const job = await waitForJob(system.jobs, created.jobId!);
     expect(job.status).toBe('failed');
@@ -793,7 +793,7 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
       [TARGET_APP]: { accepts: ['restore@1'] },
     });
     const providerId = await installProvider(system, { provides: ['restore@1'] });
-    await system.deployments.publishRestoreIndex([
+    await system.deployments.publishRestoreIndex(providerId, [
       { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: { app: TARGET_APP } },
     ]);
 
@@ -916,15 +916,14 @@ describe('restore@1 provider half (spec 008) — real filesystem harness', () =>
     // that lazily loads deployments yet.
     const cold = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
     await expect(
-      cold.deployments.publishRestoreIndex([
+      cold.deployments.publishRestoreIndex(providerId, [
         { captureId: 'cap-1', takenAt: '2026-02-01T09:00:00.000Z', sizeBytes: 100, location: '/srv/hola/apps/wiki-1a2b3c4d', identity: { app: TARGET_APP } },
       ]),
     ).resolves.toEqual({ ok: true, count: 1 });
 
     const cold2 = makeSystem({ [PROVIDER_APP]: { provides: ['restore@1'] } });
-    const polled = await cold2.deployments.pollRestoreRequests();
+    const polled = await cold2.deployments.pollRestoreRequests(providerId);
     expect(polled.reindex).toBe(false);
     expect(await cold2.deployments.listProviderRestoreSources(TARGET_APP, undefined, undefined, [])).toHaveLength(1);
-    void providerId;
   });
 });
