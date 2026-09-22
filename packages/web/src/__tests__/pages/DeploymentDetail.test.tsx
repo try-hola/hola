@@ -1073,7 +1073,10 @@ describe('DeploymentDetail remove confirmation (#446)', () => {
     expect(confirm).toHaveClass('bg-danger');
 
     fireEvent.click(confirm);
-    await waitFor(() => expect(deploymentsApi.remove).toHaveBeenCalledWith(deploymentId));
+    // No force: the ordinary uninstall is the one that refuses if the
+    // containers cannot be stopped (F09), and that refusal is the only route to
+    // the forced variant.
+    await waitFor(() => expect(deploymentsApi.remove).toHaveBeenCalledWith(deploymentId, undefined));
     // Removal navigates back to the list route.
     await waitFor(() => expect(screen.getByText('Deployments List')).toBeInTheDocument());
   });
@@ -1088,6 +1091,46 @@ describe('DeploymentDetail remove confirmation (#446)', () => {
 
     expect(await within(dialog).findByText('teardown failed')).toBeInTheDocument();
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  // F09: uninstall now refuses when the server cannot confirm the containers
+  // stopped, rather than deleting the data root out from under a live database.
+  // Without a route to the forced variant from here, a wedged container would
+  // make a deployment unremovable from the dashboard — a data-loss bug traded
+  // for an operability one. The force path is deliberately reachable ONLY after
+  // that refusal, so an operator has seen the reason before overriding it.
+  it('offers the forced removal only after a stop-failure refusal, and sends force on confirm', async () => {
+    deploymentsApi.remove.mockRejectedValueOnce(
+      new Error("Refusing to uninstall 'My App': its containers could not be stopped, and removing its data …"),
+    );
+    deploymentsApi.remove.mockResolvedValue({ ok: true });
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    // The dialog turns into the force variant, naming what forcing costs.
+    const force = await within(dialog).findByRole('button', { name: 'Force remove' });
+    expect(within(dialog).getByText(/can leave containers running/)).toBeInTheDocument();
+
+    fireEvent.click(force);
+    await waitFor(() => expect(deploymentsApi.remove).toHaveBeenLastCalledWith(deploymentId, { force: true }));
+  });
+
+  // A failure that is NOT a stop failure must not open the force route: forcing
+  // past (say) a storage error removes the record while leaving the data, which
+  // is not what force is for.
+  it('does not offer forced removal for an unrelated failure', async () => {
+    deploymentsApi.remove.mockRejectedValue(new Error('network unreachable'));
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    expect(await within(dialog).findByText('network unreachable')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Force remove' })).not.toBeInTheDocument();
   });
 
   it('closes without removing when Cancel is clicked', async () => {

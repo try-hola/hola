@@ -165,6 +165,9 @@ export const DeploymentDetail: React.FC = () => {
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // Set only when a normal uninstall has been refused because the containers
+  // could not be stopped; switches the dialog to the explicit force path (F09).
+  const [canForceRemove, setCanForceRemove] = useState(false);
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
 
@@ -398,17 +401,24 @@ export const DeploymentDetail: React.FC = () => {
   // Confirmed removal: full teardown via the DELETE endpoint, then back to the
   // deployments list (the deployment no longer exists, so there's nothing to
   // show here). On failure we keep the dialog open and surface the error inline.
-  const handleRemove = async () => {
+  const handleRemove = async (force = false) => {
     if (!deployment) return;
 
     setRemoving(true);
     setRemoveError(null);
     try {
-      await removeDeployment();
+      await removeDeployment(force ? { force: true } : undefined);
       navigate('/deployments');
     } catch (error) {
       console.error('Error removing deployment:', error);
-      setRemoveError(error instanceof Error ? error.message : 'Failed to remove deployment');
+      const message = error instanceof Error ? error.message : 'Failed to remove deployment';
+      setRemoveError(message);
+      // The server refuses to uninstall when it cannot confirm the containers
+      // stopped (F09) rather than deleting the data root under a live app. Offer
+      // the force path only AFTER that refusal — reaching it requires having
+      // seen why the safe uninstall declined, which is a better gate than a
+      // checkbox sitting next to the normal button.
+      setCanForceRemove(/could not be stopped/i.test(message));
     } finally {
       setRemoving(false);
     }
@@ -1286,15 +1296,19 @@ export const DeploymentDetail: React.FC = () => {
       <ConfirmDialog
         open={showRemoveConfirm}
         title={`Remove ${deployment.name}?`}
-        body={REMOVE_DIALOG_BODY}
-        confirmLabel={removing ? 'Removing…' : 'Remove'}
+        body={
+          canForceRemove
+            ? 'Its containers could not be stopped, so nothing was removed. Forcing removal deletes its data, auth and record anyway, and can leave containers running with no way to reach them from Hola. Stop the app on the host first if you can.'
+            : REMOVE_DIALOG_BODY
+        }
+        confirmLabel={removing ? 'Removing…' : canForceRemove ? 'Force remove' : 'Remove'}
         busy={removing}
         error={removeError}
         danger
         icon={<AlertTriangle className="w-[18px] h-[18px]" />}
         confirmIcon={<Trash2 className="w-4 h-4" />}
-        onConfirm={handleRemove}
-        onCancel={() => setShowRemoveConfirm(false)}
+        onConfirm={() => handleRemove(canForceRemove)}
+        onCancel={() => { setShowRemoveConfirm(false); setRemoveError(null); setCanForceRemove(false); }}
       />
 
       {/* Header card */}

@@ -70,6 +70,11 @@ const makeJobs = () => {
     getJob: async () => null,
     onJobUpdate: () => ({ unsubscribe() {} }),
     setExecutor: () => {},
+    // F10 lifecycle serialization: this stub dispatches nothing, so it is never
+    // busy and there is no in-flight work for the lock to exclude.
+    isDeploymentBusy: () => false,
+    runExclusive: async (_id: string, fn: () => Promise<unknown>) => fn(),
+    discardDeploymentJobs: async () => {},
     healthCheck: async () => ({ healthy: true, lastCheck: new Date() }),
   } as unknown as JobArg;
 };

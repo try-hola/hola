@@ -218,7 +218,12 @@ export class HolaSdk {
     list: (qs?: GetDeploymentsRequest) => this.get<GetDeploymentsResponse>(`${API.deployments.base}${buildQuery(qs)}`),
     byId: (deploymentId: string) => this.get<GetDeploymentResponse>(API.deployments.byId(deploymentId)),
     update: (deploymentId: string, data: PatchDeploymentRequest) => this.patch<PatchDeploymentResponse>(API.deployments.byId(deploymentId), data),
-    delete: (deploymentId: string) => this.delete<void>(API.deployments.byId(deploymentId)),
+    // `force` is the explicit force-removal operation (F09): uninstall refuses
+    // when the app's containers cannot be confirmed stopped, and this is the
+    // separate, opt-in way past that for a genuinely wedged container. It can
+    // leave orphaned containers behind.
+    delete: (deploymentId: string, opts?: { force?: boolean }) =>
+      this.delete<void>(`${API.deployments.byId(deploymentId)}${opts?.force ? '?force=true' : ''}`),
     history: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetDeploymentHistoryResponse>(`${API.deployments.history(deploymentId)}${buildQuery(qs)}`),
     action: (deploymentId: string, action: PostDeploymentActionRequest) => this.post<PostDeploymentActionResponse>(API.deployments.actions(deploymentId), action),
     rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),

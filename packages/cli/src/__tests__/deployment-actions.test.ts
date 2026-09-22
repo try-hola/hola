@@ -82,9 +82,30 @@ describe('deployment lifecycle actions', () => {
       prompter: scriptedPrompter({ confirm: 'true' }),
     });
     expect(sdk.deployments.byId).toHaveBeenCalledWith('dep1');
-    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1');
+    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1', { force: false });
     expect(res?.uninstalled).toBe('dep1');
     expect(process.exitCode).toBe(0);
+  });
+
+  // F09: the server refuses to uninstall when it cannot confirm the containers
+  // stopped, so `--force` is the explicit separate operation that removes the
+  // deployment anyway. It must reach the wire — a flag that is parsed, printed
+  // and then dropped would leave an operator with a wedged container unable to
+  // remove it and no indication why.
+  it('uninstall --force passes force through and says so in the confirmation', async () => {
+    const sdk = makeSdk();
+    const prompts: string[] = [];
+    const prompter = {
+      prompt: async (q: { message: string }) => { prompts.push(q.message); return 'true'; },
+    };
+    const res = await runUninstall('dep1', { force: true }, {
+      sdk: sdk as unknown as HolaSdk,
+      prompter: prompter as unknown as ReturnType<typeof scriptedPrompter>,
+    });
+    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1', { force: true });
+    expect(prompts[0]).toMatch(/FORCE uninstall/);
+    expect(prompts[0]).toMatch(/orphaned/);
+    expect(res?.uninstalled).toBe('dep1');
   });
 
   it('uninstall aborts (no delete) when the confirmation is declined', async () => {
@@ -101,7 +122,9 @@ describe('deployment lifecycle actions', () => {
   it('uninstall --yes skips the prompt and deletes', async () => {
     const sdk = makeSdk();
     await runUninstall('dep1', { yes: true }, { sdk: sdk as unknown as HolaSdk });
-    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1');
+    // `--yes` skips the prompt; it never implies `--force` (F09). Skipping a
+    // confirmation and overriding a safety refusal are different decisions.
+    expect(sdk.deployments.delete).toHaveBeenCalledWith('dep1', { force: false });
   });
 
   it('upgrade passes --app-version through to promote', async () => {

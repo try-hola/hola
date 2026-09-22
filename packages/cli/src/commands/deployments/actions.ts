@@ -134,6 +134,13 @@ export async function runRollback(
 export interface UninstallOptions {
   yes?: boolean;
   json?: boolean;
+  /**
+   * Remove the deployment even when its containers cannot be confirmed stopped
+   * (F09). The plain uninstall refuses in that case rather than deleting the
+   * data root out from under a live database; this is the explicit way past it
+   * for a genuinely wedged container, and it can orphan containers.
+   */
+  force?: boolean;
 }
 
 /**
@@ -164,7 +171,9 @@ export async function runUninstall(
       const answer = await prompter.prompt({
         key: 'confirm',
         type: 'confirm',
-        message: `Uninstall ${name} (${deploymentId})? This removes its containers, data, and auth.`,
+        message: opts.force
+          ? `FORCE uninstall ${name} (${deploymentId})? This removes its data and auth even if its containers cannot be stopped, which can leave them orphaned.`
+          : `Uninstall ${name} (${deploymentId})? This removes its containers, data, and auth.`,
         default: 'false',
       });
       if (answer !== 'true') {
@@ -173,8 +182,8 @@ export async function runUninstall(
       }
     }
 
-    out(`Uninstalling ${deploymentId}…`);
-    await sdk.deployments.delete(deploymentId);
+    out(opts.force ? `Force-uninstalling ${deploymentId}…` : `Uninstalling ${deploymentId}…`);
+    await sdk.deployments.delete(deploymentId, { force: opts.force === true });
 
     if (opts.json) {
       console.log(JSON.stringify({ uninstalled: deploymentId }, null, 2));

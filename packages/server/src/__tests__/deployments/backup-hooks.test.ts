@@ -163,17 +163,40 @@ describe('Backup hooks around the pre-upgrade snapshot (#121)', () => {
     expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
   });
 
-  test('a preHook failure WITHOUT required backup warns and continues (snapshot still taken)', async () => {
+  // Behaviour change (#524): an explicitly requested `snapshot: true` whose
+  // capture fails now FAILS THE PROMOTE, where it used to warn and upgrade
+  // anyway. `preUpgradeBackup: 'required'` is the app packager's default for
+  // everyone; `snapshot: true` is this operator's instruction for this upgrade,
+  // and an instruction that can be silently declined is not one. Left
+  // best-effort, it composed with the rollback's own silent no-op into the
+  // documented loss: ask for a snapshot, get none; later ask for a data-aware
+  // rollback, get none, and be told it succeeded.
+  test('a preHook failure with a REQUESTED snapshot fails the promote (#524)', async () => {
     backupConfig = PG_BACKUP;
     docker.failService = 'db';
     const { drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'pgapp', options: { autoStart: false } });
     await withAppData(dep.deploymentId);
 
-    // Opt-in snapshot, not required → a preHook failure is best-effort: the promote
-    // succeeds. (No snapshot is written because the capture is skipped on preHook
-    // failure, but the upgrade proceeds.)
-    const res = await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
+    await expect(
+      deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } }),
+    ).rejects.toThrow(/snapshot: true/);
+
+    // And nothing was recorded — an operator who retries is not looking at a
+    // snapshot directory that holds no usable capture.
+    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+  });
+
+  // The unrequested case is unchanged: no flag and no `required` means no
+  // capture is attempted at all, so there is nothing to fail.
+  test('a preHook failure with NO snapshot requested does not affect the promote', async () => {
+    backupConfig = PG_BACKUP;
+    docker.failService = 'db';
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'pgapp', options: { autoStart: false } });
+    await withAppData(dep.deploymentId);
+
+    const res = await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), options: { autoStart: false } });
     expect(res.releaseId).toBeDefined();
     expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
   });

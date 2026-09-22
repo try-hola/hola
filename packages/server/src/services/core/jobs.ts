@@ -25,6 +25,72 @@ import type { Job as SharedJob, JobStatus as SharedJobStatus, JobType as SharedJ
 export type JobUpdate = { id: string; status: SharedJobStatus; progress?: number; finishedAt?: string };
 
 /**
+ * A mutex keyed by deployment id (F10).
+ *
+ * Lifecycle work for ONE deployment must never overlap — start/stop/restart/
+ * promote/rollback/delete all act on the same Compose project, release pointer,
+ * auth objects, routing entry and data root. Work for DIFFERENT deployments
+ * must still run in parallel, which is why this is keyed rather than global: a
+ * single lock would serialize a host's entire fleet behind one slow image pull.
+ *
+ * Two acquisition modes, deliberately:
+ *   - `tryAcquire` — non-blocking, used by the job dispatcher, which skips a
+ *     busy deployment and dispatches a different one instead (so a queued job
+ *     for a busy deployment never consumes a concurrency slot).
+ *   - `acquire` — blocking + FIFO, used by work that runs OUTSIDE the queue
+ *     (`deleteDeployment`'s in-line teardown, `promote`'s pre-upgrade capture).
+ *     That is the gap the finding names: "limiting global concurrency is not
+ *     enough when delete also performs work directly".
+ *
+ * Release hands the key straight to the next FIFO waiter without clearing
+ * `held`, so a waiter can never be overtaken by the dispatcher.
+ */
+export class DeploymentLocks {
+  private held = new Set<string>();
+  private waiters = new Map<string, Array<() => void>>();
+
+  isHeld(key: string): boolean {
+    return this.held.has(key);
+  }
+
+  /** True if the key was free and is now held by the caller. */
+  tryAcquire(key: string): boolean {
+    if (this.held.has(key)) return false;
+    this.held.add(key);
+    return true;
+  }
+
+  acquire(key: string): Promise<void> {
+    if (this.tryAcquire(key)) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const queue = this.waiters.get(key) ?? [];
+      queue.push(resolve);
+      this.waiters.set(key, queue);
+    });
+  }
+
+  release(key: string): void {
+    const queue = this.waiters.get(key);
+    const next = queue?.shift();
+    if (queue && queue.length === 0) this.waiters.delete(key);
+    if (next) {
+      next(); // direct hand-off: `held` stays set for the waiter
+      return;
+    }
+    this.held.delete(key);
+  }
+
+  async runExclusive<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    await this.acquire(key);
+    try {
+      return await fn();
+    } finally {
+      this.release(key);
+    }
+  }
+}
+
+/**
  * Thrown by an executor (or a cooperative checkpoint) to signal that a job was
  * cancelled mid-flight, as opposed to failing. The job service records it as
  * `cancelled` rather than `failed`.
@@ -70,6 +136,31 @@ export interface JobService extends HealthCheckable {
   onJobUpdate(jobId: string, listener: Listener<JobUpdate>): { unsubscribe(): void };
   /** Register the executor that performs real work for jobs (e.g. Compose lifecycle). */
   setExecutor(executor: JobExecutor): void;
+  /**
+   * True while this deployment has lifecycle work queued or running (F10) — the
+   * signal `executeAction`/`promote`/`rollback`/`deleteDeployment` use to refuse
+   * a second, state-carrying operation rather than let it queue behind one that
+   * will change the state it was decided against.
+   *
+   * Point-in-time and therefore advisory: it exists for the OPERATOR (a clear
+   * 409 instead of a surprise), never as the safety property. The guarantee is
+   * {@link runExclusive} + the dispatcher's own per-deployment partitioning.
+   */
+  isDeploymentBusy(deploymentId: string): boolean;
+  /**
+   * Run `fn` holding this deployment's lifecycle lock — for work that does NOT
+   * go through the queue (delete's in-line teardown, promote's pre-upgrade
+   * capture). Serializes against dispatched jobs for the same deployment and
+   * against other callers; work for other deployments is unaffected.
+   */
+  runExclusive<T>(deploymentId: string, fn: () => Promise<T>): Promise<T>;
+  /**
+   * Drop every still-queued job for a deployment and flag any running one for
+   * cancellation. Called when the deployment is being removed: a job that
+   * outlives its deployment finds no record, falls through to the simulated
+   * executor and reports `completed` having done nothing.
+   */
+  discardDeploymentJobs(deploymentId: string): Promise<void>;
 }
 
 // Job states that are safe to clear — never a queued/running job.
@@ -95,7 +186,8 @@ export class RealJobService implements JobService {
   private db: DatabaseService;
   private repo: JobRepository;
   private logging: LoggingService;
-  private queue: string[] = [];
+  private queue: Array<{ id: string; deploymentId?: string }> = [];
+  private locks = new DeploymentLocks();
   private running = 0;
   private maxConcurrency = Number(process.env.HOLA_JOBS_CONCURRENCY || 2);
   private bus = new Bus<string, JobUpdate>();
@@ -129,21 +221,61 @@ export class RealJobService implements JobService {
     });
   }
 
-  private enqueue(id: string) {
-    this.queue.push(id);
+  private enqueue(id: string, deploymentId?: string) {
+    this.queue.push({ id, ...(deploymentId ? { deploymentId } : {}) });
     this.tick();
   }
 
+  /**
+   * Dispatch the next runnable job (F10).
+   *
+   * "Runnable" is no longer simply "first in the queue": a job whose deployment
+   * already has work in flight is SKIPPED, not waited on, so it neither runs
+   * concurrently with its sibling nor blocks an unrelated deployment behind it.
+   * That is the whole partition — per-deployment serialization with
+   * cross-deployment parallelism preserved up to `maxConcurrency`. Jobs with no
+   * deployment (the contract broker's fleet-wide prepare) are never partitioned.
+   */
   private tick() {
-    while (this.running < this.maxConcurrency && this.queue.length > 0) {
-      const id = this.queue.shift()!;
-      this.runJob(id).catch(err => {
-        this.logger.error('Job execution crashed', err as Error, { jobId: id });
+    while (this.running < this.maxConcurrency) {
+      const index = this.queue.findIndex((e) => !e.deploymentId || !this.locks.isHeld(e.deploymentId));
+      if (index === -1) return;
+      const [entry] = this.queue.splice(index, 1);
+      if (entry.deploymentId) this.locks.tryAcquire(entry.deploymentId);
+      this.runJob(entry.id, entry.deploymentId).catch(err => {
+        this.logger.error('Job execution crashed', err as Error, { jobId: entry.id });
       });
     }
   }
 
-  private async runJob(id: string) {
+  isDeploymentBusy(deploymentId: string): boolean {
+    return this.locks.isHeld(deploymentId) || this.queue.some((e) => e.deploymentId === deploymentId);
+  }
+
+  runExclusive<T>(deploymentId: string, fn: () => Promise<T>): Promise<T> {
+    return this.locks.runExclusive(deploymentId, fn).finally(() => this.tick());
+  }
+
+  async discardDeploymentJobs(deploymentId: string): Promise<void> {
+    const queued = this.queue.filter((e) => e.deploymentId === deploymentId);
+    this.queue = this.queue.filter((e) => e.deploymentId !== deploymentId);
+    for (const entry of queued) {
+      this.cancelled.add(entry.id);
+      await this.repo.updateStatus(entry.id, 'cancelled').catch(() => undefined);
+      this.cancelled.delete(entry.id);
+      this.notify(entry.id, { id: entry.id, status: 'failed', finishedAt: new Date().toISOString() });
+    }
+    // A job already running for this deployment is flagged for its next
+    // cooperative checkpoint; a single long Compose call still can't be
+    // interrupted, which is precisely why the non-forced delete path refuses to
+    // run at all while one is in flight.
+    const running = await this.repo.findByStatus('running').catch(() => []);
+    for (const job of running) {
+      if ((job.payload?.deploymentId as string | undefined) === deploymentId) this.cancelled.add(job.id);
+    }
+  }
+
+  private async runJob(id: string, deploymentId?: string) {
     this.running++;
     try {
       if (this.cancelled.has(id)) {
@@ -244,6 +376,7 @@ export class RealJobService implements JobService {
       }
     } finally {
       this.running--;
+      if (deploymentId) this.locks.release(deploymentId);
       this.tick();
     }
   }
@@ -260,7 +393,7 @@ export class RealJobService implements JobService {
     try {
       // Re-enqueue jobs that were still queued when the process stopped.
       const pending = await this.repo.findByStatus('pending');
-      pending.forEach(j => this.enqueue(j.id));
+      pending.forEach(j => this.enqueue(j.id, (j.payload?.deploymentId as string | undefined) || undefined));
       // Any job left 'running' was orphaned by a crash/restart — no executor is
       // driving it anymore — so fail it rather than leave the deployment wedged
       // showing an in-progress job that never resolves.
@@ -285,7 +418,7 @@ export class RealJobService implements JobService {
       progress: 0,
     };
     const created = await this.repo.create(entity);
-    this.enqueue(created.id);
+    this.enqueue(created.id, params.deploymentId);
     return toShared(created);
   }
 
@@ -298,7 +431,7 @@ export class RealJobService implements JobService {
     }
     // Flag for cooperative cancellation and drop it from the queue if still waiting.
     this.cancelled.add(id);
-    this.queue = this.queue.filter(j => j !== id);
+    this.queue = this.queue.filter(j => j.id !== id);
     if (entity.status === 'running') {
       // A running job is finalized by runJob once a cooperative checkpoint observes
       // the flag (it throws JobCancelledError) — writing a terminal status here would
@@ -483,6 +616,29 @@ export class MockJobService implements JobService {
 
   setExecutor(): void {
     // Mock jobs do not run an executor (test mode resolves jobs synthetically).
+  }
+
+  /**
+   * Always idle. The mock never dispatches anything — in `NODE_ENV=test` a
+   * created job stays `queued` forever by design — so reporting "busy" off the
+   * recorded status would make every second operation in a mock-backed test a
+   * 409 for a job that was never going to run. The real service is the one that
+   * knows what is in flight, and it is the one that enforces this (F10).
+   */
+  isDeploymentBusy(): boolean {
+    return false;
+  }
+
+  async runExclusive<T>(_deploymentId: string, fn: () => Promise<T>): Promise<T> {
+    return fn();
+  }
+
+  async discardDeploymentJobs(deploymentId: string): Promise<void> {
+    for (const [id, job] of this.jobs) {
+      if (job.deploymentId !== deploymentId) continue;
+      if (job.status === 'completed' || job.status === 'failed') continue;
+      await this.cancelJob(id);
+    }
   }
 
   async healthCheck(): Promise<ServiceHealth> {

@@ -86,14 +86,81 @@ function runTar(args: string[]): Promise<void> {
 }
 
 /**
- * Replace `destDir`'s contents with the extracted contents of `srcFile`. The dir
- * is wiped first so the restore is exact (no stale files from the newer release
- * left behind) — callers MUST stop the app's containers before calling this.
+ * Replace `destDir`'s contents with the extracted contents of `srcFile` —
+ * **staged**, so a missing, truncated or corrupt archive cannot destroy the
+ * only current copy of the data (F09).
+ *
+ * The order is the whole point. This used to be three lines — `rm -rf destDir`,
+ * `mkdir`, `tar -xzf` — which deleted the destination *before* anything proved
+ * the archive could be extracted. A deliberately invalid archive therefore left
+ * the caller with neither the old data nor the new. The sequence is now:
+ *
+ *  1. extract into a fresh staging directory (`.incoming-<ts>`) under
+ *     `stagingParent`. A bad archive fails HERE, with `destDir` untouched.
+ *  2. assert the staged tree is non-empty — a technically-valid archive of
+ *     nothing would otherwise be a silent `rm -rf` of the data root.
+ *  3. move the existing `destDir` aside (`.superseded-<ts>`) — a rename, so
+ *     the original is preserved, not copied, and the window is microseconds.
+ *  4. move the staged tree into place. If THAT fails, the original is renamed
+ *     back and the error propagates — the failure disposition is always "the
+ *     data you had is the data you still have".
+ *  5. only then remove the superseded tree (best-effort: a leftover costs
+ *     disk, never data).
+ *
+ * `stagingParent` is required rather than derived: it must be on the same
+ * filesystem as `destDir` for the renames to be atomic, and only the caller
+ * knows a platform-owned directory that qualifies. It must NOT be a path any
+ * app container can reach — staging holds the operator's app data mid-swap.
+ * (`EXDEV` is still tolerated, falling back to a copy, so a per-app filesystem
+ * degrades in speed rather than failing.)
+ *
+ * Callers MUST still stop the app's containers first: this proves the archive,
+ * not that nothing is writing to the directory.
  */
-export async function restoreTarGzInto(srcFile: string, destDir: string): Promise<void> {
-  await rm(destDir, { recursive: true, force: true });
-  await mkdir(destDir, { recursive: true });
-  await run('tar', ['-xzf', srcFile, '-C', destDir]);
+export async function restoreTarGzInto(srcFile: string, destDir: string, stagingParent: string): Promise<void> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const staged = join(stagingParent, `${basename(destDir)}.incoming-${stamp}`);
+  const superseded = join(stagingParent, `${basename(destDir)}.superseded-${stamp}`);
+
+  await mkdir(stagingParent, { recursive: true, mode: 0o700 });
+  await mkdir(staged, { recursive: true });
+  try {
+    // Strict `run`, not `runTar`: tolerating exit 1 is right when ARCHIVING a
+    // live directory (files change under tar) and wrong when extracting — a
+    // truncated archive is exactly what this function exists to refuse.
+    await run('tar', ['-xzf', srcFile, '-C', staged]);
+    if (!(await dirHasContents(staged))) {
+      throw new Error(`refusing to restore: ${srcFile} extracted to nothing`);
+    }
+  } catch (err) {
+    await rm(staged, { recursive: true, force: true });
+    throw err;
+  }
+
+  const hadDest = await dirHasContents(destDir);
+  if (hadDest) await moveDir(destDir, superseded);
+  try {
+    await moveDir(staged, destDir);
+  } catch (err) {
+    // Put the original back before surfacing the failure. Losing the data here
+    // would be the very outcome the staging exists to prevent.
+    if (hadDest) await moveDir(superseded, destDir).catch(() => undefined);
+    await rm(staged, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
+  if (hadDest) await rm(superseded, { recursive: true, force: true }).catch(() => undefined);
+}
+
+/** `rename`, falling back to copy+remove across filesystems (`EXDEV`). */
+async function moveDir(from: string, to: string): Promise<void> {
+  await rm(to, { recursive: true, force: true });
+  try {
+    await rename(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+    await cp(from, to, { recursive: true });
+    await rm(from, { recursive: true, force: true });
+  }
 }
 
 /**

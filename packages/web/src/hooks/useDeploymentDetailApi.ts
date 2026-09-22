@@ -81,14 +81,14 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
   // delete record + clean storage) via DELETE /api/deployments/:id. The caller
   // navigates away on success since the deployment no longer exists.
   const removeDeploymentMutation = useMutation({
-    mutationFn: () => api.deployments.remove(deploymentId!),
+    mutationFn: (opts?: { force?: boolean }) => api.deployments.remove(deploymentId!, opts),
     onSuccess: () => {
       qc.removeQueries({ queryKey: queryKeys.deployments.detail(deploymentId!), exact: true });
       qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
       qc.invalidateQueries({ queryKey: queryKeys.summary });
     },
   });
-  const removeDeployment = () => removeDeploymentMutation.mutateAsync();
+  const removeDeployment = (opts?: { force?: boolean }) => removeDeploymentMutation.mutateAsync(opts);
 
   return {
     data: query.data ?? null,
