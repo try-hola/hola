@@ -77,6 +77,29 @@ if [[ "$AUTH_MODE" == "authentik" ]]; then
   fi
 fi
 
+# --- Traefik dashboard credential (F07) ---------------------------------------
+# The dashboard is Traefik's own api@internal: it lists every route, service,
+# middleware and TLS setting on this host, and Hola's API authentication is not
+# on that request path. The server therefore refuses to publish a router for it
+# without a credential, and this is where the credential comes from.
+#
+# Generated idempotently, and OUTSIDE the authentik block — the dashboard gate is
+# not an SSO concern and must work on HOLA_AUTH_MODE=none. Because `hola update`
+# re-runs this script, a host that set TRAEFIK_DASHBOARD_DOMAIN before this change
+# gets a password on its next update and KEEPS its dashboard (now behind Basic
+# auth) rather than silently losing it.
+if [[ -n "$(env_get TRAEFIK_DASHBOARD_DOMAIN | xargs || true)" && -z "$(env_get TRAEFIK_DASHBOARD_PASSWORD | xargs || true)" ]]; then
+  if command -v openssl >/dev/null 2>&1; then
+    env_set TRAEFIK_DASHBOARD_PASSWORD "$(openssl rand -hex 24)"
+    echo "[install]   generated TRAEFIK_DASHBOARD_PASSWORD"
+    echo "[install]   The Traefik dashboard is protected by Basic auth (user: admin)."
+    echo "[install]   Read the password from TRAEFIK_DASHBOARD_PASSWORD in $ENV_FILE"
+  else
+    echo "[install] WARNING: openssl not found, so TRAEFIK_DASHBOARD_PASSWORD was not generated." >&2
+    echo "[install]          The Traefik dashboard will NOT be published until you set one." >&2
+  fi
+fi
+
 # --- LDAP staging -------------------------------------------------------------
 # The outpost exits 1 on an empty AUTHENTIK_TOKEN, and that token only exists once
 # Authentik is up and the server has provisioned the outpost — so it cannot be set

@@ -76,6 +76,11 @@ export const INSTALL_SCHEMA: InstallField[] = [
     key: 'TRAEFIK_DASHBOARD_DOMAIN',
     type: 'text',
     prompt: 'Domain for the Traefik dashboard',
+    // F07: the dashboard is Traefik's own api@internal and has no authentication
+    // of its own, so install.sh generates a Basic-auth password for it and the
+    // server refuses to publish the route without one. Say so here — an operator
+    // typing a domain should know they are about to need a credential to use it.
+    help: 'Protected by Basic auth (user: admin); install.sh generates the password into .env',
     default: (c) => (c.HOLA_BASE_DOMAIN ? `traefik.${c.HOLA_BASE_DOMAIN}` : ''),
     validate: isDomain,
   },

@@ -373,6 +373,69 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   privileged, and without them the generic mutating-method default would guard
   a future real implementation with `write:deployments`. Surfacing the
   provider's own snapshots — with real verbs — is #160.
+- **The Traefik dashboard is never published unauthenticated (F07).**
+  `coreRoutesFromEnv` emitted an `api@internal` router the moment
+  `TRAEFIK_DASHBOARD_DOMAIN` was set, and `renderCoreConfig` built every core
+  router as `{ rule, service, entryPoints, tls }` — **no `middlewares` key at
+  all, for any core route**. So the dashboard got TLS and nothing else, and
+  anyone who could resolve that name could read every route, service, middleware
+  and TLS setting on the host, the hostname of every installed app included.
+  Hola's own auth is not on that request path and could not be: this is Traefik
+  answering for itself, through a file-provider router, not a Hola API route.
+  A credential is now a **precondition for publishing the route at all** —
+  `traefikDashboardStatus` returns `unconfigured` / `blocked` / `protected`, and
+  only `protected` produces a `CoreRoute`, carrying pre-hashed
+  `basicAuthUsers` that `renderCoreConfig` turns into a `basicAuth` middleware.
+  **Basic auth, not forward-auth**: forward-auth needs Authentik running (so it
+  would fail on `HOLA_AUTH_MODE=none`) and would mean provisioning an Authentik
+  proxy provider + application for a host that is not an app, a new branch
+  through a `ProvisionerService` built entirely around deployments; an
+  `ipAllowList` is not authorization, needs the operator to know their own CIDR,
+  and is silently wrong behind a proxy or CGNAT. The hash is computed in
+  `coreRoutesFromEnv` (called once at startup), **not** in `renderCoreConfig`,
+  so the renderer stays a deterministic pure function of its input — bcrypt
+  salts randomly, and `core.yml` re-emitting differently every call is a Traefik
+  reload per write. `reservedCoreHosts` is deliberately **not** derived from the
+  emitted routes: a blocked dashboard host must stay unclaimable by an app
+  (#246), or a host one `.env` edit from serving the dashboard could lose the
+  name meanwhile — and it is the per-request path, so it does no bcrypt work.
+  The upgrade is not a silent break: `install.sh` generates
+  `TRAEFIK_DASHBOARD_PASSWORD` idempotently and **outside** the authentik block
+  (the gate is not an SSO concern), and `hola update` re-runs install.sh, so a
+  host that predates this keeps its dashboard, now authenticated. A
+  configured-but-credential-less dashboard warns loudly at startup. The dev
+  overlay (`docker-compose.dev.yml`) keeps its unauthenticated HTTP dashboard
+  label — opt-in, local, `/etc/hosts`-scoped — and now says so.
+- **The log proxy's envelope is a property of the responses, not the route
+  table (F08).** `decide` allowed `/containers/json` as `passthrough` and
+  `/events` as `stream`, so both were forwarded verbatim — and Docker's *list*
+  response carries, under different names and shapes, exactly the categories
+  `redactInspect` was rebuilt field-by-field to withhold (`Command` where
+  `Config.Cmd` was denied, `Mounts`, `NetworkSettings`, `Ports` where
+  `HostConfig.PortBindings` was). The inspect allowlist bought nothing an
+  attacker could not route around by asking a different way; the existing test
+  *pinned* the leak, asserting byte-identical passthrough. `/containers/json` is
+  now rebuilt by `redactContainerList` using inspect's vocabulary (not a second
+  one) with the schema differences spelled out in a field-by-field table, and
+  denied-but-structural fields are emitted **present and empty** for the same
+  reason inspect does it — clients walk them without nil checks. `/events` is
+  filtered payload by payload (`redactEventStream`, an NDJSON `TransformStream`
+  that re-emits per complete line so the stream stays a stream and a long idle
+  gap stays legal); an unparseable line is **dropped**, since a payload the
+  proxy cannot parse is one it cannot redact. `/info` was already a genuine
+  allowlist rebuild, not just a named `kind`. **Labels are a denylist, not an
+  allowlist, and that is the deliberate asymmetry**: they are an open namespace
+  whose whole purpose here is grouping — `sh.hola.*` is what lets a collector
+  group logs by app with no per-app configuration — so an allowlist would break
+  the capability it protects. Only the keys Compose writes absolute host paths
+  into (`com.docker.compose.project.working_dir` / `.config_files`, plus
+  Docker Desktop's `desktop.docker.io/binds/` prefix) are withheld, on list,
+  inspect **and** events alike. The app inventory is deliberately *not*
+  withheld from events: "know what exists, and read its logs" is the envelope,
+  and list already discloses the same set legitimately. Verified against the
+  real thing — Dozzle v11 (the shipped `container-logs@1` provider) connects,
+  lists, groups by `sh.hola.*`, streams logs and drops a destroyed container
+  from its list, through the changed proxy against a real daemon.
 - **The web typecheck checks files now (F13).** `packages/web`'s `typecheck`
   script ran `tsc --noEmit`, which resolves `tsconfig.json` — a
   **references-only** file with `"files": []`. A bare `tsc` does **not** traverse

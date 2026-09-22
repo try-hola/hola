@@ -39,7 +39,10 @@ services:
         condition: service_completed_successfully
     command:
       # --api enables the built-in api@internal service; the Hola server emits a
-      # file-provider router for it (core.yml) at TRAEFIK_DASHBOARD_DOMAIN.
+      # file-provider router for it (core.yml) at TRAEFIK_DASHBOARD_DOMAIN — and
+      # only when TRAEFIK_DASHBOARD_PASSWORD gives it a Basic-auth gate (F07).
+      # There is deliberately no --api.insecure: api@internal is reachable ONLY
+      # through a router, so no router means no exposure on any entrypoint.
       - --api=true
       - --api.dashboard=true
       # File provider ONLY — no Docker provider, no Docker socket. Both the
@@ -115,7 +118,12 @@ services:
       # answers on a second name that HOLA_DOMAIN doesn't cover, or behind a
       # proxy that rewrites Host. Blank is the normal case.
       - HOLA_TRUSTED_ORIGINS=${HOLA_TRUSTED_ORIGINS:-}
+      # F07: the dashboard router is emitted only when it has a Basic-auth
+      # credential. install.sh generates the password; without one the server
+      # warns and publishes nothing for this host.
       - TRAEFIK_DASHBOARD_DOMAIN=${TRAEFIK_DASHBOARD_DOMAIN}
+      - TRAEFIK_DASHBOARD_USER=${TRAEFIK_DASHBOARD_USER:-admin}
+      - TRAEFIK_DASHBOARD_PASSWORD=${TRAEFIK_DASHBOARD_PASSWORD:-}
       - HOLA_AUTHENTIK_DOMAIN=${HOLA_AUTHENTIK_DOMAIN:-}
       - HOLA_USE_AUTH=${HOLA_USE_AUTH:-true}
       # Optional fixed admin key; if unset, the server generates one on first boot

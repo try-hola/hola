@@ -8,21 +8,31 @@ import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { decide, redactInspect, startDockerProxy, redactInfo } from '../../lib/docker-proxy';
+import {
+  decide,
+  redactInspect,
+  startDockerProxy,
+  redactInfo,
+  redactContainerList,
+  redactLabels,
+  redactEvent,
+} from '../../lib/docker-proxy';
 import type { DockerProxyHandle } from '../../lib/docker-proxy';
 
 describe('decide', () => {
   test('allows the container-list, inspect, logs and events GETs', () => {
-    expect(decide('GET', '/containers/json')).toEqual({ allow: true, kind: 'passthrough' });
+    // `list` and `events` are NOT `passthrough` (F08): allowing the path is only
+    // half the decision, and both bodies are rebuilt/filtered before they leave.
+    expect(decide('GET', '/containers/json')).toEqual({ allow: true, kind: 'list' });
     expect(decide('GET', '/containers/abc123/json')).toEqual({ allow: true, kind: 'inspect' });
     expect(decide('GET', '/containers/abc123/logs')).toEqual({ allow: true, kind: 'stream' });
-    expect(decide('GET', '/events')).toEqual({ allow: true, kind: 'stream' });
+    expect(decide('GET', '/events')).toEqual({ allow: true, kind: 'events' });
     expect(decide('GET', '/_ping')).toEqual({ allow: true, kind: 'passthrough' });
     expect(decide('GET', '/version')).toEqual({ allow: true, kind: 'passthrough' });
   });
 
   test('accepts an API-version prefix and forwards the same decision', () => {
-    expect(decide('GET', '/v1.45/containers/json')).toEqual({ allow: true, kind: 'passthrough' });
+    expect(decide('GET', '/v1.45/containers/json')).toEqual({ allow: true, kind: 'list' });
     expect(decide('GET', '/v1.45/containers/abc/json')).toEqual({ allow: true, kind: 'inspect' });
     expect(decide('GET', '/v1.45/containers/abc/logs')).toEqual({ allow: true, kind: 'stream' });
   });
@@ -103,6 +113,186 @@ describe('redactInspect', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// F08. `/containers/json` used to pass through byte-identical, which made the
+// inspect allowlist decorative: Docker's list response carries the same
+// categories under different names. The fixture below is a realistic entry for
+// one of this repo's own app containers, carrying the two things the finding
+// names — a password on the command line and a sensitive bind source — plus the
+// host paths Compose writes into labels.
+const LIST_ENTRY = {
+  Id: 'c0ffee1234567890',
+  Names: ['/gitea'],
+  Image: 'gitea/gitea:1.22.3',
+  ImageID: 'sha256:deadbeef',
+  // The finding's dummy credential, exactly where Docker's list endpoint puts it.
+  Command: '/usr/bin/entrypoint --db-password=hunter2 --admin-token=s3cr3t',
+  Created: 1758400000,
+  State: 'running',
+  Status: 'Up 3 hours',
+  Ports: [{ IP: '0.0.0.0', PrivatePort: 3000, PublicPort: 8929, Type: 'tcp' }],
+  Labels: {
+    'sh.hola.app': 'gitea',
+    'sh.hola.deployment': 'gitea-a1b2c3',
+    'sh.hola.name': 'Gitea',
+    'com.docker.compose.project': 'gitea-a1b2c3',
+    'com.docker.compose.service': 'server',
+    // Compose records absolute HOST paths as labels on every container it makes.
+    'com.docker.compose.project.working_dir': '/srv/hola/apps/gitea-a1b2c3',
+    'com.docker.compose.project.config_files': '/srv/hola/apps/gitea-a1b2c3/docker-compose.yml',
+  },
+  HostConfig: { NetworkMode: 'hola-gitea-a1b2c3' },
+  NetworkSettings: { Networks: { hola: { IPAddress: '172.18.0.7', Gateway: '172.18.0.1' } } },
+  // The finding's sensitive bind source.
+  Mounts: [
+    { Type: 'bind', Source: '/srv/hola/apps/gitea-a1b2c3/data', Destination: '/data' },
+    { Type: 'bind', Source: '/etc/ssl/private', Destination: '/certs' },
+  ],
+};
+
+describe('redactContainerList (F08)', () => {
+  const [out] = redactContainerList([LIST_ENTRY]) as Record<string, unknown>[];
+
+  test('discloses no command line, bind source, host port or network topology', () => {
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain('hunter2');              // dummy password on the command line
+    expect(serialized).not.toContain('s3cr3t');
+    expect(serialized).not.toContain('/etc/ssl/private');     // sensitive bind source
+    expect(serialized).not.toContain('8929');                 // host port binding
+    expect(serialized).not.toContain('172.18.0.7');           // network topology
+    expect(serialized).not.toContain('/srv/hola/apps');       // host paths smuggled in labels
+    expect(serialized).not.toContain('docker-compose.yml');
+    const labels = out.Labels as Record<string, string>;
+    expect(labels['com.docker.compose.project.working_dir']).toBeUndefined();
+    expect(labels['com.docker.compose.project.config_files']).toBeUndefined();
+  });
+
+  test('denied-but-structural fields are present and empty, like inspect', () => {
+    // Same reasoning as redactInspect: a real daemon always returns these, so
+    // clients walk them without nil checks. `Command` is a string, and '' is
+    // exactly what Docker's Go SDK decodes an absent Command into.
+    expect(out.Command).toBe('');
+    expect(out.Ports).toEqual([]);
+    expect(out.Mounts).toEqual([]);
+    expect(out.HostConfig).toEqual({});
+    expect(out.NetworkSettings).toEqual({ Networks: {} });
+  });
+
+  // Deliberately asserts ONLY what must survive, so it passes on both sides of
+  // the fix: a collector that cannot identify and group containers cannot do its
+  // job at all, and a redaction that broke this would be a regression, not a fix.
+  test('what a log collector needs still comes through', () => {
+    expect(out.Id).toBe('c0ffee1234567890');
+    expect(out.Names).toEqual(['/gitea']);
+    expect(out.Image).toBe('gitea/gitea:1.22.3');
+    expect(out.State).toBe('running');
+    expect(out.Status).toBe('Up 3 hours');
+    const labels = out.Labels as Record<string, string>;
+    expect(labels['sh.hola.app']).toBe('gitea');
+    expect(labels['sh.hola.deployment']).toBe('gitea-a1b2c3');
+    expect(labels['sh.hola.name']).toBe('Gitea');
+    // Compose's own grouping labels are how any standard Docker client groups a
+    // project; only the two host-PATH labels are withheld (asserted above).
+    expect(labels['com.docker.compose.project']).toBe('gitea-a1b2c3');
+    expect(labels['com.docker.compose.service']).toBe('server');
+  });
+
+  test('is defensive against a missing/malformed body', () => {
+    expect(redactContainerList(null)).toBeNull();
+    expect(redactContainerList({ message: 'nope' })).toEqual({ message: 'nope' });
+    expect(redactContainerList([])).toEqual([]);
+    expect(redactContainerList(['garbage'])).toEqual(['garbage']);
+  });
+});
+
+describe('redactLabels (F08)', () => {
+  test('withholds only the host-path label keys', () => {
+    expect(
+      redactLabels({
+        'sh.hola.app': 'calibre-web',
+        'org.opencontainers.image.title': 'Calibre-Web',
+        'com.docker.compose.project.working_dir': '/srv/hola/apps/x',
+        'desktop.docker.io/binds/0/Source': '/Users/me/secrets',
+      }),
+    ).toEqual({
+      'sh.hola.app': 'calibre-web',
+      'org.opencontainers.image.title': 'Calibre-Web',
+    });
+  });
+
+  test('returns the original map untouched when nothing is denied', () => {
+    const labels = { 'sh.hola.app': 'x' };
+    expect(redactLabels(labels)).toBe(labels);
+  });
+
+  test('a non-map passes through', () => {
+    expect(redactLabels(undefined)).toBeUndefined();
+    expect(redactLabels(null)).toBeNull();
+    expect(redactLabels(['a'])).toEqual(['a']);
+  });
+});
+
+// A real container-start event. Actor.Attributes is the container's whole label
+// map plus image/name — so every host path Compose writes into a label arrives
+// here even with list and inspect locked down.
+const EVENT_WITH_HOST_PATHS = {
+  Type: 'container',
+  Action: 'start',
+  Actor: {
+    ID: 'c0ffee1234567890',
+    Attributes: {
+      image: 'gitea/gitea:1.22.3',
+      name: 'gitea',
+      'sh.hola.app': 'gitea',
+      'com.docker.compose.project': 'gitea-a1b2c3',
+      'com.docker.compose.project.working_dir': '/srv/hola/apps/gitea-a1b2c3',
+      'com.docker.compose.project.config_files': '/srv/hola/apps/gitea-a1b2c3/docker-compose.yml',
+    },
+  },
+  scope: 'local',
+  time: 1758400000,
+  timeNano: 1758400000000000,
+  status: 'start',
+  id: 'c0ffee1234567890',
+  from: 'gitea/gitea:1.22.3',
+};
+
+describe('redactEvent (F08)', () => {
+  const EVENT = EVENT_WITH_HOST_PATHS;
+
+  test('strips the host paths the label map smuggles through', () => {
+    const out = JSON.stringify(redactEvent(EVENT));
+    expect(out).not.toContain('/srv/hola/apps/gitea-a1b2c3');
+    expect(out).not.toContain('docker-compose.yml');
+  });
+
+  test('keeps everything a collector consumes, inventory labels included', () => {
+    // Deliberate: "know what exists, and read its logs" IS the envelope, and the
+    // sh.hola.* labels are what let a collector group by app with no per-app
+    // configuration. Withholding them would break the contract, not close a hole.
+    const out = redactEvent(EVENT) as Record<string, unknown>;
+    expect(out.Type).toBe('container');
+    expect(out.Action).toBe('start');
+    expect(out.status).toBe('start');
+    expect(out.id).toBe('c0ffee1234567890');
+    expect(out.time).toBe(1758400000);
+    expect(out.from).toBe('gitea/gitea:1.22.3');
+    const attrs = (out.Actor as Record<string, unknown>).Attributes as Record<string, string>;
+    expect(attrs.name).toBe('gitea');
+    expect(attrs.image).toBe('gitea/gitea:1.22.3');
+    expect(attrs['sh.hola.app']).toBe('gitea');
+    expect(attrs['com.docker.compose.project']).toBe('gitea-a1b2c3');
+  });
+
+  test('passes through an event with no Actor or no Attributes', () => {
+    const bare = { Type: 'network', Action: 'connect' };
+    expect(redactEvent(bare)).toBe(bare);
+    expect(redactEvent({ Actor: { ID: 'x' } })).toEqual({ Actor: { ID: 'x' } });
+    expect(redactEvent(null)).toBeNull();
+    expect(redactEvent('nope')).toBe('nope');
+  });
+});
+
 /** Longer than Bun.serve's default 10s idleTimeout, so an idle stream would be cut. */
 const IDLE_GAP_MS = 13_000;
 
@@ -136,7 +326,7 @@ describe('startDockerProxy (integration, fake Docker API on a temp unix socket)'
         // behaviour is actually exercised.
         const url = new URL(fullUrl.pathname.replace(/^\/v\d+(?:\.\d+)*(?=\/|$)/, '') + fullUrl.search, fullUrl);
         if (req.method === 'GET' && url.pathname === '/containers/json') {
-          return Response.json([{ Id: 'c1', Names: ['/app'] }]);
+          return Response.json([LIST_ENTRY]);
         }
         if (req.method === 'GET' && /^\/containers\/[^/]+\/json$/.test(url.pathname)) {
           return Response.json(INSPECT_BODY);
@@ -146,6 +336,13 @@ describe('startDockerProxy (integration, fake Docker API on a temp unix socket)'
         }
         if (req.method === 'GET' && url.pathname === '/_ping') {
           return new Response('OK');
+        }
+        // A prompt event stream, for asserting the redaction rather than the
+        // timeout: two NDJSON payloads and EOF.
+        if (req.method === 'GET' && url.pathname === '/events' && url.searchParams.has('fast')) {
+          return new Response(
+            `${JSON.stringify(EVENT_WITH_HOST_PATHS)}\n{"Type":"network","Action":"connect"}\n`,
+          );
         }
         // A quiet event stream: the response opens, then NOTHING for longer than
         // Bun.serve's default 10s idleTimeout, then one event. That is exactly
@@ -179,10 +376,45 @@ describe('startDockerProxy (integration, fake Docker API on a temp unix socket)'
 
   const proxyUrl = (path: string) => `http://127.0.0.1:${proxy.port}${path}`;
 
-  test('GET /containers/json passes through byte-identical', async () => {
+  // This test used to assert the opposite — that the list body reached the
+  // caller byte-identical. That expectation WAS the finding (F08): it pinned the
+  // behaviour that handed over command lines, bind sources and network topology
+  // through the one endpoint the inspect allowlist does not cover. Inverting it
+  // is the measurement.
+  test('GET /containers/json is redacted, not passed through', async () => {
     const res = await fetch(proxyUrl('/containers/json'));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual([{ Id: 'c1', Names: ['/app'] }]);
+    const body = await res.json();
+    expect(body).toHaveLength(1);
+
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('hunter2');            // password on the command line
+    expect(serialized).not.toContain('/etc/ssl/private');   // sensitive bind source
+    expect(serialized).not.toContain('172.18.0.7');         // network topology
+    expect(serialized).not.toContain('8929');               // host port binding
+    expect(serialized).not.toContain('/srv/hola/apps');     // host path via a Compose label
+
+    // ...and a collector can still find and group what it must read logs from.
+    expect(body[0].Id).toBe('c0ffee1234567890');
+    expect(body[0].Names).toEqual(['/gitea']);
+    expect(body[0].State).toBe('running');
+    expect(body[0].Labels['sh.hola.app']).toBe('gitea');
+  });
+
+  test('GET /events redacts each NDJSON payload in flight', async () => {
+    const res = await fetch(proxyUrl('/events?fast=1'));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain('/srv/hola/apps');
+    expect(text).not.toContain('docker-compose.yml');
+
+    // Still a stream of newline-delimited events, one per payload, in order.
+    const lines = text.trim().split('\n').map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(2);
+    expect(lines[0].Action).toBe('start');
+    expect(lines[0].Actor.Attributes['sh.hola.app']).toBe('gitea');
+    expect(lines[0].Actor.Attributes.name).toBe('gitea');
+    expect(lines[1]).toEqual({ Type: 'network', Action: 'connect' });
   });
 
   test('GET /v1.45/containers/{id}/json is redacted (no Env, empty HostConfig and Mounts)', async () => {
@@ -253,7 +485,7 @@ describe('serving a standard Docker client', () => {
   });
 
   test('HEAD is allowed wherever GET is — it reveals strictly less', () => {
-    expect(decide('HEAD', '/containers/json')).toEqual({ allow: true, kind: 'passthrough' });
+    expect(decide('HEAD', '/containers/json')).toEqual({ allow: true, kind: 'list' });
     expect(decide('HEAD', '/containers/abc123/json')).toEqual({ allow: true, kind: 'inspect' });
   });
 
