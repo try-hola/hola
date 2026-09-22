@@ -110,6 +110,11 @@ services:
       # the UI itself, the Traefik dashboard, and (when SSO is on) the Authentik UI.
       # These replace the Docker-label routers Traefik used to discover.
       - HOLA_DOMAIN=${HOLA_DOMAIN}
+      # F04: extra origins the dashboard may be reached at, for the CSRF origin
+      # rule on cookie-authenticated mutations. Only needed when the dashboard
+      # answers on a second name that HOLA_DOMAIN doesn't cover, or behind a
+      # proxy that rewrites Host. Blank is the normal case.
+      - HOLA_TRUSTED_ORIGINS=${HOLA_TRUSTED_ORIGINS:-}
       - TRAEFIK_DASHBOARD_DOMAIN=${TRAEFIK_DASHBOARD_DOMAIN}
       - HOLA_AUTHENTIK_DOMAIN=${HOLA_AUTHENTIK_DOMAIN:-}
       - HOLA_USE_AUTH=${HOLA_USE_AUTH:-true}

@@ -142,6 +142,34 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `restoreWithheldEnvValues` for the full-replace `systemEnv` PATCH) — because
   the read and the write are the same rows, so redacting an editable surface
   would otherwise turn the next save into a secret-wiping write.
+- **Cookie mutations prove same-origin intent (F04).** Apps live at
+  `<app>.<HOLA_BASE_DOMAIN>` and the dashboard at `HOLA_DOMAIN`, which are
+  **same-site, not same-origin** — so `SameSite=Strict` on the admin-key
+  session cookie never stopped a compromised app page from posting to the API
+  with the operator's cookie attached, and a `text/plain` POST is CORS-simple
+  (no preflight, no response header that can stop the mutation executing). The
+  rule keys on **how the request authenticated**, never on "is this a
+  mutation": `resolveCredential` (middleware/auth.ts) is the one place the
+  credential's `source` is decided — `header` (`Authorization`/`X-API-Key`),
+  `cookie`, or dev-only `query` — and `createOriginGuardMiddleware`
+  (middleware/origin-guard.ts, ahead of the auth middleware so it also covers
+  the public `POST /api/auth/logout`) refuses a **mutating** request whose
+  source is `cookie` unless `Sec-Fetch-Site` is `same-origin`/`none`, `Origin`
+  is present AND names a trusted host, and the `Content-Type` is
+  `application/json` or `multipart/form-data` (the draft upload route). Trusted
+  = `HOLA_DOMAIN` ∪ `HOLA_TRUSTED_ORIGINS` ∪ **the request's own `Host`** — the
+  last makes the rule work unconfigured without failing open, because comparing
+  `Origin` to the `Host` it was addressed to *is* the same-origin check and a
+  sibling app's origin never equals the dashboard's host. Header-authenticated
+  callers (CLI, SDK, contract-broker `curl` from catalog containers) pass
+  through untouched and are never asked for an `Origin`; reads are out of scope
+  (SSE is a cookie-authenticated `GET`). The cookie is `__Host-hola_session`:
+  the prefix (which requires `Secure`, `Path=/`, no `Domain`) is what stops a
+  sibling subdomain *setting* it, since cookies scope by domain, not origin. The
+  pre-F04 name is never read, only expired. There is deliberately **no CSRF
+  token** — it would duplicate a check the browser already makes unforgeably and
+  would not address the cookie's value being the reusable admin key itself
+  (opaque server-side sessions, #525).
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`

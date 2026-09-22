@@ -89,7 +89,15 @@ import { createSSEStream, createSSEHeaders } from './utils/sse';
 import { mapErrorToResponse, asPromoteValidationError, ValidationError, ForbiddenError } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
-import { createAuthMiddleware, getPrincipal, principalHasCapability, SESSION_COOKIE } from './middleware/auth';
+import {
+  createAuthMiddleware,
+  getPrincipal,
+  principalHasCapability,
+  sessionCookieHeader,
+  expiredSessionCookieHeader,
+  expiredLegacySessionCookieHeader,
+} from './middleware/auth';
+import { createOriginGuardMiddleware } from './middleware/origin-guard';
 import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
 import { ldapOutpostTokenPath, persistLdapOutpostToken } from './services/auth/ldap-outpost-config';
 import { authConfig } from './config/auth';
@@ -153,6 +161,10 @@ const healthMiddleware = createHealthMiddleware();
 // Phase 3: Initialize auth middleware
 const authMiddleware = createAuthMiddleware();
 
+// F04: refuse cookie-authenticated mutations that a sibling app origin could
+// have forged. Ahead of the auth middleware — see middleware/origin-guard.ts.
+const originGuardMiddleware = createOriginGuardMiddleware();
+
 function json(data: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(data), {
     headers: {
@@ -163,6 +175,24 @@ function json(data: unknown, init?: ResponseInit) {
     status: init?.status ?? 200,
     statusText: init?.statusText,
   });
+}
+
+/**
+ * A JSON response carrying one or more `Set-Cookie` headers.
+ *
+ * `json()` above builds its headers by object spread, which cannot express two
+ * headers of the same name — and the login response needs exactly that: set the
+ * `__Host-` session cookie AND expire the pre-F04 one. `withCors` re-emits
+ * multiple `Set-Cookie` values via `getSetCookie()`, so they survive to the
+ * client.
+ */
+function jsonWithCookies(data: unknown, cookies: string[], init?: ResponseInit) {
+  const headers = new Headers({
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  for (const cookie of cookies) headers.append('set-cookie', cookie);
+  return new Response(JSON.stringify(data), { status: init?.status ?? 200, headers });
 }
 
 // Plain text response helper (unused currently)
@@ -451,18 +481,30 @@ export async function route(url: URL, req: Request): Promise<Response> {
     if (!result.success || !result.principal) {
       return json({ error: { code: 'UNAUTHORIZED', message: 'Invalid key' } }, { status: 401 });
     }
-    // Session cookie carries the key itself; it's HttpOnly+Secure+SameSite=Strict
-    // and same-origin with /api, so it can't be read by JS or sent cross-site.
-    const cookie = `${SESSION_COOKIE}=${encodeURIComponent(key)}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`;
-    return json({ ok: true, principal: result.principal } satisfies AuthLoginResponse, {
-      headers: { 'set-cookie': cookie },
-    });
+    // Session cookie carries the key itself. `HttpOnly` keeps it out of JS, and
+    // `Secure` off plaintext.
+    //
+    // `SameSite=Strict` is NOT a same-origin control and never was (F04): Hola
+    // apps live at `<app>.<HOLA_BASE_DOMAIN>` and the dashboard at
+    // `HOLA_DOMAIN`, which are same-SITE, so `Strict` lets a page served by an
+    // installed app send this cookie to the API. What stops it acting on that
+    // is the origin rule in `middleware/origin-guard.ts`; what stops a sibling
+    // *setting* this cookie is the `__Host-` prefix in `SESSION_COOKIE`. Keep
+    // `Strict` anyway — it still closes genuinely cross-site requests.
+    return jsonWithCookies({ ok: true, principal: result.principal } satisfies AuthLoginResponse, [
+      sessionCookieHeader(key),
+      // Retire any pre-F04, domain-scoped `hola_session` this browser still
+      // holds, so an upgraded install stops sending a cookie we ignore.
+      expiredLegacySessionCookieHeader(),
+    ]);
   }
 
   // Public: clear the admin-key session cookie.
   if (pathname === AUTH_API.logout && req.method === 'POST') {
-    const cookie = `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0`;
-    return json({ ok: true }, { headers: { 'set-cookie': cookie } });
+    return jsonWithCookies({ ok: true }, [
+      expiredSessionCookieHeader(),
+      expiredLegacySessionCookieHeader(),
+    ]);
   }
 
   // Summary — computed from real deployments, jobs, and system status.
@@ -2288,8 +2330,10 @@ export async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
 
   const response = await requestMiddleware(req, async () => {
-    return authMiddleware(req, async () => {
-      return route(url, req);
+    return originGuardMiddleware(req, async () => {
+      return authMiddleware(req, async () => {
+        return route(url, req);
+      });
     });
   });
 
