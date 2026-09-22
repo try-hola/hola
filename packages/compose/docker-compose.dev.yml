@@ -24,7 +24,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - hola-data:/data:ro
     labels:
-      # Dashboard over plain HTTP in development.
+      # Dashboard over plain HTTP in development, and deliberately UNAUTHENTICATED
+      # — unlike production (F07), which refuses to publish it without a Basic-auth
+      # credential. This overlay is opt-in, HTTP-only, and reached through
+      # /etc/hosts entries on the developer's own machine. Do not copy these labels
+      # into anything that answers on a real domain.
       traefik.enable: "true"
       traefik.http.routers.traefik.entrypoints: web
       traefik.http.routers.traefik.tls: "false"

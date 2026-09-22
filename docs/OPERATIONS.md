@@ -360,6 +360,28 @@ automatically. For Traefik to reach the app, the app's Compose services join the
 external `hola` network under the service name Hola expects. Ingress is
 Traefik-only — apps do not publish host ports.
 
+### The Traefik dashboard requires a credential
+
+Traefik's own dashboard (`api@internal`) lists every route, service, middleware
+and TLS setting on the host — including the hostname of every installed app —
+and **Hola's API authentication is not on that request path**. Setting
+`TRAEFIK_DASHBOARD_DOMAIN` therefore no longer publishes it on its own:
+
+- `install.sh` generates `TRAEFIK_DASHBOARD_PASSWORD` into `.env` whenever a
+  dashboard domain is set. Sign in as `TRAEFIK_DASHBOARD_USER` (default `admin`)
+  with that password; the route carries a Traefik `basicAuth` middleware, so an
+  unauthenticated request gets a 401 and can inspect nothing.
+- With **no** password, **no route is emitted** and the server logs a warning at
+  startup naming the key to set. The hostname stays reserved regardless, so no
+  deployed app can take it while you sort the credential out.
+- `hola update` re-runs the installer, so a host that configured a dashboard
+  before this change keeps it across the upgrade — now authenticated.
+- To turn the dashboard off entirely, leave `TRAEFIK_DASHBOARD_DOMAIN` blank.
+
+Rotate the credential by editing `TRAEFIK_DASHBOARD_PASSWORD` in `.env` and
+restarting the `server` container (it hashes the password and re-emits
+`core.yml` at startup). The plaintext never reaches the file Traefik reads.
+
 ## Data layout
 
 Everything durable lives under `HOLA_DATA_DIR` — the `hola-data` named volume
@@ -698,6 +720,18 @@ container. Access is revoked the moment the collector is uninstalled.
 Every app container carries three labels a collector reads to group logs by
 app with no per-app configuration: `sh.hola.app` (the app id), `sh.hola.deployment`
 (the deployment id) and `sh.hola.name` (the deployment's display name).
+
+The collector never touches the Docker socket. It talks to a redacting proxy
+(`hola-docker-proxy`) that allows only reads, and **rebuilds every response it
+allows from an explicit field allowlist** — the container list, a container's
+inspect, and `/info` — while filtering the `/events` stream payload by payload.
+What that withholds, on every one of those surfaces: environment variables,
+command lines and entrypoints (where a password passed as an argument shows up),
+bind-mount sources and host paths, host port bindings, and network topology.
+Labels are kept, because they are what makes grouping work without per-app
+configuration — except the two Compose writes absolute host paths into
+(`com.docker.compose.project.working_dir` and `.config_files`), which would
+otherwise walk straight past the emptied mount fields.
 
 ## Upgrade
 

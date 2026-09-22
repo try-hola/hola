@@ -77,7 +77,7 @@ import { initializeLogger, getLogger } from './lib/logger';
 import { initializeMetrics } from './lib/metrics';
 import { createRequestMiddleware, createHealthMiddleware, getRequestContext, type RequestContext } from './middleware/request';
 import { getServices, resetServices } from './services/simple-factory';
-import { coreRoutesFromEnv } from './services/core/routing';
+import { coreRoutesFromEnv, traefikDashboardStatus } from './services/core/routing';
 import { mergeUpgradeAppEnv } from './services/core/upgrade-env';
 import { resolveUpgradeTargetFresh } from './services/core/upgrade-target';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
@@ -119,6 +119,20 @@ async function initializeInfrastructure() {
     // Emit the platform's own Traefik routes (UI, dashboard, Authentik) into the
     // file provider so Traefik needs neither the Docker provider nor the socket.
     // Mock routing (test/dev) no-ops; production writes /data/runtime/traefik/core.yml.
+    //
+    // F07: a configured-but-credential-less Traefik dashboard is NOT published.
+    // Say so loudly — the operator asked for a dashboard and is not getting one,
+    // and the only thing standing between them and it is one .env key.
+    const dashboard = traefikDashboardStatus();
+    if (dashboard.state === 'blocked') {
+      console.warn(
+        `⚠️  Traefik dashboard NOT published at ${dashboard.host}: no TRAEFIK_DASHBOARD_PASSWORD is set.\n` +
+        '   The dashboard exposes every route, service and middleware on this host and has no\n' +
+        '   authentication of its own, so Hola will not route to it unencumbered. Set\n' +
+        '   TRAEFIK_DASHBOARD_PASSWORD in .env (scripts/install.sh generates one, so `hola update`\n' +
+        '   will too) and restart, or unset TRAEFIK_DASHBOARD_DOMAIN to stop asking for it.',
+      );
+    }
     await services.routing.emitCoreRoutes(coreRoutesFromEnv());
   } catch (error) {
     console.error('');

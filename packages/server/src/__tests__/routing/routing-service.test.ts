@@ -9,7 +9,12 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { parse as parseYAML } from 'yaml';
 
-import { RealRoutingService, coreRoutesFromEnv } from '../../services/core/routing';
+import {
+  RealRoutingService,
+  coreRoutesFromEnv,
+  traefikDashboardStatus,
+  reservedCoreHosts,
+} from '../../services/core/routing';
 import { MockStorageService } from '../../services/core/storage';
 
 describe('RoutingService', () => {
@@ -281,6 +286,8 @@ describe('RoutingService', () => {
       const base = {
         HOLA_DOMAIN: 'app.example.com',
         TRAEFIK_DASHBOARD_DOMAIN: 'traefik.example.com',
+        // F07: the dashboard is only published when it has a credential.
+        TRAEFIK_DASHBOARD_PASSWORD: 'dashboard-pw',
         HOLA_AUTHENTIK_DOMAIN: 'auth.example.com',
       };
 
@@ -295,6 +302,84 @@ describe('RoutingService', () => {
 
       // Unset hosts are skipped entirely.
       expect(coreRoutesFromEnv({})).toEqual([]);
+    });
+
+    // -----------------------------------------------------------------------
+    // F07. Setting TRAEFIK_DASHBOARD_DOMAIN used to be the entire opt-in: the
+    // router was emitted with TLS and NO middlewares key at all, publishing
+    // Traefik's api@internal — every route, service and middleware on the host —
+    // to anyone who could resolve that name. Hola's API auth is not on this
+    // request path.
+    describe('the Traefik dashboard is never published unauthenticated (F07)', () => {
+      const HOST = 'traefik.example.com';
+
+      test('a domain with no credential emits NO route at all', () => {
+        const routes = coreRoutesFromEnv({ HOLA_DOMAIN: 'app.example.com', TRAEFIK_DASHBOARD_DOMAIN: HOST });
+        expect(routes.map(r => r.name)).toEqual(['hola-web']);
+        expect(traefikDashboardStatus({ TRAEFIK_DASHBOARD_DOMAIN: HOST })).toEqual({ state: 'blocked', host: HOST });
+      });
+
+      test('a domain with a credential emits the route behind basicAuth', () => {
+        const status = traefikDashboardStatus({ TRAEFIK_DASHBOARD_DOMAIN: HOST, TRAEFIK_DASHBOARD_PASSWORD: 'pw' });
+        expect(status.state).toBe('protected');
+        // htpasswd format, default user, and a real bcrypt hash — not the plaintext.
+        const [entry] = (status as { users: string[] }).users;
+        expect(entry.startsWith('admin:$2')).toBe(true);
+        expect(entry).not.toContain('pw');
+      });
+
+      test('the username is overridable', () => {
+        const status = traefikDashboardStatus({
+          TRAEFIK_DASHBOARD_DOMAIN: HOST,
+          TRAEFIK_DASHBOARD_PASSWORD: 'pw',
+          TRAEFIK_DASHBOARD_USER: 'ops',
+        });
+        expect((status as { users: string[] }).users[0].startsWith('ops:$2')).toBe(true);
+      });
+
+      test('no domain is "unconfigured", which is not the same as blocked', () => {
+        // The caller warns about `blocked` and says nothing about `unconfigured`;
+        // collapsing the two would either nag every dev host or silence the warning.
+        expect(traefikDashboardStatus({})).toEqual({ state: 'unconfigured' });
+      });
+
+      test('the rendered router carries a basicAuth middleware, and the middleware exists', async () => {
+        await routing.emitCoreRoutes(coreRoutesFromEnv({
+          HOLA_DOMAIN: 'app.example.com',
+          TRAEFIK_DASHBOARD_DOMAIN: HOST,
+          TRAEFIK_DASHBOARD_PASSWORD: 'pw',
+        }));
+        const core = parseYAML(await storage.readFileAsString('runtime/traefik/core.yml'));
+
+        expect(core.http.routers['traefik-dashboard'].middlewares).toEqual(['traefik-dashboard-auth']);
+        const mw = core.http.middlewares['traefik-dashboard-auth'];
+        expect(mw.basicAuth.users[0].startsWith('admin:$2')).toBe(true);
+        expect(mw.basicAuth.removeHeader).toBe(true);
+        // The plaintext never reaches the file Traefik reads.
+        expect(await storage.readFileAsString('runtime/traefik/core.yml')).not.toContain('pw');
+
+        // The UI route is untouched — this gate is the dashboard's, not everyone's.
+        expect(core.http.routers['hola-web'].middlewares).toBeUndefined();
+      });
+
+      test('a blocked dashboard host stays RESERVED, so no app can claim it', async () => {
+        // Emitting no route must not make the name claimable: a host one .env
+        // edit away from serving the dashboard would otherwise lose it.
+        const reserved = reservedCoreHosts({
+          HOLA_DOMAIN: 'app.local.hola',
+          TRAEFIK_DASHBOARD_DOMAIN: 'traefik.local.hola',
+        });
+        expect(reserved.has('traefik.local.hola')).toBe(true);
+
+        const prev = process.env.TRAEFIK_DASHBOARD_DOMAIN;
+        process.env.TRAEFIK_DASHBOARD_DOMAIN = 'traefik.local.hola';
+        try {
+          expect(await routing.checkSubdomain('traefik')).toMatchObject({ available: false, reason: 'reserved' });
+        } finally {
+          if (prev === undefined) delete process.env.TRAEFIK_DASHBOARD_DOMAIN;
+          else process.env.TRAEFIK_DASHBOARD_DOMAIN = prev;
+        }
+      });
     });
 
     test('emitCoreRoutes writes deterministic file-provider config', async () => {

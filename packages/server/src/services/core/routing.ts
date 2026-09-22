@@ -60,20 +60,114 @@ export interface CoreRoute {
   /** Reference a built-in Traefik service instead of a load balancer
    *  (e.g. `api@internal` for the dashboard). Mutually exclusive with `url`. */
   service?: string;
+  /**
+   * htpasswd-format entries (`user:$2b$…`) for a Traefik `basicAuth` middleware
+   * gating this router (F07). Pre-hashed by the caller, never a plaintext
+   * password: `renderCoreConfig` must stay a pure, deterministic function of
+   * its input, and bcrypt salts randomly.
+   */
+  basicAuthUsers?: string[];
+}
+
+/** Default Basic-auth username for the Traefik dashboard (F07). */
+const DASHBOARD_DEFAULT_USER = 'admin';
+
+/**
+ * Whether the Traefik dashboard/API route may be published, and under what
+ * credential (F07).
+ *
+ * `TRAEFIK_DASHBOARD_DOMAIN` being merely *set* used to be the entire opt-in:
+ * the router was emitted with TLS and nothing else, publishing Traefik's
+ * `api@internal` — every route, service, middleware and TLS setting on the
+ * host, including the existence and hostname of every installed app — to
+ * anyone who could resolve that name. Hola's own API authentication is not on
+ * that request path and never was; the dashboard is Traefik answering for
+ * itself.
+ *
+ * A credential is now a precondition for publishing it at all, which is why
+ * this returns a *status* rather than a boolean: "domain set, no credential" is
+ * a distinct, operator-visible state that the caller logs, and is deliberately
+ * not the same as "no dashboard configured".
+ */
+export type DashboardRouteStatus =
+  /** No `TRAEFIK_DASHBOARD_DOMAIN`: nothing to publish, nothing to warn about. */
+  | { state: 'unconfigured' }
+  /** Domain set but no credential: the route is NOT emitted. */
+  | { state: 'blocked'; host: string }
+  /** Domain plus credential: the route is emitted behind `basicAuth`. */
+  | { state: 'protected'; host: string; users: string[] };
+
+/**
+ * Resolve the dashboard's publication status from the environment.
+ *
+ * **Basic auth, not forward-auth or an IP allowlist**, for three reasons.
+ * Forward-auth would need Authentik running, which makes the dashboard
+ * unavailable on `HOLA_AUTH_MODE=none` and would mean provisioning an Authentik
+ * proxy provider + application for a host that is not a Hola app — a new branch
+ * through `ProvisionerService`, which is built entirely around app deployments.
+ * An `ipAllowList` is not authentication (the finding asks for administrator
+ * authorization), requires the operator to know their own source CIDR, and is
+ * silently wrong behind a reverse proxy or CGNAT. Basic auth is self-contained,
+ * behaves identically in `none` and `authentik` mode, needs no running IdP, and
+ * this module already emits exactly this middleware for `protectedBypassPaths`.
+ * It is a diagnostic UI behind TLS, not a credential store.
+ *
+ * The password is generated per-install by `scripts/install.sh` (idempotently,
+ * so `hola update` mints one for a host that predates this) — so an operator who
+ * was relying on the dashboard keeps it across the upgrade, now authenticated,
+ * rather than silently losing it.
+ */
+export function traefikDashboardStatus(env: NodeJS.ProcessEnv = process.env): DashboardRouteStatus {
+  const host = env.TRAEFIK_DASHBOARD_DOMAIN?.trim();
+  if (!host) return { state: 'unconfigured' };
+  const password = env.TRAEFIK_DASHBOARD_PASSWORD?.trim();
+  if (!password) return { state: 'blocked', host };
+  const user = env.TRAEFIK_DASHBOARD_USER?.trim() || DASHBOARD_DEFAULT_USER;
+  return { state: 'protected', host, users: [`${user}:${hashBasicAuthSecret(password)}`] };
+}
+
+/**
+ * Every host the platform reserves for itself, whether or not a route is
+ * actually emitted for it (#246).
+ *
+ * Deliberately NOT derived from `coreRoutesFromEnv`: a dashboard domain whose
+ * credential is missing emits no route, but must still not become claimable by
+ * an app — otherwise a host that is one `.env` edit away from serving the
+ * dashboard could have that name taken out from under it in the meantime. This
+ * is also the cheap path (`checkSubdomain` calls it per request), and it does
+ * no bcrypt work.
+ */
+export function reservedCoreHosts(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const hosts = [env.HOLA_DOMAIN, env.TRAEFIK_DASHBOARD_DOMAIN, env.HOLA_AUTHENTIK_DOMAIN]
+    .map(h => h?.trim())
+    .filter((h): h is string => Boolean(h));
+  return new Set(hosts);
 }
 
 /**
  * Build the platform's core routes from the process environment. Hosts that are
  * unset are skipped (e.g. dev without a real domain); the Authentik route is
- * only emitted when SSO is enabled.
+ * only emitted when SSO is enabled, and the Traefik dashboard only when it has
+ * a credential (F07 — see `traefikDashboardStatus`).
+ *
+ * Called once at startup: it hashes the dashboard password, which is bcrypt and
+ * therefore deliberately slow. Use `reservedCoreHosts` for the per-request
+ * "which hosts are taken" question.
  */
 export function coreRoutesFromEnv(env: NodeJS.ProcessEnv = process.env): CoreRoute[] {
   const routes: CoreRoute[] = [];
   const uiHost = env.HOLA_DOMAIN?.trim();
   if (uiHost) routes.push({ name: 'hola-web', host: uiHost, url: 'http://hola-web:80' });
-  const dashboardHost = env.TRAEFIK_DASHBOARD_DOMAIN?.trim();
   // The dashboard is Traefik's built-in api@internal service (enabled by --api).
-  if (dashboardHost) routes.push({ name: 'traefik-dashboard', host: dashboardHost, service: 'api@internal' });
+  const dashboard = traefikDashboardStatus(env);
+  if (dashboard.state === 'protected') {
+    routes.push({
+      name: 'traefik-dashboard',
+      host: dashboard.host,
+      service: 'api@internal',
+      basicAuthUsers: dashboard.users,
+    });
+  }
   if ((env.HOLA_AUTH_MODE?.trim() || 'none') === 'authentik') {
     const authHost = env.HOLA_AUTHENTIK_DOMAIN?.trim();
     if (authHost) routes.push({ name: 'authentik', host: authHost, url: 'http://authentik-server:9000' });
@@ -200,22 +294,23 @@ function routerTlsBlock(baseDomain: string, certResolver?: string): Record<strin
   return { certResolver, domains: [{ main: baseDomain, sans: [`*.${baseDomain}`] }] };
 }
 
-// Bcrypt cost for the htpasswd-format hash Traefik's basicAuth middleware verifies
-// `protectedBypassPaths` credentials against. 10 matches htpasswd's own `-B`
-// default and is the standard balance of brute-force resistance vs. per-request
-// verification cost for a middleware that runs on every matching request.
-const BYPASS_AUTH_BCRYPT_COST = 10;
+// Bcrypt cost for the htpasswd-format hashes Traefik's basicAuth middleware
+// verifies against — `protectedBypassPaths` credentials, and the Traefik
+// dashboard's own (F07). 10 matches htpasswd's own `-B` default and is the
+// standard balance of brute-force resistance vs. per-request verification cost
+// for a middleware that runs on every matching request.
+const BASIC_AUTH_BCRYPT_COST = 10;
 
 /**
- * Hash the raw per-deployment bypass-auth secret into the htpasswd-format bcrypt
- * hash Traefik's basicAuth middleware expects for a `users: ["name:hash"]` entry.
+ * Hash a raw secret into the htpasswd-format bcrypt hash Traefik's basicAuth
+ * middleware expects for a `users: ["name:hash"]` entry.
  * Traefik's basicAuth (go-http-auth) recognizes bcrypt hashes prefixed `$2a$`,
  * `$2b$`, `$2x$`, or `$2y$`; Bun's built-in `Bun.password` (bcrypt algorithm)
  * produces `$2b$`-prefixed hashes, so no extra hashing dependency is needed here
  * (the server only ever runs under Bun — see packages/server/Dockerfile).
  */
-function hashBypassAuthSecret(secret: string): string {
-  return Bun.password.hashSync(secret, { algorithm: 'bcrypt', cost: BYPASS_AUTH_BCRYPT_COST });
+function hashBasicAuthSecret(secret: string): string {
+  return Bun.password.hashSync(secret, { algorithm: 'bcrypt', cost: BASIC_AUTH_BCRYPT_COST });
 }
 
 /** Render the Traefik file-provider dynamic config for a routing map (deterministic). */
@@ -295,7 +390,7 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
         const basicAuthMwName = `${rule.serviceName}-bypass-auth`;
         middlewares[basicAuthMwName] = {
           basicAuth: {
-            users: [`hola:${hashBypassAuthSecret(rule.forwardAuth.bypassAuthSecret)}`],
+            users: [`hola:${hashBasicAuthSecret(rule.forwardAuth.bypassAuthSecret)}`],
             // STRIP the header once verified. Traefik's basicAuth forwards the
             // `Authorization` it just checked by default, and this credential is
             // Hola's edge gate — it means nothing to the app behind it. An app
@@ -339,8 +434,9 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
 function renderCoreConfig(routes: CoreRoute[], baseDomain: string, certResolver?: string): string {
   const routers: Record<string, unknown> = {};
   const services: Record<string, unknown> = {};
+  const middlewares: Record<string, unknown> = {};
   for (const route of [...routes].sort((a, b) => a.name.localeCompare(b.name))) {
-    routers[route.name] = {
+    const router: Record<string, unknown> = {
       rule: `Host(\`${route.host}\`)`,
       // Built-in services (api@internal) are referenced directly; everything else
       // gets a load balancer pointing at the upstream URL below.
@@ -350,12 +446,32 @@ function renderCoreConfig(routes: CoreRoute[], baseDomain: string, certResolver?
       // in wildcard mode each router carries the wildcard domains. See routerTlsBlock.
       tls: routerTlsBlock(baseDomain, certResolver),
     };
+    // F07: a core route carrying a credential is gated by its own basicAuth
+    // middleware. This is the Traefik dashboard's only authentication — Hola's
+    // API auth is not on this request path — so the router MUST NOT be emitted
+    // without it; `coreRoutesFromEnv` is what refuses to build one.
+    if (route.basicAuthUsers && route.basicAuthUsers.length > 0) {
+      const mwName = `${route.name}-auth`;
+      router.middlewares = [mwName];
+      middlewares[mwName] = {
+        basicAuth: {
+          users: route.basicAuthUsers,
+          // Consume the credential at the edge rather than forwarding it. It is
+          // meaningless to anything upstream (api@internal has no upstream at
+          // all), and the same rule already applies to the protected-bypass
+          // middleware — see renderDynamicConfig.
+          removeHeader: true,
+        },
+      };
+    }
+    routers[route.name] = router;
     if (!route.service) {
       services[route.name] = { loadBalancer: { servers: [{ url: route.url }] } };
     }
   }
   const http: Record<string, unknown> = { routers };
   if (Object.keys(services).length > 0) http.services = services;
+  if (Object.keys(middlewares).length > 0) http.middlewares = middlewares;
   return stringifyYAML({ http });
 }
 
@@ -417,7 +533,7 @@ export class RealRoutingService implements RoutingService {
 
   /** Core route hosts that a deployment subdomain must never clobber (#246). */
   private reservedHosts(): Set<string> {
-    return new Set(coreRoutesFromEnv().map(r => r.host));
+    return reservedCoreHosts();
   }
 
   async checkSubdomain(input: string): Promise<GetSubdomainAvailabilityResponse> {
@@ -509,7 +625,7 @@ export class MockRoutingService implements RoutingService {
   }
 
   async checkSubdomain(input: string): Promise<GetSubdomainAvailabilityResponse> {
-    return availabilityFor(input, this.map, this.domain, new Set(coreRoutesFromEnv().map(r => r.host)));
+    return availabilityFor(input, this.map, this.domain, reservedCoreHosts());
   }
 
   async activateRoute(rule: TraefikRoutingRule): Promise<void> {
