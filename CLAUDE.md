@@ -120,6 +120,28 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   token. Authentik is the **default** — `hola init` always sets
   `HOLA_AUTH_MODE=authentik` (a compose profile); `none` remains an internal
   dev/test mode, not an install-time choice.
+- **Secret-read authorization (F03).** Every unmatched GET names no capability —
+  the operator model is "if you hold a key to this host, you may read it"
+  (`authorizeRequest`) — but the env-bearing reads used to carry each app's
+  database password in plaintext, so the read-only set an authenticated
+  non-admin OIDC user gets was in practice full credential access. Reading
+  configuration and reading credentials are now separate grants: `read:secrets`
+  (held by `*`/admin, absent from `READONLY_CAPABILITIES`) gates the secret
+  VALUES, enforced where the response is shaped rather than as a route
+  capability, so the configuration view stays readable while the credentials do
+  not. Three surfaces go through it — `GET /api/deployments/:id/config`,
+  `GET /api/drafts/:id`, `GET /api/settings`'s `systemEnv` — via
+  `canReadSecrets(req)` + `redactSecretEnvValues`, which blanks the value and
+  sets `valueRedacted: true` (a genuinely empty secret is otherwise
+  indistinguishable). The check is `principalHasCapability`, decided from the
+  principal alone and deliberately NOT `AuthService.hasCapability`: both
+  implementations blanket-allow when auth is off, which would make the rule
+  unobservable in exactly the configurations a test can construct. `valueRedacted`
+  is also a WRITE-side instruction — the merge reads it as "no new value
+  supplied" and keeps the stored secret (`hardenAppEnv`/`mergeAppEnv`;
+  `restoreWithheldEnvValues` for the full-replace `systemEnv` PATCH) — because
+  the read and the write are the same rows, so redacting an editable surface
+  would otherwise turn the next save into a secret-wiping write.
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`

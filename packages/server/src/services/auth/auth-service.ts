@@ -346,6 +346,17 @@ export const CAPABILITIES = {
   READ_LOGS: 'read:logs',
   READ_BACKUPS: 'read:backups',
   READ_CATALOG: 'read:catalog',
+  // Reading an app's *secret* env values, separately from reading its
+  // configuration (F03). `read:deployments` answers "what is installed and how
+  // is it configured"; this answers "what are its credentials", and the two are
+  // not the same question. Held by `*`/admin and by nothing else — notably NOT
+  // by the read-only set `oidc-provider.ts` mints for an authenticated
+  // non-admin. Checked where a response carrying env rows is shaped
+  // (`server.ts`), not in the route capability table: every read route stays
+  // reachable by any operator who holds a key to this host, which is the
+  // documented model in `authorizeRequest` — what changes is that the secret
+  // VALUES are withheld from a principal that was never granted them.
+  READ_SECRETS: 'read:secrets',
   
   // Write operations  
   WRITE_DEPLOYMENTS: 'write:deployments',

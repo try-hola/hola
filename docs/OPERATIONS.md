@@ -72,6 +72,32 @@ login flow:
 
 When `HOLA_USE_AUTH=false` (dev/test) the dashboard loads with no login.
 
+### What a non-admin dashboard user can see
+
+A user who authenticates through SSO but is **not** in `HOLA_OIDC_ADMIN_GROUP`
+gets a read-only capability set (`read:system`, `read:deployments`, `read:logs`,
+`read:backups`, `read:catalog`). They can browse every installed app, its
+configuration and its logs, but they cannot install, change or remove anything.
+
+**Secret values are withheld from them.** Reading an app's configuration and
+reading its credentials are separate grants: the second is `read:secrets`, which
+only an admin (`*`) holds. So a read-only user sees *which* variables an app is
+configured with — key, label, type, and that the variable is a secret — while
+each secret's value comes back empty and flagged as hidden. The dashboard
+renders those as `•••••••• hidden` with no reveal control, and `hola config`
+shows `***`. The same policy covers draft reads and the host-wide `systemEnv` in
+Settings.
+
+An admin's own reads are unchanged, and nothing about editing changes: a form
+saved with a hidden value still in place keeps the stored secret rather than
+blanking it, so an operator never has to re-enter a password to change something
+next to it.
+
+Note that `HOLA_OIDC_ADMIN_GROUP` is fail-closed — with no admin group
+configured, **every** authenticated user is read-only. Set it to `*` to make
+every authenticated user an admin, which makes your IdP's application-access
+policy the only gate.
+
 ## Deploy an app
 
 The web dashboard browses a remote **catalog** of installable apps, set via
