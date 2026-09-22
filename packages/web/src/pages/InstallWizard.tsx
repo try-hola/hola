@@ -177,6 +177,13 @@ type AlreadyInstalledDetails = {
   code: 'ALREADY_INSTALLED';
   existing: { id: string; name: string; channel: string };
   channelPublished: boolean;
+  /**
+   * Present only when the refused install was also restoring (#493). A restore
+   * source keeps running, so for a single-instance app this conflict is the
+   * restore path's normal outcome — the panel says so rather than leaving the
+   * operator with a bare install conflict.
+   */
+  restore?: { candidateId: string; candidateIsExisting: boolean };
 };
 
 /**
@@ -196,7 +203,14 @@ function asAlreadyInstalled(details: unknown): AlreadyInstalledDetails | null {
   ) {
     return null;
   }
-  return d as AlreadyInstalledDetails;
+  // `restore` is additive (#493) and absent from every pre-#493 server, so it
+  // is narrowed separately and dropped when malformed — never a reason to
+  // reject details the spec-005 panel can already act on.
+  const restore =
+    typeof d.restore?.candidateId === 'string' && typeof d.restore?.candidateIsExisting === 'boolean'
+      ? d.restore
+      : undefined;
+  return { ...(d as AlreadyInstalledDetails), ...(restore ? { restore } : { restore: undefined }) };
 }
 
 /**
@@ -216,7 +230,7 @@ const AlreadyInstalledPanel: React.FC<{
 }> = ({ details, requestedChannel, onSwitch, onInstallSeparate }) => {
   const [busy, setBusy] = useState(false);
   const [switchErr, setSwitchErr] = useState<string | null>(null);
-  const { existing, channelPublished } = details;
+  const { existing, channelPublished, restore } = details;
   const sameChannel = existing.channel === requestedChannel;
 
   const handleSwitch = async () => {
@@ -236,6 +250,20 @@ const AlreadyInstalledPanel: React.FC<{
       <p className="text-[12.5px] text-text-muted">
         {existing.name} is already installed and follows {existing.channel}.
       </p>
+      {/* #493: on the restore path this conflict is the norm, not an edge
+          case — the copy being restored from is still running, so the
+          restoring install is a second live copy. Said here rather than
+          implied by the restore choice: the restored copy comes up with the
+          source's credentials, so running both at once is the operator's
+          call. */}
+      {restore && (
+        <p className="text-[12.5px] text-text-muted mt-1.5">
+          {restore.candidateIsExisting
+            ? `You chose to restore from ${existing.name}, which keeps running — so this install would be a second live copy of it.`
+            : `The copy you chose to restore from keeps running — so this install would be a second live copy alongside ${existing.name}.`}{' '}
+          Continue only if you mean to run both.
+        </p>
+      )}
       {switchErr && <div className="text-[12.5px] text-danger mt-1.5">{switchErr}</div>}
       <div className="flex flex-wrap items-center gap-2 mt-2.5">
         {!sameChannel && (
@@ -1224,6 +1252,11 @@ services:
           <div className="space-y-4">
             <p className="text-[13px] text-text-muted">
               Optionally restore this install from an existing copy of {app.name} on this host — its data, and its credentials, land before the app starts.
+              {/* #493: the source is never replaced or stopped, so for a
+                  single-instance app the install that follows needs the
+                  "install another copy" confirmation. Set the expectation
+                  here rather than letting the conflict be the first mention. */}
+              {' '}The copy you restore from keeps running: this install is a new, separate copy of {app.name}.
             </p>
             {restoreCandidatesLoading && <div className="text-[13px] text-text-faint">Loading restore candidates…</div>}
             {restoreCandidatesError && <div className="text-[13px] text-danger">{restoreCandidatesError}</div>}

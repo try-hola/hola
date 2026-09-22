@@ -965,7 +965,7 @@ export const API_ERROR_CODES: ApiErrorCodeMetadata[] = [
     code: 'CONFLICT',
     status: 409,
     details:
-      "details.code ∈ PROVIDER_EXISTS { contract, existing{id,name} }, ALREADY_INSTALLED { existing{id,name,channel}, channelPublished }",
+      "details.code ∈ PROVIDER_EXISTS { contract, existing{id,name} }, ALREADY_INSTALLED { existing{id,name,channel}, channelPublished, restore?{candidateId,candidateIsExisting} }",
   },
   { code: 'VERSION_NOT_ON_CHANNEL', status: 409 },
   { code: 'DRAFT_VALIDATION_FAILED', status: 422, details: 'issues[]' },
@@ -1205,7 +1205,10 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   // Force a second copy of a single-instance app past the guard (#246), e.g.
   // when the requested channel isn't a distinct/published one (spec 005). A
   // 409 CONFLICT with details.code 'ALREADY_INSTALLED' is thrown when this
-  // is needed but omitted.
+  // is needed but omitted. Required on the restore path for any
+  // single-instance app (#493): the restore source keeps running, so the
+  // restoring install is always a second live copy — the refusal's
+  // details.restore says a restore was in play.
   allowMultiple?: boolean;
   profiles?: string[];
   grants?: string[];

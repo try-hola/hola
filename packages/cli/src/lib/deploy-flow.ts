@@ -153,18 +153,35 @@ export function reportDeployError(err: unknown): undefined {
         candidateId?: string;
         candidateName?: string;
         subdomain?: string;
+        // The install that was refused was also restoring (#493).
+        restore?: { candidateId: string; candidateIsExisting: boolean };
       } | undefined)
     : undefined;
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
     const { id, name, channel } = details.existing;
-    const channelClause = details.channelPublished
-      ? `install a separate copy on another published channel with '--channel <name>', `
-      : '';
-    console.error(
-      `Hint: '${name}' (${id}) already follows ${channel}. Switch it with 'hola channel ${id} <channel>', ` +
-        channelClause +
-        `or force a second copy with '--allow-multiple --name ${name}-2'.`,
-    );
+    if (details.restore) {
+      // #493: `--restore-from` names a source that is still running, so for a
+      // single-instance app this refusal is the NORMAL outcome of the restore
+      // path rather than an edge case — and the channel advice below is no
+      // route to a restore. Pair the two flags instead. Not implied by the
+      // restore choice on purpose: the restored copy comes up live beside the
+      // source, with the source's credentials, so it is the operator's call.
+      const alongside = details.restore.candidateIsExisting ? 'it' : `'${name}' (${id})`;
+      console.error(
+        `Hint: restoring from '${details.restore.candidateId}' leaves that copy running, so this install is a ` +
+          `SECOND live copy of the app alongside ${alongside} — which this app is not marked for. Confirm it ` +
+          `deliberately: re-run with '--allow-multiple' and a '--name' that differs from the source's.`,
+      );
+    } else {
+      const channelClause = details.channelPublished
+        ? `install a separate copy on another published channel with '--channel <name>', `
+        : '';
+      console.error(
+        `Hint: '${name}' (${id}) already follows ${channel}. Switch it with 'hola channel ${id} <channel>', ` +
+          channelClause +
+          `or force a second copy with '--allow-multiple --name ${name}-2'.`,
+      );
+    }
   }
   // Restore-on-install refusals (spec 007): one branch per `RESTORE_*` code,
   // hints built from `details` alone — never from the message, for the same

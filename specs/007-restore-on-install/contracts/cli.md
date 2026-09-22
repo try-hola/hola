@@ -16,6 +16,25 @@ Not a capability contract — these are flags on an existing command. See
 | `--carry-env` / `--no-carry-env` | Carry the candidate's configuration. Default **on** when the candidate has an environment record — carrying is what makes the restored data readable (spec US2), so the safe default is the one that preserves it. `--no-carry-env` requires `--ack restore-env-not-carried`. |
 | `--ack <code>` | Supply an acknowledgement code. Repeatable or comma-separated, parsed exactly like `--grant` (`install.ts:82-93`). |
 
+### `--restore-from` pairs with `--allow-multiple` (#493)
+
+A restore source is a **live** deployment (FR-048/FR-004a) or a provider's
+capture of one, and a restore never replaces or stops it. So for a
+single-instance app — most of the catalog, including every database-backed app
+that most needs restore — `--restore-from` always trips spec 005's
+single-instance guard and is refused `ALREADY_INSTALLED` until the operator
+also passes `--allow-multiple` (with a `--name` distinct from the source's,
+per FR-035/#490). On this path the flag is the normal case, not an edge case.
+
+The restore choice deliberately does **not** imply it. The restored copy comes
+up live holding the source's credentials — the very risk FR-041's summary
+acknowledgement names — so a second live copy of the same app is something an
+operator confirms, never something inferred from a different choice. What
+changed instead is that the refusal explains itself: `details` gains
+`restore { candidateId, candidateIsExisting }` whenever the refused install
+carried a `restoreFrom`, added to the spec 005 shape (same top-level
+`CONFLICT`, same `details.code`) so existing clients are unaffected.
+
 ## The default is the contract
 
 **With no restore flag, no restore happens** (FR-044).
@@ -81,6 +100,7 @@ Mapping from `details.code` to the hint, one row per code
 | `RESTORE_NOT_SUPPORTED` | install-by-ref cannot restore; use the catalog path |
 | `RESTORE_NOT_ACCEPTED` | this app has not declared it can be restored; install fresh |
 | `RESTORE_ADDRESS_REQUIRED` | `candidateName`, `subdomain` → name what still holds the address, ask for `--name <something>` |
+| `ALREADY_INSTALLED` + `restore` (#493) | `restore.candidateId`, `restore.candidateIsExisting` → say the source keeps running, so this is a second live copy; ask for `--allow-multiple` + a distinct `--name` |
 
 The table lists every code a **create call** can return (api.md §2). The four
 job-time codes — `RESTORE_TARGET_NOT_EMPTY`, `RESTORE_INCOMPLETE`,
@@ -95,7 +115,13 @@ the server's own refusal message — which is why `RESTORE_INCOMPLETE` spells ou
 
 ## Unchanged
 
-`hola install`'s existing flags, `--grant` parsing, and the `ALREADY_INSTALLED`
-branch at `deploy-flow.ts:145-155` all behave exactly as they do today. There is
-no new command and no new subcommand — restore is an option on install, because
-install is the only moment it is safe (spec §Executive Summary).
+`hola install`'s existing flags and `--grant` parsing behave exactly as they do
+today. There is no new command and no new subcommand — restore is an option on
+install, because install is the only moment it is safe (spec §Executive
+Summary).
+
+The `ALREADY_INSTALLED` branch in `deploy-flow.ts` now has two arms (#493): with
+no `details.restore` it prints exactly the spec 005 hint, byte for byte; with
+one, it prints the restore pairing above instead. A non-restore install cannot
+reach the new arm, because the server only emits `details.restore` for an
+install that carried a `restoreFrom`.

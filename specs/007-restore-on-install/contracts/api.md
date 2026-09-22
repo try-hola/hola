@@ -123,6 +123,24 @@ through `mergeUpgradeAppEnv`; `name` and `subdomain` default from the candidate
 | `RESTORE_ACK_REQUIRED` | + `required[]` |
 | `RESTORE_ADDRESS_REQUIRED` | FR-035's default would land on the address the candidate still routes under; + `candidateId`, `candidateName`, `subdomain` |
 
+Spec 005's `ALREADY_INSTALLED` is also reachable from this path and, since the
+source keeps running, is the **normal** outcome for a single-instance app
+(#493). Its details gain, only when the refused install carried a `restoreFrom`:
+
+```ts
+details.restore?: {
+  candidateId: string;         // what the operator chose to restore from
+  candidateIsExisting: boolean; // the copy in the way IS that source
+};
+```
+
+Added to the spec 005 shape, never repurposing it: the top-level `CONFLICT` and
+`details.code` are unchanged, so a spec 005 client keeps working and a
+restore-aware one can say "a second live copy alongside the source you are
+restoring from" instead of a bare install conflict. The verdict is unchanged —
+a restore choice does not imply `allowMultiple` (see
+[cli.md](./cli.md#--restore-from-pairs-with---allow-multiple-493)).
+
 **`RESTORE_ADDRESS_REQUIRED` (#490).** With no `name` in the request, FR-035
 defaults the new install's address to the candidate's own — and the candidate,
 being an existing deployment on this host, still owns it. That default is
