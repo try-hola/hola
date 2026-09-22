@@ -195,6 +195,18 @@ describe('Auth provisioning lifecycle', () => {
     return { storage, jobs, drafts, deployments, provisioner, contractTokens };
   }
 
+  // A provider whose contract work runs in a SECOND service — the shape
+  // `restore@1` forces, since Backrest has no restore-triggered hook (#509).
+  const MULTI_SERVICE_COMPOSE =
+    'services:\n  gitea:\n    image: gitea/gitea:1.0.0\n  sidekick:\n    image: gitea/gitea:1.0.0\n    environment:\n      MY_KNOB: "true"\n';
+
+  async function finalizedMultiServiceDraft(drafts: RealDraftService): Promise<string> {
+    const { draftId } = await drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await drafts.updateDraft(draftId, { composeOverride: MULTI_SERVICE_COMPOSE });
+    await drafts.finalizeDraft(draftId);
+    return draftId;
+  }
+
   async function finalizedDraft(drafts: RealDraftService): Promise<string> {
     const { draftId } = await drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
     await drafts.updateDraft(draftId, { composeOverride: COMPOSE });
@@ -604,6 +616,83 @@ describe('Auth provisioning lifecycle', () => {
       'sh.hola.app': 'gitea',
       'sh.hola.deployment': created.deploymentId,
       'sh.hola.name': 'My Gitea',
+    });
+  });
+
+  describe('contract credentials reach every service the app declares (#509)', () => {
+    // Ingress-only injection was enough for `backup@1`, whose provider scripts
+    // run inside the ingress container because Backrest invokes them itself. A
+    // provider that must POLL needs its own long-running service, and that
+    // service was getting the grant's elevated mounts with no credential to use
+    // them: consent recorded, token withheld, provider half inoperable. Found on
+    // the first live DR rehearsal — nothing in either unit suite exercised a
+    // second container asking the broker for work.
+    test('a non-ingress service receives HOLA_CONTRACT_TOKEN and HOLA_API_URL', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['backup@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedMultiServiceDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { environment?: Record<string, string> }> };
+
+      for (const svc of ['gitea', 'sidekick']) {
+        expect(doc.services[svc]?.environment?.HOLA_CONTRACT_TOKEN).toMatch(/^hct_/);
+        expect(doc.services[svc]?.environment?.HOLA_API_URL).toBeTruthy();
+      }
+      // the second service's own declared env survives the merge
+      expect(doc.services.sidekick?.environment?.MY_KNOB).toBe('true');
+    });
+
+    test('those same services join the hola network, and ONLY ingress keeps the routing alias', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['backup@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedMultiServiceDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as {
+        networks?: Record<string, unknown>;
+        services: Record<string, { networks?: Record<string, { aliases?: string[] }> }>;
+      };
+
+      // A token with no route to hola-server is as useless as no token.
+      expect(doc.services.gitea?.networks?.hola).toBeDefined();
+      expect(doc.services.sidekick?.networks?.hola).toBeDefined();
+      expect(doc.networks?.hola).toMatchObject({ external: true });
+
+      // The alias belongs to ingress ALONE: on a second container it would make
+      // Traefik round-robin the app's public traffic onto something that does
+      // not serve it.
+      expect(doc.services.gitea?.networks?.hola?.aliases?.length ?? 0).toBeGreaterThan(0);
+      expect(doc.services.sidekick?.networks?.hola?.aliases).toBeUndefined();
+    });
+
+    test('auth env stays INGRESS-ONLY — it configures the app\'s front door, not every container', async () => {
+      const sys = makeSystem({ auth: OIDC_AUTH, provides: ['backup@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedMultiServiceDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as { services: Record<string, { environment?: Record<string, string> }> };
+      const ingressEnv = doc.services.gitea?.environment ?? {};
+      const otherEnv = doc.services.sidekick?.environment ?? {};
+
+      const authKeys = Object.keys(ingressEnv).filter((k) => k.startsWith('GITEA_OIDC_'));
+      expect(authKeys.length).toBeGreaterThan(0);
+      for (const k of authKeys) expect(otherEnv).not.toHaveProperty(k);
+      // ...while the contract token reached both.
+      expect(otherEnv.HOLA_CONTRACT_TOKEN).toMatch(/^hct_/);
     });
   });
 

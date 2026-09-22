@@ -145,6 +145,57 @@ export function injectContainerLogsSource(
 }
 
 /**
+ * Inject a provider's contract credentials (`HOLA_CONTRACT_TOKEN`, `HOLA_API_URL`)
+ * into every service the APP itself declares — not just its ingress service (#509).
+ *
+ * Ingress-only injection was sufficient for `backup@1` because that provider's
+ * contract work happens inside the ingress container: Backrest invokes
+ * `backup-prepare.sh`/`backup-finalize.sh` itself as Command hooks, so they
+ * inherit that service's environment.
+ *
+ * `restore@1` cannot work that way, and not by choice. Backrest's hooks fire on
+ * snapshot start and end only, so nothing fires when an install elsewhere on the
+ * host wants a capture delivered — there is no event for the provider to react
+ * to, so it must poll, so it must be a long-running process of its own.
+ * Injecting only into ingress left that process holding the grant's elevated
+ * MOUNTS with no credential to use them: consent recorded, token withheld, the
+ * provider half inoperable as shipped.
+ *
+ * The platform-injected `hola-docker-proxy` sidecar is skipped, for the same
+ * reason the writable staging mount skips it — it runs from the SERVER's own
+ * image to mediate Docker access and is not part of the app's trust boundary, so
+ * handing it a control-plane credential would be a real widening. Every other
+ * service belongs to the app that already holds this token.
+ *
+ * Auth env is deliberately NOT broadened by this; see the call site in
+ * `materializeCompose`.
+ */
+export function injectContractEnvironment(
+  composeYaml: string,
+  env: Record<string, string>,
+): string {
+  const keys = Object.keys(env);
+  if (keys.length === 0) return composeYaml;
+
+  const doc = (parse(composeYaml) ?? {}) as ComposeDoc;
+  const services = doc.services;
+  if (!services || typeof services !== 'object' || Object.keys(services).length === 0) {
+    throw new Error('cannot inject contract environment: compose document has no services');
+  }
+
+  for (const name of Object.keys(services)) {
+    if (name === CONTAINER_LOGS_PROXY_SERVICE) continue;
+    const service = services[name];
+    if (!service || typeof service !== 'object') continue;
+    const envMap = toEnvMap(service.environment);
+    for (const k of keys) envMap[k] = env[k];
+    service.environment = envMap;
+  }
+
+  return stringify(doc);
+}
+
+/**
  * Return the compose YAML with `<hostPath>:<hostPath>:ro` added to every
  * service's `volumes` (deduped). Returns the input unchanged when there are no
  * services. Parse errors propagate (mirrors the sibling injection helpers).
