@@ -113,6 +113,80 @@ export interface DockerService {
 }
 
 /**
+ * Environment variables an app-directed `docker compose` invocation may inherit
+ * from the server process. Everything else is dropped — see {@link appComposeEnv}.
+ *
+ * Only what the docker CLI itself needs to find its binary, its plugins and the
+ * daemon: `PATH`/`HOME` (compose ships as a CLI plugin discovered under
+ * `$HOME/.docker`), the `DOCKER_*` client settings (remote daemon, TLS, context),
+ * and the two vars a non-default socket is discovered through (`SSH_AUTH_SOCK`
+ * for `DOCKER_HOST=ssh://`, `XDG_RUNTIME_DIR` for rootless). `DOCKER_CONFIG`
+ * passes through so an operator-configured client config keeps working; a
+ * per-pull registry-auth dir overrides it.
+ *
+ * `COMPOSE_PROFILES` is deliberately NOT here: the platform derives it per
+ * invocation from the app's manifest (#162), so inheriting the server's own
+ * value would silently activate profiles no app asked for.
+ *
+ * Proxy variables (`HTTP(S)_PROXY`, `NO_PROXY`) are deliberately absent too:
+ * nothing in this repo sets or documents them, and image pulls are performed by
+ * the daemon (which has its own proxy configuration), not by the CLI.
+ */
+const COMPOSE_ENV_PASSTHROUGH = [
+  'PATH',
+  'HOME',
+  'DOCKER_HOST',
+  'DOCKER_CONFIG',
+  'DOCKER_CONTEXT',
+  'DOCKER_CERT_PATH',
+  'DOCKER_TLS_VERIFY',
+  'DOCKER_API_VERSION',
+  'SSH_AUTH_SOCK',
+  'XDG_RUNTIME_DIR',
+] as const;
+
+/**
+ * The environment for a `docker compose` command run against an APP's project.
+ *
+ * Built from an explicit allowlist ({@link COMPOSE_ENV_PASSTHROUGH}) instead of
+ * inheriting the server's environment, because Compose interpolates `${VAR}` in
+ * the app's own compose file from the environment of the process that invoked
+ * it. The production server environment holds control-plane credentials (the
+ * Authentik bootstrap/provisioner tokens, an optional fixed `HOLA_API_KEY`), so
+ * an inherited env let a bundle write `environment: { X: "${HOLA_AUTHENTIK_BOOTSTRAP_TOKEN}" }`
+ * and receive a live platform credential it was never granted — the compose
+ * validator's unknown-`HOLA_*`-token check only warns, and a credential
+ * referenced from an `image:` would leave the host on the next pull. An
+ * allowlisted env closes that whole class: there is nothing in the child
+ * environment worth stealing.
+ *
+ * App-supplied interpolation values do NOT travel this way. They are written to
+ * `deployments/<id>/runtime/.env` by `materializeCompose` (deployment.ts) and
+ * auto-loaded by Compose from the project directory every command runs in, which
+ * is now the only path by which an app value reaches Compose.
+ *
+ * `source` is injectable for tests; production always reads `process.env`.
+ */
+export function appComposeEnv(
+  opts?: { dockerConfigDir?: string; profiles?: string[] },
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of COMPOSE_ENV_PASSTHROUGH) {
+    const value = source[key];
+    if (value !== undefined) env[key] = value;
+  }
+  // A scoped registry-auth dir (0o600 config.json) wins over any inherited one.
+  if (opts?.dockerConfigDir) env.DOCKER_CONFIG = opts.dockerConfigDir;
+  // Active Compose profiles (#162), comma-joined. Docker Compose reads this to
+  // decide which profiled services to act on — set identically across
+  // pull/up/down/restart/exec so `down` tears down the profiled services `up`
+  // started (a plain `down` leaves them orphaned).
+  if (opts?.profiles?.length) env.COMPOSE_PROFILES = opts.profiles.join(',');
+  return env;
+}
+
+/**
  * Real Docker service implementation
  */
 export class RealDockerService implements DockerService, HealthCheckable {
@@ -184,11 +258,11 @@ export class RealDockerService implements DockerService, HealthCheckable {
 
   /**
    * Materialize a scoped DOCKER_CONFIG dir (0o600 config.json) authenticating the
-   * given private registries, and return the env to pass to a docker invocation.
-   * Never touches ~/.docker/config.json; caller removes the dir when done. Returns
-   * undefined (and no temp dir) when there are no credentials.
+   * given private registries. Never touches ~/.docker/config.json; caller removes
+   * the dir when done (and passes it to {@link appComposeEnv} as
+   * `dockerConfigDir`). Returns no dir when there are no credentials.
    */
-  private makeRegistryAuthEnv(registryAuth?: PullCredentials[]): { env?: NodeJS.ProcessEnv; dir?: string } {
+  private makeRegistryAuthDir(registryAuth?: PullCredentials[]): { dir?: string } {
     if (!registryAuth || registryAuth.length === 0) return {};
     const dir = mkdtempSync(join(tmpdir(), 'hola-docker-'));
     const auths: Record<string, { auth: string }> = {};
@@ -197,24 +271,12 @@ export class RealDockerService implements DockerService, HealthCheckable {
       auths[host] = { auth: Buffer.from(`${c.username}:${c.password}`, 'utf8').toString('base64') };
     }
     writeFileSync(join(dir, 'config.json'), JSON.stringify({ auths }), { mode: 0o600 });
-    return { env: { ...process.env, DOCKER_CONFIG: dir }, dir };
-  }
-
-  /**
-   * Layer the active Compose profiles (#162) onto a base env as `COMPOSE_PROFILES`
-   * (comma-joined). Docker Compose reads it to decide which profiled services to
-   * act on — set identically across up/down/restart/exec so `down` tears down the
-   * profiled services `up` started (a plain `down` leaves them orphaned). Returns
-   * the base unchanged when no profile is active (undefined ⇒ inherit process env).
-   */
-  private withComposeProfiles(base: NodeJS.ProcessEnv | undefined, profiles?: string[]): NodeJS.ProcessEnv | undefined {
-    if (!profiles || profiles.length === 0) return base;
-    return { ...(base ?? process.env), COMPOSE_PROFILES: profiles.join(',') };
+    return { dir };
   }
 
   async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
-    const { env: authEnv, dir } = this.makeRegistryAuthEnv(registryAuth);
-    const env = this.withComposeProfiles(authEnv, profiles);
+    const { dir } = this.makeRegistryAuthDir(registryAuth);
+    const env = appComposeEnv({ dockerConfigDir: dir, profiles });
     try {
       this.logger.info('Pulling compose images', { projectPath, projectName, authenticated: Boolean(dir) });
 
@@ -253,8 +315,8 @@ export class RealDockerService implements DockerService, HealthCheckable {
     profiles?: string[],
     options?: { services?: string[]; wait?: boolean; timeoutMs?: number },
   ): Promise<{ success: boolean; output: string }> {
-    const { env: authEnv, dir } = this.makeRegistryAuthEnv(registryAuth);
-    const env = this.withComposeProfiles(authEnv, profiles);
+    const { dir } = this.makeRegistryAuthDir(registryAuth);
+    const env = appComposeEnv({ dockerConfigDir: dir, profiles });
     try {
       this.logger.info('Starting compose project', { projectPath, projectName, services: options?.services, wait: options?.wait });
 
@@ -319,7 +381,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
       // too — without them Compose leaves profiled containers orphaned (#162).
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" down`,
-        { cwd: projectPath, timeout: 60000, env: this.withComposeProfiles(undefined, profiles) } // 1 minute timeout
+        { cwd: projectPath, timeout: 60000, env: appComposeEnv({ profiles }) } // 1 minute timeout
       );
       
       const output = [stdout, stderr].filter(Boolean).join('\n');
@@ -348,7 +410,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
       
       const { stdout } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" ps --format json`,
-        { cwd: projectPath }
+        { cwd: projectPath, env: appComposeEnv() }
       );
       
       const lines = stdout.trim().split('\n').filter(line => line.trim());
@@ -402,7 +464,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
 
       const { stdout, stderr } = await execAsync(
         `docker compose -f "${composeFile}" -p "${projectName}" restart${serviceArg}`,
-        { cwd: projectPath, timeout: 60000, env: this.withComposeProfiles(undefined, profiles) }
+        { cwd: projectPath, timeout: 60000, env: appComposeEnv({ profiles }) }
       );
       
       const output = [stdout, stderr].filter(Boolean).join('\n');
@@ -440,7 +502,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
     try {
       // Carry active profiles so an exec targeting a profiled service (#162) still
       // resolves it — Compose treats a service in an inactive profile as unknown.
-      const env = this.withComposeProfiles(undefined, opts?.profiles);
+      const env = appComposeEnv({ profiles: opts?.profiles });
       const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout: 60000, env });
       const output = [stdout, stderr].filter(Boolean).join('\n');
       this.logger.info('Compose exec succeeded', { projectName, service, output: output.substring(0, 1000) });
@@ -540,7 +602,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
       const { stdout } = await execFileAsync(
         'docker',
         ['compose', '-f', composeFile, '-p', projectName, 'logs', '--no-color', '--timestamps', '--tail', String(tail)],
-        { cwd: projectPath, maxBuffer: 16 * 1024 * 1024 }
+        { cwd: projectPath, maxBuffer: 16 * 1024 * 1024, env: appComposeEnv() }
       );
       return { entries: parseComposeLogs(stdout), hasMore: false };
     } catch (error) {
@@ -567,7 +629,7 @@ export class RealDockerService implements DockerService, HealthCheckable {
     const proc = spawn('docker', [
       'compose', '-f', composeFile, '-p', projectName,
       'logs', '-f', '--no-color', '--timestamps', '--tail', '0',
-    ], { cwd: projectPath });
+    ], { cwd: projectPath, env: appComposeEnv() });
 
     let stopped = false;
     const onData = (data: Buffer) => {
@@ -753,6 +815,24 @@ export class MockDockerService implements DockerService {
    */
   readonly composeUpCalls: Array<{ projectName: string; services?: string[]; wait?: boolean; timeoutMs?: number }> = [];
 
+  /**
+   * Every app-directed lifecycle call, in order, with the project DIRECTORY —
+   * the one thing a test needs to find the `runtime/.env` the real Compose would
+   * auto-load, which is the only path by which an app's own env now reaches
+   * Compose (F01). Deliberately NOT a recorded child environment: the child env
+   * is built inside `RealDockerService` (`appComposeEnv`), so having the Mock
+   * synthesize one would assert the Mock's copy of production rather than
+   * production — the very divergence the plan's "Known trap" warns about. The
+   * real child environment is observed end-to-end in
+   * `__tests__/docker/compose-env.test.ts`.
+   */
+  readonly composeCalls: Array<{
+    command: 'pull' | 'up' | 'down' | 'restart' | 'exec';
+    projectPath: string;
+    projectName: string;
+    profiles?: string[];
+  }> = [];
+
   async getDockerInfo(): Promise<DockerInfo> {
     return { available: true, version: 'mock', serverVersion: 'mock', apiVersion: 'mock' };
   }
@@ -763,6 +843,7 @@ export class MockDockerService implements DockerService {
 
   async composePull(projectPath: string, projectName: string, registryAuth?: PullCredentials[], profiles?: string[]): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose pull', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles });
+    this.composeCalls.push({ command: 'pull', projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} images pulled` };
   }
 
@@ -775,11 +856,13 @@ export class MockDockerService implements DockerService {
   ): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose up', { projectPath, projectName, authenticated: Boolean(registryAuth?.length), profiles, services: options?.services, wait: options?.wait });
     this.composeUpCalls.push({ projectName, services: options?.services, wait: options?.wait, timeoutMs: options?.timeoutMs });
+    this.composeCalls.push({ command: 'up', projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} created and started` };
   }
 
   async composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose down', { projectPath, projectName, profiles });
+    this.composeCalls.push({ command: 'down', projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} stopped and removed` };
   }
 
@@ -795,6 +878,7 @@ export class MockDockerService implements DockerService {
 
   async composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose restart', { projectPath, projectName, serviceName, profiles });
+    this.composeCalls.push({ command: 'restart', projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} restarted` };
   }
 
@@ -806,6 +890,7 @@ export class MockDockerService implements DockerService {
     opts?: { user?: string; profiles?: string[] }
   ): Promise<{ success: boolean; output: string }> {
     this.logger.debug('Mock compose exec', { projectPath, projectName, service, command, profiles: opts?.profiles });
+    this.composeCalls.push({ command: 'exec', projectPath, projectName, profiles: opts?.profiles });
     return { success: true, output: `[mock] exec ${service}: ${command.join(' ')}` };
   }
 
