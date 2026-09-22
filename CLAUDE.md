@@ -319,6 +319,38 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `createFromDraft`/`promote`), and a second, independent guard in
   `runLifecycleJob` refuses when a job's recorded target release is no longer the
   active one, so reverting the ordering yields a failed job rather than a lie.
+- **A capture proves it produced an archive (F15).** `tarGzipDir` treats `tar`
+  exiting 1 as success **on purpose**: archiving a *live* data root races the
+  app's own writes, and a file changing or vanishing between tar's stat and read
+  is a soft error that still yields a complete, crash-consistent archive — the
+  contract of this snapshot (#284/#121). The bug was never the tolerance, it was
+  the **absent post-condition**: tolerating exit 1 meant tolerating *any*
+  exit-1 outcome, including ones that wrote no file at all. The observed case is
+  a non-GNU `tar` — libarchive's `bsdtar`, which macOS ships as `/usr/bin/tar` —
+  refusing the GNU-only flags (`--warning=no-file-changed`,
+  `--ignore-failed-read`) with "Option … is not supported", exiting **1**, and
+  creating nothing; the snapshot was then recorded with `sizeBytes: 0` and the
+  loss surfaced only at rollback. So the exit code no longer decides alone:
+  `>= 2` is fatal as before, while 0 and 1 are **provisional** and the archive
+  must then exist, be non-empty, and **list** (`tar -tzf`) with at least one
+  member. Listing rather than stat'ing is what catches a *truncated* archive (a
+  capture killed by ENOSPC) that a size check waves through; measured on GNU tar
+  1.35, verifying a 400 MB incompressible root costs 2.3 s against 12.8 s to
+  create it (+18%), and is bounded by decompression throughput, so it is never
+  worse than the capture it follows. The flag set is **chosen per
+  implementation** (`tar --version`, probed per call — a process-lifetime cache
+  would make the answer depend on which snapshot ran first) rather than assumed:
+  GNU tar needs `--ignore-failed-read` (without it a file that vanishes mid-read
+  is exit **2**, fatal), bsdtar needs neither flag and already behaves the way
+  those flags make GNU tar behave. Detection failing answers "not GNU", which
+  selects the portable set — the post-condition backs it up either way.
+  Production is Linux/GNU, so this is primarily a **developer-environment**
+  concern, and the choice is deliberate: a macOS developer now takes real
+  snapshots instead of merely failing loudly. `writeSnapshotMeta` deletes the
+  snapshot directory when the capture throws, so a failed upgrade leaves no
+  metaless debris. Not covered: a macOS CI job to exercise the other supported
+  host platform (#549), and verifying the archive's *contents* rather than its
+  readability.
 - **Startup recovery reconciles before it resumes (F11).** `ensureStarted` did
   the two halves of crash recovery in the wrong order: it re-enqueued every
   `pending` job first — and `enqueue` calls `tick()` **synchronously**, so those

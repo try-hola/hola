@@ -20,6 +20,7 @@
  * executing" — becomes an assertion rather than an anecdote.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { spawn } from 'child_process';
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -47,6 +48,19 @@ const COMPOSE_WITH_DATA =
 
 /** One compose call, as `<op>:<phase>` — the ordering evidence F10 needs. */
 type ComposeEvent = string;
+
+/**
+ * `tar -czf` with no post-condition — the pre-F15 `tarGzipDir`, kept here only
+ * so a test can still build the degenerate archives the restore side must
+ * refuse. Production code must never use this: proving the archive is the point.
+ */
+function rawTarGzip(srcDir: string, destFile: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const child = spawn('tar', ['-czf', destFile, '-C', srcDir, '.'], { stdio: 'ignore' });
+    child.on('error', rej);
+    child.on('close', (code) => (code === 0 ? res() : rej(new Error(`tar exited ${code}`))));
+  });
+}
 
 /**
  * A Docker mock that can be told to fail a call, or to HOLD one open until the
@@ -492,6 +506,14 @@ describe('Lifecycle safety (F09 + F10)', () => {
    * An archive of an empty directory is technically valid, so nothing in the
    * extraction itself refuses it — and landing it would be an `rm -rf` of the
    * data root dressed up as a restore.
+   *
+   * The archive is built by invoking `tar` directly rather than through
+   * `tarGzipDir`, because F15 gave that helper the opposite post-condition: it
+   * now refuses to report success for an archive holding no files. Both rules
+   * are wanted — the capture side never records an empty snapshot, and the
+   * restore side never lands one that reached it some other way (an older
+   * snapshot on disk, a provider-delivered capture) — so this test constructs
+   * the input it is about instead of borrowing a helper that now rejects it.
    */
   test('an archive that extracts to nothing is refused rather than landed', async () => {
     const dest = join(appsRoot, 'dest');
@@ -501,7 +523,7 @@ describe('Lifecycle safety (F09 + F10)', () => {
     await mkdir(emptySrc, { recursive: true });
     await writeFile(join(dest, 'original.txt'), 'the only copy');
     const archive = join(appsRoot, 'empty.tar.gz');
-    await tarGzipDir(emptySrc, archive);
+    await rawTarGzip(emptySrc, archive);
 
     await expect(restoreTarGzInto(archive, dest, staging)).rejects.toThrow(/extracted to nothing/);
     expect(await readFile(join(dest, 'original.txt'), 'utf8')).toBe('the only copy');

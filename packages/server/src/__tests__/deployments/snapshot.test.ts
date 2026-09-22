@@ -388,6 +388,44 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     expect(await readdir(snapshotsPath(dep.deploymentId))).toHaveLength(1);
   });
 
+  /**
+   * F15 at the level the operator sees it: a capture that produces no archive
+   * must fail the promote and leave nothing on record.
+   *
+   * `tarGzipDir`'s own post-condition is tested against real tar behaviours in
+   * `snapshot-capture.test.ts`; this asserts the consequence — that a capture
+   * failure is not swallowed on the way up, and that no snapshot directory is
+   * left behind for `listSnapshots` (or an operator reading the disk) to find.
+   * Before the fix the tar below "succeeded", `meta.json` was written with
+   * `sizeBytes: 0`, the upgrade proceeded, and the absence surfaced only when a
+   * rollback came looking for data.
+   */
+  test('a capture that produces no archive fails the promote and records no snapshot', async () => {
+    const { drafts, deployments } = makeSystem();
+    const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
+    await writeAppData(dep.deploymentId, 'v1-data');
+
+    // A `tar` that reports no fatal error and creates nothing — the shape of
+    // the observed bsdtar failure, minus the flag parsing.
+    const binDir = join(dataRoot, 'fake-bin');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(join(binDir, 'tar'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${binDir}:${savedPath ?? ''}`;
+    try {
+      await expect(
+        deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } }),
+      ).rejects.toThrow(/Pre-upgrade snapshot failed/);
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
+
+    // Nothing recorded: not an archive, not a meta, not an orphaned directory.
+    const snapshots = existsSync(snapshotsPath(dep.deploymentId)) ? await readdir(snapshotsPath(dep.deploymentId)) : [];
+    expect(snapshots).toEqual([]);
+  });
+
   test('retention keeps only the most recent N snapshots', async () => {
     const { drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });

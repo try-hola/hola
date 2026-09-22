@@ -55,33 +55,173 @@ function run(cmd: string, args: string[]): Promise<void> {
   });
 }
 
-/** Gzip-tar the CONTENTS of `srcDir` into `destFile` (whose parent dir must exist). */
+/**
+ * Gzip-tar the CONTENTS of `srcDir` into `destFile` (whose parent dir must
+ * exist), and PROVE the archive exists before reporting success (F15).
+ *
+ * Two facts have to coexist here, and mixing them up is the whole finding.
+ *
+ * **The tolerance (keep it).** Snapshotting a *live* data dir races with the
+ * app's own writes: a file (e.g. a postgres WAL segment) can change or vanish
+ * between tar's stat and read. tar reports that as a soft error (exit 1) while
+ * still writing a complete, crash-consistent archive — which is exactly this
+ * snapshot's contract (#284/#121). Making tar strict would fail every snapshot
+ * of a busy app, i.e. break the feature the tolerance was added for.
+ *
+ * **The missing post-condition (the bug).** Tolerating exit 1 meant tolerating
+ * *any* exit-1 outcome, including ones that wrote no archive at all. The
+ * observed case is a non-GNU `tar`: libarchive's `bsdtar` — which is what
+ * macOS ships as `/usr/bin/tar` — rejects the GNU-only flags below with
+ * `Option --warning=no-file-changed is not supported`, exits **1**, and creates
+ * nothing. `tarGzipDir` then resolved, `writeSnapshotMeta` recorded a snapshot
+ * whose `sizeBytes` was 0, and the loss only surfaced at rollback time.
+ *
+ * So the exit code no longer decides on its own:
+ *
+ *  - exit >= 2 — fatal, fail immediately (unchanged).
+ *  - exit 0 or 1 — provisional. The archive must then exist, be non-empty, and
+ *    LIST (`tar -tzf`) with at least one entry. If it does, exit 1 was the
+ *    documented soft error and this succeeds; if it does not, exit 1 was a real
+ *    failure whatever tar said, and this throws with tar's own stderr attached.
+ *
+ * Listing rather than only stat'ing costs a full decompress of what was just
+ * written, and it is what catches a *truncated* archive (a capture killed by
+ * ENOSPC or an OOM) that a size check waves through. Measured on GNU tar 1.35:
+ * a 400 MB incompressible root costs 12.8 s to create and 2.3 s to verify
+ * (+18%); a highly compressible one is ~1:1 but trivial in absolute terms
+ * (~2 s). Verification is bounded by decompression throughput and so is never
+ * worse than the capture it follows — cheap next to restoring a snapshot that
+ * turns out not to exist.
+ *
+ * The flag set is chosen per implementation rather than assumed, so a
+ * developer machine with `bsdtar` produces real snapshots instead of merely
+ * failing loudly: GNU tar needs `--ignore-failed-read` (without it a file that
+ * vanishes mid-read is exit **2**, fatal) and `--warning=no-file-changed`,
+ * while bsdtar needs neither — it ignores a mid-read change outright and
+ * reports an unreadable file as exit 1 with a complete archive, which is
+ * precisely what the tolerance above already accepts. Production (the Linux
+ * image) is GNU either way.
+ */
 export async function tarGzipDir(srcDir: string, destFile: string): Promise<void> {
-  // Snapshotting a *live* data dir races with the app's own writes: a file (e.g. a
-  // postgres WAL segment) can change or vanish between tar's stat and read. GNU tar
-  // reports that as a soft error (exit 1) but still writes a complete, crash-
-  // consistent archive — which is exactly this snapshot's contract (#284/#121).
-  // So suppress the file-changed warning, ignore a file that disappears mid-read,
-  // and treat exit 1 as success; only a fatal error (exit >= 2) fails the snapshot.
-  await runTar([
-    '-czf', destFile,
-    '--warning=no-file-changed',
-    '--ignore-failed-read',
-    '-C', srcDir, '.',
-  ]);
+  const tolerance = (await tarIsGnu())
+    ? ['--warning=no-file-changed', '--ignore-failed-read']
+    : [];
+  const created = await runTar(['-czf', destFile, ...tolerance, '-C', srcDir, '.']);
+  // exit >= 2 already threw inside runTar; 0 and 1 are both provisional.
+  await assertArchiveUsable(destFile, created);
+}
+
+interface TarRun {
+  code: number;
+  stderr: string;
 }
 
 /** Like `run('tar', …)` but tolerant of tar's exit-1 "file changed as we read it"
- *  (expected when archiving a live data dir); only exit >= 2 is a real failure. */
-function runTar(args: string[]): Promise<void> {
+ *  (expected when archiving a live data dir); only exit >= 2 is a real failure.
+ *  Returns the tolerated outcome so the caller can prove what tar actually did. */
+function runTar(args: string[]): Promise<TarRun> {
   return new Promise((resolve, reject) => {
     const child = spawn('tar', args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     child.stderr?.on('data', (d) => { stderr += String(d); });
     child.on('error', reject);
     child.on('close', (code) =>
-      code === 0 || code === 1 ? resolve() : reject(new Error(`tar exited ${code}: ${stderr.trim()}`)),
+      code === 0 || code === 1
+        ? resolve({ code: code ?? 0, stderr: stderr.trim() })
+        : reject(new Error(`tar exited ${code}: ${stderr.trim()}`)),
     );
+  });
+}
+
+/**
+ * True when `tar` on PATH is GNU tar. Probed per call rather than cached: one
+ * `tar --version` is a few milliseconds against a capture measured in seconds,
+ * and a process-lifetime cache would make the answer depend on which snapshot
+ * ran first. Anything unexpected — a spawn failure, a non-zero exit, an
+ * unrecognised banner — answers **false**, which selects the portable flag set;
+ * the post-condition backs that up either way.
+ */
+async function tarIsGnu(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('tar', ['--version'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    let stdout = '';
+    child.stdout?.on('data', (d) => { stdout += String(d); });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0 && /GNU tar/i.test(stdout)));
+  });
+}
+
+/**
+ * The post-condition F15 was missing: an archive this function reported was
+ * created must exist, be non-empty, and be readable as a gzip tar holding at
+ * least one member.
+ *
+ * `./` alone does not count. Both callers guarantee a non-empty source
+ * (`capturePreUpgradeSnapshot` returns early on an empty data root; the
+ * restore-on-install capture reads an installed deployment's root, which always
+ * holds its `.hola/` marker), so an archive that lists nothing but its own root
+ * entry means the capture did not see the data — a wrong `-C`, a directory that
+ * disappeared — and recording it would put an `rm -rf`-shaped restore on disk.
+ */
+async function assertArchiveUsable(destFile: string, created: TarRun): Promise<void> {
+  const context = `tar exited ${created.code}${created.stderr ? `: ${created.stderr}` : ''}`;
+
+  let size: number;
+  try {
+    size = (await stat(destFile)).size;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    throw new Error(
+      `tar reported no fatal error but wrote no archive at ${destFile} (${context})`,
+      { cause: err },
+    );
+  }
+  if (size === 0) {
+    throw new Error(`tar wrote an empty archive at ${destFile} (${context})`);
+  }
+
+  const listing = await listArchive(destFile);
+  if (listing.code !== 0) {
+    throw new Error(
+      `the archive at ${destFile} is not readable (tar -t exited ${listing.code}` +
+      `${listing.stderr ? `: ${listing.stderr}` : ''}; ${context})`,
+    );
+  }
+  if (!listing.hasMember) {
+    throw new Error(`the archive at ${destFile} holds no files (${context})`);
+  }
+}
+
+/**
+ * Read `destFile`'s member names to EOF — reading to the end is what detects
+ * truncation — reporting only whether any member beyond the root entry was
+ * seen. Names are scanned chunk by chunk and discarded: a data root with a
+ * million files would otherwise buffer tens of megabytes of paths to answer a
+ * yes/no question.
+ */
+function listArchive(destFile: string): Promise<{ code: number; stderr: string; hasMember: boolean }> {
+  return new Promise((resolveList, reject) => {
+    const child = spawn('tar', ['-tzf', destFile], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let carry = '';
+    let hasMember = false;
+
+    const scan = (line: string): void => {
+      const name = line.trim().replace(/\/+$/, '');
+      if (name !== '' && name !== '.') hasMember = true;
+    };
+
+    child.stdout?.on('data', (d) => {
+      const lines = (carry + String(d)).split('\n');
+      carry = lines.pop() ?? '';
+      for (const line of lines) scan(line);
+    });
+    child.stderr?.on('data', (d) => { stderr += String(d); });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      scan(carry);
+      resolveList({ code: code ?? 0, stderr: stderr.trim(), hasMember });
+    });
   });
 }
 
