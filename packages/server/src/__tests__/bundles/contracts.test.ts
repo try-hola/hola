@@ -10,7 +10,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   CONTRACTS,
   formatContractRef,
-  grantsInclude,
+  grantKindsFor,
+  resolveGrantKinds,
   missingGrantConsents,
   parseContractRef,
   providerGrantsFor,
@@ -20,6 +21,7 @@ import {
   judgeRestoreCoverage,
 } from '@hola/shared/contracts';
 
+import type { ContractDefinition } from '@hola/shared/contracts';
 import type { ContractParticipant, ContractRollup } from '@hola/shared';
 
 import {
@@ -224,21 +226,82 @@ describe('provider grants (ADR 0004 §4)', () => {
     // Consent is an answer to a declaration, not a way to ask for privilege: the
     // manifest is what bounds the grant.
     expect(missingGrantConsents(undefined, ['backup@1'])).toEqual([]);
-    expect(grantsInclude([], 'apps-data')).toBe(false);
+    expect(grantKindsFor([])).toEqual([]);
   });
 
-  test('grantsInclude keys off the contract, not the ref string', () => {
-    expect(grantsInclude(['backup@1'], 'apps-data')).toBe(true);
-    expect(grantsInclude(['auth@1', 'push@1'], 'apps-data')).toBe(false);
-    expect(grantsInclude(['telemetry@1'], 'apps-data')).toBe(false);
+  test('grantKindsFor keys off the contract, not the ref string', () => {
+    expect(grantKindsFor(['backup@1'])).toEqual(['apps-data']);
+    expect(grantKindsFor(['auth@1', 'push@1'])).toEqual([]);
+    expect(grantKindsFor(['telemetry@1'])).toEqual([]);
   });
 
   test('container-logs@1 carries its own grant kind', () => {
     expect(providerGrantsFor(['container-logs@1'])).toEqual([
       { ref: 'container-logs@1', grant: expect.objectContaining({ kind: 'container-logs' }) },
     ]);
-    expect(grantsInclude(['container-logs@1'], 'container-logs')).toBe(true);
-    expect(grantsInclude(['backup@1'], 'container-logs')).toBe(false);
+    expect(grantKindsFor(['container-logs@1'])).toEqual(['container-logs']);
+    expect(grantKindsFor(['backup@1'])).not.toContain('container-logs');
+  });
+});
+
+// #496: consent is recorded per REF, but the privilege that reaches a container
+// is a KIND. These are the pure half of the fix — the enforcement rule itself.
+describe('resolveGrantKinds (#496) — recorded kinds bound the live table', () => {
+  /** The shipped table with `backup@1`'s grant swapped for a DIFFERENT kind. */
+  const widenedTable: readonly ContractDefinition[] = CONTRACTS.map((c) =>
+    c.id === 'backup'
+      ? { ...c, providerGrant: { ...c.providerGrant!, kind: 'container-logs' as const } }
+      : c,
+  );
+
+  /** The shipped table with a `providerGrant` bolted onto a contract that had none. */
+  const bolusTable: readonly ContractDefinition[] = CONTRACTS.map((c) =>
+    c.id === 'push'
+      ? { ...c, providerGrant: { kind: 'apps-data' as const, label: 'x', risk: 'y' } }
+      : c,
+  );
+
+  test('the happy path: a consented ref whose live kind is recorded is granted', () => {
+    expect(resolveGrantKinds(['backup@1'], ['apps-data'])).toEqual({
+      kinds: ['apps-data'],
+      widened: [],
+    });
+  });
+
+  test('a kind newly attached to an already-consented ref is NOT granted, and is reported', () => {
+    const res = resolveGrantKinds(['backup@1'], ['apps-data'], widenedTable);
+    expect(res.kinds).toEqual([]);
+    expect(res.widened).toEqual([{ ref: 'backup@1', kind: 'container-logs' }]);
+  });
+
+  test('a providerGrant bolted onto a contract that had none is NOT granted', () => {
+    const res = resolveGrantKinds(['push@1'], [], bolusTable);
+    expect(res.kinds).toEqual([]);
+    expect(res.widened).toEqual([{ ref: 'push@1', kind: 'apps-data' }]);
+  });
+
+  test('a kind removed from the table is not granted either — both directions fail closed', () => {
+    const strippedTable = CONTRACTS.map((c) =>
+      c.id === 'backup' ? { ...c, providerGrant: undefined } : c,
+    );
+    const res = resolveGrantKinds(['backup@1'], ['apps-data'], strippedTable);
+    expect(res.kinds).toEqual([]);
+    // Withdrawal is deliberate and needs no operator action, so it stays silent.
+    expect(res.widened).toEqual([]);
+  });
+
+  test('a recorded kind no longer implied by any consented ref is silently dropped, not warned', () => {
+    // An upgrade that drops `provides: backup@1` loses the ref upstream; warning
+    // here would fire on every materialisation for ordinary operation.
+    const res = resolveGrantKinds([], ['apps-data']);
+    expect(res).toEqual({ kinds: [], widened: [] });
+  });
+
+  test('grantKindsFor is the snapshot: de-duplicated, in ref order', () => {
+    expect(grantKindsFor(['backup@1', 'restore@1', 'backup@1'])).toEqual([
+      'apps-data',
+      'restore-staging',
+    ]);
   });
 });
 

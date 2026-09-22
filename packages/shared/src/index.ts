@@ -4,7 +4,7 @@
 // the CLI and the install wizard consume it without the rest of this file; the
 // rollup response types below are API shapes, so they belong here and reference
 // it. Type-only, so nothing is pulled in at runtime.
-import type { ContractProviderKind, ContractShape } from './contracts';
+import type { ContractProviderKind, ContractShape, ProviderGrantKind } from './contracts';
 
 // ------------------------------------------------------
 // API route constants to prevent drift between client/server
@@ -2334,6 +2334,22 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // manifest is not covered by an old consent. Absent for the overwhelming
   // majority of apps, which request no cross-app privilege at all.
   grantedContracts?: string[];
+  // The privileges those consented refs implied AT CONSENT TIME (#496), as
+  // `ProviderGrantKind`s. `grantedContracts` freezes the *ref*; this freezes the
+  // *privilege*, which is the part that actually reaches a container. Without it,
+  // the kind was resolved live from the `CONTRACTS` table on every
+  // materialisation — so attaching a new/wider `providerGrant` to an
+  // already-shipped contract would hand that privilege to every install which
+  // consented to its ref months ago, with no new consent event at all.
+  // Enforcement is `resolveGrantKinds`: live-kind-for-consented-ref ∩ this set,
+  // which fails closed in both directions.
+  //
+  // Written together with `grantedContracts` and only when non-empty, so
+  // "`grantedContracts` non-empty, this absent" identifies a pre-#496 record
+  // exactly — which is what the one-time backfill in `RealDeploymentService`
+  // keys on. With no consented refs the intersection is empty either way, so
+  // absence is not a gap there.
+  grantedPrivileges?: ProviderGrantKind[];
   // Release channel this deployment follows (#428): set from the finalized
   // manifest at create time, changed only via PATCH `{ channel }` (sticky
   // across promote/rollback). Optional in the type so pre-existing typed

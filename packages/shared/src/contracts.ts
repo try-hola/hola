@@ -254,13 +254,16 @@ export function formatContractRef(def: ContractDefinition): string {
  * contract whose obligations changed underneath it. Manifest CI in the catalog
  * repo catches the missing `@1` before publish; here it simply doesn't resolve.
  */
-export function parseContractRef(raw: string): ContractDefinition | undefined {
+export function parseContractRef(
+  raw: string,
+  table: readonly ContractDefinition[] = CONTRACTS,
+): ContractDefinition | undefined {
   const at = raw.lastIndexOf('@');
   if (at <= 0 || at === raw.length - 1) return undefined;
   const id = raw.slice(0, at);
   const version = Number(raw.slice(at + 1));
   if (!Number.isInteger(version)) return undefined;
-  return CONTRACTS.find((c) => c.id === id && c.version === version);
+  return table.find((c) => c.id === id && c.version === version);
 }
 
 /**
@@ -291,9 +294,79 @@ export function missingGrantConsents(provides: string[] | undefined, consented: 
   return providerGrantsFor(provides).filter((g) => !ok.has(g.ref)).map((g) => g.ref);
 }
 
-/** Whether a set of consented contract refs carries a particular grant kind. */
-export function grantsInclude(refs: string[] | undefined, kind: ProviderGrantKind): boolean {
-  return (refs ?? []).some((ref) => parseContractRef(ref)?.providerGrant?.kind === kind);
+/**
+ * The grant KINDS a set of contract refs implies, resolved against `table`
+ * (the shipped `CONTRACTS` by default). De-duplicated, in ref order.
+ *
+ * **This is the snapshot function, not the enforcement one** (#496). Consent is
+ * recorded per *ref* (`backup@1`), but the privilege a ref implies lives in the
+ * table — so resolving a ref's kind live on every read means that changing a
+ * shipped contract's `providerGrant` (widening the kind, or adding one where
+ * there was none) retroactively hands the new privilege to every install that
+ * consented to that ref months ago, with no new consent event: no wizard row, no
+ * `--grant` flag, no audit entry. Call this ONCE, at consent time, persist the
+ * result, and enforce through {@link resolveGrantKinds} thereafter.
+ */
+export function grantKindsFor(
+  refs: readonly string[] | undefined,
+  table: readonly ContractDefinition[] = CONTRACTS,
+): ProviderGrantKind[] {
+  const out: ProviderGrantKind[] = [];
+  for (const ref of refs ?? []) {
+    const kind = parseContractRef(ref, table)?.providerGrant?.kind;
+    if (kind && !out.includes(kind)) out.push(kind);
+  }
+  return out;
+}
+
+/** The outcome of {@link resolveGrantKinds}. */
+export type GrantKindResolution = {
+  /** Kinds actually granted: the live kind of each consented ref ∩ the recorded set. */
+  kinds: ProviderGrantKind[];
+  /**
+   * Consented refs whose live kind is NOT in the recorded set — i.e. the
+   * contract table now implies a privilege this install never consented to.
+   * Dropped from `kinds`; the caller is expected to say so out loud.
+   */
+  widened: Array<{ ref: string; kind: ProviderGrantKind }>;
+};
+
+/**
+ * The privilege an install actually holds: **the live kind of each consented ref
+ * intersected with the kinds recorded at consent time** (#496).
+ *
+ * Both directions of a table change fail closed:
+ *
+ * - a kind newly attached to an already-consented ref is absent from `recorded`,
+ *   so it is not granted (and is reported in `widened`);
+ * - a kind removed from the table no longer resolves from any consented ref, so
+ *   it is not granted either — the platform withdrew it deliberately, which is
+ *   silent by design (unlike a widening, it needs no operator action).
+ *
+ * The *other* asymmetry — a recorded kind no longer implied by any consented ref
+ * — is also silent, because it is ordinary operation rather than a table change:
+ * an upgrade that drops a `provides` role loses its refs through
+ * `resolveGrantedContracts` and must not warn on every materialisation for it.
+ */
+export function resolveGrantKinds(
+  refs: readonly string[] | undefined,
+  recorded: readonly ProviderGrantKind[] | undefined,
+  table: readonly ContractDefinition[] = CONTRACTS,
+): GrantKindResolution {
+  const consentedKinds = new Set(recorded ?? []);
+  const kinds: ProviderGrantKind[] = [];
+  const widened: Array<{ ref: string; kind: ProviderGrantKind }> = [];
+  for (const ref of refs ?? []) {
+    const def = parseContractRef(ref, table);
+    const kind = def?.providerGrant?.kind;
+    if (!def || !kind) continue;
+    if (consentedKinds.has(kind)) {
+      if (!kinds.includes(kind)) kinds.push(kind);
+    } else {
+      widened.push({ ref: formatContractRef(def), kind });
+    }
+  }
+  return { kinds, widened };
 }
 
 // ---------------------------------------------------------------------------
