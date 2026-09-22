@@ -192,6 +192,8 @@ export class RealJobService implements JobService {
   private maxConcurrency = Number(process.env.HOLA_JOBS_CONCURRENCY || 2);
   private bus = new Bus<string, JobUpdate>();
   private started = false;
+  /** In-flight startup recovery, shared by concurrent callers (F11). */
+  private startup?: Promise<void>;
   private cancelled = new Set<string>();
   private maxRetries = Number(process.env.HOLA_JOBS_MAX_RETRIES || 0);
   private baseBackoffMs = Number(process.env.HOLA_JOBS_BACKOFF_MS || 500);
@@ -307,7 +309,7 @@ export class RealJobService implements JobService {
         };
         const handled = await this.executor(ctx);
         if (handled) {
-          await this.repo.updateStatus(id, 'completed');
+          await this.markCompleted(id);
           this.cancelled.delete(id);
           const finishedAt = new Date().toISOString();
           this.notify(id, { id, status: 'completed', progress: 100, finishedAt });
@@ -358,7 +360,7 @@ export class RealJobService implements JobService {
         await this.logging.logJob(id, 'info', steps[i]);
       }
 
-      await this.repo.updateStatus(id, 'completed');
+      await this.markCompleted(id);
       const finishedAt = new Date().toISOString();
       this.notify(id, { id, status: 'completed', progress: 100, finishedAt });
       await this.logging.logJob(id, 'info', 'Job completed');
@@ -387,26 +389,102 @@ export class RealJobService implements JobService {
     await this.sleep(ms);
   }
 
-  private async ensureStarted() {
-    if (this.started) return;
+  /**
+   * Run startup recovery exactly once, however many callers race for it (F11).
+   *
+   * Every public entry point opens with this, so on a cold service several can
+   * be in flight at the same instant. The boolean alone was set only AFTER the
+   * awaits, so each concurrent caller passed the guard and ran recovery again —
+   * resuming the same pending jobs once per caller.
+   *
+   * The in-flight promise is NOT cached past settlement: it is cleared either
+   * way, so a startup that failed before reaching `started` (only
+   * `db.initialize()` can — recovery itself warns and continues, see
+   * {@link recoverAndStart}) is retried by the next caller rather than
+   * inherited as a permanently rejected promise. A transient DB error at boot
+   * must not wedge the queue for the life of the process.
+   */
+  private ensureStarted(): Promise<void> {
+    if (this.started) return Promise.resolve();
+    if (!this.startup) {
+      this.startup = this.recoverAndStart().finally(() => { this.startup = undefined; });
+    }
+    return this.startup;
+  }
+
+  /**
+   * Reconcile the previous process's job table, then open scheduling (F11).
+   *
+   * Order is the correctness property, not a style choice. Resuming a pending
+   * job dispatches it — `enqueue` calls `tick()` synchronously — and a
+   * dispatched job's first act is to write itself `running`. So a recovery
+   * that resumed first and then asked for "everything still `running`" got
+   * back the very jobs it had just resumed, and failed them as restart orphans
+   * while their executors were live: the deployment saw `Interrupted by server
+   * restart` for work that was in fact proceeding, and the error survived onto
+   * the row when it later completed.
+   *
+   * Both sets are therefore read BEFORE anything is scheduled, which is what
+   * makes "still `running`" mean "left running by the process that died". The
+   * `started` flag is raised in the same synchronous step as the first
+   * `enqueue`, with no await between them, so no other caller can dispatch
+   * into a half-reconciled table — and a job resumed here that re-enters
+   * `ensureStarted` (an executor creating a follow-up job) short-circuits on
+   * the flag instead of awaiting the promise it is running inside of.
+   *
+   * Resumed jobs go through the same `enqueue(id, deploymentId)` as fresh ones,
+   * so F10's per-deployment partition applies to them unchanged: two resumed
+   * jobs for one deployment serialize, jobs for different deployments resume in
+   * parallel, and a deployment whose lock is held by out-of-queue work
+   * (`runExclusive`) is skipped until that work releases it.
+   *
+   * Scope: this reconciles the JOB table only. A deployment the orphaned job was
+   * midway through still reads `installing` in its own record, because only
+   * `runLifecycleJob` ever clears that — the job service sits below the
+   * deployment service and has no way to reach a deployment record. That half
+   * belongs in `RealDeploymentService.loadFromStorage` and is tracked in #542.
+   */
+  private async recoverAndStart(): Promise<void> {
     await this.db.initialize();
+    let pending: JobEntity[] = [];
     try {
-      // Re-enqueue jobs that were still queued when the process stopped.
-      const pending = await this.repo.findByStatus('pending');
-      pending.forEach(j => this.enqueue(j.id, (j.payload?.deploymentId as string | undefined) || undefined));
+      // Snapshots of the table as the previous process left it. Disjoint by
+      // status, and both taken before the first dispatch.
+      const orphaned = await this.repo.findByStatus('running');
+      pending = await this.repo.findByStatus('pending');
       // Any job left 'running' was orphaned by a crash/restart — no executor is
       // driving it anymore — so fail it rather than leave the deployment wedged
       // showing an in-progress job that never resolves.
-      const orphaned = await this.repo.findByStatus('running');
       for (const j of orphaned) {
         await this.repo.update(j.id, { status: 'failed', error: 'Interrupted by server restart' });
         this.notify(j.id, { id: j.id, status: 'failed', finishedAt: new Date().toISOString() });
         await this.logging.logJob(j.id, 'error', 'Job failed: interrupted by server restart');
       }
     } catch (e) {
+      // Recovery is housekeeping: a failure here must not make the service
+      // unusable for new work. `pending` is read before the orphan loop so a
+      // mid-loop failure still resumes what it can.
       this.logger.warn('Failed to recover jobs on startup', { error: e instanceof Error ? e.message : String(e) });
     }
+    // Scheduling opens here — nothing above this line may dispatch.
     this.started = true;
+    for (const j of pending) {
+      this.enqueue(j.id, (j.payload?.deploymentId as string | undefined) || undefined);
+    }
+  }
+
+  /**
+   * Finalize a job that succeeded, clearing any error the row carries (F11).
+   *
+   * A completed job that still reports a failure reason is a contradiction the
+   * reader has no way to resolve — and it is exactly what a wrongly-recorded
+   * failure leaves behind, since the success path only ever wrote `status`. The
+   * clear is unconditional and rides the same write as the status, so it costs
+   * no extra round trip and states the invariant rather than patching the one
+   * case that produced it.
+   */
+  private async markCompleted(id: string): Promise<void> {
+    await this.repo.update(id, { status: 'completed', completedAt: new Date(), error: '' });
   }
 
   async createJob(params: CreateJobParams): Promise<SharedJob> {
