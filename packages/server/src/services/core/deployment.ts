@@ -428,6 +428,23 @@ interface SnapshotMeta {
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
 const SNAPSHOT_RETENTION = 5;
 
+/**
+ * Host-level fence for the F06 legacy-grant migration, under the same `config/`
+ * tree as `system-settings.json`. Its *existence* is the whole signal — the JSON
+ * body is an audit record for a human, never re-read as logic, so a hand-edited
+ * or truncated file still fences correctly.
+ */
+const LEGACY_GRANT_MIGRATION_FILE = 'legacy-apps-data-migration.json';
+const LEGACY_GRANT_MIGRATION_ID = 'legacy-apps-data@1';
+
+/**
+ * What a migrated pre-existing install is recorded as holding. `apps-data` is
+ * the only privilege ADR 0002's `consumes` route ever conferred — `app-registry`
+ * (the other capability) publishes a feed into the app's own data root and grants
+ * nothing cross-app, so it is not and must not become part of this.
+ */
+const LEGACY_APPS_DATA_PRIVILEGES: readonly ProviderGrantKind[] = ['apps-data'];
+
 /** What a caller of `resolveUpgradeTarget` has already fetched (#432), so the
  *  resolution reuses it instead of re-reading the deployment and re-fetching the
  *  catalog version list. */
@@ -1333,6 +1350,33 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // `assertInstanceAllowed` above just counted (live, non-removed
       // deployments) — the two guards can never disagree about "installed".
       await this.assertProviderAllowed(artifacts?.manifest.provides, app);
+
+      // The retired ADR 0002 privilege route is refused outright on a new install
+      // (F06). `consumes: apps-data` asked the platform for a read-only view of
+      // every app's data root — and of the sibling `.hola/<id>/` environment
+      // records, which hold app secrets — from a manifest line the operator never
+      // sees, with no consent step anywhere. ADR 0004 §4 replaced it with the
+      // `backup@1` provider grant, which is disclosed and consented to; the
+      // compatibility branch in `materializeCompose` now serves only installs the
+      // one-shot migration identified as pre-existing, and this is what makes that
+      // set closed for good.
+      //
+      // REFUSED rather than silently ignored, for the same reason
+      // `GRANT_CONSENT_REQUIRED` below refuses rather than installing an
+      // unprivileged backup tool: an app that asks for cross-app data and is
+      // quietly given none looks healthy and protects nothing, and the operator
+      // finds out at restore time. This is also the only surface where a
+      // third-party bundle written against the old convention can be told what to
+      // change — the alternative is an install that works, does nothing, and
+      // explains itself in a server log the operator never reads.
+      if ((artifacts?.manifest.consumes ?? []).includes(APPS_DATA_CAPABILITY)) {
+        throw new ValidationError(
+          `'${app}' requests the retired '${APPS_DATA_CAPABILITY}' capability in its manifest 'consumes'. ` +
+            `Access to every app's data is now the provider grant of '${BACKUP_CONTRACT_REF}' (ADR 0004): ` +
+            `the bundle must declare 'provides: ["${BACKUP_CONTRACT_REF}"]' so the privilege is disclosed and consented to at install.`,
+          { code: 'LEGACY_CAPABILITY_REFUSED', capability: APPS_DATA_CAPABILITY, contract: BACKUP_CONTRACT_REF },
+        );
+      }
 
       // Capability contract grants (ADR 0004 §4). A `provides` role can carry
       // privilege — `backup@1`'s provider gets a read-only view of EVERY app's
@@ -2399,18 +2443,30 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // never sees. The grant must be BOTH declared (manifest `provides`) and
     // consented to (`deployment.grantedContracts`, and its privilege recorded in
     // `deployment.grantedPrivileges`); any one of the three alone grants nothing.
+    //
+    // The second branch is the MIGRATED legacy route (F06). Until F06 this read
+    // the active manifest's `consumes` line directly, so any bundle — including
+    // one installed the same day — could take a read-only view of every app's
+    // data root (and of the sibling `.hola/<id>/` environment records, which hold
+    // app secrets) by writing one manifest line the operator never sees, with
+    // nothing to show for it but a server-side `warn`. The shim was written for
+    // continuity, but nothing restricted it to the installs it was written for.
+    //
+    // It is now gated on a per-deployment stamp that ONLY the one-shot migration
+    // writes (`migrateLegacyAppsDataGrants`, run once at first rehydration after
+    // the upgrade and never again), AND on the active release still declaring the
+    // legacy capability. `createFromDraft` refuses a new install that declares it
+    // at all, so no record created from here on can ever be a candidate. Held to
+    // a MIGRATED install, the shim keeps a working backup working; unheld, it was
+    // a self-service grant.
     if (grantedKinds.includes('apps-data')) {
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
       platformMounts.push(this.appsBindRoot());
-    } else if ((await this.readActiveConsumes(deployment)).includes(APPS_DATA_CAPABILITY)) {
-      // Compatibility shim, one release only (#418 Phase 2). A backrest installed
-      // before this change — or a bundle published before the catalog declared
-      // `provides` — still asks the old way, and breaking a working backup on
-      // upgrade is worse than honoring a grant the operator implicitly accepted
-      // when they installed it. Warns so the remaining users are visible, and is
-      // deleted once the catalog has shipped `provides: backup@1`.
+    } else if ((await this.activeLegacyPrivileges(deployment)).includes('apps-data')) {
       this.logger.warn(
-        'Granting apps-data via the legacy `consumes` declaration; migrate this app to `provides: backup@1` (ADR 0004)',
+        'Granting apps-data through the migrated legacy `consumes` declaration (F06); ' +
+          'this install was never asked to consent. Upgrade it to a release declaring `provides: backup@1` ' +
+          'and re-install to put the privilege under consent, or uninstall it to withdraw the access.',
         { deploymentId: deployment.id, app: deployment.app },
       );
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
@@ -2686,6 +2742,47 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
+   * Privileges this install holds through the retired ADR 0002 self-declaration
+   * route and is STILL exercising (F06): the stamp the one-shot migration wrote
+   * ∩ what the ACTIVE release still declares in `consumes`.
+   *
+   * Both halves matter, and for different reasons.
+   *
+   * The **stamp** is the security half. It is written in exactly one place —
+   * `migrateLegacyAppsDataGrants`, which runs once, against the deployments
+   * already on disk when the F06 server first boots, and is then fenced off by a
+   * persisted marker. `createFromDraft` refuses the legacy declaration outright,
+   * so a new install cannot be a candidate even if the marker were somehow lost.
+   * That is what makes "pre-existing install" a fact about the record rather than
+   * a claim a manifest line can make about itself.
+   *
+   * The **live `consumes` read** is the decay half, and it is why this is an
+   * intersection rather than a straight read of the stamp. The privilege follows
+   * what the running release actually asks for, exactly as `readActiveGrantKinds`
+   * does for consented grants: promote the app to a release that declares
+   * `provides: backup@1` instead, and the legacy route goes inert the same
+   * instant, leaving consent as the only way back in. A stamp alone would be a
+   * privilege that outlived the declaration that earned it.
+   *
+   * "Consent as the only way back in" today means uninstall + re-install:
+   * `promote` has no consent step of its own, so the same upgrade that retires
+   * the legacy declaration cannot itself grant the contract (#531). The
+   * migration's own warning says so; this is the narrower note about why the
+   * decay is nonetheless right — an inert stamp is recoverable, a permanent one
+   * is not.
+   */
+  private async activeLegacyPrivileges(
+    deployment: EnhancedDeploymentDetail,
+  ): Promise<ProviderGrantKind[]> {
+    const stamped = deployment.legacyGrantedPrivileges;
+    if (!stamped?.length) return [];
+    const consumes = await this.readActiveConsumes(deployment);
+    return stamped.filter(
+      (kind) => kind === 'apps-data' && consumes.includes(APPS_DATA_CAPABILITY),
+    );
+  }
+
+  /**
    * Mint this install's contract-scoped token and the API base to reach the
    * server, as compose env for the provider app's bolt-on to use.
    *
@@ -2748,6 +2845,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       : undefined;
     const granted = resolveGrantedContracts(manifest.provides, deployment.grantedContracts);
 
+    // The migrated legacy grant (F06), reported as its own fact. Computed from
+    // the manifest already in hand rather than via `activeLegacyPrivileges`,
+    // which would re-read it — the condition is identical (stamped ∩ still
+    // declared), so a running install and the page describing it can never
+    // disagree. Before F06 this privilege had no surface at all: an app could
+    // hold a read-only view of every app's data and every stored env record, and
+    // the only trace was a `warn` in the server log.
+    const legacyGranted = (deployment.legacyGrantedPrivileges ?? []).filter(
+      (kind) => kind === 'apps-data' && (manifest.consumes ?? []).includes(APPS_DATA_CAPABILITY),
+    );
+
     // Coverage judgement (spec 004, FR-016/017): computed only for `backup@1`,
     // the one declared contract with a coverage concept today. Degrades to an
     // empty database list on an unreadable/unparsable compose (never throws —
@@ -2792,6 +2900,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       ...(accepts ? { accepts } : {}),
       ...(hooks?.length ? { hooks } : {}),
       ...(granted.length ? { granted } : {}),
+      ...(legacyGranted.length ? { legacyGranted } : {}),
       ...(coverage ? { coverage } : {}),
       ...(restoreCoverage ? { restoreCoverage } : {}),
     };
@@ -5466,7 +5575,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /** Rehydrate deployments, releases, and the active-release pointer from storage. */
   protected override async loadFromStorage(): Promise<void> {
+    // The F06 fence is dropped even on a host with nothing to rehydrate — an
+    // empty host has no pre-existing legacy install by definition, and writing
+    // the marker now is what guarantees a deployment created afterwards can
+    // never be mistaken for one. (See `migrateLegacyAppsDataGrants`.)
     if (!(await this.storageService.fileExists('deployments'))) {
+      await this.migrateLegacyAppsDataGrants();
       return;
     }
 
@@ -5512,6 +5626,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       }
     }
 
+    // One-shot, and deliberately HERE (F06): the deployments in the map at this
+    // instant are exactly the ones that existed before this server started, which
+    // is the whole definition of "pre-existing install". Runs before routing
+    // reconcile only because it is part of rehydrating a record's meaning; it
+    // touches no routing state.
+    await this.migrateLegacyAppsDataGrants();
+
     // Rebuild Traefik routing from the persisted active deployments.
     const rules = Array.from(this.deployments.values())
       .filter(d => d.currentReleaseId)
@@ -5519,6 +5640,107 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     await this.routingService.reconcile(rules);
 
     this.logger.info('Rehydrated deployments from storage', { count: this.deployments.size });
+  }
+
+  /**
+   * Migrate pre-existing `consumes: apps-data` installs into an explicit,
+   * recorded legacy grant — once, ever, on this host (F06).
+   *
+   * **Why a migration and not a deletion.** Materialisation used to honour the
+   * ADR 0002 declaration straight off the active manifest. Deleting that outright
+   * is the safest thing for a host with no such install and the worst thing for a
+   * host with one: a backup tool would lose its view of every app's data on its
+   * next restart — not with an error, but by quietly capturing an empty set. A
+   * backup that stops covering things without saying so is the failure the whole
+   * contract model exists to prevent, so the access is carried forward. What is
+   * NOT carried forward is the ability to ask for it: the declaration stops being
+   * self-service and becomes a fact recorded about installs that already had it.
+   *
+   * **Why the marker, not just the per-record condition.** The record-level test
+   * ("no stamp, and the active manifest declares the capability") is not by
+   * itself sound across restarts: a deployment created by this server could
+   * *become* legacy-declaring later — `promote` switches the active release and
+   * has no consent step of its own — and the next boot would then stamp it,
+   * handing it the privilege with nobody asked. The marker makes the migration a
+   * single point in this host's history rather than a rule that keeps applying,
+   * which is precisely the difference between migrating and re-opening the hole.
+   *
+   * **Order: marker first, then stamps.** The marker is written *before* any
+   * record is touched, so a crash mid-migration can never produce a second pass.
+   * Failing that way costs an unmigrated install its mount (loudly logged,
+   * recoverable by re-installing under consent); failing the other way would hand
+   * out privilege. For a fix whose whole subject is unconsented privilege, the
+   * first is the acceptable failure.
+   *
+   * Idempotent three times over: the marker short-circuits before any manifest is
+   * read, a stamped record is skipped, and the stamp it writes is the same value
+   * it would compute again.
+   */
+  private async migrateLegacyAppsDataGrants(): Promise<void> {
+    const markerPath = `config/${LEGACY_GRANT_MIGRATION_FILE}`;
+    // Cheap exit on every boot but the first: no manifest reads, no writes.
+    if (await this.storageService.fileExists(markerPath)) return;
+
+    const candidates: EnhancedDeploymentDetail[] = [];
+    for (const deployment of this.deployments.values()) {
+      if (deployment.legacyGrantedPrivileges?.length) continue;
+      // An unreadable/corrupt manifest must not migrate anything: `consumes` is
+      // unknown, and "unknown" is not "grant it". The deployment's own operating
+      // paths still fail loudly on the same file.
+      const consumes = await this.readActiveConsumes(deployment).catch(() => [] as string[]);
+      if (consumes.includes(APPS_DATA_CAPABILITY)) candidates.push(deployment);
+    }
+
+    try {
+      await this.storageService.writeFile(
+        markerPath,
+        JSON.stringify(
+          {
+            migration: LEGACY_GRANT_MIGRATION_ID,
+            completedAt: new Date().toISOString(),
+            migrated: candidates.map((d) => ({ id: d.id, app: d.app, privileges: LEGACY_APPS_DATA_PRIVILEGES })),
+          },
+          null,
+          2,
+        ) + '\n',
+      );
+    } catch (error) {
+      // Fail CLOSED: without a durable marker the migration could run again on a
+      // later boot, and a later boot is exactly when a record that was not
+      // pre-existing could qualify. Nothing is stamped, so nothing is granted.
+      this.logger.error(
+        'Could not persist the legacy apps-data migration marker; skipping the migration entirely. ' +
+          'Any pre-existing `consumes: apps-data` install will lose its apps-root mount until it is re-installed under an explicit grant.',
+        error as Error,
+        { markerPath, candidates: candidates.map((d) => d.id) },
+      );
+      return;
+    }
+
+    if (candidates.length === 0) return;
+
+    for (const deployment of candidates) {
+      deployment.legacyGrantedPrivileges = [...LEGACY_APPS_DATA_PRIVILEGES];
+      try {
+        await this.persistDeployment(deployment);
+        this.logger.warn(
+          'Migrated a pre-existing `consumes: apps-data` install into an explicit legacy grant (F06). ' +
+            'It keeps its read-only view of every app\'s data, which nobody was ever asked to consent to — ' +
+            're-install it under `provides: backup@1` to put that under consent, or uninstall it to withdraw the access.',
+          { deploymentId: deployment.id, app: deployment.app, legacyGrantedPrivileges: deployment.legacyGrantedPrivileges },
+        );
+      } catch (error) {
+        // The stamp lives on the persisted record; an in-memory-only stamp would
+        // silently evaporate on the next boot with the marker already down.
+        delete deployment.legacyGrantedPrivileges;
+        this.logger.error(
+          'Failed to persist the legacy apps-data grant for a pre-existing install (F06); it will lose its apps-root mount. ' +
+            'Re-install it under an explicit `backup@1` grant to restore the access.',
+          error as Error,
+          { deploymentId: deployment.id, app: deployment.app },
+        );
+      }
+    }
   }
 
   /**

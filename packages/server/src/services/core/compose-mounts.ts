@@ -1,16 +1,21 @@
 /**
  * Inject a server-granted read-only mount into a deployed app's compose.
  *
- * The `apps-data` capability (declared in a manifest as `consumes: apps-data`)
- * grants a trusted app — e.g. a backup tool — read-only access to ALL apps' data
- * roots. The mount is identity-mapped (`<hostPath>:<hostPath>:ro`) so absolute
- * host paths resolve unchanged inside the container (the apps bind root is
- * identity-mounted into the server too — see packages/compose). Like the network
- * and platform-defaults injections, this happens after validation: it's a
- * deliberate platform grant, not user-authored, and is gated by the capability.
+ * The `apps-data` privilege gives a trusted app — e.g. a backup tool — read-only
+ * access to ALL apps' data roots. The mount is identity-mapped
+ * (`<hostPath>:<hostPath>:ro`) so absolute host paths resolve unchanged inside
+ * the container (the apps bind root is identity-mounted into the server too —
+ * see packages/compose). Like the network and platform-defaults injections, this
+ * happens after validation: it's a deliberate platform grant, not user-authored.
  *
- * SECURITY: this exposes every app's data to the consumer. It is read-only and
- * reserved for trusted catalog apps that explicitly declare the capability.
+ * SECURITY: this exposes every app's data — and the sibling `.hola/<id>/`
+ * environment records, which hold app secrets — to the mount's holder. It is
+ * therefore NOT something an app can ask for. It is the provider grant of
+ * `backup@1` (ADR 0004 §4), disclosed to the operator and consented to at
+ * install. The old self-declared route (`consumes: apps-data`, ADR 0002) is
+ * refused on a new install and survives only as a per-install stamp written by
+ * F06's one-shot migration; `deployment.ts` owns both gates, and this module
+ * only performs the injection it is told to.
  */
 
 import { parse, stringify } from 'yaml';
@@ -19,7 +24,13 @@ import type { ComposeDoc, ComposeService } from './compose-network';
 import { toEnvMap } from './compose-network';
 import { mergeLabels } from './compose-defaults';
 
-/** Manifest capability granting read-only access to all app data roots. */
+/**
+ * The retired ADR 0002 manifest capability that used to request read-only access
+ * to all app data roots. Kept as a named constant because the server still has
+ * to RECOGNISE it — to refuse a new install that declares it, and to decide
+ * whether a migrated pre-existing install is still exercising it (F06) — not
+ * because anything still grants on it.
+ */
 export const APPS_DATA_CAPABILITY = 'apps-data';
 
 /**

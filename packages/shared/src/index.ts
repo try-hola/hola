@@ -2436,6 +2436,23 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // keys on. With no consented refs the intersection is empty either way, so
   // absence is not a gap there.
   grantedPrivileges?: ProviderGrantKind[];
+  // Privileges this install holds through the RETIRED ADR 0002 self-declaration
+  // route (`consumes: apps-data`), recorded once by the F06 migration and never
+  // again (see `migrateLegacyAppsDataGrants`). Before F06, materialisation read
+  // the manifest's `consumes` line directly on every deploy, so ANY bundle —
+  // including one installed today — could take the apps-root mount by writing
+  // one manifest line the operator never sees. That branch is gone; the only way
+  // to hold a legacy privilege now is to have been stamped here, which only a
+  // pre-existing install can be.
+  //
+  // This is deliberately NOT `grantedPrivileges`: nothing was consented to, no
+  // contract ref was involved, and conflating the two would make a legacy
+  // privilege indistinguishable from one the operator was actually asked about.
+  // It also decays on its own — the grant applies only while the active release
+  // still declares the legacy `consumes`, so the moment the app upgrades to a
+  // release that declares `provides` instead, this stamp stops granting anything
+  // and the normal consent path takes over.
+  legacyGrantedPrivileges?: ProviderGrantKind[];
   // Release channel this deployment follows (#428): set from the finalized
   // manifest at create time, changed only via PATCH `{ channel }` (sticky
   // across promote/rollback). Optional in the type so pre-existing typed
@@ -2603,6 +2620,18 @@ export type DeploymentContracts = {
    * operator consents again.
    */
   granted?: string[];
+  /**
+   * Privileges this install holds through the retired ADR 0002 `consumes` route
+   * and is STILL exercising — the migrated stamp (F06) intersected with what the
+   * active release actually declares, so it empties the moment the app upgrades
+   * off the legacy manifest.
+   *
+   * Reported separately from `granted` on purpose: these were never consented to
+   * by anyone, and before F06 they were visible only in a server-side `warn`.
+   * Surfacing them is the point — an operator can now see that an app holds the
+   * "reads every app's data" privilege without ever having been asked.
+   */
+  legacyGranted?: ProviderGrantKind[];
   /**
    * Coverage judgement per accepted, declared contract that quiesces (spec 004).
    * Keyed by ref; only `backup@1` is populated today. Absent when the contract

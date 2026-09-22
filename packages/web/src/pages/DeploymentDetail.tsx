@@ -33,7 +33,8 @@ import type {
 } from '@hola/shared';
 import { STABLE_CHANNEL } from '@hola/shared';
 import { validateParams, generateSecretValue, hasParamSpec } from '@hola/shared/param-validate';
-import { BACKUP_CONTRACT_REF, providerGrantsFor } from '@hola/shared/contracts';
+import { BACKUP_CONTRACT_REF, CONTRACTS, providerGrantsFor } from '@hola/shared/contracts';
+import type { ProviderGrantKind } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -56,6 +57,14 @@ import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 const REMOVE_DIALOG_BODY =
   "This permanently removes the deployment: it stops and deletes the containers, " +
   "deprovisions SSO, releases the route, and deletes its data. This can't be undone.";
+
+// Operator-facing label for a raw privilege KIND (F06's `legacyGranted` reports
+// kinds, not refs, because a legacy grant never had a contract ref). Read off the
+// same contract table the consent step renders from, so the legacy row and the
+// wizard describe the same privilege in the same words.
+const LEGACY_GRANT_LABELS: Partial<Record<ProviderGrantKind, string>> = Object.fromEntries(
+  CONTRACTS.flatMap((c) => (c.providerGrant ? [[c.providerGrant.kind, c.providerGrant.label]] : [])),
+);
 
 // Decorative sparkline bar heights — computed once at module load (the values
 // are illustrative, not real time-series data).
@@ -544,6 +553,19 @@ export const DeploymentDetail: React.FC = () => {
           value: (deployment.contracts!.granted ?? [])
             .map((ref) => providerGrantsFor([ref])[0]?.grant.label ?? ref)
             .join(', '),
+        }]
+      : []),
+    // F06: privilege this install holds through the retired `consumes` route,
+    // carried forward by the one-time migration so a working backup keeps
+    // working. Its own row, never folded into "Grants": nobody consented to
+    // these, and that is the fact worth showing. Before F06 the page said
+    // nothing at all about them.
+    ...((deployment.contracts?.legacyGranted?.length ?? 0) > 0
+      ? [{
+          label: 'Legacy grants',
+          value: `${(deployment.contracts!.legacyGranted ?? [])
+            .map((kind) => LEGACY_GRANT_LABELS[kind] ?? kind)
+            .join(', ')} — never consented to; re-install this app to put it under consent`,
         }]
       : []),
   ];
