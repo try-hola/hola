@@ -108,9 +108,17 @@ scenario 10).
   operator-owned directory that no app's own data lives under. This is a genuine widening of
   the platform's privilege surface, which is why it is recorded here rather than folded silently
   into an existing grant.
-- **`grantsInclude`'s live-resolution property remains a sharp edge** for any *future* change to
-  an existing contract's `providerGrant` — this feature routes around the risk (a new ref) rather
-  than fixing the underlying mechanism. Tracked as a follow-up issue (research.md R22 #1).
+- **`grantsInclude`'s live-resolution property was the sharp edge** for any *future* change to
+  an existing contract's `providerGrant` — this feature routed around the risk (a new ref) rather
+  than fixing the underlying mechanism (research.md R22 #1). **Closed since, by #496**:
+  `grantsInclude` is gone, the privilege *kinds* a consented ref implies are frozen onto the
+  deployment record as `grantedPrivileges` at consent time, and materialisation resolves
+  `resolveGrantKinds` — the live table's kind for each consented ref **intersected with** that
+  recorded set. A kind newly attached to an already-consented ref is therefore absent from the
+  recorded set and is dropped with a warning naming the deployment, the ref and both kinds; a
+  kind removed from the table stops resolving. §1's reasoning for minting a new ref still
+  stands on its own merits (a reviewed manifest change plus a fresh consent row), but it is no
+  longer the *only* thing standing between a table edit and a retroactive widening.
 - **Everything downstream of the mount stays server-code, not provider-trusted code.** The
   provider's only actions are: write files under its request's destination, then report
   completion. Locating the app root inside the delivered tree, moving it into place, applying

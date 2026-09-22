@@ -107,7 +107,9 @@ import { uncontainedBindMounts, describeUncontained } from './compose-resolved-g
 import {
   BACKUP_CONTRACT_REF,
   RESTORE_CONTRACT_REF,
-  grantsInclude,
+  CONTRACTS,
+  grantKindsFor,
+  resolveGrantKinds,
   missingGrantConsents,
   backupParticipations,
   isDatabaseImage,
@@ -118,6 +120,7 @@ import {
   PLATFORM_LABEL_DEPLOYMENT,
   PLATFORM_LABEL_NAME,
 } from '@hola/shared/contracts';
+import type { ContractDefinition, ProviderGrantKind } from '@hola/shared/contracts';
 import { acceptorBlocksPresent, buildContractRollup } from './contracts';
 import { BackupBrokerStateStore, isPrepareExpired, prepareTimeoutMs } from './backup-broker-state';
 import { parse as parseYaml } from 'yaml';
@@ -792,6 +795,15 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   /** One-time rehydration guard so persisted state loads at most once. */
   private loadPromise: Promise<void> | null = null;
 
+  /**
+   * The capability-contract table grant kinds resolve against (#496): the shipped
+   * `CONTRACTS` in production. A field rather than a direct module reference so a
+   * test can simulate a maintainer widening a shipped contract's `providerGrant`
+   * without mutating a module-level constant shared by every other suite in the
+   * process. Never reassigned outside tests.
+   */
+  contractTable: readonly ContractDefinition[] = CONTRACTS;
+
   constructor(protected jobService: JobService) {}
 
   abstract healthCheck(): Promise<ServiceHealth>;
@@ -1283,6 +1295,13 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // What this install actually holds: declared ∩ consented. Consent answers a
       // declaration, so it can never widen what the manifest asked for.
       const grantedContracts = resolveGrantedContracts(artifacts?.manifest.provides, request.grants);
+      // Freeze the PRIVILEGE those refs imply, not just the refs (#496). The ref
+      // is what the operator was shown; the kind is what actually reaches a
+      // container, and resolving it live from `CONTRACTS` on every materialise
+      // meant a later change to a shipped contract's `providerGrant` would widen
+      // this install's privilege with no new consent event. Recorded here, once,
+      // against the table in force at consent time.
+      const grantedPrivileges = grantKindsFor(grantedContracts, this.contractTable);
 
       // The DNS label this deployment routes under; stable for the install's
       // life. Restore-on-install (spec 007, FR-035): with no explicit
@@ -1353,6 +1372,11 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         // persisted so the grant is an auditable property of the install and a
         // later manifest can't quietly widen it. Absent for apps that ask for none.
         ...(grantedContracts.length ? { grantedContracts } : {}),
+        // The privilege kinds those refs implied at consent time (#496). Written
+        // with `grantedContracts` and only when non-empty, so a record carrying
+        // refs but no privileges is unambiguously pre-#496 and the backfill in
+        // `readRecordedGrantPrivileges` can key on exactly that.
+        ...(grantedPrivileges.length ? { grantedPrivileges } : {}),
         // Release channel this deployment follows (#428); always written for a
         // new record (read as `stable` for pre-feature records with none).
         channel,
@@ -2259,10 +2283,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     };
     content = applyPlatformDefaults(content, composeDefaultsConfig, { allowPrivilegeEscalationServices, labels });
 
-    // Provider grants (ADR 0004 §4 / spec 004): read once, reused for both
-    // grant kinds below, so a provider holding both never re-derives the set
-    // twice or risks the two branches disagreeing about what's granted.
-    const granted = await this.readActiveGrantedContracts(deployment);
+    // Provider grants (ADR 0004 §4 / spec 004 / #496): the privilege KINDS this
+    // install actually holds — the active release's declared `provides`,
+    // intersected with the refs the operator consented to, resolved to kinds
+    // against the live table, intersected again with the kinds recorded at
+    // consent time. Read ONCE and reused by every grant branch below, so a
+    // provider holding several never re-derives the set or risks two branches
+    // disagreeing; and every branch tests this set rather than the table, so a
+    // change to a shipped contract's `providerGrant` cannot widen what an
+    // existing install holds.
+    const grantedKinds = await this.readActiveGrantKinds(deployment);
 
     // Host paths the PLATFORM is about to bind into this app's containers, as
     // it grants them. Collected here rather than re-derived later so the
@@ -2281,8 +2311,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // role the app fills, is disclosed to the operator, and is recorded per
     // install — rather than living in a manifest line the person bearing the risk
     // never sees. The grant must be BOTH declared (manifest `provides`) and
-    // consented to (`deployment.grantedContracts`); either alone grants nothing.
-    if (grantsInclude(granted, 'apps-data')) {
+    // consented to (`deployment.grantedContracts`, and its privilege recorded in
+    // `deployment.grantedPrivileges`); any one of the three alone grants nothing.
+    if (grantedKinds.includes('apps-data')) {
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
       platformMounts.push(this.appsBindRoot());
     } else if ((await this.readActiveConsumes(deployment)).includes(APPS_DATA_CAPABILITY)) {
@@ -2305,7 +2336,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // that reads the Docker socket read-only. Re-derived from declared ∩
     // consented on every materialise, like apps-data above, so a manifest that
     // later drops `provides` loses the source immediately.
-    if (grantsInclude(granted, 'container-logs')) {
+    if (grantedKinds.includes('container-logs')) {
       const socketPath = process.env.HOLA_DOCKER_SOCKET?.trim() || '/var/run/docker.sock';
       platformMounts.push(socketPath);
       content = injectContainerLogsSource(content, {
@@ -2320,11 +2351,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     // restore@1's staging grant (spec 008): a writable mount of ONE
     // platform-owned scratch directory, sibling to the apps root — never any
-    // app's data root, never the apps root itself (FR-011). Same `granted`
+    // app's data root, never the apps root itself (FR-011). Same `grantedKinds`
     // read as the two branches above, so a declared-but-unconsented provider
     // role (an upgrade the operator hasn't consented to yet) takes NONE of
     // these three branches (FR-014, SC-003).
-    if (grantsInclude(granted, 'restore-staging')) {
+    if (grantedKinds.includes('restore-staging')) {
       content = injectWritableMount(content, { hostPath: this.restoreStagingRoot() });
       platformMounts.push(this.restoreStagingRoot());
     }
@@ -2495,6 +2526,77 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   private async readActiveGrantedContracts(deployment: EnhancedDeploymentDetail): Promise<string[]> {
     const provides = (await this.readActiveManifest(deployment))?.provides;
     return resolveGrantedContracts(provides, deployment.grantedContracts);
+  }
+
+  /**
+   * The privilege kinds recorded for this install at consent time (#496).
+   *
+   * **This also performs a one-time migration, not a live fallback.** A record
+   * whose `grantedContracts` is non-empty but which carries no
+   * `grantedPrivileges` can only have been written before #496 —
+   * `createFromDraft` has written the two together ever since — so the kinds its
+   * refs imply under *today's* table are derived once, persisted, and used from
+   * then on. That freezes today's mapping for existing installs, which is
+   * exactly what their operators effectively consented to. It matters that this
+   * is a migration: leaving a permanent "if absent, trust the table" fallback in
+   * place would mean every pre-#496 install stayed retroactively wideneable
+   * forever, which is the whole hole this closes.
+   *
+   * A record with no consented refs is left alone: the intersection is empty
+   * either way, so there is nothing to freeze and no write worth making.
+   */
+  private async readRecordedGrantPrivileges(
+    deployment: EnhancedDeploymentDetail,
+  ): Promise<ProviderGrantKind[]> {
+    if (deployment.grantedPrivileges) return deployment.grantedPrivileges;
+    if (!deployment.grantedContracts?.length) return [];
+
+    const backfilled = grantKindsFor(deployment.grantedContracts, this.contractTable);
+    deployment.grantedPrivileges = backfilled;
+    await this.persistDeployment(deployment);
+    this.logger.info('Backfilled consented grant privileges for a pre-#496 deployment record', {
+      deploymentId: deployment.id,
+      app: deployment.app,
+      grantedContracts: deployment.grantedContracts,
+      grantedPrivileges: backfilled,
+    });
+    return backfilled;
+  }
+
+  /**
+   * The grant kinds this install actually holds at materialise time (#496):
+   * the live table's kind for each consented ref ∩ the kinds recorded at
+   * consent time.
+   *
+   * A consented ref whose live kind is NOT recorded is **dropped, and warned
+   * about** — never honoured. Dropping fails closed without breaking anything
+   * that already worked (the install keeps every privilege it was actually
+   * granted), and refusing to materialise would instead turn one contract-table
+   * edit into a fleet-wide outage of installs that are behaving correctly. The
+   * warning is the operator's way in: it is both the answer to "why does my
+   * backup tool have no data mount?" and the signal that someone changed a
+   * shipped contract's `providerGrant`.
+   */
+  private async readActiveGrantKinds(
+    deployment: EnhancedDeploymentDetail,
+  ): Promise<ProviderGrantKind[]> {
+    const granted = await this.readActiveGrantedContracts(deployment);
+    const recorded = await this.readRecordedGrantPrivileges(deployment);
+    const { kinds, widened } = resolveGrantKinds(granted, recorded, this.contractTable);
+    for (const { ref, kind } of widened) {
+      this.logger.warn(
+        `Contract '${ref}' now grants '${kind}', which this install never consented to — dropping it. ` +
+          `A shipped contract's providerGrant appears to have changed; re-install or re-consent to grant it.`,
+        {
+          deploymentId: deployment.id,
+          app: deployment.app,
+          ref,
+          liveKind: kind,
+          recordedKinds: recorded,
+        },
+      );
+    }
+    return kinds;
   }
 
   /**

@@ -100,7 +100,16 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   exposing container list/logs/events and a field-redacted inspect only — never
   the raw socket. Every app container also carries `sh.hola.app`,
   `sh.hola.deployment`, `sh.hola.name` labels (`applyPlatformDefaults`) so a
-  collector groups logs by app with no per-app configuration.
+  collector groups logs by app with no per-app configuration. **Consent freezes
+  the privilege, not just the ref (#496).** `createFromDraft` records both the
+  consented refs (`grantedContracts`) and the `ProviderGrantKind`s they implied
+  at consent time (`grantedPrivileges`); materialisation grants
+  `resolveGrantKinds` — the live table's kind for each consented ref
+  **intersected with** the recorded set — so changing a shipped contract's
+  `providerGrant` cannot widen an existing install (the new kind is dropped and
+  warned about, naming the deployment, the ref and both kinds). A record
+  carrying refs but no privileges is pre-#496 and is backfilled once from
+  today's table, then held.
 - **Auth/SSO (Authentik).** `ProvisionerService` (`services/core/provisioner.ts`)
   provisions per-app auth at deploy time for three modes declared in the app
   manifest's `auth` block: `native-oidc` (env injection and/or a post-deploy setup
