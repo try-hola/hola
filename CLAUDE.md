@@ -319,6 +319,35 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `createFromDraft`/`promote`), and a second, independent guard in
   `runLifecycleJob` refuses when a job's recorded target release is no longer the
   active one, so reverting the ordering yields a failed job rather than a lie.
+- **Startup recovery reconciles before it resumes (F11).** `ensureStarted` did
+  the two halves of crash recovery in the wrong order: it re-enqueued every
+  `pending` job first — and `enqueue` calls `tick()` **synchronously**, so those
+  jobs were dispatched and wrote themselves `running` on the spot — then asked
+  the DB for "everything still `running`" and failed the whole set as restart
+  orphans. The set it got back contained the jobs it had just resumed, so an
+  install that was proceeding normally was reported `failed` with `Interrupted
+  by server restart` while its executor ran, and kept that error onto the row
+  when it later completed. Both snapshots are now taken **before** anything is
+  scheduled, which is what makes "still `running`" mean "left running by the
+  process that died"; `started` is raised in the same synchronous step as the
+  first `enqueue`, so nothing dispatches into a half-reconciled table and a
+  resumed executor re-entering `ensureStarted` short-circuits instead of
+  deadlocking on the promise it is running inside. The boolean guard was also
+  set only *after* the awaits, so every concurrent caller on a cold service ran
+  recovery again — three entry points racing resumed the same job three times —
+  and is now one shared in-flight promise (the `ensureLoaded`/`loadPromise`
+  pattern from `deployment.ts`). That promise is **not** cached past settlement:
+  only `db.initialize()` can reject it (recovery itself warns and continues, as
+  before — housekeeping must not make the queue unusable for new work), and the
+  next caller retries rather than inheriting a permanently rejected promise.
+  Resumed jobs go through the same `enqueue(id, deploymentId)` as fresh ones, so
+  F10's per-deployment partition applies unchanged. Completion now clears the
+  `error` column on the same write as the status (`markCompleted`), stating the
+  invariant "a completed job carries no failure reason" rather than patching the
+  one case that broke it. The deployment-side half — a record left `installing`
+  by the crash, which only `runLifecycleJob` ever clears — is **not** here: the
+  job service sits below the deployment service and cannot reach a deployment
+  record. That is #542.
 - **The web typecheck checks files now (F13).** `packages/web`'s `typecheck`
   script ran `tsc --noEmit`, which resolves `tsconfig.json` — a
   **references-only** file with `"files": []`. A bare `tsc` does **not** traverse
