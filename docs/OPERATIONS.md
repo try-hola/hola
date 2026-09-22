@@ -67,10 +67,45 @@ login flow:
   external IdP instead, and `HOLA_OIDC_ADMIN_GROUP` to restrict write access to a
   group.
 - **Admin-key fallback.** Without OIDC, the login screen accepts the admin API key;
-  the server validates it and sets an `HttpOnly` session cookie, so the key is never
-  stored in the browser.
+  the server validates it and sets an `HttpOnly`, `Secure`, `__Host-`-prefixed
+  session cookie, so the key is never stored in the browser.
 
 When `HOLA_USE_AUTH=false` (dev/test) the dashboard loads with no login.
+
+#### Dashboard session security
+
+Hola puts every installed app on a subdomain of one domain — the dashboard at
+`HOLA_DOMAIN`, apps at `<app>.<HOLA_BASE_DOMAIN>`. Those are *same-site* even
+when they are different origins, so `SameSite=Strict` on its own would let a page
+served by an installed app send the operator's session cookie to the API. Two
+rules close that (F04), and both are on unconditionally:
+
+- **A cookie-authenticated request that changes state must come from the
+  dashboard.** Its `Origin` must name a trusted dashboard host and its
+  `Sec-Fetch-Site`, when the browser sends one, must say `same-origin`. A
+  mutation carrying the session cookie with no `Origin` at all is refused
+  (`403 MISSING_ORIGIN`), and one from another origin is refused
+  (`403 CROSS_ORIGIN_MUTATION`). Its `Content-Type` must be `application/json`
+  (or `multipart/form-data` for a draft file upload), else `415`.
+- **The session cookie belongs to the dashboard host alone.** The `__Host-`
+  prefix means a browser accepts it only for exactly that host, so a compromised
+  app on a sibling subdomain cannot set or replace it.
+
+**Nothing to configure for the normal install.** The origin a browser request was
+addressed to is always trusted, so the rule works with no settings; `HOLA_DOMAIN`
+pins it to a named host as well. Set `HOLA_TRUSTED_ORIGINS` (comma-separated
+origins or bare hosts) only if you open the dashboard at an additional name, or
+front it with a proxy that rewrites the `Host` header.
+
+**This never applies to the CLI, the SDK, or a catalog app's contract calls.**
+They authenticate with `Authorization: Bearer <key>` or `X-API-Key: <key>`, which
+a web page cannot attach to a cross-origin request, so they are not forgeable and
+send no `Origin`. If you script the API yourself, send the key as a header — a
+copied browser cookie jar is not a supported way to drive mutations and will be
+refused.
+
+Upgrading to a build with this change **logs existing cookie sessions out once**
+(the cookie's name changed); sign in again with the admin key.
 
 ### What a non-admin dashboard user can see
 

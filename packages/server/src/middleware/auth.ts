@@ -13,6 +13,35 @@ export interface AuthContext {
   isAuthenticated: boolean;
   principal?: Principal;
   error?: string;
+  /** How the credential reached us — see {@link CredentialSource}. */
+  credentialSource?: CredentialSource;
+}
+
+/**
+ * Where a request's credential came from.
+ *
+ * This distinction is the hinge of the CSRF rule (F04, see
+ * `middleware/origin-guard.ts`), not a diagnostic nicety:
+ *
+ * - `header` — `Authorization: Bearer` / `X-API-Key`. Nothing attaches these
+ *   for the caller; a page has to set them itself, which means knowing the key.
+ *   (A cross-origin page setting one also triggers a CORS preflight, and this
+ *   server answers none that permits a *credentialed* cross-origin request —
+ *   but the decisive point is simpler: a header credential is proof of intent
+ *   because the caller had to hold it.)
+ * - `cookie` — the admin-key session cookie. Attached AMBIENTLY by the browser
+ *   to any request to this origin, including one initiated by a page on a
+ *   sibling app subdomain, which is same-SITE and therefore not blocked by
+ *   `SameSite=Strict`. This is the only CSRF-able credential Hola has.
+ * - `query` — `?token=` / `?api_key=`, dev/test only. Ambient in no sense: the
+ *   caller must already know the key to put it in the URL.
+ */
+export type CredentialSource = 'header' | 'cookie' | 'query';
+
+/** A credential found on a request, with the source that yielded it. */
+export interface RequestCredential {
+  token: string;
+  source: CredentialSource;
 }
 
 // Extend RequestContext to include auth information
@@ -26,26 +55,39 @@ export interface RequestContextWithAuth {
 }
 
 /**
- * Extract authentication token from request
+ * Find the request's credential AND record which of the three sources it came
+ * from, in precedence order.
+ *
+ * Exported because the CSRF rule (`middleware/origin-guard.ts`) must decide
+ * from the *same* answer this function gives, not from a second reading of the
+ * headers. If the two ever disagreed — say the guard called a request
+ * cookie-authenticated while `authenticate()` used its Bearer header, or the
+ * reverse — the guard would be enforcing a rule about a credential that isn't
+ * the one in force. One function, two consumers, no drift.
+ *
+ * The precedence matters as much as the values: an explicit header wins over
+ * the ambient cookie, so a caller that sends both (the dashboard, once it holds
+ * an OIDC access token) is treated as header-authenticated and is exempt from
+ * the origin rule on its own merits.
  */
-function extractToken(req: Request): string | null {
+export function resolveCredential(req: Request): RequestCredential | null {
   // Try Authorization header first (Bearer token)
   const authHeader = req.headers.get('authorization');
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7);
+    return { token: authHeader.substring(7), source: 'header' };
   }
-  
+
   // Try X-API-Key header
   const apiKeyHeader = req.headers.get('x-api-key');
   if (apiKeyHeader) {
-    return apiKeyHeader;
+    return { token: apiKeyHeader, source: 'header' };
   }
 
   // Try the dashboard session cookie (admin-key fallback login sets this HttpOnly
   // cookie so the SPA never holds the raw key in JS-readable storage).
   const sessionCookie = readCookie(req, SESSION_COOKIE);
   if (sessionCookie) {
-    return sessionCookie;
+    return { token: sessionCookie, source: 'cookie' };
   }
 
   // Try query parameter — only outside production. The browser authenticates SSE
@@ -57,15 +99,69 @@ function extractToken(req: Request): string | null {
     const url = new URL(req.url);
     const queryToken = url.searchParams.get('token') || url.searchParams.get('api_key');
     if (queryToken) {
-      return queryToken;
+      return { token: queryToken, source: 'query' };
     }
   }
 
   return null;
 }
 
-/** Name of the HttpOnly session cookie used by the admin-key login fallback. */
-export const SESSION_COOKIE = 'hola_session';
+/**
+ * Name of the HttpOnly session cookie used by the admin-key login fallback.
+ *
+ * `__Host-` prefixed (F04): a browser will only accept such a cookie when it is
+ * `Secure`, `Path=/` and carries NO `Domain` attribute, and — the part that
+ * matters here — it then belongs to exactly this host. Without the prefix, a
+ * compromised sibling app on `*.<HOLA_BASE_DOMAIN>` could set a `hola_session`
+ * cookie scoped to the registrable domain and have the browser send it to the
+ * dashboard (cookies are scoped by domain, not by origin), shadowing or seeding
+ * the operator's session. The prefix makes that impossible.
+ *
+ * Renaming the cookie logs existing browser sessions out once, on the upgrade
+ * that introduces it; the SPA already routes a 401 to its login screen, and the
+ * login response expires the old name (see `AUTH_API.login` in server.ts).
+ */
+export const SESSION_COOKIE = '__Host-hola_session';
+
+/**
+ * The pre-F04 cookie name. Never read — it is only expired, on login and on
+ * logout, so an upgraded install stops sending a cookie the server ignores.
+ * Deliberately not accepted as a credential: doing so would keep alive exactly
+ * the domain-scoped, sibling-settable name that `__Host-` exists to retire.
+ */
+export const LEGACY_SESSION_COOKIE = 'hola_session';
+
+/**
+ * Attributes shared by every session-cookie header we emit.
+ *
+ * `Secure` and `Path=/` are two of the three things the `__Host-` prefix
+ * requires (the third is the absence of `Domain`, which is expressed by not
+ * writing one); a browser silently DROPS a `__Host-` cookie that misses any of
+ * them, so these are load-bearing, not decoration.
+ */
+const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; Secure; SameSite=Strict; Path=/';
+
+/** Thirty days, in seconds — the session cookie's lifetime. */
+const SESSION_COOKIE_MAX_AGE = 2592000;
+
+/** The `Set-Cookie` value that establishes an admin-key session. */
+export function sessionCookieHeader(key: string): string {
+  return `${SESSION_COOKIE}=${encodeURIComponent(key)}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=${SESSION_COOKIE_MAX_AGE}`;
+}
+
+/** The `Set-Cookie` value that clears the session cookie. */
+export function expiredSessionCookieHeader(): string {
+  return `${SESSION_COOKIE}=; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=0`;
+}
+
+/**
+ * The `Set-Cookie` value that deletes the pre-F04 cookie name. Emitted on
+ * logout AND on login, so an upgraded browser stops sending a domain-scoped
+ * cookie the server no longer reads.
+ */
+export function expiredLegacySessionCookieHeader(): string {
+  return `${LEGACY_SESSION_COOKIE}=; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=0`;
+}
 
 /** Read a single cookie value from the request's Cookie header. */
 export function readCookie(req: Request, name: string): string | null {
@@ -312,7 +408,8 @@ export function createAuthMiddleware() {
     // Auth is enabled, perform authentication
     logger.debug('Auth enabled, performing authentication', { path, method });
     
-    const token = extractToken(req);
+    const credential = resolveCredential(req);
+    const token = credential?.token ?? null;
     if (!token) {
       logger.warn('No authentication token provided', { path, method });
       return new Response(
@@ -418,16 +515,21 @@ export function createAuthMiddleware() {
       const authContext: AuthContext = {
         isAuthenticated: true,
         principal: authResult.principal,
+        ...(credential ? { credentialSource: credential.source } : {}),
       };
-      
+
       // Store in request for handlers to access
       (req as Request & { authContext?: AuthContext }).authContext = authContext;
-      
-      logger.info('Authentication successful', { 
-        path, 
-        method, 
+
+      logger.info('Authentication successful', {
+        path,
+        method,
         principalId: authResult.principal.id,
-        principalType: authResult.principal.type 
+        principalType: authResult.principal.type,
+        // Which credential was in force. Worth a log field: it is what decides
+        // whether the origin rule applied (F04), so a 403 an operator does not
+        // expect is diagnosable from the preceding success lines.
+        credentialSource: credential?.source,
       });
       
       return next();

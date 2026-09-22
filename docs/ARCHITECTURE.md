@@ -187,3 +187,12 @@ production, disabled in development/test. Clients send
 Public endpoints (health/readiness/metrics) are exempt; invalid credentials →
 `401`, insufficient capability → `403`. Application SSO via an external IdP +
 Traefik forward-auth is **roadmap** (ADR 0001 pt.2).
+
+The dashboard's admin-key login instead holds the key in a `__Host-`-prefixed
+`HttpOnly` cookie. That credential — and only that one — is attached ambiently
+by the browser, and Hola's apps are same-*site* with the dashboard, so a
+**mutating** request authenticated by the cookie must additionally prove a
+trusted `Origin`/`Sec-Fetch-Site` and an accepted `Content-Type`
+(`middleware/origin-guard.ts`, F04). Header-authenticated callers — the CLI, the
+SDK, a catalog app's contract calls — are unaffected; see
+[OPERATIONS.md](OPERATIONS.md) "Dashboard session security".
