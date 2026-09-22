@@ -379,7 +379,21 @@ export const CatalogSourcesCard: React.FC<{ inputClass: string; labelClass: stri
           <div key={s.id} className="flex items-center justify-between bg-surface-0 border border-border rounded-lg px-3 py-2">
             <div className="text-[13px] min-w-0">
               <span className="font-medium text-text-strong">{s.id}</span>
-              <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${s.trust === 'verified' ? 'text-success bg-success/10' : 'text-warning bg-warning/10'}`}>{s.trust}</span>
+              {/*
+                Label, not the raw enum value. `CatalogSourceTrust` is
+                'verified' | 'custom', where 'verified' means "the built-in
+                first-party source" — it has NOTHING to do with signature
+                verification, and a green badge reading "verified" next to a
+                catalog invited exactly that reading (F05: no bundle in the
+                shipped catalog is signed). The wire value is unchanged; only
+                what the operator is told is.
+              */}
+              <span
+                className={`ml-2 text-xs px-1.5 py-0.5 rounded ${s.trust === 'verified' ? 'text-success bg-success/10' : 'text-warning bg-warning/10'}`}
+                title={s.trust === 'verified' ? 'Hola’s own catalog. Not a statement about bundle signatures.' : 'An operator-added catalog.'}
+              >
+                {s.trust === 'verified' ? 'first-party' : s.trust}
+              </span>
               <div className="text-text-muted truncate">{s.url || '(built-in)'}</div>
               {s.allowRegistries && s.allowRegistries.length > 0 && (
                 <div className="text-[12px] text-text-muted truncate">

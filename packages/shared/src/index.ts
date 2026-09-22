@@ -888,6 +888,15 @@ export type GetSummaryResponse = {
 // ------------------------------------------------------
 // Catalog
 // ------------------------------------------------------
+/**
+ * Where a catalog came from: `verified` is the built-in first-party source,
+ * `custom` is one an operator added.
+ *
+ * **This says nothing about signatures** (F05). The value predates any
+ * signature work and is a provenance label, not a cryptographic claim — no
+ * bundle in the shipped catalog is signed. The dashboard therefore renders
+ * `verified` as "first-party"; the wire value is kept for compatibility.
+ */
 export type CatalogSourceTrust = 'verified' | 'custom';
 
 export type CatalogApp = {

@@ -170,6 +170,50 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   token** — it would duplicate a check the browser already makes unforgeably and
   would not address the cookie's value being the reusable admin key itself
   (opaque server-side sessions, #525).
+- **Bundles are not claimed verified unless they were (F05).** `verifySignature`
+  used to run `cosign version` and return `{ verified: true }` — it never
+  checked a signature, identity, key or digest, and its one admission was a
+  **debug** line. The failure mode was **inverted**: cosign *absent* →
+  `verified: false` → `required` failed closed; cosign *present* →
+  `verified: true` → `required` passed having verified nothing. Installing
+  cosign, exactly the remediation an operator performs when `required` starts
+  failing, is what converted a safe error into a false pass, so the posture
+  degraded the more diligent the operator was. A boolean also cannot express
+  "nothing was checked", and that conflation *was* the bug: the outcome is now a
+  three-state verdict (`bundle-signature.ts`) — `verified` (a signature over
+  **this manifest digest** matched the configured trust root), `unsigned` (a
+  determinate negative: no signature the trust root accepts), `unverifiable` (no
+  trust root, no resolvable digest, cosign missing, registry unreachable — never
+  success). Verification is pinned to `<repo>@sha256:…`, never the mutable tag.
+  There is deliberately **no default trust root** (`HOLA_SIGNATURE_TRUST_KEY`, or
+  `HOLA_SIGNATURE_TRUST_IDENTITY` + `_ISSUER`): a hardcoded key or identity would
+  look like verification while proving nothing about who signed. The gate now
+  runs on the **cache hit** as well as the fresh pull — the old placement meant
+  tightening the policy on a host with a warm cache enforced nothing (the cache
+  path was never "trusts file presence": it re-resolves the remote digest and
+  re-pulls when stale; the gap was that policy was never *evaluated*). Provenance
+  follows the `.oras-digest` precedent — `.signature-verdict.json` beside the
+  bundle, **only ever a `verified` verdict**, reused only while both the bundle's
+  digest and the trust material's fingerprint (the key's **content**, so an
+  in-place rotation invalidates it) are unchanged; a negative is re-evaluated
+  every pull and can never go stale into a false refusal. Policy meaning:
+  `none` = nothing attempted, `optional` (default) = report and warn but never
+  block, `required` = only `verified` installs. Said plainly: **the only catalog
+  signs nothing**, so `optional` today gates exactly like `none` and `required`
+  refuses every install — the honest fail-closed outcome, not a startup refusal
+  (the setting only affects pulls, and taking the host down would remove
+  start/stop/logs/backup for apps already installed; `required` is also
+  satisfiable in principle, so refusing to boot would forbid the correct
+  configuration too). The stock image still ships **without** cosign: no longer
+  because it is harmful, but because there is nothing signed for it to check.
+  An unrecognised `HOLA_SIGNATURE_POLICY` resolves to `required`, not the
+  default — it used to be a blind cast that behaved as `optional`, so a typo
+  downgraded the host silently. The one other place the product *said*
+  "verified" was the catalog-source badge — `CatalogSourceTrust = 'verified' |
+  'custom'` is a provenance label ("Hola's own catalog") that predates any
+  signature work, so the dashboard now renders it as **first-party** (wire value
+  unchanged). Catalog signing is #527; surfacing the verdict beyond the server
+  log is #528.
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`

@@ -193,4 +193,17 @@ describe('Settings → Catalog Sources editing', () => {
     await waitFor(() => expect(catalogSources.add).toHaveBeenCalled());
     expect(catalogSources.update).not.toHaveBeenCalled();
   });
+
+  it('never badges a catalog source as "verified" (F05: that is provenance, not a signature)', async () => {
+    // `CatalogSourceTrust` is 'verified' | 'custom' and predates any signature
+    // work: 'verified' means "Hola's own catalog". Rendering that word in a
+    // green badge next to a catalog invited the reading that its bundles were
+    // cryptographically verified — and none of them are signed at all.
+    renderCard();
+    await waitFor(() => expect(screen.getByText('hola')).toBeInTheDocument());
+
+    expect(screen.queryByText('verified')).not.toBeInTheDocument();
+    expect(screen.getByText('first-party')).toBeInTheDocument();
+    expect(screen.getByText('custom')).toBeInTheDocument();
+  });
 });
