@@ -16,11 +16,9 @@ const contractsList = vi.fn<() => Promise<GetContractsResponse>>();
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
     contracts: { list: () => contractsList() },
+    // Reads only: the page has no backup-mutating affordance (F12).
     backups: {
       list: vi.fn(async () => ({ items: [], page: 1, limit: 10, total: 0 })),
-      create: vi.fn(),
-      restore: vi.fn(),
-      delete: vi.fn(),
     },
   },
 }));

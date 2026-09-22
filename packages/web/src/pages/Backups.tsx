@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Box,
   Download,
-  Trash2,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -40,7 +39,6 @@ export const Backups: React.FC = () => {
     data: backupsData,
     loading,
     error,
-    deleteBackup,
     downloadBackup,
   } = useBackupsApi();
 
@@ -61,19 +59,6 @@ export const Backups: React.FC = () => {
 
   // Operations state
   const [operationLoading, setOperationLoading] = useState<{ [key: string]: boolean }>({});
-
-  const handleDeleteBackup = async (backupId: string) => {
-    const operationKey = `delete-${backupId}`;
-    setOperationLoading((prev) => ({ ...prev, [operationKey]: true }));
-
-    try {
-      await deleteBackup(backupId);
-    } catch (err) {
-      console.error('Failed to delete backup:', err);
-    } finally {
-      setOperationLoading((prev) => ({ ...prev, [operationKey]: false }));
-    }
-  };
 
   const handleDownloadBackup = async (backupId: string) => {
     const operationKey = `download-${backupId}`;
@@ -200,7 +185,11 @@ export const Backups: React.FC = () => {
                   </span>
                 </div>
 
-                {/* Actions */}
+                {/* Actions. No Delete: it posted to a route that reported a
+                    deletion it had not performed (F12), and a backup an operator
+                    believes they deleted is a worse outcome than one they cannot
+                    delete from here. Deleting a capture is the provider app's
+                    own job until #160 surfaces its snapshots with real verbs. */}
                 <div className="flex items-center gap-1 justify-end">
                   <button
                     onClick={() => handleDownloadBackup(backup.id)}
@@ -209,14 +198,6 @@ export const Backups: React.FC = () => {
                     className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-text-strong hover:bg-surface-3 transition disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Download className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => handleDeleteBackup(backup.id)}
-                    disabled={operationLoading[`delete-${backup.id}`]}
-                    title="Delete"
-                    className="w-[30px] h-[30px] flex items-center justify-center rounded-[7px] text-text-muted hover:text-danger hover:bg-danger-weak transition disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>

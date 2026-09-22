@@ -348,6 +348,31 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   by the crash, which only `runLifecycleJob` ever clears — is **not** here: the
   job service sits below the deployment service and cannot reach a deployment
   record. That is #542.
+- **The backup API is reads only, because that is all this host can do (F12).**
+  `POST /api/backups` answered 200 with a freshly minted `jobId`/`backupId` and
+  `DELETE /api/backups/:id` with `{ ok: true }`, neither having called a
+  service — no job, no archive, no deletion. The `jobId` was the sharp end: it
+  named a job `GET /api/jobs/:id` has never heard of, so polling automation
+  waits forever on a backup that was never started, which is strictly worse
+  than an error. There was nothing to route them to and there will not be in
+  this shape — Hola **brokers** backups rather than performing them, and
+  `backup@1` is provider-initiated by design (ADR 0004: the server never calls
+  an app), so "command a capture" is not a verb the architecture has. So both
+  were **deleted**, not stubbed with a 501: a 501 promises a route that is
+  coming, and pointing a documented endpoint at a refusal is how a caller ends
+  up writing automation against it anyway. The route, the types
+  (`CreateBackupRequest`/`CreateBackupResponse`/`DeleteBackupResponse`), the
+  `API_ENDPOINTS` documentation and the client affordances went together —
+  `createBackup` in `useBackupsApi` (already wired to nothing, and one import
+  from being a button again) and the row's Delete control — following spec
+  008's deletion of the equally fictitious backup-restore stub (#504, #484).
+  The two **reads** were already honest (a genuinely empty list; an id that can
+  never resolve) and are asserted on both sides of the change so the fix cannot
+  take them with it. `getRequiredCapability`'s `write:backups` rows survive the
+  routes on purpose: they are where this host records that a backup mutation is
+  privileged, and without them the generic mutating-method default would guard
+  a future real implementation with `write:deployments`. Surfacing the
+  provider's own snapshots — with real verbs — is #160.
 - **The web typecheck checks files now (F13).** `packages/web`'s `typecheck`
   script ran `tsc --noEmit`, which resolves `tsconfig.json` — a
   **references-only** file with `"files": []`. A bare `tsc` does **not** traverse

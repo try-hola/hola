@@ -429,7 +429,9 @@ export const api = {
     },
   },
 
-  // Backups with cache management
+  // Backups — reads only. `create`/`delete` were removed with the routes they
+  // called (F12): both reported success having done nothing, and Hola has no
+  // backup engine to give them (ADR 0004). See #160.
   backups: {
     list: (params?: { appId?: string; status?: string; page?: number; limit?: number }) => {
       const query = apiClient.buildQuery(params || {});
@@ -437,12 +439,6 @@ export const api = {
     },
     
     byId: (backupId: string) => apiClient.get(API.backups.byId(backupId)),
-    
-    create: (data: { appId?: string }) => 
-      apiClient.post(API.backups.base, data),
-    
-    delete: (backupId: string) =>
-      apiClient.delete(API.backups.byId(backupId)),
   },
 
   // Notifications with cache management
