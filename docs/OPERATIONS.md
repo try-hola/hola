@@ -505,9 +505,19 @@ as the containers. It happens when the app's package declares
 `preUpgradeBackup: required`, or when you ask for one (`snapshot: true` /
 `hola upgrade --snapshot`).
 
-Two behaviours changed here, both because the old ones could report success
+Three behaviours changed here, all because the old ones could report success
 having done nothing:
 
+- **A capture now proves it produced an archive.** `tar` is allowed to report a
+  soft error while archiving a live data root — a file the app rewrites between
+  `tar`'s stat and its read is expected, and the archive it writes is still
+  complete — but that tolerance used to be applied to the exit code alone, so a
+  `tar` that errored *and wrote nothing* was recorded as a snapshot. The archive
+  is now checked after every capture: it must exist, be non-empty, and read back
+  as a gzip tar holding files. A capture that fails this fails the operation that
+  asked for it and records no snapshot, instead of leaving one that turns out to
+  be missing when you roll back. The check re-reads the archive just written, so
+  a capture costs roughly 20% longer on a large data root.
 - **A requested snapshot that cannot be taken now fails the upgrade.** It used
   to warn and upgrade anyway unless the package said `required`. `required` is
   the app packager's default for everyone; asking for a snapshot is *your*

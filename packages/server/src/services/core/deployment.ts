@@ -3610,6 +3610,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * case: `listSnapshots` skips a directory with no readable meta, so a crash
    * mid-tar leaves a half-written archive that is invisible rather than one a
    * rollback would try to restore.
+   *
+   * A capture that FAILS is a different case from a crash and is cleaned up
+   * (F15): `tarGzipDir` now proves its own output, so a rejection here is a
+   * known-bad archive rather than an unknown state, and leaving the directory
+   * would accumulate invisible debris on every failed upgrade. The error
+   * propagates either way — `promote` turns it into a refusal.
    */
   private async writeSnapshotMeta(
     deploymentId: string,
@@ -3625,7 +3631,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     let sizeBytes = 0;
     if (opts.appRoot) {
       const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
-      await tarGzipDir(opts.appRoot, tarPath);
+      try {
+        await tarGzipDir(opts.appRoot, tarPath);
+      } catch (err) {
+        await this.storageService.deleteDir(relDir, true).catch(() => undefined);
+        throw err;
+      }
       sizeBytes = await fileSize(tarPath);
     }
 
