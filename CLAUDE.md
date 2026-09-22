@@ -41,6 +41,21 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   file-provider config (`/data/runtime/traefik/dynamic.yml`) and joins each app's
   ingress service to the external `hola` network. The compose **validator rejects
   host ports** and requires pinned image tags.
+- **Compose policy is enforced twice (F02).** The validator refuses
+  privilege-bearing service keys (host/foreign namespaces, `devices`, `cap_add`,
+  `group_add`, widening `security_opt`, `env_file`, `extends`, `volumes_from`,
+  `userns_mode`, `sysctls`, `cgroup_parent`, `runtime`, file-backed top-level
+  `secrets`/`configs`) and requires bind sources to be **literal** paths under
+  `${HOLA_APP_DATA}` — containment is proved against literal segments, so an
+  interpolated suffix is unprovable and refused. `privileged` only WARNS: two
+  shipped catalog apps (gitea, running-man) run dind sidecars. Then
+  `materializeCompose` → `assertResolvedMountsContained` re-checks the
+  configuration Compose actually resolved (`composeConfig`) against the app's
+  data root plus the platform's own granted mounts, before `composePull`, and
+  fails the deploy rather than creating containers. The platform's own
+  injections (`hola-docker-proxy`, apps-data, restore-staging) are added
+  **after** validation, so validator rules never apply to them — the
+  deploy-time gate allows them only when the matching grant was consented to.
 - **Deploy lifecycle is async.** `createFromDraft`/`promote`/`rollback` enqueue a
   job; the actual `docker compose up` runs later in `RealDeploymentService.runLifecycleJob`.
   Per-deploy work (auth provisioning, env injection) belongs there, not at create time.

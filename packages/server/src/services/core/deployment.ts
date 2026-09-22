@@ -103,6 +103,7 @@ import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
 import { APPS_DATA_CAPABILITY, injectReadonlyMount, injectContainerLogsSource, injectWritableMount, injectContractEnvironment, CONTAINER_LOGS_PROXY_SERVICE } from './compose-mounts';
+import { uncontainedBindMounts, describeUncontained } from './compose-resolved-guard';
 import {
   BACKUP_CONTRACT_REF,
   RESTORE_CONTRACT_REF,
@@ -2263,6 +2264,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // twice or risks the two branches disagreeing about what's granted.
     const granted = await this.readActiveGrantedContracts(deployment);
 
+    // Host paths the PLATFORM is about to bind into this app's containers, as
+    // it grants them. Collected here rather than re-derived later so the
+    // containment gate at the end of this method allows exactly what was
+    // actually injected — a grant the operator did not consent to leaves its
+    // path off this list, and the gate then refuses that mount even if
+    // something else in the pipeline produced it (F02a).
+    const platformMounts: string[] = [];
+
     // Grant a trusted app (a backup tool) read-only access to ALL apps' data.
     // Identity-mapped so absolute host paths resolve unchanged inside the
     // container. Read-only, and gated on the operator's consent at install.
@@ -2275,6 +2284,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // consented to (`deployment.grantedContracts`); either alone grants nothing.
     if (grantsInclude(granted, 'apps-data')) {
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
+      platformMounts.push(this.appsBindRoot());
     } else if ((await this.readActiveConsumes(deployment)).includes(APPS_DATA_CAPABILITY)) {
       // Compatibility shim, one release only (#418 Phase 2). A backrest installed
       // before this change — or a bundle published before the catalog declared
@@ -2287,6 +2297,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         { deploymentId: deployment.id, app: deployment.app },
       );
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
+      platformMounts.push(this.appsBindRoot());
     }
 
     // Container-logs source (spec 004, ADR 0004 §12): on consent, every OTHER
@@ -2295,9 +2306,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // consented on every materialise, like apps-data above, so a manifest that
     // later drops `provides` loses the source immediately.
     if (grantsInclude(granted, 'container-logs')) {
+      const socketPath = process.env.HOLA_DOCKER_SOCKET?.trim() || '/var/run/docker.sock';
+      platformMounts.push(socketPath);
       content = injectContainerLogsSource(content, {
         image: process.env.HOLA_SERVER_IMAGE?.trim() || `ghcr.io/try-hola/server:${process.env.HOLA_VERSION?.trim() || 'latest'}`,
-        socketPath: process.env.HOLA_DOCKER_SOCKET?.trim() || '/var/run/docker.sock',
+        socketPath,
         labels,
         logging: composeDefaultsConfig.logMaxSize
           ? { driver: 'json-file', options: { 'max-size': composeDefaultsConfig.logMaxSize, 'max-file': composeDefaultsConfig.logMaxFile } }
@@ -2313,6 +2326,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // these three branches (FR-014, SC-003).
     if (grantsInclude(granted, 'restore-staging')) {
       content = injectWritableMount(content, { hostPath: this.restoreStagingRoot() });
+      platformMounts.push(this.restoreStagingRoot());
     }
 
     // The runtime compose may hold a client secret in cleartext; restrict it.
@@ -2365,7 +2379,66 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         .join('\n') + '\n';
       await this.storageService.writeFile(`deployments/${deployment.id}/runtime/.env`, dotenv, 0o600);
     }
+
+    // LAST, after the `.env` write: prove containment against the configuration
+    // Compose will actually execute (F02a). Everything above is text
+    // substitution on a document Compose has not yet interpolated, so this is
+    // the first moment the real bind sources exist.
+    await this.assertResolvedMountsContained(deployment, platformMounts);
+
     return this.runtimeDir(deployment.id);
+  }
+
+  /**
+   * Refuse to proceed when the RESOLVED compose configuration binds a host path
+   * outside this app's own data root (F02a).
+   *
+   * The compose validator proves containment on what an app declares, but a
+   * bind source is only fully known once Compose has interpolated it — and the
+   * app's own environment legitimately reaches Compose through
+   * `deployments/<id>/runtime/.env`. So the declared-side rule (no interpolation
+   * in a bind source) has a deploy-side twin that asks Compose itself, under the
+   * same allowlisted environment `up` uses, what it resolved to.
+   *
+   * Called from `materializeCompose` rather than from each lifecycle branch, so
+   * no future caller can bring a project up without passing through it. That
+   * places it before `composePull` and therefore before any container exists: a
+   * failure here fails the deploy with nothing created.
+   *
+   * Fails closed. If Compose cannot resolve the document, containment is
+   * unproven and the deploy stops — `up` would have failed on the same document
+   * anyway, just after doing work.
+   */
+  private async assertResolvedMountsContained(
+    deployment: EnhancedDeploymentDetail,
+    platformMounts: readonly string[],
+  ): Promise<void> {
+    const runtimeDir = this.runtimeDir(deployment.id);
+    const projectName = this.projectName(deployment.id);
+    const resolved = await this.dockerService.composeConfig(runtimeDir, projectName, deployment.selectedProfiles);
+    if (!resolved.success) {
+      throw new ServiceError(
+        `Could not resolve the Compose configuration for ${deployment.id}: ${resolved.output}. ` +
+          `Refusing to start containers whose bind mounts cannot be checked.`,
+      );
+    }
+
+    const uncontained = uncontainedBindMounts(resolved.config, {
+      appRoot: this.appRootFor(deployment.id),
+      allowedPaths: platformMounts,
+    });
+    if (uncontained.length === 0) return;
+
+    this.logger.error('Resolved compose binds host paths outside the app data root', undefined, {
+      deploymentId: deployment.id,
+      app: deployment.app,
+      mounts: uncontained.map((m) => ({ service: m.service, source: m.source, reason: m.reason })),
+    });
+    throw new ServiceError(
+      `Deployment ${deployment.id} resolves to bind mounts outside its own data root: ` +
+        `${describeUncontained(uncontained)}. Every app bind source must stay under '${APP_DATA_TOKEN}'; ` +
+        `refusing to create containers.`,
+    );
   }
 
   /**

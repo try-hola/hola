@@ -84,6 +84,18 @@ export interface DockerService {
     options?: { services?: string[]; wait?: boolean; timeoutMs?: number },
   ): Promise<{ success: boolean; output: string }>;
   composeDown(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
+  /**
+   * The FULLY RESOLVED configuration Compose would execute — every `${VAR}`
+   * interpolated, every short-syntax mount normalised — as parsed JSON.
+   *
+   * Run under the same allowlisted child environment as `up` (`appComposeEnv`)
+   * and in the same project directory, so the `.env` Compose auto-loads is the
+   * one `up` would load: the answer describes the real invocation, not a
+   * sanitised approximation of it. `success: false` carries Compose's own error
+   * text in `output` and leaves `config` undefined; a caller gating a deploy on
+   * containment must treat that as a refusal, not a pass (F02a).
+   */
+  composeConfig(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string; config?: unknown }>;
   composePs(projectPath: string, projectName: string): Promise<ComposeProject>;
   composeRestart(projectPath: string, projectName: string, serviceName?: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
   /** Run a command inside a running compose service (no shell). Used for post-deploy
@@ -398,6 +410,36 @@ export class RealDockerService implements DockerService, HealthCheckable {
         projectName,
       });
       
+      return { success: false, output: errorMessage };
+    }
+  }
+
+  async composeConfig(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string; config?: unknown }> {
+    const composeFile = join(projectPath, 'docker-compose.yml');
+    try {
+      if (!existsSync(composeFile)) {
+        throw new Error(`docker-compose.yml not found at ${composeFile}`);
+      }
+      // `execFile`, not a shell string: no interpolation of the project name or
+      // path into a command line. `--format json` asks for the machine-readable
+      // resolved document; `--no-normalize` is deliberately NOT passed — the
+      // normalisation (short mounts expanded to long syntax) is what makes the
+      // bind sources readable. A 16MB buffer matches `composeLogs`: a resolved
+      // multi-service document is large but bounded.
+      const { stdout, stderr } = await execFileAsync(
+        'docker',
+        ['compose', '-f', composeFile, '-p', projectName, 'config', '--format', 'json'],
+        { cwd: projectPath, timeout: 60000, maxBuffer: 16 * 1024 * 1024, env: appComposeEnv({ profiles }) },
+      );
+      // Compose writes interpolation warnings to stderr and still exits 0; the
+      // document on stdout is the authoritative part.
+      return { success: true, output: [stdout, stderr].filter(Boolean).join('\n'), config: JSON.parse(stdout) };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.logger.error('Failed to resolve compose configuration', error instanceof Error ? error : undefined, {
+        projectPath,
+        projectName,
+      });
       return { success: false, output: errorMessage };
     }
   }
@@ -864,6 +906,22 @@ export class MockDockerService implements DockerService {
     this.logger.debug('Mock compose down', { projectPath, projectName, profiles });
     this.composeCalls.push({ command: 'down', projectPath, projectName, profiles });
     return { success: true, output: `[mock] Project ${projectName} stopped and removed` };
+  }
+
+  /**
+   * No Docker, so nothing to resolve: an empty, successful document.
+   *
+   * Deliberately NOT a re-implementation of Compose's interpolation over the
+   * on-disk file. A Mock that resolved the document itself would let the
+   * containment gate assert the Mock's idea of Compose rather than Compose,
+   * which is the divergence that makes a mocked security check worthless. Mock
+   * mode creates no containers, so there is nothing to contain; the gate's real
+   * behaviour is covered by unit tests over the pure functions in
+   * `compose-resolved-guard.ts` and by a stub that returns a resolved document.
+   */
+  async composeConfig(projectPath: string, projectName: string, profiles?: string[]): Promise<{ success: boolean; output: string; config?: unknown }> {
+    this.logger.debug('Mock compose config', { projectPath, projectName, profiles });
+    return { success: true, output: `[mock] Project ${projectName} configuration resolved`, config: { services: {} } };
   }
 
   async composePs(_projectPath: string, projectName: string): Promise<ComposeProject> {

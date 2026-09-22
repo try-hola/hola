@@ -52,6 +52,23 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
   the service named after the app id, else the first service. So a multi-service
   app whose web service is neither named after the app id nor listed first is
   routed correctly as long as its manifest declares `ingress.service`.
+- **Apps run confined, and the policy is enforced twice.** The Compose validator
+  refuses privilege-bearing service keys outright — host/foreign namespaces
+  (`pid`, `ipc`, `uts`, `cgroup`, `network_mode: container:…`), host devices
+  (`devices`, `device_cgroup_rules`), capability and group widening (`cap_add`,
+  `group_add`), a widening `security_opt`, host file reads (`env_file`, a
+  file-backed top-level `secrets`/`configs`), and definition smuggling
+  (`extends`, `volumes_from`, `userns_mode`, `sysctls`, `cgroup_parent`,
+  `runtime`). `privileged` is reported as a warning rather than refused: two
+  shipped catalog apps run Docker-in-Docker sidecars precisely because the host
+  socket is forbidden them. Bind sources must be literal paths under
+  `${HOLA_APP_DATA}` — no interpolation after the platform's own token, because
+  containment is proved against literal segments and a variable's value arrives
+  from the app's own environment. Then, at deploy time,
+  `assertResolvedMountsContained` re-checks the configuration Compose actually
+  resolved (`docker compose config`, under the same allowlisted environment
+  `up` runs with) and refuses to create containers when a bind source landed
+  outside the app's own data root or the platform's own granted mounts.
 
 ## Server services
 
