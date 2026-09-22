@@ -1349,7 +1349,11 @@ export async function route(url: URL, req: Request): Promise<Response> {
     const id = deploymentMatch[1];
     try {
       const services = getServices();
-      await services.deployments.deleteDeployment(id);
+      // `?force=true` is the explicit, separate force-removal operation (F09):
+      // uninstall otherwise refuses when the containers cannot be confirmed
+      // stopped, which would leave a genuinely wedged container unremovable.
+      const force = new URL(req.url).searchParams.get('force') === 'true';
+      await services.deployments.deleteDeployment(id, { force });
       return json({ ok: true });
     } catch (err) {
       return errorResponse(req, err);

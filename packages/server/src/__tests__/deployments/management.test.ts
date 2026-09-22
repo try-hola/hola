@@ -24,6 +24,7 @@ import type {
   RollbackResponse,
   GetSubdomainAvailabilityResponse,
 } from '@hola/shared';
+import { getServices } from '../../services/simple-factory';
 import { setupTestServer, teardownTestServer } from '../utils/bun-server';
 import { makeRequest } from '../utils/phase7-helpers';
 
@@ -275,6 +276,47 @@ describe('Deployment Management', () => {
       });
       expect(detail.success).toBe(false);
       expect(detail.error!.code).toBe('NOT_FOUND');
+    });
+
+    // F09: force removal is a separate operation reached by `?force=true`, and
+    // the route has to actually read it. A flag the router drops would leave the
+    // CLI's `--force` and the dashboard's "Force remove" silently inert — the
+    // operator does everything right and the deployment still cannot be removed.
+    test('?force=true reaches the service as an explicit force removal', async () => {
+      const { deploymentId } = await createDeployment('consistency-force-delete');
+      const services = getServices();
+      const seen: Array<{ id: string; options?: { force?: boolean } }> = [];
+      const original = services.deployments.deleteDeployment.bind(services.deployments);
+      services.deployments.deleteDeployment = async (id: string, options?: { force?: boolean }) => {
+        seen.push({ id, options });
+        return original(id, options);
+      };
+
+      try {
+        const del = await makeRequest({ method: 'DELETE', url: `${baseURL}/api/deployments/${deploymentId}?force=true` });
+        expect(del.success).toBe(true);
+        expect(seen).toEqual([{ id: deploymentId, options: { force: true } }]);
+      } finally {
+        services.deployments.deleteDeployment = original;
+      }
+    });
+
+    test('a delete with no query string is NOT a force removal', async () => {
+      const { deploymentId } = await createDeployment('consistency-plain-delete');
+      const services = getServices();
+      const seen: Array<{ force?: boolean }> = [];
+      const original = services.deployments.deleteDeployment.bind(services.deployments);
+      services.deployments.deleteDeployment = async (id: string, options?: { force?: boolean }) => {
+        seen.push({ force: options?.force });
+        return original(id, options);
+      };
+
+      try {
+        await makeRequest({ method: 'DELETE', url: `${baseURL}/api/deployments/${deploymentId}` });
+        expect(seen).toEqual([{ force: false }]);
+      } finally {
+        services.deployments.deleteDeployment = original;
+      }
     });
   });
 });

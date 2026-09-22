@@ -685,6 +685,17 @@ describe('Install identity markers (spec 006)', () => {
     const v1Before = await readInstanceRecord(created.deploymentId);
     expect(v1Before.appVersion).toBe('1.0.0');
 
+    // Give the app real data of its own (#524). Without this the data root
+    // holds only `.hola/`, which `capturePreUpgradeSnapshot` correctly reads as
+    // "nothing to capture" — so the promote below recorded no archive, the
+    // rollback restored nothing, and this test passed while exercising none of
+    // the restore ordering its comment describes. It then failed intermittently
+    // for an entirely different reason (the rollback job racing the release
+    // pointer), which is how the vacuum was found. A real payload makes the
+    // snapshot real and the restore real.
+    await mkdir(join(appsRoot, created.deploymentId, 'data'), { recursive: true });
+    await writeFile(join(appsRoot, created.deploymentId, 'data', 'app.db'), 'v1-payload');
+
     // Promote to v2 WITH a pre-upgrade snapshot: this captures v1's data root
     // (its .hola/ included) BEFORE switching to v2.
     const draftId2 = await finalizedDraft(drafts, { version: '2.0.0' });
@@ -696,6 +707,10 @@ describe('Install identity markers (spec 006)', () => {
     await waitForJob(jobs, promoted.jobId!);
     const v2 = await readInstanceRecord(created.deploymentId);
     expect(v2.appVersion).toBe('2.0.0');
+
+    // The new release "migrates" the data forward, so the rollback has
+    // something to actually put back.
+    await writeFile(join(appsRoot, created.deploymentId, 'data', 'app.db'), 'v2-migrated');
 
     // Roll back to v1 WITH restoreData: true. The lifecycle job wipes and
     // replaces the whole data root from the v1 snapshot (which carries v1's
@@ -723,6 +738,8 @@ describe('Install identity markers (spec 006)', () => {
     const afterRollback = await readInstanceRecord(created.deploymentId);
     expect(afterRollback.appVersion).toBe('1.0.0');
     expect(new Date(afterRollback.writtenAt).getTime()).toBeGreaterThan(new Date(v1Before.writtenAt).getTime());
+    // The data really was rolled back — not just the containers and the record.
+    expect(await Bun.file(join(appsRoot, created.deploymentId, 'data', 'app.db')).text()).toBe('v1-payload');
   });
 
   // ---- Scenario 16 (T027): reconfiguration updates env.json (FR-013) ----

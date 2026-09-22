@@ -248,6 +248,7 @@ prog
   .command('uninstall <deploymentId>')
   .describe('Uninstall a deployment: stop it and remove its containers, data, and auth')
   .option('--yes, -y', 'Skip the confirmation prompt', false)
+  .option('--force', 'Remove the deployment even if its containers cannot be stopped (may orphan containers)', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {
     const { runUninstall } = await load(import('./commands/deployments/actions'));

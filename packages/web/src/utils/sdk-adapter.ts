@@ -486,8 +486,19 @@ export class SdkAdapter {
     // Full teardown: stops containers, deprovisions auth, releases the Traefik
     // route, and removes the record (DELETE /api/deployments/:id). The `delete`
     // *action* only stops compose, leaving the route held — use this to remove.
-    remove: (deploymentId: string): Promise<void> =>
-      this.enhancedRequest('DELETE', `/api/deployments/${deploymentId}`, () => this.sdk.deployments.delete(deploymentId), undefined, true),
+    // `force` is the explicit, separate force-removal operation (F09): the plain
+    // uninstall refuses when the containers cannot be confirmed stopped, rather
+    // than deleting the data root out from under a live database. Without a way
+    // to reach it from here, a wedged container would make a deployment
+    // unremovable from the dashboard.
+    remove: (deploymentId: string, opts?: { force?: boolean }): Promise<void> =>
+      this.enhancedRequest(
+        'DELETE',
+        `/api/deployments/${deploymentId}${opts?.force ? '?force=true' : ''}`,
+        () => this.sdk.deployments.delete(deploymentId, opts),
+        undefined,
+        true,
+      ),
 
     list: (params?: GetDeploymentsRequest): Promise<GetDeploymentsResponse> => {
       const query = this.buildQuery(params || {});

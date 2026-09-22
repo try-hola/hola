@@ -256,6 +256,69 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   signature work, so the dashboard now renders it as **first-party** (wire value
   unchanged). Catalog signing is #527; surfacing the verdict beyond the server
   log is #528.
+- **Destructive transitions prove they are safe, and one deployment runs one
+  operation at a time (F09 + F10).** These are one fix, not two. F09's gaps were
+  each a destructive step taken without the proof it needed: the data-aware
+  rollback **discarded `composeDown`'s result entirely** and then wiped the data
+  root (the comment directly above it asserted the invariant the code did not
+  enforce); uninstall logged `compose down reported a failure … continuing with
+  teardown` and went on to remove the storage tree and the app data root; and
+  `restoreTarGzInto` was `rm -rf dest` → `mkdir` → `tar -xzf`, destroying the
+  destination **before** anything proved the archive extracts. But a
+  point-in-time check is worth nothing while a second job can act on the same
+  deployment: adding the missing `composeDown().success` check only moves the
+  window, because a concurrent `start` can bring the containers back up between
+  the check and the wipe. So F10 is the other half. **Serialization lives in the
+  job queue**, partitioned by `deploymentId` (`DeploymentLocks` in `jobs.ts`):
+  `tick()` skips — rather than waits on — a job whose deployment is busy, so one
+  app's work never overlaps while other apps keep running in parallel up to
+  `maxConcurrency`. A global lock would pass a naive serialization test and
+  destroy fleet throughput, which is why `work for a DIFFERENT deployment still
+  runs in parallel` is a test on both sides of the fix. Work that **bypasses the
+  queue** — `deleteDeployment`'s in-line teardown, `promote`'s pre-upgrade
+  capture, which runs the app's `backup@1` preHooks in its live containers —
+  takes the same lock through `jobService.runExclusive`. **Queue vs reject is
+  per-action, deliberately:** `start`/`stop`/`restart` name no release and
+  destroy nothing, so they queue; `promote`/`rollback`/`delete` are decided
+  against a release pointer or a data set the in-flight job is about to change,
+  so they refuse with `409 DEPLOYMENT_BUSY` (`details.code`, same shape as
+  `PROVIDER_EXISTS`/`ALREADY_INSTALLED`) rather than silently re-aiming. Restore
+  is now **staged**: extract into a platform-owned scratch dir, assert non-empty,
+  rename the original aside, land the new tree, and only then drop the original —
+  failure at any point leaves the data exactly as it was. That scratch dir is
+  deliberately **not** `HOLA_RESTORE_STAGING_ROOT` (spec 008): that one is a
+  *writable mount handed to a catalog container*, and putting the single
+  surviving copy of an operator's data root inside a third-party app's mount
+  mid-swap is the opposite of the isolation it exists to provide. Since
+  teardown now refuses, **force removal is a separate explicit operation** —
+  `DELETE /api/deployments/:id?force=true`, `hola uninstall --force`, and a
+  "Force remove" the dashboard offers *only after* a stop-failure refusal — or a
+  wedged container would have converted a data-loss bug into an unremovable
+  deployment. Force skips the busy check and does **not** wait for the lock (a
+  stuck job holds it forever, which is the situation force exists for).
+- **A snapshot that was never taken is now a refusal, not a log line (#524).**
+  Two *individually defensible* best-effort behaviours composed into silent data
+  loss: `promote` warned-and-continued when an explicitly requested
+  `snapshot: true` capture failed (fail-closed applied only to the packager's
+  `preUpgradeBackup: required`), and `restoreAppDataSnapshot` then found nothing,
+  restored nothing, and let the job report **`completed`**. The operator asks for
+  a snapshot and silently gets none; later asks for a data-aware rollback,
+  silently gets none, **and is told it succeeded.** Both halves are closed: a
+  requested snapshot that fails now fails the promote (operator-visible change —
+  `snapshot: true` is *this operator's* instruction for *this* upgrade, not the
+  packager's default for everyone), and a rollback with no snapshot for its
+  target fails the job. "No app data to capture" is a third, legitimate outcome
+  and is now **recorded** (`meta.json` with `empty: true`) rather than being
+  indistinguishable from "never captured" — the two have opposite correct
+  behaviours at restore time. The intermittent CI failure this was diagnosed
+  from had a **different** root cause in the same neighbourhood, and it is fixed
+  too: `rollback()` enqueued the job **before** `promoteRelease` moved the
+  pointer, and `runLifecycleJob` resolves the release to materialize from that
+  pointer — a footrace the job won under CI load, re-materializing and re-marking
+  the release being rolled *away from*. The promote now happens first (matching
+  `createFromDraft`/`promote`), and a second, independent guard in
+  `runLifecycleJob` refuses when a job's recorded target release is no longer the
+  active one, so reverting the ordering yields a failed job rather than a lie.
 - **The web typecheck checks files now (F13).** `packages/web`'s `typecheck`
   script ran `tsc --noEmit`, which resolves `tsconfig.json` — a
   **references-only** file with `"files": []`. A bare `tsc` does **not** traverse

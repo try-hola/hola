@@ -144,6 +144,28 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     return join(dataRoot, 'deployments', deploymentId, 'snapshots');
   }
 
+  /**
+   * The single recorded snapshot for a deployment: its meta plus whether an
+   * archive sits beside it (F09/#524).
+   *
+   * "No app data was captured" is now RECORDED rather than left as an absent
+   * directory. The two used to be indistinguishable, and a later data-aware
+   * rollback has opposite correct behaviours for them — proceed for a release
+   * that genuinely held nothing, refuse for one whose capture never happened.
+   * So the dataless-promote tests below assert `empty: true` **and** the
+   * absence of `data.tar.gz`: the original claim (nothing was tarred) plus the
+   * new one (the reason is on record).
+   */
+  async function soleSnapshot(deploymentId: string): Promise<{ meta: Record<string, unknown>; hasArchive: boolean }> {
+    const dir = snapshotsPath(deploymentId);
+    const snaps = await readdir(dir);
+    expect(snaps).toHaveLength(1);
+    return {
+      meta: JSON.parse(await readFile(join(dir, snaps[0], 'meta.json'), 'utf8')),
+      hasArchive: existsSync(join(dir, snaps[0], 'data.tar.gz')),
+    };
+  }
+
   test('opt-in promote snapshots the app data, keyed by the outgoing release', async () => {
     const { drafts, deployments } = makeSystem();
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
@@ -185,7 +207,10 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     const dep = await deployments.createFromDraft({ draftId: await finalizedDraft(drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });
     // No writeAppData — the data root is empty/absent.
     await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
-    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+    const snap = await soleSnapshot(dep.deploymentId);
+    expect(snap.hasArchive).toBe(false);
+    expect(snap.meta.empty).toBe(true);
+    expect(snap.meta.fromReleaseId).toBe(dep.releaseId);
   });
 
   // The test above uses `autoStart: false`, so `materializeCompose` never runs
@@ -208,7 +233,9 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     await writeFile(join(appsRoot, dep.deploymentId, '.hola', 'instance.json'), '{"schema":1}');
 
     await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), snapshot: true, options: { autoStart: false } });
-    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+    const snap = await soleSnapshot(dep.deploymentId);
+    expect(snap.hasArchive).toBe(false);
+    expect(snap.meta.empty).toBe(true);
   });
 
   // The other half of finding A: the short-circuit also guards the #121 backup
@@ -227,7 +254,9 @@ describe('Pre-upgrade snapshot + data-aware rollback (#284 Phase 1)', () => {
     await deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(drafts, '2.0.0'), options: { autoStart: false } });
 
     expect(docker.execs.filter((e) => e.command.includes('pg_dump'))).toHaveLength(0);
-    expect(existsSync(snapshotsPath(dep.deploymentId))).toBe(false);
+    const snap = await soleSnapshot(dep.deploymentId);
+    expect(snap.hasArchive).toBe(false);
+    expect(snap.meta.empty).toBe(true);
   });
 
   test('data-aware rollback restores the pre-upgrade app data', async () => {

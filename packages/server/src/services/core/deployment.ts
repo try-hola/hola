@@ -423,6 +423,21 @@ interface SnapshotMeta {
   fromVersion?: string;
   createdAt: string;
   sizeBytes: number;
+  /**
+   * The outgoing release had no app data to capture, so there is no
+   * `data.tar.gz` beside this record (F09/#524).
+   *
+   * Recorded rather than left implicit because "no snapshot exists" and "the
+   * snapshot is legitimately empty" have OPPOSITE correct behaviours at restore
+   * time, and the old code could not tell them apart: both looked like an
+   * absent directory. A rollback to a release that genuinely held no data has
+   * nothing to restore and must proceed; a rollback to a release whose capture
+   * never happened must REFUSE, because proceeding leaves the newer release's
+   * data in place and reports success. Writing the marker is also what makes
+   * `snapshot: true` an honest promise — the operator asked for a snapshot and
+   * gets either an archive or a recorded, auditable reason there is none.
+   */
+  empty?: boolean;
 }
 
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
@@ -564,7 +579,19 @@ export interface DeploymentService extends HealthCheckable {
    *  installed, and which apps does it cover?". */
   getContracts(): Promise<GetContractsResponse>;
   updateDeployment(deploymentId: string, request: PatchDeploymentRequest): Promise<PatchDeploymentResponse>;
-  deleteDeployment(deploymentId: string): Promise<void>;
+  /**
+   * Uninstall. Refuses (409 `DEPLOYMENT_BUSY`) while lifecycle work is in
+   * flight, and refuses (409 `TEARDOWN_FAILED`) when the containers cannot be
+   * confirmed stopped — removing the data root out from under a live database
+   * is the F09 failure this closes.
+   *
+   * `force` is the deliberate, separate escape hatch for a genuinely wedged
+   * container: it cancels queued work, does NOT wait for the lifecycle lock (a
+   * stuck job would hold it forever, which is the situation force exists for),
+   * and removes storage and data regardless of what `docker compose down` said.
+   * It can orphan containers. Never a default, never a retry.
+   */
+  deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void>;
 
   // Deployment actions
   executeAction(deploymentId: string, request: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse>;
@@ -901,12 +928,19 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * Tear down a deployment's running containers (`docker compose down`).
    * Base is a no-op; the real service overrides it. Called synchronously during
    * delete BEFORE {@link removeStorage} so the compose file still exists on disk.
-   * A failure here is non-fatal — deletion must always proceed — and, crucially,
-   * it must NOT re-persist the deployment, so it never leaves an `error` tombstone
-   * for a record that is being removed.
+   *
+   * It THROWS when the stop cannot be confirmed (F09). It used to log the
+   * failure and let deletion proceed to remove storage and the data root — an
+   * acknowledged, written-down decision to delete a live database's files out
+   * from under it. `force` restores the old tolerance, as an explicit operator
+   * choice rather than the default.
+   *
+   * It must still never re-persist the deployment, so it leaves no `error`
+   * tombstone for a record being removed.
    */
-  protected async teardownContainers(deploymentId: string): Promise<void> {
+  protected async teardownContainers(deploymentId: string, options?: { force?: boolean }): Promise<void> {
     void deploymentId;
+    void options;
   }
 
   /** Rehydrate persisted deployments/releases from storage exactly once. */
@@ -1157,6 +1191,37 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   ): Promise<{ version?: string; channel: string }> {
     const detail = options?.detail ?? (await this.getDeployment(deploymentId));
     return { version: requested ?? detail.latestVersion, channel: detail.channel ?? STABLE_CHANNEL };
+  }
+
+  /**
+   * Refuse a state-carrying operation while this deployment already has
+   * lifecycle work queued or running (F10).
+   *
+   * Which operations refuse, and which simply queue, is a deliberate split:
+   *
+   *   - `promote`, `rollback` and `delete` REFUSE. Each is decided against a
+   *     release pointer or a data set that the in-flight job is about to
+   *     change, so running it afterwards would apply a decision the operator
+   *     made about a state that no longer exists — a rollback to "the previous
+   *     release" resolved before a promote landed means something different
+   *     after it. Refusing hands the operator the fact ("something is already
+   *     running") instead of a silently re-aimed action.
+   *   - `start`, `stop` and `restart` QUEUE. They name no release and destroy
+   *     nothing; "stop it when the promote finishes" is a coherent and usually
+   *     intended request. They are serialized, not rejected.
+   *
+   * This check is advisory — it races itself, and two simultaneous callers can
+   * both see an idle deployment. Correctness comes from the lock the dispatcher
+   * and `runExclusive` share; this exists so the common case is a clear 409
+   * rather than a surprise.
+   */
+  protected assertNotBusy(deploymentId: string, operation: string): void {
+    if (!this.jobService.isDeploymentBusy(deploymentId)) return;
+    throw new ConflictError(
+      `Another operation is already running for this deployment; ${operation} was not started. ` +
+        `Wait for it to finish (or cancel it) and retry.`,
+      { code: 'DEPLOYMENT_BUSY', deploymentId, operation },
+    );
   }
 
   private countReleases(deploymentId: string): number {
@@ -1555,6 +1620,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async promote(deploymentId: string, request: PromoteRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
+    // A promote decides which release becomes current and captures the data of
+    // the one it replaces; both are meaningless if another job is concurrently
+    // moving the same pointer (F10).
+    this.assertNotBusy(deploymentId, 'promote');
     const releaseId = crypto.randomUUID();
 
     this.logger.info('Promoting new release onto deployment', { deploymentId, releaseId, draftId: request.draftId });
@@ -1591,21 +1660,41 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     // Pre-upgrade snapshot (#284 Phase 1): capture the app data BEFORE switching
     // the release, keyed by the outgoing release so a later data-aware rollback to
-    // it restores this exact state. Always for `preUpgradeBackup: "required"`,
-    // opt-in otherwise. Fail-closed only when required (don't silently upgrade a
-    // stack the operator asked to be snapshotted); best-effort otherwise.
+    // it restores this exact state.
+    //
+    // A capture failure now FAILS THE PROMOTE in both cases (#524). It used to
+    // fail closed only for `preUpgradeBackup: "required"` and warn otherwise —
+    // including when the operator had explicitly passed `snapshot: true`. Those
+    // two are not the same requirement expressed twice: `preUpgradeBackup` is
+    // the APP PACKAGER's default for everyone who upgrades this app, while
+    // `snapshot: true` is THIS operator's instruction for THIS upgrade. An
+    // instruction that can be silently declined is not an instruction, and this
+    // one composed with the rollback's own silent no-op into the loss the issue
+    // describes: ask for a snapshot, get none; later ask for a data-aware
+    // rollback, get none, and be told it succeeded. Either half alone still
+    // leaves a silent failure, so both are closed.
+    //
+    // Operator-visible change: an upgrade requested with a snapshot now stops
+    // rather than proceeding unprotected. Re-run without the snapshot to accept
+    // that risk explicitly.
+    //
+    // The capture runs under the deployment's lifecycle lock: it executes the
+    // app's `backup@1` preHooks in its live containers and tars its data root,
+    // which must not interleave with a job doing the same (F10).
     const backupRequired = artifacts?.manifest.upgrade?.preUpgradeBackup === 'required';
     if ((backupRequired || request.snapshot === true) && deployment.currentReleaseId) {
+      const currentReleaseId = deployment.currentReleaseId;
       try {
-        await this.capturePreUpgradeSnapshot(deploymentId, deployment.currentReleaseId, deployment.version);
+        await this.jobService.runExclusive(deploymentId, () =>
+          this.capturePreUpgradeSnapshot(deploymentId, currentReleaseId, deployment.version),
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (backupRequired) {
-          throw new ValidationError(
-            `Pre-upgrade snapshot failed and this upgrade requires one (preUpgradeBackup: required): ${msg}`,
-          );
-        }
-        this.logger.warn('Pre-upgrade snapshot failed (continuing — not required)', { deploymentId, error: msg });
+        throw new ValidationError(
+          backupRequired
+            ? `Pre-upgrade snapshot failed and this upgrade requires one (preUpgradeBackup: required): ${msg}`
+            : `Pre-upgrade snapshot failed and one was requested (snapshot: true): ${msg}`,
+        );
       }
     }
 
@@ -1928,29 +2017,66 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return { ok: true, ...(warnings ? { warnings } : {}) };
   }
 
-  async deleteDeployment(deploymentId: string): Promise<void> {
+  async deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void> {
     await this.ensureLoaded();
+    const force = options?.force === true;
     // Capture the live record up front so its provisioned-auth ref is available
     // for teardown before in-memory/storage state is removed.
-    const deployment = this.requireDeployment(deploymentId);
+    this.requireDeployment(deploymentId);
 
-    this.logger.info('Deleting deployment', { deploymentId });
+    // Uninstall destroys data, so it is one of the operations that REFUSES to
+    // queue behind in-flight work rather than running after it (F10): the
+    // operator decided to delete against a state a running promote is about to
+    // change. `force` skips the check — a wedged job is exactly what it is for.
+    if (!force) this.assertNotBusy(deploymentId, 'delete');
 
+    // Nothing may run for this deployment again: drop queued jobs (one that
+    // outlived its record falls through to the simulated executor and reports
+    // `completed` having done nothing) and flag any running one.
+    await this.jobService.discardDeploymentJobs(deploymentId);
+
+    // The removal itself holds the deployment's lifecycle lock — delete is the
+    // work the finding singles out as bypassing the queue, so it takes the same
+    // lock the queue's dispatcher does. `force` deliberately does NOT wait for
+    // it: a stuck job holds the lock indefinitely, and an operator cannot be
+    // left with an unremovable deployment.
+    if (force) return this.performDelete(deploymentId, true);
+    return this.jobService.runExclusive(deploymentId, () => this.performDelete(deploymentId, false));
+  }
+
+  private async performDelete(deploymentId: string, force: boolean): Promise<void> {
+    // Re-read under the lock: the record may have gone while we waited.
+    const deployment = this.deployments.get(deploymentId);
+    if (!deployment) return;
+
+    this.logger.info('Deleting deployment', { deploymentId, force });
+
+    // Tear down running containers synchronously, in-line, BEFORE we remove the
+    // runtime directory below. Previously this enqueued a fire-and-forget `stop`
+    // job and returned immediately; the job's `docker compose down` then raced
+    // `removeStorage` and frequently ran after the compose file was already
+    // deleted. That failure path re-persisted the (already removed) deployment
+    // with status `error`, leaving a stuck tombstone after a "successful"
+    // uninstall. Running the teardown here guarantees compose-down sees the file
+    // and that no late job can resurrect the record.
+    //
+    // A failure now ABORTS the delete (F09) instead of being logged and stepped
+    // over: every line below removes something, and the deployment record is
+    // what makes the containers findable again. Retaining it is the
+    // "recoverable deployment state on failure" the finding asks for.
     try {
-      // Tear down running containers synchronously, in-line, BEFORE we remove the
-      // runtime directory below. Previously this enqueued a fire-and-forget `stop`
-      // job and returned immediately; the job's `docker compose down` then raced
-      // `removeStorage` and frequently ran after the compose file was already
-      // deleted. That failure path re-persisted the (already removed) deployment
-      // with status `error`, leaving a stuck tombstone after a "successful"
-      // uninstall. Running the teardown here guarantees compose-down sees the file
-      // and that no late job can resurrect the record.
-      await this.teardownContainers(deploymentId);
+      await this.teardownContainers(deploymentId, { force });
     } catch (error) {
-      this.logger.warn('Failed to stop deployment before deletion', {
-        deploymentId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn('Failed to stop deployment before deletion', { deploymentId, error: message });
+      if (!force) {
+        throw new ConflictError(
+          `Refusing to uninstall '${deployment.name}': its containers could not be stopped, and removing its data ` +
+            `while they are running risks corrupting it. Stop the app and retry, or uninstall with force to remove ` +
+            `the deployment anyway (this can leave orphaned containers). Cause: ${message}`,
+          { code: 'TEARDOWN_FAILED', deploymentId },
+        );
+      }
     }
 
     // Tear down auth artifacts (OIDC client, etc.). Must never block deletion:
@@ -2023,6 +2149,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async rollback(deploymentId: string, request: RollbackRequest): Promise<RollbackResponse> {
     await this.ensureLoaded();
     const deployment = this.requireDeployment(deploymentId);
+    // "The previous release" is resolved below against state a concurrent
+    // promote is about to change, and a data-aware rollback then wipes the data
+    // root. Neither may be decided against a moving target (F10).
+    this.assertNotBusy(deploymentId, 'rollback');
 
     this.logger.info('Rolling back deployment', { deploymentId, targetReleaseId: request.targetReleaseId });
 
@@ -2047,6 +2177,22 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     const previousReleaseId = deployment.currentReleaseId || '';
 
+    // Activate the target release BEFORE enqueuing the job that materializes it
+    // (#524). These two statements used to be the other way round, and the job
+    // resolves the release to materialize from `deployment.currentReleaseId` —
+    // so the job and this pointer write were in a footrace that the job could
+    // win. When it did, the rollback re-materialized and re-marked the release
+    // it was rolling AWAY from, and reported `completed`. That is not a
+    // hypothetical ordering: it reproduces on demand by delaying this call, and
+    // it failed CI on three consecutive PRs, each time looking like a flake.
+    //
+    // `createFromDraft` and `promote` already promote first; rollback was the
+    // one that did not. The guard in `runLifecycleJob` — which refuses to act
+    // when the job's recorded target is not the active release — is the second,
+    // independent line: if this ordering is ever reverted, that turns the silent
+    // wrong-release materialization into a failed job rather than a lie.
+    await this.promoteRelease(deploymentId, targetReleaseId);
+
     const job = await this.jobService.createJob({
       type: 'start',
       deploymentId,
@@ -2060,9 +2206,6 @@ abstract class InMemoryDeploymentService implements DeploymentService {
         restoreData: request.restoreData === true,
       },
     });
-
-    // Atomically activate the target release (switches the durable current pointer).
-    await this.promoteRelease(deploymentId, targetReleaseId);
 
     deployment.status = 'installing';
     deployment.lifecycleState = 'releasing';
@@ -3297,6 +3440,29 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
+   * Platform-owned scratch space for staged archive extraction (F09):
+   * `<HOLA_APPS_BIND_ROOT>/.hola/restore-tmp/`.
+   *
+   * Two properties are load-bearing. It is on the SAME FILESYSTEM as every app
+   * data root, so landing a validated tree is a rename rather than a second
+   * full copy. And it is inside the platform's reserved `.hola/` tree, which no
+   * app's `${HOLA_APP_DATA}` mount covers.
+   *
+   * It is deliberately NOT `HOLA_RESTORE_STAGING_ROOT` (spec 008), despite the
+   * similar name and purpose. That directory is a **writable mount handed to a
+   * catalog container** — the `restore-staging` privilege a restore provider
+   * consents to. Staging the operator's own data root there, mid-swap, would
+   * put the single surviving copy of it inside a third-party app's writable
+   * mount for the duration of every rollback: a buggy or compromised provider
+   * could corrupt or delete a restore it has no part in. The whole reason that
+   * root is a sibling of the apps root rather than inside it is to be the
+   * provider's sandbox, and this is not the provider's work.
+   */
+  private restoreStagingDir(): string {
+    return `${this.appsBindRoot()}/${INSTALL_ENV_ROOT_DIR}/restore-tmp`;
+  }
+
+  /**
    * Restore-on-install (spec 007): read the filesystem-derived parts of one
    * deployment's candidate description — `.hola/instance.json` (identity
    * record first, research R5), whether the data root holds app data (the
@@ -3435,6 +3601,48 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
+   * Write one snapshot record — with its `data.tar.gz` when `appRoot` is given,
+   * or as an `empty: true` marker when the outgoing release held no app data.
+   *
+   * Both outcomes go through here so a snapshot directory is never created
+   * without a `meta.json` to describe it, and so the two are impossible to
+   * confuse at restore time (#524). `meta.json` is written LAST in the archive
+   * case: `listSnapshots` skips a directory with no readable meta, so a crash
+   * mid-tar leaves a half-written archive that is invisible rather than one a
+   * rollback would try to restore.
+   */
+  private async writeSnapshotMeta(
+    deploymentId: string,
+    fromReleaseId: string,
+    fromVersion: string | undefined,
+    opts: { appRoot?: string; empty?: boolean },
+  ): Promise<void> {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const snapshotId = `${stamp}-${fromReleaseId.slice(0, 8)}`;
+    const relDir = `${this.snapshotsDir(deploymentId)}/${snapshotId}`;
+    await this.storageService.ensureDir(relDir);
+
+    let sizeBytes = 0;
+    if (opts.appRoot) {
+      const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
+      await tarGzipDir(opts.appRoot, tarPath);
+      sizeBytes = await fileSize(tarPath);
+    }
+
+    const meta: SnapshotMeta = {
+      snapshotId,
+      deploymentId,
+      fromReleaseId,
+      fromVersion,
+      createdAt: new Date().toISOString(),
+      sizeBytes,
+      ...(opts.empty ? { empty: true } : {}),
+    };
+    await this.storageService.writeFile(`${relDir}/meta.json`, JSON.stringify(meta, null, 2));
+    this.logger.info('Captured pre-upgrade snapshot', { deploymentId, snapshotId, sizeBytes, empty: opts.empty === true });
+  }
+
+  /**
    * Snapshot a deployment's app data (file-level tar) keyed by the release that
    * is active right now (`fromReleaseId`) — the rollback target a later
    * data-aware rollback restores it for. No-ops when there's no app data yet (a
@@ -3465,6 +3673,15 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // extracting, so a near-empty archive DELETES it. Both are silent.
     if (!(await dirHasContents(appRoot, [INSTALL_MARKERS_DIR]))) {
       this.logger.info('No app data to snapshot (fresh deployment)', { deploymentId });
+      // Record the fact rather than returning silently (#524). "No snapshot
+      // was taken" and "the snapshot is legitimately empty" used to be the same
+      // observable state — an absent directory — and they have opposite correct
+      // behaviours at rollback time, where one must refuse and the other must
+      // proceed. Writing an `empty` marker is what lets the restore tell them
+      // apart, and it is also what keeps a requested `snapshot: true` honest:
+      // the operator gets an archive or a recorded reason there is none, never
+      // nothing at all.
+      await this.writeSnapshotMeta(deploymentId, fromReleaseId, fromVersion, { empty: true });
       return;
     }
 
@@ -3499,24 +3716,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
 
     try {
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const snapshotId = `${stamp}-${fromReleaseId.slice(0, 8)}`;
-      const relDir = `${this.snapshotsDir(deploymentId)}/${snapshotId}`;
-      await this.storageService.ensureDir(relDir);
-
-      const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snapshotId, 'data.tar.gz');
-      await tarGzipDir(appRoot, tarPath);
-
-      const meta: SnapshotMeta = {
-        snapshotId,
-        deploymentId,
-        fromReleaseId,
-        fromVersion,
-        createdAt: new Date().toISOString(),
-        sizeBytes: await fileSize(tarPath),
-      };
-      await this.storageService.writeFile(`${relDir}/meta.json`, JSON.stringify(meta, null, 2));
-      this.logger.info('Captured pre-upgrade snapshot', { deploymentId, snapshotId, sizeBytes: meta.sizeBytes });
+      await this.writeSnapshotMeta(deploymentId, fromReleaseId, fromVersion, { appRoot });
       await this.pruneSnapshots(deploymentId);
     } finally {
       // postHook always runs (clean up the dump), even if the capture threw.
@@ -4238,9 +4438,23 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   /**
    * Restore the most recent snapshot taken when `targetReleaseId` was active,
-   * replacing the app-data dir. Returns false (with a warning) when none exists —
-   * the caller then proceeds with a containers-only rollback. Callers MUST stop
-   * the app's containers first (the data dir is wiped and replaced).
+   * replacing the app-data dir. Callers MUST stop the app's containers first
+   * (the data dir is wiped and replaced) — the rollback branch proves that
+   * before calling.
+   *
+   * **A missing snapshot is a refusal, not a warning** (F09, #524). This used
+   * to log and return false, and the job then reported `completed`: an operator
+   * who asked for a data-aware rollback got a containers-only one, was told it
+   * succeeded, and was left believing their data had been rolled back. The old
+   * image then booted against the newer release's forward-migrated data —
+   * precisely the outcome data-aware rollback exists to prevent. There is no
+   * safe silent fallback here: restoring nothing is not a lesser form of
+   * restoring, it is a different operation the operator did not ask for. They
+   * can still run a plain rollback, which is that operation, named.
+   *
+   * A snapshot recorded as `empty` is a different fact and is honoured: the
+   * outgoing release genuinely held no app data, so there is nothing to put
+   * back and nothing to wipe.
    */
   private async restoreAppDataSnapshot(
     deploymentId: string,
@@ -4249,12 +4463,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   ): Promise<boolean> {
     const snap = (await this.listSnapshots(deploymentId)).find((m) => m.fromReleaseId === targetReleaseId);
     if (!snap) {
-      await log('warn', 'No pre-upgrade snapshot for this release — rolling back containers only (app data not restored).');
+      throw new Error(
+        `No pre-upgrade snapshot exists for release ${targetReleaseId}, so its app data cannot be restored. ` +
+          `Nothing was changed. Roll back without data restore to move the containers only.`,
+      );
+    }
+    if (snap.empty) {
+      await log('info', `Pre-upgrade snapshot ${snap.snapshotId} recorded no app data for this release — nothing to restore.`);
       return false;
     }
     const tarPath = this.storageService.resolveHolaPath('deployments', deploymentId, 'snapshots', snap.snapshotId, 'data.tar.gz');
     await log('info', `Restoring app data from pre-upgrade snapshot ${snap.snapshotId}…`);
-    await restoreTarGzInto(tarPath, this.appRootFor(deploymentId));
+    await restoreTarGzInto(tarPath, this.appRootFor(deploymentId), this.restoreStagingDir());
     return true;
   }
 
@@ -5081,12 +5301,15 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // payload (#489).
       await this.markRestoreStarted(deployment);
 
-      // Step 4 (R7): extract straight into the target root. Root-relative on
-      // both sides (`tar -C <dir> .` in, `-C <dir>` out) — no intermediate
-      // extracted copy, so peak additional disk cost is one compressed
-      // archive (SC-013). This `rm -rf`s the target root, destroying the
-      // marker `materializeCompose` just wrote — step 7 rewrites it.
-      await restoreTarGzInto(captureStagingPath, targetAppRoot);
+      // Step 4 (R7): extract the capture for the target root. Root-relative on
+      // both sides (`tar -C <dir> .` in, `-C <dir>` out). Extraction is now
+      // STAGED (F09) rather than landing directly on a pre-wiped target, so a
+      // truncated or corrupt capture fails with the target untouched; peak
+      // additional disk cost rises from one compressed archive to that plus one
+      // extracted copy (SC-013 revised). The swap still replaces the whole
+      // root, destroying the marker `materializeCompose` just wrote — step 7
+      // rewrites it.
+      await restoreTarGzInto(captureStagingPath, targetAppRoot, this.restoreStagingDir());
     } finally {
       // The whole staging DIRECTORY, not just the archive inside it — deleting
       // only the file left an empty `capture-staging/` under every restored
@@ -5401,6 +5624,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       await this.loggingService.logDeployment(deploymentId, level, message);
     };
 
+    // Immutable target release (F10, #524). A deploy or rollback job records
+    // WHICH release it was created to bring up; everything downstream —
+    // `materializeCompose`, `provisionAuth`, `writeInstanceMarkers` — reads the
+    // deployment's CURRENT release instead. Those agree only as long as nothing
+    // moved the pointer between enqueue and dispatch, which is exactly what the
+    // #524 defect did. Rather than thread a release id through a dozen call
+    // sites (filed separately), assert the agreement here and fail loudly: a
+    // job that would materialize a release other than the one it was created
+    // for has no correct behaviour available to it, and reporting `completed`
+    // after doing the wrong thing is the outcome being removed.
+    const targetReleaseId = (ctx.payload.targetReleaseId as string | undefined)
+      ?? (ctx.payload.releaseId as string | undefined);
+    if (targetReleaseId && deployment.currentReleaseId && deployment.currentReleaseId !== targetReleaseId) {
+      throw new Error(
+        `Refusing ${action}: this job targets release ${targetReleaseId} but ${deployment.currentReleaseId} is now ` +
+          `active. Another operation changed the active release after this one was queued.`,
+      );
+    }
+
     await logBoth('info', `Starting deployment action: ${action}`);
     await ctx.setProgress(10);
 
@@ -5461,13 +5703,26 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // up, stop the current containers and restore the app-data snapshot taken
         // when the target was last active. Stopping first is essential — we wipe
         // and replace the data dir, which must not happen under live containers.
-        // No matching snapshot ⇒ a warning + a containers-only rollback (the data
-        // is left as-is rather than failing the rollback outright).
+        //
+        // That invariant is now ENFORCED rather than merely asserted in a
+        // comment (F09). `composeDown`'s result used to be discarded entirely,
+        // so a stop that failed — a container with a wedged shutdown hook, a
+        // daemon that timed out — proceeded straight into wiping the data root
+        // of a still-running database. The check is point-in-time on its own,
+        // which is why it is only half the fix: per-deployment serialization
+        // (F10) is what stops a concurrent `start` bringing the containers back
+        // up between this line and the restore.
         if (action === 'rollback' && ctx.payload.restoreData === true) {
-          const targetReleaseId = (ctx.payload.targetReleaseId as string | undefined) ?? deployment.currentReleaseId ?? '';
+          const restoreTarget = targetReleaseId ?? deployment.currentReleaseId ?? '';
           await logBoth('info', 'Data-aware rollback: stopping containers before restoring app data…');
-          await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName, deployment.selectedProfiles);
-          await this.restoreAppDataSnapshot(deploymentId, targetReleaseId, logBoth);
+          const down = await this.dockerService.composeDown(this.runtimeDir(deploymentId), projectName, deployment.selectedProfiles);
+          if (!down.success) {
+            throw new Error(
+              `Refusing to restore app data: the containers could not be stopped, and replacing the data root under ` +
+                `a live app would corrupt it. Nothing was changed. Cause: ${down.output}`,
+            );
+          }
+          await this.restoreAppDataSnapshot(deploymentId, restoreTarget, logBoth);
         }
 
         // Restore-on-install (spec 007): true for AT MOST one job per
@@ -5927,23 +6182,43 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   }
 
   /**
-   * Run `docker compose down` for a deployment in-line during delete. Tolerates a
-   * compose-down failure (e.g. nothing running, or no compose file): deletion must
-   * proceed regardless. Unlike the lifecycle job, it never touches/persists the
-   * deployment record, so it cannot leave an `error` tombstone for a record that is
-   * being removed.
+   * Run `docker compose down` for a deployment in-line during delete.
+   *
+   * A failure now THROWS (F09), aborting the uninstall before anything is
+   * removed. It used to warn "continuing with teardown" and proceed to delete
+   * the storage tree and the app data root — with a live database potentially
+   * still holding those files open. `force` keeps the old tolerance as an
+   * explicit operator decision.
+   *
+   * Absence is not failure: `docker compose down` exits 0 for a project with
+   * nothing running, so an already-stopped app uninstalls normally. What it
+   * does NOT tolerate is a missing compose file, which the real implementation
+   * reports as an error — hence the `fileExists` check below, so a deployment
+   * whose runtime directory was already cleaned up is still removable without
+   * `force`.
+   *
+   * Unlike the lifecycle job, it never touches/persists the deployment record,
+   * so it cannot leave an `error` tombstone for a record that is being removed.
    */
-  protected override async teardownContainers(deploymentId: string): Promise<void> {
+  protected override async teardownContainers(deploymentId: string, options?: { force?: boolean }): Promise<void> {
+    const runtimeDir = this.runtimeDir(deploymentId);
+    if (!(await this.storageService.fileExists(`${runtimeDir}/docker-compose.yml`))) {
+      this.logger.info('No compose file to tear down during delete', { deploymentId });
+      return;
+    }
     // Carry the install's active profiles (#162) so `down` removes profiled
     // services too rather than orphaning them.
     const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
-    const res = await this.dockerService.composeDown(this.runtimeDir(deploymentId), this.projectName(deploymentId), profiles);
-    if (!res.success) {
-      this.logger.warn('compose down reported a failure during delete; continuing with teardown', {
+    const res = await this.dockerService.composeDown(runtimeDir, this.projectName(deploymentId), profiles);
+    if (res.success) return;
+    if (options?.force) {
+      this.logger.warn('compose down failed during a FORCED delete; removing anyway (containers may be orphaned)', {
         deploymentId,
         output: res.output,
       });
+      return;
     }
+    throw new Error(res.output);
   }
 
   protected override async onDeprovision(deployment: EnhancedDeploymentDetail): Promise<void> {

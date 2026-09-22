@@ -304,6 +304,43 @@ router is emitted. Lifecycle actions — **start / stop / restart / delete** and
 deployment's list, detail, and history views. See the
 [deployment lifecycle](ARCHITECTURE.md#deployment-lifecycle) for the full path.
 
+### One operation at a time, per app
+
+Lifecycle work for a single deployment is **serialized**: only one job for a
+given app runs at a time, and work for other apps continues in parallel. Two
+consequences you will see:
+
+- **`start`, `stop` and `restart` queue.** Asking for a stop while an upgrade is
+  still running is accepted; it runs when the upgrade finishes.
+- **Upgrade, rollback and uninstall are refused while something is running**,
+  with `409 DEPLOYMENT_BUSY`. Each of those is a decision made about a specific
+  release or a specific set of data, and the job in flight is about to change
+  both — so they tell you rather than silently re-aim themselves. Wait for the
+  running job (the detail page's history shows it), or cancel it, then retry.
+
+### Uninstall can now refuse — and how to force it
+
+Uninstall **stops the app first and checks that the stop succeeded**. If Docker
+cannot stop the containers, nothing is removed: not the data root, not the
+record, not the auth objects. Previously the failure was logged and the removal
+continued, which could delete a running database's files out from under it.
+
+You will see a message naming the cause and the deployment survives, so you can
+fix the container and retry. When a container is genuinely wedged and cannot be
+stopped at all, use the explicit force path:
+
+```bash
+hola uninstall <deployment-id> --force
+```
+
+(Dashboard: the removal dialog offers **Force remove** after a stop failure. API:
+`DELETE /api/deployments/:id?force=true`.)
+
+Forcing removes the data, auth and record **regardless**, and can leave
+containers running that Hola no longer knows about — check `docker ps` afterwards
+and clean up by hand. It is not a retry of a normal uninstall; use it only when
+you have seen the refusal and understand why.
+
 ### Single sign-on (SSO)
 
 SSO is the default. `HOLA_AUTH_MODE=authentik` deploys **Authentik** alongside the
@@ -437,6 +474,39 @@ docker run --rm -v hola-data:/data -v "$PWD":/backup alpine \
 
 > Scheduled/automatic backups and restore orchestration through the UI are
 > **roadmap**; today backup/restore is the manual volume snapshot above.
+
+### Pre-upgrade snapshots and data-aware rollback
+
+Upgrading an app can capture a **pre-upgrade snapshot** of its data root, keyed
+by the release being replaced, so a later rollback can put the data back as well
+as the containers. It happens when the app's package declares
+`preUpgradeBackup: required`, or when you ask for one (`snapshot: true` /
+`hola upgrade --snapshot`).
+
+Two behaviours changed here, both because the old ones could report success
+having done nothing:
+
+- **A requested snapshot that cannot be taken now fails the upgrade.** It used
+  to warn and upgrade anyway unless the package said `required`. `required` is
+  the app packager's default for everyone; asking for a snapshot is *your*
+  instruction for *this* upgrade, and an instruction that can be silently
+  declined is not one. If you would rather upgrade without protection, re-run
+  without the snapshot — that is now a decision you make, not one made for you.
+- **A data-aware rollback with no snapshot to restore now fails.** It used to
+  log and report the job `completed`, leaving you believing the data had been
+  rolled back when only the containers had. Roll back without data restore if
+  the containers are what you want moved.
+
+An app that had written no data when the snapshot was taken records an empty
+snapshot rather than nothing at all, so rolling back to it correctly does
+nothing to your data instead of refusing.
+
+Restores are **staged**: the archive is extracted and checked in a scratch
+directory, and only then swapped into place, with the original preserved until
+the swap succeeds. A corrupt or truncated archive fails with your data
+untouched. The cost is transient disk — during a restore the host holds the
+archive plus a second copy of the data root — so size the filesystem holding the
+apps root accordingly.
 
 ### App backups and coverage
 
