@@ -183,7 +183,10 @@ hola install <appId>
 signature verification to check, and **no bundle should be understood as
 cryptographically verified today.** What the allowlist above gives you is a
 typo-squat guard plus registry TLS and GHCR's own integrity — not publisher
-authentication.
+authentication. (The catalog-source badge in Settings reads **first-party** for
+Hola's own catalog for the same reason: the underlying value is the word
+`verified`, but it is a provenance label with no bearing on signatures, and a
+green "verified" badge next to a catalog invited exactly the wrong reading.)
 
 Until [#527](https://github.com/try-hola/hola/issues/527) lands (the catalog
 publishing cosign signatures), the platform's job is to say so honestly rather

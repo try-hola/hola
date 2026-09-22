@@ -208,8 +208,12 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   because it is harmful, but because there is nothing signed for it to check.
   An unrecognised `HOLA_SIGNATURE_POLICY` resolves to `required`, not the
   default — it used to be a blind cast that behaved as `optional`, so a typo
-  downgraded the host silently. Catalog signing is #527; surfacing the verdict
-  beyond the server log is #528.
+  downgraded the host silently. The one other place the product *said*
+  "verified" was the catalog-source badge — `CatalogSourceTrust = 'verified' |
+  'custom'` is a provenance label ("Hola's own catalog") that predates any
+  signature work, so the dashboard now renders it as **first-party** (wire value
+  unchanged). Catalog signing is #527; surfacing the verdict beyond the server
+  log is #528.
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`
