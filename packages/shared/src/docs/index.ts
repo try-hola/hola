@@ -19,9 +19,15 @@ export * from './migration-tracker';
 export const DOCUMENTATION_CONFIG = {
   title: 'Hola API Documentation',
   version: '1.0.0',
-  baseUrl: process.env.NODE_ENV === 'production' 
-    ? 'https://api.try-hola.com' 
-    : 'http://localhost:3001',
+  // `@hola/shared` is imported by the browser bundle as well as by the server,
+  // and this is a top-level evaluation: a bare `process.env` here is a
+  // ReferenceError the moment the barrel is pulled into the dashboard. Read it
+  // off `globalThis` so the absence is expressed in the type.
+  baseUrl:
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+      ?.NODE_ENV === 'production'
+      ? 'https://api.try-hola.com'
+      : 'http://localhost:3001',
   
   // Feature flags for documentation components
   features: {

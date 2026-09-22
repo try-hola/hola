@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { globalCache, type TimestampedEntry } from '../utils/cache';
 import type { GetCatalogAppsRequest, GetCatalogAppsResponse, GetCatalogAppVersionsResponse, GetCatalogAppResponse } from '@hola/shared';
 
 // StrictMode-compatible hook for catalog apps using the same proven pattern
@@ -22,13 +22,13 @@ export function useCatalogAppsApi(params: GetCatalogAppsRequest) {
 
   // EXACTLY the same fetchData pattern that works for deployments
   const fetchData = React.useCallback(async () => {
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetCatalogAppsResponse>>(cacheKey);
     const now = Date.now();
     
     // Check cache (30 second TTL for catalog)
     if (cached && (now - cached.timestamp) < 30000) {
       setState({
-        data: cached.data as GetCatalogAppsResponse,
+        data: cached.data,
         loading: false,
         error: null,
       });
@@ -93,13 +93,13 @@ export function useCatalogAppVersionsApi(appId: string) {
   const fetchData = React.useCallback(async () => {
     if (!appId) return;
     
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetCatalogAppVersionsResponse>>(cacheKey);
     const now = Date.now();
     
     // Check cache (60 second TTL for versions)
     if (cached && (now - cached.timestamp) < 60000) {
       setState({
-        data: cached.data as GetCatalogAppVersionsResponse,
+        data: cached.data,
         loading: false,
         error: null,
       });
@@ -162,13 +162,13 @@ export function useCatalogAppApi(appId: string, source?: string) {
   const fetchData = React.useCallback(async () => {
     if (!appId) return;
 
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetCatalogAppResponse>>(cacheKey);
     const now = Date.now();
 
     // 60 second TTL, same as versions — this is listing metadata, not
     // per-install state.
     if (cached && (now - cached.timestamp) < 60000) {
-      setState({ data: cached.data as GetCatalogAppResponse, loading: false, error: null });
+      setState({ data: cached.data, loading: false, error: null });
       return;
     }
 

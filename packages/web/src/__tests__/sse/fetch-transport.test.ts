@@ -28,7 +28,7 @@ afterEach(() => {
 describe('SSE fetch transport', () => {
   it('attaches the Bearer token and dispatches a named message event', async () => {
     setAuthTokenGetter(() => 'tok-123');
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       streamResponse([
         'event: message\ndata: {"type":"log","data":{"timestamp":"t","service":"web","level":"info","message":"hello"}}\n\n',
       ]),
@@ -44,7 +44,7 @@ describe('SSE fetch transport', () => {
 
     await vi.waitFor(() => expect(events).toHaveLength(1));
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const init = fetchMock.mock.calls[0]![1]!;
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
     expect(init.credentials).toBe('include');
     expect(events[0]).toMatchObject({ type: 'log', data: { message: 'hello' } });

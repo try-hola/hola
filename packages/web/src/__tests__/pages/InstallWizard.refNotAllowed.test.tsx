@@ -1,8 +1,7 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { CreateDraftResponse, RefNotAllowedDetails } from '@hola/shared';
+import type { CreateDraftResponse, RefNotAllowedDetails, UpdateCatalogSourceRequest } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 
 /**
@@ -52,7 +51,7 @@ const catalogSources = {
       { id: 'pofallon', name: 'pofallon', type: 'index-url' as const, url: 'https://example.test/catalog.json', trust: 'custom' as const, enabled: true, allowRegistries: ['ghcr.io/other/*'] },
     ],
   })),
-  update: vi.fn(async () => ({ id: 'pofallon', name: 'pofallon', type: 'index-url' as const, url: 'https://example.test/catalog.json', trust: 'custom' as const, enabled: true })),
+  update: vi.fn(async (_id: string, _patch: UpdateCatalogSourceRequest) => ({ id: 'pofallon', name: 'pofallon', type: 'index-url' as const, url: 'https://example.test/catalog.json', trust: 'custom' as const, enabled: true })),
 };
 
 // Restore-on-install (spec 007): the wizard's new first step reads this
@@ -113,10 +112,10 @@ describe('InstallWizard REF_NOT_ALLOWED recovery', () => {
     fireEvent.click(allow);
 
     await waitFor(() => expect(catalogSources.update).toHaveBeenCalled());
-    const [sourceId, patch] = catalogSources.update.mock.calls[0] as [string, { allowRegistries: string[] }];
+    const [sourceId, patch] = catalogSources.update.mock.calls[0]!;
     expect(sourceId).toBe('pofallon');
     // Merged with the source's existing consent — patching must never revoke it.
-    expect([...patch.allowRegistries].sort()).toEqual(['ghcr.io/other/*', 'ghcr.io/pofallon/*']);
+    expect([...(patch.allowRegistries ?? [])].sort()).toEqual(['ghcr.io/other/*', 'ghcr.io/pofallon/*']);
 
     // The install resumes on its own: no reload, no re-navigating the catalog.
     await waitFor(() => expect(draftsApi.create).toHaveBeenCalledTimes(2));

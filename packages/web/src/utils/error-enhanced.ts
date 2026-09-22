@@ -4,6 +4,7 @@
 import type { ErrorResponse as SharedErrorResponse } from '@hola/shared';
 
 import { getAuthToken, notifyUnauthorized, refreshAuthToken } from './auth-token';
+import { isTestEnv } from './runtime-env';
 
 export type ErrorResponse = SharedErrorResponse;
 
@@ -328,8 +329,7 @@ export async function enhancedFetch(
 
   // Determine retry configuration
   // In test environments we disable automatic retries to keep tests fast and deterministic
-  const isTestEnv = typeof process !== 'undefined' && (process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test');
-  const defaultConfig = isTestEnv ? null : DEFAULT_RETRY_CONFIGS[lastError.type];
+  const defaultConfig = isTestEnv() ? null : DEFAULT_RETRY_CONFIGS[lastError.type];
   // If in test env but caller explicitly requests retries (maxAttempts > 1), honor it.
   const explicitWantsRetry = retryConfig && typeof retryConfig.maxAttempts === 'number' && retryConfig.maxAttempts > 1;
   const baseConfig = defaultConfig || (explicitWantsRetry ? DEFAULT_RETRY_CONFIGS[lastError.type] || {

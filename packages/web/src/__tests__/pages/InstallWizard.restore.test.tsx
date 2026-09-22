@@ -1,8 +1,7 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { CreateDraftRequest, CreateDraftResponse, Draft, ListRestoreCandidatesResponse } from '@hola/shared';
+import type { CreateDeploymentFromDraftRequest, CreateDraftRequest, CreateDraftResponse, Draft, ListRestoreCandidatesResponse } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 
 // Restore-on-install (spec 007). Covers quickstart.md scenarios 44-48 (mode
@@ -22,7 +21,7 @@ const draftsApi = {
     const appEnv = carried
       ? [{ key: 'ADMIN_PASSWORD', value: 'carried-secret-value', isSecret: true, label: 'Admin password' }]
       : [{ key: 'ADMIN_PASSWORD', value: '', isSecret: true, label: 'Admin password', generate: { kind: 'hex' as const, length: 4 } }];
-    const draft: Draft = { draftId, appId: 'demo', version: '1.0.0', systemOverrides: {}, appEnv, ports: [] };
+    const draft: Draft = { draftId, appId: 'demo', version: '1.0.0', systemOverrides: {}, appEnv, ports: [], files: [] };
     draftsByChoice.set(draftId, draft);
     return { draftId, app: { id: 'demo', name: 'Demo', icon: '📦' }, systemEnv: [], appEnv, defaults: { ports: [], volumes: [] } };
   }),
@@ -34,7 +33,12 @@ const draftsApi = {
   finalize: vi.fn(async () => ({ spec: {}, checksum: 'x' })),
 };
 
-const create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' }));
+// Declare the request parameter: without it `vi.fn` infers a zero-argument
+// function and every `create.mock.calls[n][0]` assertion below indexes an
+// empty tuple.
+const create = vi.fn(
+  async (_req: CreateDeploymentFromDraftRequest) => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' })
+);
 
 // One lineage, one candidate, WITH a carried environment record.
 const DEFAULT_CANDIDATES_RESPONSE: ListRestoreCandidatesResponse = {
@@ -42,6 +46,9 @@ const DEFAULT_CANDIDATES_RESPONSE: ListRestoreCandidatesResponse = {
   lineages: [{
     lineageId: 'demo-source',
     candidates: [{
+      candidateId: 'demo-source',
+      source: 'deployment',
+      confidence: 'marker',
       deploymentId: 'demo-source',
       lineageId: 'demo-source',
       app: 'demo',
@@ -72,7 +79,7 @@ vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
     deployments: {
-      create: (data: unknown) => create(data),
+      create: (data: CreateDeploymentFromDraftRequest) => create(data),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
     restoreCandidates: (appId: string, version?: string, source?: string, channel?: string) => restoreCandidates(appId, version, source, channel),

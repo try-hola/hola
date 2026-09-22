@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, screen, waitFor } from '@testing-library/react';
-import React from 'react';
 
 // Simple component to test React rendering
 function TestComponent() {

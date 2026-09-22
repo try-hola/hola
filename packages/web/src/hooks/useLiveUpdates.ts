@@ -4,7 +4,7 @@ import * as React from 'react';
 import { useSSE } from './useSSE';
 import { usePoll } from './usePoll';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { globalCache, type TimestampedEntry } from '../utils/cache';
 import type { 
   SSEEvent, 
   Job, 
@@ -198,9 +198,9 @@ export function useLiveDeploymentStatus(deploymentId?: string) {
       // previously wrote `deployment-<id>`, which no reader reads, so the SSE
       // update never reached the cache).
       const cacheKey = `deployment-detail-${deploymentId}`;
-      const cached = globalCache.get(cacheKey);
+      const cached = globalCache.get<TimestampedEntry<DeploymentDetail>>(cacheKey);
       if (cached && cached.data && typeof cached.data === 'object') {
-        const deploymentData = cached.data as DeploymentDetail;
+        const deploymentData = cached.data;
         globalCache.set(cacheKey, {
           ...cached,
           data: {

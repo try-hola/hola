@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -133,8 +132,9 @@ describe('Settings → Pre-release apps', () => {
 
     await waitFor(() => {
       const patchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-        ([input, init]: [RequestInfo | URL, RequestInit?]) =>
-          String(input).includes('/api/settings') && init?.method === 'PATCH'
+        (call) =>
+          String(call[0]).includes('/api/settings') &&
+          (call[1] as RequestInit | undefined)?.method === 'PATCH'
       );
       expect(patchCall).toBeTruthy();
       expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({
@@ -154,8 +154,9 @@ describe('Settings → Pre-release apps', () => {
 
     await waitFor(() => {
       const patchCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-        ([input, init]: [RequestInfo | URL, RequestInit?]) =>
-          String(input).includes('/api/settings') && init?.method === 'PATCH'
+        (call) =>
+          String(call[0]).includes('/api/settings') &&
+          (call[1] as RequestInit | undefined)?.method === 'PATCH'
       );
       expect(patchCall).toBeTruthy();
       expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({

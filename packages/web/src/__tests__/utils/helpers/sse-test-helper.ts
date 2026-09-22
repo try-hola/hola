@@ -9,11 +9,15 @@ import {
   eventSourceController, 
   SSEEventCreators 
 } from '../mocks/controllable-eventsource';
-import type { SSEEvent } from '@hola/shared';
+import type { JobStatus, SSEEvent } from '@hola/shared';
 
 // Factory function for creating controllable EventSource in tests
 export const createControllableEventSourceFactory = () => {
-  return (url: string) => new ControllableEventSource(url) as EventSource;
+  // A deliberate partial double: the client only ever touches `url`,
+  // `readyState`, the three `on*` handlers, `addEventListener`,
+  // `removeEventListener` and `close`, so the double implements exactly those
+  // and nothing else of the DOM interface.
+  return (url: string) => new ControllableEventSource(url) as unknown as EventSource;
 };
 
 // Helper to wait for React state updates
@@ -189,7 +193,7 @@ export class SSETestHelper {
    * Create a job progress sequence for testing
    */
   static createJobProgressSequence(jobId: string, steps = 5): SSEEvent[] {
-    const statuses = ['pending', 'running', 'running', 'running', 'completed'];
+    const statuses: JobStatus[] = ['queued', 'running', 'running', 'running', 'completed'];
     return Array.from({ length: steps }, (_, i) => ({
       type: 'job_update' as const,
       data: {

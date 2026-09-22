@@ -13,15 +13,14 @@ describe('Health API - SDK Migration', () => {
   it('should call health endpoint through SDK adapter', async () => {
     // Mock a successful health response
     mockFetch.mockResolvedValueOnce(createMockResponse({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      version: '1.0.0'
+      ok: true,
+      ts: new Date().toISOString(),
     }));
 
     const result = await sdkAdapter.health();
 
     expect(result).toBeDefined();
-    expect(result.status).toBe('healthy');
+    expect(result.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/health',
@@ -45,9 +44,8 @@ describe('Health API - SDK Migration', () => {
   it('should cache health responses when requested', async () => {
     // Mock response
     mockFetch.mockResolvedValue(createMockResponse({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      version: '1.0.0'
+      ok: true,
+      ts: new Date().toISOString(),
     }));
 
     // First call
@@ -67,9 +65,8 @@ describe('Health API - SDK Migration', () => {
   it('should not cache health responses by default', async () => {
     // Mock response
     mockFetch.mockResolvedValue(createMockResponse({
-      status: 'healthy',
-      timestamp: new Date().toISOString(),
-      version: '1.0.0'
+      ok: true,
+      ts: new Date().toISOString(),
     }));
 
     // First call

@@ -1,55 +1,26 @@
-// Hybrid API interface for gradual migration to SDK adapter
-// This allows us to migrate endpoints incrementally while preserving all behavior
+// Hybrid API interface for the SDK migration.
+//
+// Every endpoint below is served by the SDK adapter. This module used to
+// dispatch each one through a `USE_SDK_FOR.<name> ? sdk : legacy` ternary so
+// endpoints could be cut over one at a time; the cutover finished with every
+// flag set to `true`, and the leftover ternaries were actively harmful — a
+// conditional expression is typed as the union of BOTH branches even when the
+// condition is the literal `true`, so `api.deployments` was typed as the
+// intersection-free union of the SDK surface and the legacy surface and every
+// SDK-only method (`drafts.remove`, `deployments.config`,
+// `deployments.subdomainAvailable`, ...) looked like it did not exist. The
+// legacy client is still used for the shared cache controls below.
 
 import { api as originalApi } from './api';
 import { sdkAdapter } from './sdk-adapter';
 
-// Migration flags to control which endpoints use the SDK adapter
-const USE_SDK_FOR = {
-  health: true,       // ✅ Migrated - simple and safe
-  me: true,           // ✅ Migrated - simple user info  
-  summary: true,      // ✅ Migrated - dashboard data
-  catalog: true,      // ✅ Migrated - read-only catalog data
-  system: true,       // ✅ Migrated - system status reads
-  drafts: true,       // ✅ Migrated - draft operations (create, read, update, validate, finalize)
-  deployments: true,  // ✅ Migrated - deployment operations
-  jobs: true,         // ✅ Migrating now - job monitoring
-  backups: true,      // ✅ Migrating now - backup management
-  notifications: true, // ✅ Migrating now - notification management
-  settings: true,     // ✅ Migrating now - settings management
-} as const;
-
-// Hybrid API that gradually switches to SDK adapter
 export const api = {
-  // Health endpoint - migrated to SDK adapter
-  health: USE_SDK_FOR.health 
-    ? () => sdkAdapter.health(false) // Don't cache health checks
-    : originalApi.health,
-
-  // Me endpoint - not migrated yet  
-  me: USE_SDK_FOR.me
-    ? () => sdkAdapter.me()
-    : originalApi.me,
-
-  // Summary endpoint - not migrated yet
-  summary: USE_SDK_FOR.summary
-    ? () => sdkAdapter.summary()
-    : originalApi.summary,
-
-  // System endpoints - not migrated yet
-  system: USE_SDK_FOR.system
-    ? sdkAdapter.system
-    : originalApi.system,
-
-  // Catalog endpoints - not migrated yet
-  catalog: USE_SDK_FOR.catalog
-    ? sdkAdapter.catalog
-    : originalApi.catalog,
-
-  // Draft endpoints - not migrated yet
-  drafts: USE_SDK_FOR.drafts
-    ? sdkAdapter.drafts
-    : originalApi.drafts,
+  health: () => sdkAdapter.health(false), // Don't cache health checks
+  me: () => sdkAdapter.me(),
+  summary: () => sdkAdapter.summary(),
+  system: sdkAdapter.system,
+  catalog: sdkAdapter.catalog,
+  drafts: sdkAdapter.drafts,
 
   // Capability contract rollup (ADR 0004 Phase 4) — SDK-only, read-only.
   contracts: sdkAdapter.contracts,
@@ -62,32 +33,14 @@ export const api = {
   // Catalog sources (multi-catalog Slice 2) — SDK-only.
   catalogSources: sdkAdapter.catalogSources,
 
-  // Deployment endpoints - not migrated yet
-  deployments: USE_SDK_FOR.deployments
-    ? sdkAdapter.deployments
-    : originalApi.deployments,
+  deployments: sdkAdapter.deployments,
+  jobs: sdkAdapter.jobs,
+  backups: sdkAdapter.backups,
+  notifications: sdkAdapter.notifications,
+  settings: sdkAdapter.settings,
 
-  // Job endpoints - not migrated yet
-  jobs: USE_SDK_FOR.jobs
-    ? sdkAdapter.jobs
-    : originalApi.jobs,
-
-  // Backup endpoints - not migrated yet
-  backups: USE_SDK_FOR.backups
-    ? sdkAdapter.backups
-    : originalApi.backups,
-
-  // Notification endpoints - not migrated yet
-  notifications: USE_SDK_FOR.notifications
-    ? sdkAdapter.notifications
-    : originalApi.notifications,
-
-  // Settings endpoints - not migrated yet
-  settings: USE_SDK_FOR.settings
-    ? sdkAdapter.settings
-    : originalApi.settings,
-
-  // Cache management - delegate to appropriate implementation
+  // Cache management - both implementations keep their own cache, so clearing
+  // one without the other leaves stale reads behind.
   cache: {
     clear: () => {
       originalApi.cache.clear();

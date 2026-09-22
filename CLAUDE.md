@@ -25,6 +25,9 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 ## Commands
 
 - `bun run typecheck` · `bun run lint` · `bun run build` — across all packages.
+  Web's `typecheck` invokes **all three** of its TS projects explicitly
+  (`tsconfig.app.json`, `tsconfig.node.json`, `tsconfig.test.json`); a bare
+  `tsc --noEmit` there checks **nothing** (see F13 below).
 - `bun run test` — server, web AND cli suites (`test:server` / `test:web` /
   `test:cli` run one each). The CLI was missing from this gate until #505: it is
   the only package released as a binary, so it was the one with no CI coverage.
@@ -253,6 +256,36 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   signature work, so the dashboard now renders it as **first-party** (wire value
   unchanged). Catalog signing is #527; surfacing the verdict beyond the server
   log is #528.
+- **The web typecheck checks files now (F13).** `packages/web`'s `typecheck`
+  script ran `tsc --noEmit`, which resolves `tsconfig.json` — a
+  **references-only** file with `"files": []`. A bare `tsc` does **not** traverse
+  project references (only `tsc -b` does), so the command loaded zero files,
+  exited 0, and had done so for the whole life of the package; `vite build`
+  transpiles without typechecking, so nothing else covered it. 167 diagnostics
+  were standing behind the empty gate. The command is now **explicit per
+  project** — `tsc --noEmit -p tsconfig.app.json && … tsconfig.node.json && …
+  tsconfig.test.json` — rather than `tsc -b`, because build mode wants
+  `composite: true` on every referenced project and composite has historically
+  fought `noEmit`, and a second config that *looks* like it checks and does not
+  is the same defect in new clothes. The **environment split** is the other half:
+  tests lived under `src/__tests__`, inside `tsconfig.app.json`'s `include`, so
+  they were typed as browser code with no Node or vitest globals — 63 of the 167
+  were just `Cannot find name 'global'`/`'process'`. The application project now
+  **excludes** test files and pins `"types": []`, so a stray `process` in a
+  component is still an error (it does not exist in a browser, and `@types/node`
+  hoisted into the workspace root would otherwise silently supply it); the new
+  `tsconfig.test.json` extends it and adds `["node", "vitest/globals"]`.
+  Application sources reach the test program only as *imports*, never as root
+  files, so the strict browser-only project stays the one that judges them.
+  Guarded isomorphic reads that genuinely want Node when it is there go through
+  `utils/runtime-env.ts` (`globalThis.process?.env`), which puts the absence in
+  the type instead of asserting it away. The app project also pulls `sdk` and
+  `shared` **source** in through path mapping, so it catches cross-package type
+  errors those packages' own checks cannot — `sdk`'s `me()`/`logs()` returned
+  `unknown`, and `shared/src/docs` evaluated a bare `process.env.NODE_ENV` at
+  module top level in a barrel the browser bundle imports. The meaningful
+  measurement is that the check **fails on a deliberate error**, not that it
+  passes.
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`

@@ -1,8 +1,7 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
-import type { CreateDraftResponse, Draft } from '@hola/shared';
+import type { CreateDeploymentFromDraftRequest, CreateDraftResponse, Draft } from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 
 // #162: an app that declares optional Compose profiles must render them as
@@ -18,10 +17,15 @@ const PROFILES = [
 ];
 
 function makeDraft(overrides: Partial<Draft> = {}): Draft {
-  return { draftId, appId: 'testapp', version: '1.0.0', systemOverrides: {}, appEnv: [], ports: [], profiles: PROFILES, ...overrides };
+  return { draftId, appId: 'testapp', version: '1.0.0', systemOverrides: {}, appEnv: [], ports: [], files: [], profiles: PROFILES, ...overrides };
 }
 
-const create = vi.fn(async () => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' }));
+// Declare the request parameter: without it `vi.fn` infers a zero-argument
+// function and every `create.mock.calls[n][0]` assertion below indexes an
+// empty tuple.
+const create = vi.fn(
+  async (_req: CreateDeploymentFromDraftRequest) => ({ deploymentId: 'dep1', releaseId: 'r1', jobId: 'j1' })
+);
 
 const draftsApi = {
   create: vi.fn(async (): Promise<CreateDraftResponse> => ({
@@ -50,7 +54,7 @@ vi.mock('../../utils/api-hybrid', () => ({
   api: {
     drafts: draftsApi,
     deployments: {
-      create: (data: unknown) => create(data),
+      create: (data: CreateDeploymentFromDraftRequest) => create(data),
       subdomainAvailable: vi.fn(async (subdomain: string) => ({ subdomain, host: `${subdomain}.local.hola`, available: true })),
     },
     restoreCandidates: (appId: string) => restoreCandidates(appId),
@@ -125,7 +129,7 @@ describe('InstallWizard optional Compose profiles (#162)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^install$/i }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
-    const arg = create.mock.calls[0][0] as { profiles?: string[] };
+    const arg = create.mock.calls[0]![0];
     // Both the default-on and the just-enabled profile are sent (order-independent).
     expect([...(arg.profiles ?? [])].sort()).toEqual(['elasticsearch', 'metrics']);
   });

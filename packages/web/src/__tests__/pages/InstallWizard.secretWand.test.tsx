@@ -1,4 +1,3 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -38,6 +37,7 @@ function makeDraft(overrides: Partial<Draft> = {}): Draft {
     systemOverrides: {},
     appEnv: seededEnv,
     ports: [],
+    files: [],
     ...overrides,
   };
 }

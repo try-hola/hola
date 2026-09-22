@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../utils/api-hybrid'; // Use hybrid API
-import { globalCache } from '../utils/cache';
+import { globalCache, type TimestampedEntry } from '../utils/cache';
 import type { EnhancedError } from '../utils/error-enhanced';
 import type { 
   CreateDraftRequest, 
@@ -88,13 +88,13 @@ export function useDraftApi(draftId: string | null) {
   const fetchDraft = React.useCallback(async () => {
     if (!draftId || !cacheKey) return;
     
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetDraftResponse>>(cacheKey);
     const now = Date.now();
     
     // Check cache (30 second TTL for draft data)
     if (cached && (now - cached.timestamp) < 30000) {
       setState({
-        data: cached.data as GetDraftResponse,
+        data: cached.data,
         loading: false,
         error: null,
       });

@@ -17,7 +17,8 @@ import type {
   GetContractsResponse,
   // Draft types  
   CreateDraftRequest, CreateDraftResponse, GetDraftResponse, 
-  PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, FinalizeDraftResponse,
+  PatchDraftRequest, PatchDraftResponse, ValidateDraftResponse, EnhancedPreflightResponse,
+  FinalizeDraftResponse,
   UploadDraftFileResponse, DeleteDraftFileResponse,
   // Deployment types
   CreateDeploymentFromDraftRequest, CreateDeploymentFromDraftResponse,
@@ -43,6 +44,7 @@ import type {
 } from '@hola/shared';
 import { globalCache, CacheTTL } from './cache';
 import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
+import { nodeEnv, nodeProcess } from './runtime-env';
 
 // Environment-based configuration for SDK
 export function getWebBaseUrl(): string {
@@ -52,10 +54,11 @@ export function getWebBaseUrl(): string {
   }
   
   // Check for Node.js environment variable (for tests)
-  if (typeof process !== 'undefined' && process.env?.VITE_API_BASE_URL) {
-    return process.env.VITE_API_BASE_URL;
+  const fromNode = nodeEnv()?.VITE_API_BASE_URL;
+  if (fromNode) {
+    return fromNode;
   }
-  
+
   // In development with Vite, use the proxy (empty base URL)
   if (
     typeof import.meta !== 'undefined' && 
@@ -65,7 +68,7 @@ export function getWebBaseUrl(): string {
   }
   
   // For tests or any environment without import.meta, use direct connection
-  if (typeof import.meta === 'undefined' || typeof process !== 'undefined') {
+  if (typeof import.meta === 'undefined' || nodeProcess() !== undefined) {
     return 'http://localhost:3001';
   }
   
@@ -455,7 +458,11 @@ export class SdkAdapter {
       return this.enhancedRequest('POST', path, () => this.sdk.drafts.validate(draftId), undefined, false);
     },
     
-    preflight: (draftId: string): Promise<ValidateDraftResponse> => {
+    // The server's preflight route returns the enhanced shape ({ ok, checks,
+    // reservationToken }), NOT a ValidateDraftResponse ({ ok, errors, warnings }).
+    // This used to be declared as the latter, which promised callers `errors`
+    // and `warnings` arrays that are never on the wire.
+    preflight: (draftId: string): Promise<EnhancedPreflightResponse> => {
       const path = `/api/drafts/${draftId}/preflight`;
       return this.enhancedRequest('POST', path, () => this.sdk.drafts.preflight(draftId), undefined, false);
     },

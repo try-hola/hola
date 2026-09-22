@@ -1,9 +1,16 @@
-import React from 'react';
 import { render, screen, fireEvent, waitFor, cleanup, act, within } from '@testing-library/react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { GetDeploymentResponse, GetDeploymentConfigResponse, SSEEvent, SSEConnectionState } from '@hola/shared';
+import type {
+  AppEnvVar,
+  GetDeploymentResponse,
+  GetDeploymentConfigResponse,
+  PatchDeploymentRequest,
+  PatchDeploymentResponse,
+  SSEEvent,
+  SSEConnectionState,
+} from '@hola/shared';
 import { globalCache } from '../../utils/cache';
 import { handleGlobalEvent, useGlobalQueryEvents } from '../../state/useGlobalQueryEvents';
 import { mockFetch, createMockResponse } from '../../setupTests';
@@ -69,7 +76,14 @@ const config: GetDeploymentConfigResponse = {
 const deploymentsApi = {
   byId: vi.fn(async () => deployment),
   config: vi.fn(async () => config),
-  update: vi.fn(async () => ({ ok: true as const })),
+  // Declare the real parameters: `vi.fn(async () => ...)` infers a zero-argument
+  // function, which makes `mock.calls[n]` an empty tuple and hides every
+  // assertion made about what the component actually sent.
+  update: vi.fn(
+    async (_deploymentId: string, _body: PatchDeploymentRequest): Promise<PatchDeploymentResponse> => ({
+      ok: true as const,
+    })
+  ),
   history: vi.fn(async () => ({ items: [], page: 1, limit: 10, total: 0 })),
   action: vi.fn(),
   promote: vi.fn(),
@@ -89,6 +103,20 @@ const catalogApi = {
 const contractsApi = {
   list: vi.fn(async () => ({ items: [] })),
 };
+
+/** The body of the n-th `deployments.update` call, asserted to exist. */
+function updatePayload(call = 0): PatchDeploymentRequest {
+  const args = deploymentsApi.update.mock.calls[call];
+  if (!args) throw new Error(`deployments.update was not called ${call + 1} time(s)`);
+  return args[1];
+}
+
+/** One env row out of an update payload, asserted to exist. */
+function envRow(payload: PatchDeploymentRequest, key: string): AppEnvVar {
+  const row = payload.env?.find((e) => e.key === key);
+  if (!row) throw new Error(`update payload carried no env row for ${key}`);
+  return row;
+}
 
 vi.mock('../../utils/api-hybrid', () => ({
   api: {
@@ -185,9 +213,10 @@ describe('DeploymentDetail Configuration tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
-    const [calledId, payload] = deploymentsApi.update.mock.calls[0];
+    const [calledId] = deploymentsApi.update.mock.calls[0] ?? [];
+    const payload = updatePayload();
     expect(calledId).toBe(deploymentId);
-    expect(payload.env.find((e: { key: string }) => e.key === 'ADMIN_USER').value).toBe('root');
+    expect(envRow(payload, 'ADMIN_USER').value).toBe('root');
     // A pure edit (nothing deleted) sends no removeEnvKeys — merge-by-key leaves
     // every omitted var untouched, so there's nothing to delete.
     expect(payload.removeEnvKeys).toBeUndefined();
@@ -206,12 +235,12 @@ describe('DeploymentDetail Configuration tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
-    const [, payload] = deploymentsApi.update.mock.calls[0];
+    const payload = updatePayload();
     // The deletion is stated explicitly now, not expressed by omission.
     expect(payload.removeEnvKeys).toEqual(['ADMIN_USER']);
-    expect(payload.env.some((e: { key: string }) => e.key === 'ADMIN_USER')).toBe(false);
+    expect(payload.env?.some((e) => e.key === 'ADMIN_USER')).toBe(false);
     // The var still in the form is upserted (and untouched vars survive server-side).
-    expect(payload.env.some((e: { key: string }) => e.key === 'MAX_CONNECTIONS')).toBe(true);
+    expect(payload.env?.some((e) => e.key === 'MAX_CONNECTIONS')).toBe(true);
   });
 
   it('blocks saving an out-of-range typed value client-side without calling the API', async () => {
@@ -298,13 +327,13 @@ describe('DeploymentDetail withheld secrets (F03)', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
-    const [, payload] = deploymentsApi.update.mock.calls[0];
-    const row = payload.env.find((e: { key: string }) => e.key === 'DB_PASSWORD');
+    const payload = updatePayload();
+    const row = envRow(payload, 'DB_PASSWORD');
     // The marker survives the round trip, which is what tells the server to
     // keep the stored value instead of writing this empty string over it.
     expect(row.valueRedacted).toBe(true);
     expect(row.value).toBe('');
-    expect(payload.env.find((e: { key: string }) => e.key === 'ADMIN_USER').value).toBe('root');
+    expect(envRow(payload, 'ADMIN_USER').value).toBe('root');
     // Not deleted — a withheld value is not an absent variable.
     expect(payload.removeEnvKeys).toBeUndefined();
   });
@@ -320,8 +349,8 @@ describe('DeploymentDetail withheld secrets (F03)', () => {
     fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
 
     await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
-    const [, payload] = deploymentsApi.update.mock.calls[0];
-    const row = payload.env.find((e: { key: string }) => e.key === 'DB_PASSWORD');
+    const payload = updatePayload();
+    const row = envRow(payload, 'DB_PASSWORD');
     expect(row.value).toBe('rotated');
     // Keeping the marker here would silently discard the rotation.
     expect(row.valueRedacted).toBeUndefined();

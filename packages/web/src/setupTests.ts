@@ -1,6 +1,7 @@
 import { vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import type {
+  CatalogApp,
   GetSummaryResponse,
   HealthResponse,
   GetCatalogAppsResponse,
@@ -80,7 +81,7 @@ mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) 
     const page = Number(urlObj.searchParams.get('page') || '1');
     const limit = Number(urlObj.searchParams.get('limit') || '12');
 
-    const catalog = [
+    const catalog: CatalogApp[] = [
       {
         id: 'nextcloud',
         name: 'Nextcloud',
@@ -91,6 +92,8 @@ mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) 
         downloads: 12345,
         tags: ['files', 'collaboration'],
         featured: true,
+        source: 'hola',
+        trust: 'verified',
       },
       {
         id: 'plex',
@@ -102,6 +105,8 @@ mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) 
         downloads: 54321,
         tags: ['media', 'streaming'],
         featured: false,
+        source: 'hola',
+        trust: 'verified',
       },
       {
         id: 'jellyfin',
@@ -113,6 +118,8 @@ mockFetch.mockImplementation(async (url: RequestInfo | URL, init?: RequestInit) 
         downloads: 22334,
         tags: ['media', 'streaming'],
         featured: false,
+        source: 'hola',
+        trust: 'verified',
       },
     ];
 

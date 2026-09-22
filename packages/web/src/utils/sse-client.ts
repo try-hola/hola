@@ -1,6 +1,7 @@
 import type { SSEEvent, SSEConnectionState } from '@hola/shared';
 import type { EventSourceFactory, SSEOptions, SSEState } from './sse-types';
 import { getAuthToken, notifyUnauthorized, refreshAuthToken } from './auth-token';
+import { isTestEnv } from './runtime-env';
 
 export interface SSEClient {
   connect(): void;
@@ -29,9 +30,7 @@ const DEFAULT_OPTIONS: Required<Omit<SSEOptions, 'eventSourceFactory'>> & { even
   eventSourceFactory: undefined,
 };
 
-const TEST_ENV = typeof process !== 'undefined' && (
-  process.env.VITEST || process.env.VITEST_WORKER_ID || process.env.NODE_ENV === 'test'
-);
+const TEST_ENV = isTestEnv();
 
 export function createSSEClient(initialOptions: SSEOptions = {}): SSEClient {
   let config = applyDefaults(initialOptions);

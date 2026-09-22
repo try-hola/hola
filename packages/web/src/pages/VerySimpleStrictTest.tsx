@@ -1,6 +1,6 @@
 import React from 'react';
 import { api } from '../utils/api';
-import { globalCache } from '../utils/cache';
+import { globalCache, type TimestampedEntry } from '../utils/cache';
 import type { GetSummaryResponse } from '@hola/shared';
 
 export const VerySimpleStrictTest: React.FC = () => {
@@ -18,14 +18,14 @@ export const VerySimpleStrictTest: React.FC = () => {
     console.log('VerySimpleStrictTest: fetchData called');
     
     const cacheKey = 'summary-test';
-    const cached = globalCache.get(cacheKey);
+    const cached = globalCache.get<TimestampedEntry<GetSummaryResponse>>(cacheKey);
     const now = Date.now();
     
     // Check cache (5 second TTL for testing)
     if (cached && (now - cached.timestamp) < 5000) {
       console.log('VerySimpleStrictTest: Using cached data');
       setState({
-        data: cached.data as GetSummaryResponse,
+        data: cached.data,
         loading: false,
         error: null,
       });
