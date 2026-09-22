@@ -218,7 +218,16 @@ export const DeploymentDetail: React.FC = () => {
 
   // Every row's issues against its own spec (legacy/custom rows with no spec
   // reduce to just the required-tri-state check — see param-validate.ts).
-  const paramIssues = useMemo(() => validateParams(envVars), [envVars]);
+  //
+  // A row the server withheld the value of (F03: this user lacks
+  // `read:secrets`) arrives with `value: ''`, which the required check would
+  // read as "the operator cleared a required secret". It is stored and unchanged,
+  // so it is relaxed to optional for validation only — leaving it blank means
+  // "keep what is stored", which is exactly what the server does with it.
+  const paramIssues = useMemo(
+    () => validateParams(envVars.map((e) => (e.valueRedacted && !e.value ? { ...e, required: false } : e))),
+    [envVars],
+  );
   const issuesForKey = (key: string): ValidationIssue[] =>
     touchedKeys.has(key) ? paramIssues.filter((i) => i.path === `env.${key}`) : [];
 
@@ -423,8 +432,16 @@ export const DeploymentDetail: React.FC = () => {
         .map((e) => e.key)
         .filter((k) => k && !currentKeys.has(k));
 
+      // F03: a withheld secret left blank keeps its `valueRedacted` flag, which
+      // the server reads as "no new value supplied" and preserves the stored
+      // secret. Once the operator types over it the flag must go, or the
+      // replacement would be silently discarded.
+      const envForPatch = envVars
+        .filter((e) => e.key)
+        .map((e) => (e.valueRedacted && e.value ? { ...e, valueRedacted: undefined } : e));
+
       await updateConfiguration({
-        env: envVars.filter((e) => e.key),
+        env: envForPatch,
         ...(removeEnvKeys.length ? { removeEnvKeys } : {}),
         systemOverrides,
       });
@@ -766,7 +783,13 @@ export const DeploymentDetail: React.FC = () => {
             <div className="flex-1">
               {envVar.key ? (
                 <ParamField
-                  spec={envVar}
+                  // F03: a withheld secret edits as an empty field, so say what
+                  // leaving it empty means rather than letting it look lost.
+                  spec={
+                    envVar.valueRedacted
+                      ? { ...envVar, required: false, placeholder: 'hidden — leave blank to keep the stored value' }
+                      : envVar
+                  }
                   value={envVar.value}
                   onChange={(v) => handleParamChange(index, v)}
                   issues={issuesForKey(envVar.key)}
@@ -801,6 +824,10 @@ export const DeploymentDetail: React.FC = () => {
         );
 
         const renderReadOnlyRow = ({ env: envVar }: { env: AppEnvVar; index: number }) => {
+          // A withheld value (F03) is masked with no reveal control: there is
+          // nothing behind the eye, and rendering it as `(empty)` would claim
+          // the app has no password rather than that this user may not see it.
+          const withheld = envVar.valueRedacted === true;
           const showValue = envVar.isSecret && !showSecrets[envVar.key];
           return (
             <div
@@ -811,9 +838,14 @@ export const DeploymentDetail: React.FC = () => {
                 {envVar.label ?? envVar.key}
               </span>
               <span className="flex-1 font-mono text-[12.5px] break-all">
-                {showValue ? '••••••••' : (envVar.value || '(empty)')}
+                {withheld ? (
+                  <>
+                    <span>••••••••</span>
+                    <span className="ml-2 text-[11.5px] text-text-faint not-italic">hidden</span>
+                  </>
+                ) : showValue ? '••••••••' : (envVar.value || '(empty)')}
               </span>
-              {envVar.isSecret && (
+              {envVar.isSecret && !withheld && (
                 <button
                   type="button"
                   onClick={() => toggleSecretVisibility(envVar.key)}

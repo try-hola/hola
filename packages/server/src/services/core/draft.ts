@@ -32,7 +32,7 @@ import type {
 
 import { createHash } from 'crypto';
 
-import { STABLE_CHANNEL } from '@hola/shared';
+import { STABLE_CHANNEL, withoutRedactionMarker } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ValidationError, DraftValidationError, BundleUnavailableError, assertValidChannelName } from '../../middleware/error-mapping';
 import { validateComposeDocument, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN } from '@hola/shared/compose-validate';
@@ -240,6 +240,13 @@ function assertComposeParses(content: string, source: string): void {
  * (a custom/user-added var, e.g. the wizard's "Add variable" or an unknown CLI
  * `--set` key) passes through unmodified — it has no spec to protect.
  *
+ * `valueRedacted` (F03) is the one field a client may send that changes the
+ * OUTCOME rather than being re-imposed: it means "this row came back from a
+ * read with its secret withheld, I am not supplying a value", so the stored row
+ * is kept whole. Without that rule, redacting an editable surface would make
+ * every save silently blank the app's secrets. The flag is stripped either way,
+ * so it never reaches a persisted record.
+ *
  * Exported: `RealDeploymentService.updateDeployment` (deployment.ts) reuses the
  * exact same re-imposition semantics for a live deployment's config PATCH — a
  * client only ever owns `value` there either, never the manifest-declared spec.
@@ -248,7 +255,9 @@ export function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): 
   const byKey = new Map(storedEnv.map((e) => [e.key, e]));
   return incomingEnv.map((incoming) => {
     const stored = byKey.get(incoming.key);
-    return stored ? { ...stored, value: incoming.value } : incoming;
+    if (!stored) return withoutRedactionMarker(incoming);
+    if (incoming.valueRedacted) return stored;
+    return { ...stored, value: incoming.value };
   });
 }
 
@@ -262,6 +271,11 @@ export function hardenAppEnv(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): 
  *
  * Stored order is preserved (with brand-new keys appended in `upserts` order).
  * A key that appears in both `upserts` and `removeKeys` is removed (delete wins).
+ *
+ * An upsert flagged `valueRedacted` supplies no value (F03) and is treated as
+ * though the key had been omitted — see `hardenAppEnv` above for why. An
+ * explicit `removeKeys` entry still wins over it: withholding a value on read
+ * must not make a secret undeletable.
  */
 export function mergeAppEnv(
   storedEnv: AppEnvVar[],
@@ -274,15 +288,16 @@ export function mergeAppEnv(
 
   const result: AppEnvVar[] = [];
   // Existing rows: drop if removed, else apply an upsert's value (spec preserved).
+  // A redacted upsert carries no value, so the stored row passes through whole.
   for (const stored of storedEnv) {
     if (remove.has(stored.key)) continue;
     const up = upsertByKey.get(stored.key);
-    result.push(up ? { ...stored, value: up.value } : stored);
+    result.push(up && !up.valueRedacted ? { ...stored, value: up.value } : stored);
   }
   // Brand-new keys (not already stored), minus any also flagged for removal.
   for (const up of upserts) {
     if (storedKeys.has(up.key) || remove.has(up.key)) continue;
-    result.push(up);
+    result.push(withoutRedactionMarker(up));
   }
   return result;
 }

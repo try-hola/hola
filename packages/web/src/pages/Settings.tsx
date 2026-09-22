@@ -628,6 +628,10 @@ export const Settings: React.FC = () => {
   const updateSystemEnvVar = (index: number, field: keyof SystemEnvVar, value: string | boolean) => {
     const updated = [...localSystemEnvVars];
     updated[index] = { ...updated[index], [field]: value };
+    // F03: typing over a withheld value supplies a real one, so the marker has
+    // to go — the server reads it as "no new value supplied" and would restore
+    // the stored secret over the replacement.
+    if (field === 'value') delete updated[index]!.valueRedacted;
     setLocalSystemEnvVars(updated);
   };
 
@@ -873,12 +877,15 @@ export const Settings: React.FC = () => {
                 <div className="flex-1 relative">
                   <input
                     type={envVar.isSecret && !showSecrets[envVar.key] ? 'password' : 'text'}
-                    placeholder="Value"
+                    // F03: a value this user may not read comes back empty, so
+                    // say why rather than letting it look deleted. There is also
+                    // no reveal control below — nothing is behind it.
+                    placeholder={envVar.valueRedacted ? 'Hidden — leave blank to keep' : 'Value'}
                     value={envVar.value}
                     onChange={(e) => updateSystemEnvVar(index, 'value', e.target.value)}
                     className={`${inputClass} font-mono pr-10`}
                   />
-                  {envVar.isSecret && (
+                  {envVar.isSecret && !envVar.valueRedacted && (
                     <button
                       type="button"
                       onClick={() => toggleSecretVisibility(envVar.key)}

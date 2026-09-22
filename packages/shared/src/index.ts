@@ -789,6 +789,13 @@ export const CAPABILITIES = {
   READ_LOGS: 'read:logs',
   READ_BACKUPS: 'read:backups',
   READ_CATALOG: 'read:catalog',
+  // Reading an app's *secret* env values, separately from reading its
+  // configuration (F03). Held by `*`/admin; deliberately absent from the
+  // read-only set an authenticated non-admin dashboard user receives, who
+  // would otherwise retrieve every app's database password from a routine
+  // configuration read. Enforced where the response is shaped rather than as a
+  // route capability: the route stays readable, the credentials do not.
+  READ_SECRETS: 'read:secrets',
   
   // Write operations  
   WRITE_DEPLOYMENTS: 'write:deployments',
@@ -1220,7 +1227,77 @@ export type AppEnvVar = {
   // --- secret generation ---
   /** Generation recipe for the wand/CLI auto-fill. Only meaningful when `isSecret` is true. */
   generate?: ParamGenerate;
+  /**
+   * RESPONSE-ONLY marker (F03): this row's `value` was withheld, because the
+   * reading principal does not hold `read:secrets`. `value` is `''` — which is
+   * indistinguishable from a genuinely empty secret without this flag, so a
+   * client MUST NOT render `(empty)` for a row carrying it.
+   *
+   * It is also a WRITE-SIDE instruction, and the reason redaction is safe to
+   * apply to an editable surface: a client may echo a redacted row back
+   * verbatim, and the server reads the flag as "no new value supplied for this
+   * key" and keeps the stored secret (`hardenAppEnv`/`mergeAppEnv` in
+   * `services/core/draft.ts`). Clearing a secret is therefore an explicit act —
+   * send the row with `value: ''` and no flag.
+   *
+   * Never persisted: the write path strips it before anything reaches a
+   * manifest, so a forged flag cannot make a stored row read as redacted.
+   */
+  valueRedacted?: true;
 };
+
+/**
+ * Withhold every secret value in a set of env rows, for a principal that may
+ * read an app's configuration but not its credentials (F03).
+ *
+ * Applied at the response boundary, not in the service layer: the services that
+ * assemble these rows have no request context, and the same rows are the
+ * carry-forward source for upgrades and the restore-on-install env merge, which
+ * run as the platform and must keep real values. Redaction is therefore a
+ * property of one *answer to one caller*, never of the stored record.
+ *
+ * `isSecret` is the whole test. Nothing is inferred from a key's name: a row's
+ * secrecy is declared by the packager in the bundle manifest and re-imposed by
+ * the server on every write (`hardenAppEnv`), so it is already the platform's
+ * own fact rather than the client's.
+ */
+export function redactSecretEnvValues(rows: AppEnvVar[]): AppEnvVar[] {
+  return rows.map((row) => (row.isSecret ? { ...row, value: '', valueRedacted: true as const } : row));
+}
+
+/**
+ * Drop the response-only redaction marker from a row a client sent back (F03).
+ * Used on the write path after the flag has been consumed as "keep the stored
+ * value" — see {@link AppEnvVar.valueRedacted}.
+ */
+export function withoutRedactionMarker(row: AppEnvVar): AppEnvVar {
+  if (!row.valueRedacted) return row;
+  const { valueRedacted: _redacted, ...rest } = row;
+  void _redacted;
+  return rest;
+}
+
+/**
+ * The write-side counterpart of {@link redactSecretEnvValues}, for a surface
+ * whose PATCH REPLACES the whole row set rather than merging by key (F03).
+ *
+ * Every incoming row flagged `valueRedacted` has its value taken from the
+ * stored row of the same key — the client was never shown that value, so it
+ * cannot be supplying one, and a full replace would otherwise blank it. The
+ * marker is stripped from every row either way, so it never persists.
+ *
+ * Deployment/draft env has its own merge (`hardenAppEnv`/`mergeAppEnv` in the
+ * server's `services/core/draft.ts`) which also re-imposes the typed spec; this
+ * is for row sets with no spec to protect, where the operator owns the whole
+ * row — host `systemEnv`, notably.
+ */
+export function restoreWithheldEnvValues(storedEnv: AppEnvVar[], incomingEnv: AppEnvVar[]): AppEnvVar[] {
+  const stored = new Map(storedEnv.map((e) => [e.key, e]));
+  return incomingEnv.map((incoming) => {
+    if (!incoming.valueRedacted) return incoming;
+    return { ...withoutRedactionMarker(incoming), value: stored.get(incoming.key)?.value ?? '' };
+  });
+}
 
 export type DraftDefaults = {
   ports: Array<{ host?: number; container: number; protocol: 'tcp' | 'udp' }>;

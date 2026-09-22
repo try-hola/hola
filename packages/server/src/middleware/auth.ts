@@ -242,6 +242,30 @@ export function authorizeRequest(
 }
 
 /**
+ * Whether a principal holds one capability, decided from the principal alone.
+ *
+ * Identical in effect to `AuthService.hasCapability` for every real provider —
+ * each one is `capabilities.includes('*') || capabilities.includes(cap)` — but
+ * deliberately NOT routed through the service, for two reasons:
+ *
+ * - `MockAuthService.hasCapability` returns `true` unconditionally, and
+ *   `RealAuthService` short-circuits to `true` whenever auth is disabled. Both
+ *   are right for a ROUTE gate (no auth configured ⇒ no authorization to
+ *   perform), and both are wrong for shaping a response around a capability:
+ *   they would make the shaping a no-op in exactly the configurations where a
+ *   test could observe it, leaving the real rule unverifiable.
+ * - The principal is the whole input. When auth is disabled the middleware
+ *   substitutes a wildcard system principal, so a single-operator host still
+ *   sees everything — by holding `*`, not by the check being skipped.
+ *
+ * Use it for response policy (see `canReadSecrets` in server.ts). Route
+ * authorization stays with `authorizeRequest` + the service.
+ */
+export function principalHasCapability(principal: Principal, capability: Capability): boolean {
+  return principal.capabilities.includes('*') || principal.capabilities.includes(capability);
+}
+
+/**
  * Create authentication middleware
  */
 export function createAuthMiddleware() {

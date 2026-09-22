@@ -249,6 +249,100 @@ describe('DeploymentDetail Configuration tab', () => {
   });
 });
 
+/**
+ * A secret whose value the server withheld (F03: this user does not hold
+ * `read:secrets`) arrives as `value: '', valueRedacted: true`.
+ *
+ * The page has to get two things right about it: say that the value is hidden
+ * rather than that the app has none, and — because the same rows are the save
+ * payload — not turn the operator's next save into a secret-wiping write.
+ */
+describe('DeploymentDetail withheld secrets (F03)', () => {
+  const withRedacted = () =>
+    deploymentsApi.config.mockResolvedValueOnce({
+      appEnv: [
+        ...config.appEnv,
+        { key: 'DB_PASSWORD', value: '', isSecret: true, required: true, valueRedacted: true as const },
+        // A genuinely empty optional secret, for contrast: it has no marker, so
+        // "(empty)" is the truthful rendering for this one.
+        { key: 'OPTIONAL_TOKEN', value: '', isSecret: true, required: false },
+      ],
+      systemOverrides: config.systemOverrides,
+    });
+
+  it('renders a withheld secret as hidden, with no reveal control', async () => {
+    withRedacted();
+    renderDetail();
+
+    await waitFor(() => expect(screen.getByText('DB_PASSWORD')).toBeInTheDocument());
+    // Said explicitly, and said once — for the withheld row only.
+    expect(screen.getAllByText('hidden')).toHaveLength(1);
+    // Both secret rows mask their value, so the mask alone says nothing; the
+    // difference between them is the label above and the control below.
+    expect(screen.getAllByText('••••••••')).toHaveLength(2);
+    // Exactly one reveal control — the genuinely-empty secret's. Offering one
+    // for the withheld row would promise something it cannot deliver: there is
+    // nothing behind that eye, because the value never reached the browser.
+    expect(document.querySelectorAll('.lucide-eye')).toHaveLength(1);
+  });
+
+  it('keeps the stored secret on save by echoing the marker back, not a blank value', async () => {
+    withRedacted();
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('DB_PASSWORD')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit configuration/i }));
+    // Edit something else entirely; the withheld secret is left alone.
+    const adminInput = await screen.findByDisplayValue('admin');
+    fireEvent.change(adminInput, { target: { value: 'root' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
+    const [, payload] = deploymentsApi.update.mock.calls[0];
+    const row = payload.env.find((e: { key: string }) => e.key === 'DB_PASSWORD');
+    // The marker survives the round trip, which is what tells the server to
+    // keep the stored value instead of writing this empty string over it.
+    expect(row.valueRedacted).toBe(true);
+    expect(row.value).toBe('');
+    expect(payload.env.find((e: { key: string }) => e.key === 'ADMIN_USER').value).toBe('root');
+    // Not deleted — a withheld value is not an absent variable.
+    expect(payload.removeEnvKeys).toBeUndefined();
+  });
+
+  it('drops the marker once the operator types a replacement, so the new value applies', async () => {
+    withRedacted();
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('DB_PASSWORD')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit configuration/i }));
+    const secretInput = await screen.findByLabelText(/DB_PASSWORD/i);
+    fireEvent.change(secretInput, { target: { value: 'rotated' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
+    const [, payload] = deploymentsApi.update.mock.calls[0];
+    const row = payload.env.find((e: { key: string }) => e.key === 'DB_PASSWORD');
+    expect(row.value).toBe('rotated');
+    // Keeping the marker here would silently discard the rotation.
+    expect(row.valueRedacted).toBeUndefined();
+  });
+
+  it('does not treat a withheld required secret as a missing required value', async () => {
+    // The row is `required` and reads as empty. Blocking the save on it would
+    // make every configuration change impossible for this user without ever
+    // saying why.
+    withRedacted();
+    renderDetail();
+    await waitFor(() => expect(screen.getByText('DB_PASSWORD')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit configuration/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(deploymentsApi.update).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/fix the highlighted fields/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('DeploymentDetail live updates (T009)', () => {
   it('re-renders the new status from a deployment_update event patched onto the same QueryClient the page reads from, with no page remount', async () => {
     const { queryClient } = renderDetail();

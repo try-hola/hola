@@ -5,7 +5,7 @@
  * Built on top of StorageService for file operations.
  */
 
-import { type AppEnvVar } from '@hola/shared';
+import { type AppEnvVar, restoreWithheldEnvValues } from '@hola/shared';
 import { getLogger } from '../../lib/logger';
 import { ValidationError } from '../../middleware/error-mapping';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -179,8 +179,14 @@ export class RealConfigService implements ConfigService {
         ...(updates.channels && {
           channels: { ...current.channels, ...updates.channels }
         }),
-        // System env requires special handling to maintain array structure
-        ...(updates.systemEnv && { systemEnv: updates.systemEnv }),
+        // System env requires special handling to maintain array structure.
+        // `restoreWithheldEnvValues` is what makes redacting this surface on
+        // read safe (F03): this is a FULL REPLACE, so a client saving the form
+        // it was shown sends `value: ''` back for every secret it was not
+        // allowed to see, and without this the save would blank them all.
+        ...(updates.systemEnv && {
+          systemEnv: restoreWithheldEnvValues(current.systemEnv ?? [], updates.systemEnv),
+        }),
       };
 
       // Validate settings before saving
@@ -378,7 +384,10 @@ export class MockConfigService implements ConfigService {
       ...(updates.channels && {
         channels: { ...this.systemSettings.channels, ...updates.channels }
       }),
-      ...(updates.systemEnv && { systemEnv: updates.systemEnv }),
+      // Same rule as the real service — see the comment there (F03).
+      ...(updates.systemEnv && {
+        systemEnv: restoreWithheldEnvValues(this.systemSettings.systemEnv ?? [], updates.systemEnv),
+      }),
     };
 
     this.logger.debug('Mock system settings updated');

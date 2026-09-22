@@ -62,6 +62,8 @@ import {
   type AppEnvVar,
   type PublishRestoreIndexRequest,
   type CompleteRestoreRequestRequest,
+  CAPABILITIES,
+  redactSecretEnvValues,
 } from '@hola/shared';
 import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
 import { resolveListedCandidate, groupIntoLineages, suppressInferredDefault } from './services/core/restore-candidates';
@@ -87,7 +89,7 @@ import { createSSEStream, createSSEHeaders } from './utils/sse';
 import { mapErrorToResponse, asPromoteValidationError, ValidationError, ForbiddenError } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
-import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
+import { createAuthMiddleware, getPrincipal, principalHasCapability, SESSION_COOKIE } from './middleware/auth';
 import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
 import { ldapOutpostTokenPath, persistLdapOutpostToken } from './services/auth/ldap-outpost-config';
 import { authConfig } from './config/auth';
@@ -228,6 +230,37 @@ function redactNotifications<T extends { smtpPassword?: string } | undefined>(n:
   const { smtpPassword: _password, ...rest } = n;
   void _password;
   return rest as T;
+}
+
+/**
+ * Whether this caller may be handed an app's secret env VALUES (F03).
+ *
+ * The sibling of `redactNotifications` above, and the same kind of rule: a
+ * response is shaped for the principal that asked for it. Reading an app's
+ * configuration and reading its credentials are separate grants —
+ * `read:deployments` answers the first, `read:secrets` the second — and an
+ * authenticated non-admin dashboard user holds only the first
+ * (`oidc-provider.ts`). Before this, a routine Configuration-tab read handed
+ * that user every app's database password.
+ *
+ * Fails closed: no resolved principal (a handler reached outside the auth
+ * middleware) withholds secrets rather than publishing them. When auth is
+ * DISABLED the middleware substitutes a wildcard system principal, so
+ * single-operator dev/`mode=none` hosts are unaffected — but by that principal
+ * holding `*`, not by the check being skipped (see `principalHasCapability`,
+ * which is why this does not go through the auth SERVICE: both implementations
+ * of `hasCapability` blanket-allow when auth is off).
+ *
+ * Deliberately NOT a route capability in `getRequiredCapability`: making
+ * `/config` demand `read:secrets` would take the whole configuration view away
+ * from read-only users, who have a legitimate reason to see which variables an
+ * app is configured with. What they lose is only the values that were never
+ * theirs.
+ */
+function canReadSecrets(req: Request): boolean {
+  const principal = getPrincipal(req);
+  if (!principal) return false;
+  return principalHasCapability(principal, CAPABILITIES.READ_SECRETS);
 }
 
 /**
@@ -830,6 +863,10 @@ export async function route(url: URL, req: Request): Promise<Response> {
 
       const services = getServices();
       const payload = await services.drafts.getDraft(draftId);
+      // F03: the same response policy as the deployment config read — a draft's
+      // env rows hold the same secrets (including ones the wizard generated),
+      // and this is an unmatched GET, so any authenticated principal reaches it.
+      if (!canReadSecrets(req)) payload.appEnv = redactSecretEnvValues(payload.appEnv ?? []);
       
       logger.info('Draft retrieved successfully', { 
         requestId: context?.requestId, 
@@ -1452,6 +1489,10 @@ export async function route(url: URL, req: Request): Promise<Response> {
     try {
       const services = getServices();
       const payload: GetDeploymentConfigResponse = await services.deployments.getConfig(deploymentId);
+      // F03: secret values are withheld unless the caller holds `read:secrets`.
+      // The rows themselves (key, label, type, `isSecret`) are not secret and
+      // stay, so the Configuration tab still renders for a read-only user.
+      if (!canReadSecrets(req)) payload.appEnv = redactSecretEnvValues(payload.appEnv);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1871,8 +1912,13 @@ export async function route(url: URL, req: Request): Promise<Response> {
       const services = getServices();
       const systemSettings = await services.config.getSystemSettings();
       
+      // F03: host-wide `systemEnv` carries secrets too (SMTP_PASSWORD and
+      // whatever else the operator put there), and this is an unmatched GET.
+      // Same policy as the deployment-config and draft reads; the PATCH echo
+      // below gets it as well, and `updateSystemSettings` restores a withheld
+      // value from the stored row so a replayed form cannot blank it.
       const payload: GetSettingsResponse = {
-        systemEnv: systemSettings.systemEnv,
+        systemEnv: canReadSecrets(req) ? systemSettings.systemEnv : redactSecretEnvValues(systemSettings.systemEnv ?? []),
         docker: systemSettings.docker,
         tls: systemSettings.tls,
         notifications: redactNotifications(systemSettings.notifications),
@@ -1902,7 +1948,7 @@ export async function route(url: URL, req: Request): Promise<Response> {
       const updatedSettings = await services.config.updateSystemSettings(body);
       
       const payload: PatchSettingsResponse = {
-        systemEnv: updatedSettings.systemEnv,
+        systemEnv: canReadSecrets(req) ? updatedSettings.systemEnv : redactSecretEnvValues(updatedSettings.systemEnv ?? []),
         docker: updatedSettings.docker,
         tls: updatedSettings.tls,
         notifications: redactNotifications(updatedSettings.notifications),

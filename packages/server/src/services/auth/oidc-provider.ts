@@ -21,8 +21,24 @@ import { getLogger } from '../../lib/logger';
 import { resolveOidcConfig, type OidcConfig } from '../../config/oidc';
 import type { AuthProvider, AuthResult, Principal } from './auth-service';
 
-/** Read-only capability set for authenticated-but-non-admin OIDC users. */
-const READONLY_CAPABILITIES = [
+/**
+ * Read-only capability set for authenticated-but-non-admin OIDC users.
+ *
+ * `read:secrets` is deliberately NOT in this list (F03). These users can read
+ * every deployment's configuration, which is the point of a read-only
+ * dashboard — but a configuration read used to carry each app's database
+ * password, API token and encryption secret in plaintext, so "read-only" was
+ * in practice full credential access to every installed app. The values are
+ * now withheld at the response boundary from any principal lacking this
+ * capability; `admin`'s `*` matches it, so an operator's own reads are
+ * unchanged.
+ *
+ * Adding a capability here widens what every non-admin dashboard user may see
+ * on a host whose IdP has no admin group configured (the fail-closed default),
+ * so treat this list as a security boundary rather than a convenience. Exported
+ * so a test can assert that boundary directly rather than by inference.
+ */
+export const READONLY_CAPABILITIES = [
   'read:system',
   'read:deployments',
   'read:logs',
