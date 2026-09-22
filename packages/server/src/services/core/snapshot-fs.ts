@@ -9,7 +9,7 @@
  */
 import { spawn } from 'node:child_process';
 import { readdir, rm, mkdir, stat, lstat, realpath, rename, cp } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { isStrictlyInside } from './path-containment';
 
@@ -110,11 +110,22 @@ export type LocateAppRootResult =
  * Locate the one directory inside `destination` that is the delivered app
  * data root (spec 008, FR-041, closes #486).
  *
- * A restic/borg-shaped repository restore reproduces the SOURCE's absolute
- * path under the destination — `/srv/hola/apps/wiki-1a2b3c4d` restored into
- * `<destination>` lands at `<destination>/srv/hola/apps/wiki-1a2b3c4d` — so
- * this codebase's own root-relative assumption (every OTHER archive helper
- * in this file) does NOT hold for a provider-delivered tree.
+ * A provider-delivered tree does NOT follow this codebase's own root-relative
+ * assumption (every OTHER archive helper in this file), and it does not follow
+ * ONE alternative either — which is the whole reason this function exists
+ * rather than an offset. Measured layouts:
+ *
+ *   - Backrest/restic v1.14.1 reproduces the **last path segment** only:
+ *     `/srv/hola/apps/wiki-1a2b3c4d` delivered into `<destination>` lands at
+ *     `<destination>/wiki-1a2b3c4d`.
+ *   - A borg-shaped restore, and restic's own `--target` with a full path,
+ *     reproduce the **whole absolute path**:
+ *     `<destination>/srv/hola/apps/wiki-1a2b3c4d`.
+ *
+ * So the layout is a property of the provider, not of the contract, and both
+ * forms have to be tolerated (#511). Neither is trusted further than the
+ * other: each is derived from the same recorded `location` and each must prove
+ * strict containment on its own.
  *
  * Two rules, in order, neither of them a guess:
  *
@@ -128,7 +139,11 @@ export type LocateAppRootResult =
  *     REFUSE rather than pick.
  *  2. **Location.** No marker anywhere, and the caller supplied the capture's
  *     own recorded `location` (`RestoreIndexEntry.location`): the app root is
- *     at that absolute path reproduced under `destination`. This is the ONLY
+ *     that path reproduced under `destination`, in EITHER of the two layouts
+ *     above. If both forms resolve to real, contained, non-empty directories
+ *     the result is ambiguous and REFUSED, exactly as two markers are — a
+ *     delivered tree that answers to both descriptions is not one this can
+ *     pick between. This is the ONLY
  *     rule that can work for a capture taken before install identity existed
  *     (spec 006) — it has no `.hola` to find, and rule 1 alone would make
  *     every inference-identified candidate (spec 008 US5, FR-048-FR-052)
@@ -190,25 +205,53 @@ export async function locateAppRootInTree(
   if (matches.length > 1) return { ok: false, matchCount: matches.length };
 
   // Rule 2 — no marker anywhere in the delivered tree.
-  const hinted = await resolveLocationHint(realDestination, opts.locationHint, markerDir);
-  return hinted ? { ok: true, path: hinted, via: 'location' } : { ok: false, matchCount: 0 };
+  const hinted = await resolveLocationHints(realDestination, opts.locationHint, markerDir);
+  if (hinted.length === 1) return { ok: true, path: hinted[0]!, via: 'location' };
+  return { ok: false, matchCount: hinted.length };
 }
 
 /**
- * `<destination>/<locationHint without its leading separator>`, but only when
- * that path is a real directory, strictly inside `destination` after both
- * sides are `realpath`'d, and actually holds content. Anything else — a hint
- * with `..`, a hint naming the destination itself, a symlinked tail, a path
- * that doesn't exist or is empty — yields `undefined`, and the caller refuses.
+ * Every directory the recorded `location` could name under `destination`, in
+ * the two layouts providers actually produce (#511): the whole path, and its
+ * last segment alone. Deduplicated by resolved path, so a single-segment
+ * `location` yields one candidate rather than two identical ones.
+ *
+ * Returning a LIST rather than a first match is deliberate: if a delivered
+ * tree answers to both descriptions, that is an ambiguity the caller must
+ * refuse, not something to resolve by rule order. Ordering the forms by
+ * preference would silently pick one and be wrong in whichever direction the
+ * provider did not intend.
  */
-async function resolveLocationHint(
+async function resolveLocationHints(
   realDestination: string,
   locationHint: string | undefined,
   markerDir: string,
-): Promise<string | undefined> {
-  const relative = locationHint?.trim().replace(/^[/\\]+/, '');
-  if (!relative) return undefined;
+): Promise<string[]> {
+  const relative = locationHint?.trim().replace(/^[/\\]+/, '').replace(/[/\\]+$/, '');
+  if (!relative) return [];
 
+  const last = basename(relative);
+  const forms = last && last !== relative ? [relative, last] : [relative];
+
+  const found: string[] = [];
+  for (const form of forms) {
+    const hit = await resolveOneLocationHint(realDestination, form, markerDir);
+    if (hit && !found.includes(hit)) found.push(hit);
+  }
+  return found;
+}
+
+/**
+ * `<destination>/<form>`, but only when that path is a real directory, strictly
+ * inside `destination` after both sides are `realpath`'d, and actually holds
+ * content. Anything else — a form with `..`, one naming the destination itself,
+ * a symlinked tail, a path that doesn't exist or is empty — yields `undefined`.
+ */
+async function resolveOneLocationHint(
+  realDestination: string,
+  relative: string,
+  markerDir: string,
+): Promise<string | undefined> {
   const candidate = resolve(realDestination, relative);
   if (!isStrictlyInside(realDestination, candidate)) return undefined;
 

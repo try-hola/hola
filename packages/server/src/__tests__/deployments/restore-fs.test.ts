@@ -17,7 +17,7 @@
  *    the staging root and can create one pointing at any path it can see.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtemp, mkdir, writeFile, rm, symlink, readFile, readdir, lstat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, symlink, readFile, readdir, lstat, realpath } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -306,5 +306,83 @@ describe('landDirInto', () => {
     const entries = (await readdir(dest)).sort();
     expect(entries).toEqual([MARKER, 'new.txt']);
     expect((await lstat(dest)).isDirectory()).toBe(true);
+  });
+});
+
+/**
+ * #511 — the location rule must tolerate BOTH provider layouts.
+ *
+ * Measured against a live Backrest/restic v1.14.1: restoring
+ * `/srv/hola/apps/wiki-1a2b3c4d` into a target lands it at
+ * `<target>/wiki-1a2b3c4d` — the LAST SEGMENT only. A borg-shaped restore, and
+ * restic's own full-path target, reproduce the whole absolute path. The layout
+ * is a property of the provider, not of the contract.
+ *
+ * This only bites captures with NO marker — the pre-spec-006 ones that US5
+ * (FR-048–FR-052) exists to serve, where the hint is the only rule available.
+ * A marker-bearing capture is found by rule 1 at any depth, which is why the
+ * DR rehearsal passed without this fix.
+ */
+describe('locateAppRootInTree — the location rule tolerates both provider layouts (#511)', () => {
+  const LOCATION = '/srv/hola/apps/wiki-1a2b3c4d';
+
+  test('absolute-path layout: <dest>/srv/hola/apps/wiki-1a2b3c4d', async () => {
+    const dest = join(root, 'dest');
+    const payload = join(dest, 'srv/hola/apps/wiki-1a2b3c4d');
+    await makeMarkerlessAppRoot(payload);
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: LOCATION });
+    expect(result).toMatchObject({ ok: true, via: 'location' });
+    expect((result as { path: string }).path).toBe(await realpath(payload));
+  });
+
+  test('last-segment layout (Backrest): <dest>/wiki-1a2b3c4d', async () => {
+    const dest = join(root, 'dest');
+    const payload = join(dest, 'wiki-1a2b3c4d');
+    await makeMarkerlessAppRoot(payload);
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: LOCATION });
+    expect(result).toMatchObject({ ok: true, via: 'location' });
+    expect((result as { path: string }).path).toBe(await realpath(payload));
+  });
+
+  test('BOTH layouts present is ambiguous and refused — not resolved by rule order', async () => {
+    const dest = join(root, 'dest');
+    await makeMarkerlessAppRoot(join(dest, 'srv/hola/apps/wiki-1a2b3c4d'));
+    await makeMarkerlessAppRoot(join(dest, 'wiki-1a2b3c4d'));
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: LOCATION });
+    expect(result).toEqual({ ok: false, matchCount: 2 });
+  });
+
+  test('an empty last-segment directory is not a payload, so the absolute form still wins alone', async () => {
+    const dest = join(root, 'dest');
+    await makeMarkerlessAppRoot(join(dest, 'srv/hola/apps/wiki-1a2b3c4d'));
+    await mkdir(join(dest, 'wiki-1a2b3c4d'), { recursive: true }); // empty
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: LOCATION });
+    expect(result).toMatchObject({ ok: true, via: 'location' });
+    expect((result as { path: string }).path).toBe(await realpath(join(dest, 'srv/hola/apps/wiki-1a2b3c4d')));
+  });
+
+  test('a single-segment location yields ONE candidate, not two identical ones', async () => {
+    const dest = join(root, 'dest');
+    const payload = join(dest, 'wiki-1a2b3c4d');
+    await makeMarkerlessAppRoot(payload);
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: 'wiki-1a2b3c4d' });
+    expect(result).toMatchObject({ ok: true, via: 'location' });
+  });
+
+  test('containment still holds for the last-segment form: a traversing location is refused', async () => {
+    const dest = join(root, 'dest');
+    await mkdir(dest, { recursive: true });
+    await makeMarkerlessAppRoot(join(root, 'outside'));
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: '/srv/hola/apps/../../../outside' });
+    expect(result).toEqual({ ok: false, matchCount: 0 });
+  });
+
+  test('a symlinked last-segment form is refused rather than followed', async () => {
+    const dest = join(root, 'dest');
+    await mkdir(dest, { recursive: true });
+    await makeMarkerlessAppRoot(join(root, 'elsewhere'));
+    await symlink(join(root, 'elsewhere'), join(dest, 'wiki-1a2b3c4d'));
+    const result = await locateAppRootInTree(dest, MARKER, { locationHint: LOCATION });
+    expect(result).toEqual({ ok: false, matchCount: 0 });
   });
 });
