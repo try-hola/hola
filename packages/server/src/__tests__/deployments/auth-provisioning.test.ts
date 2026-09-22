@@ -647,6 +647,33 @@ describe('Auth provisioning lifecycle', () => {
       expect(doc.services.sidekick?.environment?.MY_KNOB).toBe('true');
     });
 
+    test('those same services join the hola network, and ONLY ingress keeps the routing alias', async () => {
+      const sys = makeSystem({ auth: undefined, provides: ['backup@1'], withContractTokens: true });
+      const created = await sys.deployments.createFromDraft({
+        draftId: await finalizedMultiServiceDraft(sys.drafts),
+        name: 'gitea',
+        grants: ['backup@1'],
+      });
+      expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+      const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+      const doc = parse(raw) as {
+        networks?: Record<string, unknown>;
+        services: Record<string, { networks?: Record<string, { aliases?: string[] }> }>;
+      };
+
+      // A token with no route to hola-server is as useless as no token.
+      expect(doc.services.gitea?.networks?.hola).toBeDefined();
+      expect(doc.services.sidekick?.networks?.hola).toBeDefined();
+      expect(doc.networks?.hola).toMatchObject({ external: true });
+
+      // The alias belongs to ingress ALONE: on a second container it would make
+      // Traefik round-robin the app's public traffic onto something that does
+      // not serve it.
+      expect(doc.services.gitea?.networks?.hola?.aliases?.length ?? 0).toBeGreaterThan(0);
+      expect(doc.services.sidekick?.networks?.hola?.aliases).toBeUndefined();
+    });
+
     test('auth env stays INGRESS-ONLY — it configures the app\'s front door, not every container', async () => {
       const sys = makeSystem({ auth: OIDC_AUTH, provides: ['backup@1'], withContractTokens: true });
       const created = await sys.deployments.createFromDraft({

@@ -98,11 +98,11 @@ import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
 import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN, USER_EMAIL_TOKEN } from '@hola/shared/compose-validate';
-import { attachToHolaNetwork, injectEnvironment } from './compose-network';
+import { attachToHolaNetwork, attachContractServicesToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
-import { APPS_DATA_CAPABILITY, injectReadonlyMount, injectContainerLogsSource, injectWritableMount, injectContractEnvironment } from './compose-mounts';
+import { APPS_DATA_CAPABILITY, injectReadonlyMount, injectContainerLogsSource, injectWritableMount, injectContractEnvironment, CONTAINER_LOGS_PROXY_SERVICE } from './compose-mounts';
 import {
   BACKUP_CONTRACT_REF,
   RESTORE_CONTRACT_REF,
@@ -2180,6 +2180,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // them, leaving the provider half inoperable with consent recorded.
     if (Object.keys(contractEnv).length > 0) {
       content = injectContractEnvironment(content, contractEnv);
+      // A token with no route to the API is as useless as no token: the same
+      // services must also be able to resolve `hola-server` (#509).
+      content = attachContractServicesToHolaNetwork(content, {
+        skipServices: [CONTAINER_LOGS_PROXY_SERVICE],
+      });
     }
 
     // Resolve the per-app data root: apps declare persistent storage under the

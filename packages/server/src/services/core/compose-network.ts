@@ -105,6 +105,56 @@ export function attachToHolaNetwork(composeYaml: string, opts: AttachOptions): s
 }
 
 /**
+ * Attach a contract provider's NON-ingress services to the external routing
+ * network so they can reach the server's API (#509, second half).
+ *
+ * A credential with no route to the API is as useless as no credential. The
+ * ingress service is joined by `attachToHolaNetwork` because Traefik has to
+ * reach it; a provider whose contract work runs in its own long-running process
+ * — which `restore@1` forces — was left on the project network only, where
+ * `hola-server` does not resolve. So the set of services trusted with a contract
+ * token and the set able to use it must be the same set.
+ *
+ * **No routing alias is applied here.** The alias belongs to the ingress service
+ * alone: adding it to a second container would make Traefik round-robin the
+ * app's public traffic across containers that do not serve it.
+ *
+ * Skips `hola-docker-proxy` for the same reason the credential injection does —
+ * it is platform-injected, deliberately isolated from this network (see
+ * `compose-mounts.ts`), and giving it ambient reach would undo that.
+ * Idempotent: a service already on the network keeps the membership (and alias)
+ * it has.
+ */
+export function attachContractServicesToHolaNetwork(
+  composeYaml: string,
+  opts: { networkName?: string; skipServices?: string[] } = {},
+): string {
+  const network = opts.networkName ?? 'hola';
+  const skip = new Set(opts.skipServices ?? []);
+  const doc = (parse(composeYaml) ?? {}) as ComposeDoc;
+  const services = doc.services;
+  if (!services || typeof services !== 'object' || Object.keys(services).length === 0) {
+    return composeYaml;
+  }
+
+  doc.networks = doc.networks ?? {};
+  if (!doc.networks[network]) doc.networks[network] = { external: true };
+
+  for (const name of Object.keys(services)) {
+    if (skip.has(name)) continue;
+    const service = services[name];
+    if (!service || typeof service !== 'object') continue;
+    const hadNetworks = service.networks !== undefined;
+    const nets = toNetworkMap(service.networks);
+    if (nets[network] === undefined) nets[network] = {};
+    if (!hadNetworks) nets.default = {};
+    service.networks = nets;
+  }
+
+  return stringify(doc);
+}
+
+/**
  * Return the Compose YAML with the given environment merged into the ingress
  * service's `environment` block (as a map). Used to inject provisioned auth
  * settings (OIDC client id/secret/issuer/redirect) so the app picks them up on
