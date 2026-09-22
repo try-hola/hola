@@ -2283,16 +2283,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     };
     content = applyPlatformDefaults(content, composeDefaultsConfig, { allowPrivilegeEscalationServices, labels });
 
-    // Provider grants (ADR 0004 §4 / spec 004): read once, reused for both
-    // grant kinds below, so a provider holding both never re-derives the set
-    // twice or risks the two branches disagreeing about what's granted.
-    const granted = await this.readActiveGrantedContracts(deployment);
-    // The privilege KINDS those refs actually carry for THIS install (#496):
-    // the live table's kind for each consented ref, intersected with the kinds
-    // recorded at consent time. Every grant branch below tests this set — never
-    // the table — so a change to a shipped contract's `providerGrant` cannot
-    // widen what an existing install holds.
-    const grantedKinds = await this.readActiveGrantKinds(deployment, granted);
+    // Provider grants (ADR 0004 §4 / spec 004 / #496): the privilege KINDS this
+    // install actually holds — the active release's declared `provides`,
+    // intersected with the refs the operator consented to, resolved to kinds
+    // against the live table, intersected again with the kinds recorded at
+    // consent time. Read ONCE and reused by every grant branch below, so a
+    // provider holding several never re-derives the set or risks two branches
+    // disagreeing; and every branch tests this set rather than the table, so a
+    // change to a shipped contract's `providerGrant` cannot widen what an
+    // existing install holds.
+    const grantedKinds = await this.readActiveGrantKinds(deployment);
 
     // Host paths the PLATFORM is about to bind into this app's containers, as
     // it grants them. Collected here rather than re-derived later so the
@@ -2311,7 +2311,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // role the app fills, is disclosed to the operator, and is recorded per
     // install — rather than living in a manifest line the person bearing the risk
     // never sees. The grant must be BOTH declared (manifest `provides`) and
-    // consented to (`deployment.grantedContracts`); either alone grants nothing.
+    // consented to (`deployment.grantedContracts`, and its privilege recorded in
+    // `deployment.grantedPrivileges`); any one of the three alone grants nothing.
     if (grantedKinds.includes('apps-data')) {
       content = injectReadonlyMount(content, { hostPath: this.appsBindRoot() });
       platformMounts.push(this.appsBindRoot());
@@ -2350,7 +2351,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     // restore@1's staging grant (spec 008): a writable mount of ONE
     // platform-owned scratch directory, sibling to the apps root — never any
-    // app's data root, never the apps root itself (FR-011). Same `granted`
+    // app's data root, never the apps root itself (FR-011). Same `grantedKinds`
     // read as the two branches above, so a declared-but-unconsented provider
     // role (an upgrade the operator hasn't consented to yet) takes NONE of
     // these three branches (FR-014, SC-003).
@@ -2578,8 +2579,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    */
   private async readActiveGrantKinds(
     deployment: EnhancedDeploymentDetail,
-    granted: string[],
   ): Promise<ProviderGrantKind[]> {
+    const granted = await this.readActiveGrantedContracts(deployment);
     const recorded = await this.readRecordedGrantPrivileges(deployment);
     const { kinds, widened } = resolveGrantKinds(granted, recorded, this.contractTable);
     for (const { ref, kind } of widened) {
