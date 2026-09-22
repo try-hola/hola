@@ -102,7 +102,7 @@ import { attachToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
 import { APP_REGISTRY_CAPABILITY, REGISTRY_FILENAME, buildRegistry, type RegistryApp } from './app-registry';
-import { APPS_DATA_CAPABILITY, injectReadonlyMount, injectContainerLogsSource, injectWritableMount } from './compose-mounts';
+import { APPS_DATA_CAPABILITY, injectReadonlyMount, injectContainerLogsSource, injectWritableMount, injectContractEnvironment } from './compose-mounts';
 import {
   BACKUP_CONTRACT_REF,
   RESTORE_CONTRACT_REF,
@@ -2165,10 +2165,21 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // Inject provisioned auth env into the ingress service. NOT swallowed: a
     // failure here must fail the deploy rather than silently ship an app whose
     // auth was never wired (a security-relevant bypass).
-    const envToInject = { ...injectedEnv, ...contractEnv };
-    const hasSecret = Object.keys(envToInject).length > 0;
-    if (hasSecret) {
-      content = injectEnvironment(content, envToInject, { ingressService });
+    // Either kind of injected value can be a secret, so the runtime compose's
+    // 0600 mode below is gated on both.
+    const hasSecret = Object.keys(injectedEnv).length + Object.keys(contractEnv).length > 0;
+    // Auth env stays INGRESS-ONLY: it configures the app's own front door, which
+    // is the ingress service by definition.
+    if (Object.keys(injectedEnv).length > 0) {
+      content = injectEnvironment(content, injectedEnv, { ingressService });
+    }
+    // Contract credentials go to every service the app declares (#509). A
+    // provider whose contract work runs in a separate long-running process —
+    // which `restore@1` forces, since Backrest has no restore-triggered hook —
+    // otherwise received the grant's elevated mounts with no credential to use
+    // them, leaving the provider half inoperable with consent recorded.
+    if (Object.keys(contractEnv).length > 0) {
+      content = injectContractEnvironment(content, contractEnv);
     }
 
     // Resolve the per-app data root: apps declare persistent storage under the

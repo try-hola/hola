@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { parse } from 'yaml';
 
-import { injectWritableMount, injectReadonlyMount, injectContainerLogsSource, CONTAINER_LOGS_PROXY_SERVICE } from '../../services/core/compose-mounts';
+import { injectWritableMount, injectReadonlyMount, injectContainerLogsSource, injectContractEnvironment, CONTAINER_LOGS_PROXY_SERVICE } from '../../services/core/compose-mounts';
 
 const COMPOSE = 'services:\n  app:\n    image: app:1.0.0\n  worker:\n    image: app:1.0.0\n';
 
@@ -57,5 +57,60 @@ describe('injectWritableMount (spec 008, scenario 8)', () => {
     expect(ro).toContain(':ro');
     const rw = injectWritableMount(COMPOSE, { hostPath: '/srv/hola/apps' });
     expect(rw).not.toContain(':ro');
+  });
+});
+
+/**
+ * `injectContractEnvironment` (#509) — contract credentials must reach every
+ * service the APP declares, not just its ingress service.
+ *
+ * Ingress-only injection was enough for `backup@1`, whose provider scripts run
+ * inside the ingress container because Backrest invokes them itself. `restore@1`
+ * forces a separate long-running poller (Backrest has no restore-triggered hook
+ * condition), and that container was receiving the grant's elevated MOUNTS with
+ * no credential to use them — consent recorded, token withheld, provider half
+ * inoperable. Found on the first live DR rehearsal, not by any unit suite.
+ */
+describe('injectContractEnvironment (#509)', () => {
+  const CONTRACT = { HOLA_CONTRACT_TOKEN: 'hct_dummy', HOLA_API_URL: 'http://hola-server:3001' };
+
+  test('reaches every service, not only the first/ingress one', () => {
+    const out = injectContractEnvironment(COMPOSE, CONTRACT);
+    const doc = parse(out) as { services: Record<string, { environment?: Record<string, string> }> };
+    for (const svc of ['app', 'worker']) {
+      expect(doc.services[svc]!.environment).toMatchObject(CONTRACT);
+    }
+  });
+
+  test('preserves a service\'s own declared environment', () => {
+    const src = 'services:\n  app:\n    image: app:1.0.0\n  poller:\n    image: yq:1\n    environment:\n      MY_KNOB: "true"\n';
+    const out = injectContractEnvironment(src, CONTRACT);
+    const doc = parse(out) as { services: Record<string, { environment?: Record<string, string> }> };
+    expect(doc.services.poller!.environment).toMatchObject({ MY_KNOB: 'true', ...CONTRACT });
+  });
+
+  test('normalizes a KEY=value array form before merging', () => {
+    const src = 'services:\n  app:\n    image: app:1.0.0\n    environment:\n      - MY_KNOB=true\n';
+    const out = injectContractEnvironment(src, CONTRACT);
+    const doc = parse(out) as { services: Record<string, { environment?: Record<string, string> }> };
+    expect(doc.services.app!.environment).toMatchObject({ MY_KNOB: 'true', ...CONTRACT });
+  });
+
+  test('SKIPS the platform-injected docker-proxy sidecar — it is not the app\'s trust boundary', () => {
+    const withProxy = `services:\n  app:\n    image: app:1.0.0\n  ${CONTAINER_LOGS_PROXY_SERVICE}:\n    image: ghcr.io/try-hola/server:1\n`;
+    const out = injectContractEnvironment(withProxy, CONTRACT);
+    const doc = parse(out) as { services: Record<string, { environment?: Record<string, string> }> };
+    expect(doc.services.app!.environment).toMatchObject(CONTRACT);
+    const proxyEnv = doc.services[CONTAINER_LOGS_PROXY_SERVICE]!.environment ?? {};
+    expect(proxyEnv).not.toHaveProperty('HOLA_CONTRACT_TOKEN');
+    expect(proxyEnv).not.toHaveProperty('HOLA_API_URL');
+  });
+
+  test('an empty env map is a no-op, not a rewrite', () => {
+    expect(injectContractEnvironment(COMPOSE, {})).toBe(COMPOSE);
+  });
+
+  test('refuses a compose document with no services rather than silently doing nothing', () => {
+    expect(() => injectContractEnvironment('version: "3"\n', CONTRACT)).toThrow(/no services/);
   });
 });
