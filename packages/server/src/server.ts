@@ -63,6 +63,7 @@ import {
   type PublishRestoreIndexRequest,
   type CompleteRestoreRequestRequest,
 } from '@hola/shared';
+import { BACKUP_CONTRACT_REF } from '@hola/shared/contracts';
 import { resolveListedCandidate, groupIntoLineages, suppressInferredDefault } from './services/core/restore-candidates';
 import { isWellFormedRestoreIndexEntry, MAX_RESTORE_INDEX_ENTRIES, MAX_RESTORE_INDEX_STRING } from './services/core/restore-index';
 
@@ -83,7 +84,7 @@ import { resolveUpgradeTargetFresh } from './services/core/upgrade-target';
 import { createSSEStream, createSSEHeaders } from './utils/sse';
 
 // Phase 1: Enhanced observability imports
-import { mapErrorToResponse, asPromoteValidationError, ValidationError } from './middleware/error-mapping';
+import { mapErrorToResponse, asPromoteValidationError, ValidationError, ForbiddenError } from './middleware/error-mapping';
 
 // Phase 3: Authentication imports
 import { createAuthMiddleware, getPrincipal, SESSION_COOKIE } from './middleware/auth';
@@ -229,7 +230,40 @@ function redactNotifications<T extends { smtpPassword?: string } | undefined>(n:
   return rest as T;
 }
 
-async function route(url: URL, req: Request): Promise<Response> {
+/**
+ * The deployment a brokered-contract call is being made BY (#501): the id the
+ * presented `hct_*` token was minted for, carried on the authenticated
+ * principal's metadata (`services/auth/contract-tokens.ts`).
+ *
+ * Read here, in request scope, and passed explicitly into the service — the
+ * service layer has no request context and must not acquire one. Every broker
+ * route below goes through this function; a route that forgot to would be the
+ * whole of #501 again, which is why the route-level test enumerates them.
+ *
+ * A principal with no `deploymentId` is refused rather than defaulted. That is
+ * every caller except a contract token: an operator key or a dashboard session
+ * reaching a broker route is not "the provider acting on its own work", and the
+ * only way to act as one is to hold that install's own credential.
+ */
+function contractCallerDeploymentId(req: Request): string {
+  const raw = getPrincipal(req)?.metadata?.deploymentId;
+  if (typeof raw !== 'string' || raw.length === 0) {
+    throw new ForbiddenError(
+      'Capability contract broker routes are callable only with a contract-scoped credential minted for a deployment.',
+    );
+  }
+  return raw;
+}
+
+/**
+ * Exported for the route-level tests only (#501): they must present a CONTRACT
+ * principal, and the auth middleware substitutes a wildcard system principal
+ * whenever auth is disabled — which the test environment always is. Driving the
+ * real router directly is what lets them assert that each broker handler threads
+ * the caller's deployment id through. Production entry point is
+ * {@link handleRequest}.
+ */
+export async function route(url: URL, req: Request): Promise<Response> {
   const { pathname, searchParams } = url;
 
   // Health
@@ -1684,7 +1718,7 @@ async function route(url: URL, req: Request): Promise<Response> {
   // token has — and which would be far too much to hand a catalog container.
   if (pathname === API.contracts.backupPrepare && req.method === 'POST') {
     try {
-      const payload = await getServices().deployments.prepareContractBackup();
+      const payload = await getServices().deployments.prepareContractBackup(contractCallerDeploymentId(req));
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1693,7 +1727,7 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === API.contracts.backupFinalize && req.method === 'POST') {
     try {
-      const payload = await getServices().deployments.finalizeContractBackup();
+      const payload = await getServices().deployments.finalizeContractBackup(contractCallerDeploymentId(req));
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1703,11 +1737,23 @@ async function route(url: URL, req: Request): Promise<Response> {
   // Prepare-job status. A thin projection of the job record so the provider's
   // hook script has one thing to poll: `queued|running` → keep waiting,
   // `completed` → capture, anything else → abort (fail closed).
+  //
+  // It answers about a job rather than about contract state, so there is
+  // nothing here to scope to the caller — but it is still a broker route, and a
+  // caller that is not the backup provider has no business polling it (#501).
   const contractStatusMatch = pathname.match(/^\/api\/contracts\/backup\/status\/([^/]+)$/);
   if (contractStatusMatch && req.method === 'GET') {
-    const job = await getServices().jobs.getJob(contractStatusMatch[1]!);
-    if (!job) return notFound();
-    return json({ jobId: job.id, status: job.status });
+    try {
+      await getServices().deployments.assertContractProvider(
+        contractCallerDeploymentId(req),
+        BACKUP_CONTRACT_REF,
+      );
+      const job = await getServices().jobs.getJob(contractStatusMatch[1]!);
+      if (!job) return notFound();
+      return json({ jobId: job.id, status: job.status });
+    } catch (err) {
+      return errorResponse(req, err);
+    }
   }
 
   // restore@1 provider half (spec 008, contracts/api.md). Four routes, all
@@ -1722,7 +1768,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         err.code = 'RESTORE_INDEX_INVALID';
         throw err;
       }
-      const payload = await getServices().deployments.publishRestoreIndex(entries);
+      const payload = await getServices().deployments.publishRestoreIndex(contractCallerDeploymentId(req), entries);
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1731,7 +1777,7 @@ async function route(url: URL, req: Request): Promise<Response> {
 
   if (pathname === API.contracts.restoreRequests && req.method === 'GET') {
     try {
-      const payload = await getServices().deployments.pollRestoreRequests();
+      const payload = await getServices().deployments.pollRestoreRequests(contractCallerDeploymentId(req));
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1741,7 +1787,10 @@ async function route(url: URL, req: Request): Promise<Response> {
   const restoreClaimMatch = pathname.match(/^\/api\/contracts\/restore\/requests\/([^/]+)\/claim$/);
   if (restoreClaimMatch && req.method === 'POST') {
     try {
-      const payload = await getServices().deployments.claimRestoreRequest(decodeURIComponent(restoreClaimMatch[1]!));
+      const payload = await getServices().deployments.claimRestoreRequest(
+        contractCallerDeploymentId(req),
+        decodeURIComponent(restoreClaimMatch[1]!),
+      );
       return json(payload);
     } catch (err) {
       return errorResponse(req, err);
@@ -1756,6 +1805,7 @@ async function route(url: URL, req: Request): Promise<Response> {
         throw new ValidationError("'outcome' must be 'completed' or 'failed'.");
       }
       const payload = await getServices().deployments.completeRestoreRequest(
+        contractCallerDeploymentId(req),
         decodeURIComponent(restoreCompleteMatch[1]!),
         body.outcome,
         // Persisted into the broker store and surfaced in the job's error;
