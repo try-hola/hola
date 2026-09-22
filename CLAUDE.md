@@ -25,8 +25,9 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 ## Commands
 
 - `bun run typecheck` · `bun run lint` · `bun run build` — across all packages.
-- `bun run test` — server unit suite + web tests. `bun --cwd packages/server test`
-  for server only.
+- `bun run test` — server, web AND cli suites (`test:server` / `test:web` /
+  `test:cli` run one each). The CLI was missing from this gate until #505: it is
+  the only package released as a binary, so it was the one with no CI coverage.
 - **Integration tests** (`*.it.ts`) are **excluded** from the default suite and
   **gated on a reachable Docker daemon** (`describe.skipIf(!dockerOk)`). Run via
   `bun run test:integration`. Some boot real Authentik (slow: image pull +
