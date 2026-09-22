@@ -146,6 +146,24 @@ type BackupParticipant = {
 };
 
 /**
+ * Which subsystem a hook run belongs to — the noun its log lines are phrased
+ * with (#494).
+ *
+ * Spec 007 runs restore hooks through `runPreHooksFailClosed`/`runPostHooks`
+ * verbatim (research R14), which is right: declaration order, fail-closed and
+ * started-only cleanup are the same policy, and two copies of it would drift.
+ * What is NOT shareable is the vocabulary. The runner used to hardcode
+ * "backup", so a restore hook announced itself as a backup hook in exactly the
+ * log an operator reads when a failing restore has just failed their whole
+ * install (FR-021) — pointing them at the wrong subsystem at the worst moment.
+ *
+ * Every caller therefore names what it is running, and there is no default:
+ * a future third caller has to say which noun it wants rather than silently
+ * inheriting this one's.
+ */
+type HookVocabulary = 'backup' | 'restore';
+
+/**
  * Where a provider app reaches the server from inside the `hola` network. Not the
  * public URL: that would send an in-cluster call out through Traefik and the
  * forward-auth gate for no reason. Overridable for non-standard stacks.
@@ -1010,12 +1028,13 @@ abstract class InMemoryDeploymentService implements DeploymentService {
    * the mock stays permissive: it resolves every draft to one placeholder app, so
    * enforcing here would spuriously collide unrelated mock-based tests.)
    */
-  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean): InstanceReason | undefined {
+  protected assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean, restoreCandidateId?: string): InstanceReason | undefined {
     void appId;
     void multiInstance;
     void allowMultiple;
     void channel;
     void channelPublished;
+    void restoreCandidateId;
     return undefined;
   }
 
@@ -1265,7 +1284,19 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       // `operator-override` — clarification Q1), so the dashboard can explain it.
       // `channelPublished` comes off the finalized manifest for the same reason
       // `channel` does: the catalog was already read once, at draft creation.
-      const instanceReason = this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple, channel, artifacts?.manifest.channelPublished);
+      //
+      // The chosen restore candidate rides along (#493) so a refusal can say a
+      // restore was in play. A restore source is by definition a live
+      // deployment (FR-048/FR-004a) or a provider's capture of one, so for a
+      // single-instance app this guard is not an edge case on the restore path
+      // — it is the normal outcome, and a conflict about *installing* is a
+      // confusing answer to a request to *restore*. Naming the candidate is
+      // all this does: choosing one deliberately does NOT imply
+      // `allowMultiple`, because the source keeps running and a second live
+      // copy of the same app (resuming with live credentials, per spec 007's
+      // own summary acknowledgement) is precisely what an operator should
+      // confirm rather than inherit from a different choice.
+      const instanceReason = this.assertInstanceAllowed(app, artifacts?.manifest.multiInstance, request.allowMultiple, channel, artifacts?.manifest.channelPublished, restoreFrom?.candidateId);
 
       // One provider per contract per host (spec 004, ADR 0004 §10), checked
       // before consent so an operator is never asked to consent to an install
@@ -3293,14 +3324,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // preHook failure propagates — `promote` decides fail-closed (when the target
     // declares `preUpgradeBackup: required`) vs. best-effort. A consistent dump is
     // worthless if we snapshot anyway.
-    const prepared = await this.runPreHooksFailClosed(participants, (level, message) => {
+    const prepared = await this.runPreHooksFailClosed(participants, 'backup', (level, message) => {
       if (level === 'error') this.logger.warn(message, { deploymentId });
       else this.logger.info(message, { deploymentId });
     });
     if (!prepared.ok && prepared.failed) {
       // Cleanup runs the postHook of every STARTED participation only (FR-007) —
       // the same rule the broker's prepare applies — before propagating.
-      await this.runPostHooks(prepared.started);
+      await this.runPostHooks(prepared.started, 'backup');
       throw new Error(`backup preHook failed: ${prepared.failed.participationId}: ${prepared.failed.output}`);
     }
 
@@ -3334,33 +3365,38 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // started set only, per FR-007.) Best-effort — a cleanup failure must not
       // fail the upgrade; `runPostHooks` already warns per failed participation,
       // so nothing is re-logged here.
-      await this.runPostHooks(participants);
+      await this.runPostHooks(participants, 'backup');
     }
   }
 
   // ---- Backup hooks + the contract broker (#121, #298, ADR 0004 §6) --------
 
   /**
-   * Run one app's backup hook in its own containers.
+   * Run one app's participation hook in its own containers.
    *
-   * The single place a `preHook`/`postHook` is executed, shared by both callers
-   * #121 named: the pre-upgrade snapshot below, and the contract broker further
-   * down. Two implementations of "exec this hook" would drift on exactly the
-   * details that matter — profile resolution, error shape, what gets logged.
+   * The single place a `preHook`/`postHook` is executed, shared by every caller
+   * #121 named — the pre-upgrade snapshot below, the contract broker further
+   * down — and by spec 007's restore. Two implementations of "exec this hook"
+   * would drift on exactly the details that matter: profile resolution, error
+   * shape, what gets logged. `vocabulary` is what keeps the sharing honest —
+   * the policy is one implementation, the noun in the log is the caller's
+   * (#494).
    *
-   * Never throws: a hook failure is data the caller acts on, and the two callers
-   * act differently (the snapshot fails closed; the broker collects and reports).
+   * Never throws: a hook failure is data the caller acts on, and the callers
+   * act differently (the snapshot and the restore fail closed; the broker
+   * collects and reports).
    */
-  private async runBackupHook(
+  private async runParticipationHook(
     deploymentId: string,
     hook: AppBackupHook,
     phase: 'preHook' | 'postHook',
+    vocabulary: HookVocabulary,
     participationId?: string,
   ): Promise<{ ok: boolean; output?: string }> {
-    // A backup hook may target a profiled service (#162); carry the active
-    // profiles so Compose can resolve it.
+    // A hook may target a profiled service (#162); carry the active profiles so
+    // Compose can resolve it.
     const profiles = this.deployments.get(deploymentId)?.selectedProfiles;
-    this.logger.info(`Running backup ${phase}`, { deploymentId, participationId, service: hook.service });
+    this.logger.info(`Running ${vocabulary} ${phase}`, { deploymentId, participationId, service: hook.service });
     try {
       const res = await this.dockerService.composeExec(
         this.runtimeDir(deploymentId),
@@ -3439,20 +3475,24 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * exactly the participations whose preHook actually ran (succeeded or
    * failed) — the set FR-007 says cleanup may touch; anything after the
    * failure never starts and must never be cleaned up.
+   *
+   * `vocabulary` names the subsystem this run belongs to (#494) — the policy is
+   * shared, the noun in the log is not.
    */
   private async runPreHooksFailClosed(
     parts: BackupParticipant[],
+    vocabulary: HookVocabulary,
     log: (level: 'info' | 'error', message: string) => void | Promise<void>,
   ): Promise<{ ok: boolean; started: BackupParticipant[]; failed?: { deploymentId: string; participationId: string; output?: string } }> {
     const started: BackupParticipant[] = [];
     for (const part of parts) {
       if (!part.preHook) continue;
-      const res = await this.runBackupHook(part.deploymentId, part.preHook, 'preHook', part.participationId);
+      const res = await this.runParticipationHook(part.deploymentId, part.preHook, 'preHook', vocabulary, part.participationId);
       started.push(part);
       if (res.ok) {
-        await log('info', `preHook ok: ${part.deploymentId}/${part.participationId}`);
+        await log('info', `${vocabulary} preHook ok: ${part.deploymentId}/${part.participationId}`);
       } else {
-        await log('error', `preHook failed: ${part.deploymentId}/${part.participationId}: ${res.output ?? 'no output'}`);
+        await log('error', `${vocabulary} preHook failed: ${part.deploymentId}/${part.participationId}: ${res.output ?? 'no output'}`);
         return { ok: false, started, failed: { deploymentId: part.deploymentId, participationId: part.participationId, output: res.output } };
       }
     }
@@ -3464,14 +3504,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * in the same forward order, regardless of individual failures (spec 004
    * FR-008). Never throws — a failed cleanup/finalize hook is reported, not a
    * reason to fail the caller.
+   *
+   * `vocabulary` names the subsystem this run belongs to (#494), as in
+   * {@link runPreHooksFailClosed}.
    */
-  private async runPostHooks(parts: BackupParticipant[]): Promise<ContractBackupFinalizeResponse['results']> {
+  private async runPostHooks(parts: BackupParticipant[], vocabulary: HookVocabulary): Promise<ContractBackupFinalizeResponse['results']> {
     const results: ContractBackupFinalizeResponse['results'] = [];
     for (const part of parts) {
       if (!part.postHook) continue;
-      const res = await this.runBackupHook(part.deploymentId, part.postHook, 'postHook', part.participationId);
+      const res = await this.runParticipationHook(part.deploymentId, part.postHook, 'postHook', vocabulary, part.participationId);
       if (!res.ok) {
-        this.logger.warn('Backup postHook failed', {
+        this.logger.warn(`${vocabulary} postHook failed`, {
           deploymentId: part.deploymentId,
           participationId: part.participationId,
           output: res.output,
@@ -3539,16 +3582,16 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // the started set before unwinding, exactly as the failure branch does
         // (FR-007). Otherwise cancelling mid-prepare strands a dump in every app
         // that already ran.
-        await this.runPostHooks(started);
+        await this.runPostHooks(started, 'backup');
         throw new JobCancelledError();
       }
-      const res = await this.runBackupHook(part.deploymentId, part.preHook!, 'preHook', part.participationId);
+      const res = await this.runParticipationHook(part.deploymentId, part.preHook!, 'preHook', 'backup', part.participationId);
       started.push(part);
       if (res.ok) {
-        await ctx.log('info', `preHook ok: ${part.deploymentId}/${part.participationId}`);
+        await ctx.log('info', `backup preHook ok: ${part.deploymentId}/${part.participationId}`);
       } else {
         failure = { deploymentId: part.deploymentId, participationId: part.participationId, output: res.output };
-        await ctx.log('error', `preHook failed: ${part.deploymentId}/${part.participationId}: ${res.output ?? 'no output'}`);
+        await ctx.log('error', `backup preHook failed: ${part.deploymentId}/${part.participationId}: ${res.output ?? 'no output'}`);
       }
       await ctx.setProgress(Math.round(((index + 1) / total) * 100));
       // Fail-closed (FR-006): stop at the first failure. No participation after
@@ -3560,7 +3603,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       // Cleanup runs the postHook of every participation whose preHook was
       // STARTED (succeeded or failed) — never one that never ran (FR-007).
       // `started` is exactly that set, in the same forward order.
-      await this.runPostHooks(started);
+      await this.runPostHooks(started, 'backup');
       throw new Error(
         `backup preHook failed for 1 of ${total} participation(s): ${failure.deploymentId}/${failure.participationId}`,
       );
@@ -3675,7 +3718,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
     // Same postHooks finalize would have run. They remove the dumps; a failed
     // one is reported by runPostHooks and must not stop the rest.
-    const results = await this.runPostHooks(await this.backupParticipants());
+    const results = await this.runPostHooks(await this.backupParticipants(), 'backup');
     await this.brokerState.update((current) => ({
       ...current,
       openSince: undefined,
@@ -3699,7 +3742,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    */
   override async finalizeContractBackup(): Promise<ContractBackupFinalizeResponse> {
     const participants = await this.backupParticipants();
-    const results = await this.runPostHooks(participants);
+    const results = await this.runPostHooks(participants, 'backup');
 
     // Disarm the expiry: the provider came back, so nothing is stranded. Recorded
     // even when a postHook failed — the run is over either way, and leaving the
@@ -4738,13 +4781,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
           postHook: p.postHook,
         }))
       : [];
-    const prepared = await this.runPreHooksFailClosed(participants, (level, message) => {
+    const prepared = await this.runPreHooksFailClosed(participants, 'backup', (level, message) => {
       if (level === 'error') this.logger.warn(message, { deploymentId: deployment.id });
       else this.logger.info(message, { deploymentId: deployment.id });
     });
     if (!prepared.ok && prepared.failed) {
       // Cleanup runs the postHook of every STARTED participation only, same as capturePreUpgradeSnapshot.
-      await this.runPostHooks(prepared.started);
+      await this.runPostHooks(prepared.started, 'backup');
       throw new ConflictError(
         `Restore source quiesce failed (${prepared.failed.participationId}): ${prepared.failed.output ?? 'no output'}`,
         { code: 'RESTORE_HOOK_FAILED', participationId: prepared.failed.participationId },
@@ -4773,7 +4816,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         await tarGzipDir(sourceAppRoot, captureStagingPath);
       } finally {
         // postHook (clean up the dump) always runs, mirroring capturePreUpgradeSnapshot.
-        await this.runPostHooks(participants);
+        await this.runPostHooks(participants, 'backup');
       }
 
       // Everything above this line is read-only with respect to the target
@@ -5039,12 +5082,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       const restoreParticipants: BackupParticipant[] = restoreDeclarations
         .filter((d) => d.hook)
         .map((d) => ({ deploymentId: deployment.id, participationId: d.id, preHook: d.hook }));
-      const hookResult = await this.runPreHooksFailClosed(restoreParticipants, (level, message) => {
+      const hookResult = await this.runPreHooksFailClosed(restoreParticipants, 'restore', (level, message) => {
         if (level === 'error') this.logger.warn(message, { deploymentId: deployment.id });
         else this.logger.info(message, { deploymentId: deployment.id });
       });
       if (!hookResult.ok && hookResult.failed) {
-        await this.runPostHooks(hookResult.started);
+        await this.runPostHooks(hookResult.started, 'restore');
         throw new ConflictError(
           `Restore hook failed for participation '${hookResult.failed.participationId}': ${hookResult.failed.output ?? 'no output'}`,
           {
@@ -5339,8 +5382,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * reason"): `channel` takes precedence over `operator-override` even when
    * both would have worked (clarification Q1) — the channel difference is
    * what actually permitted it, so that's what's recorded.
+   *
+   * `restoreCandidateId` does not change the VERDICT (#493) — a restore choice
+   * never implies `allowMultiple`, precisely because the source keeps running
+   * — it only makes the refusal explain itself: on the restore path this guard
+   * fires for every single-instance app, so a refusal that mentioned only
+   * "already installed" answered a question the operator did not ask.
    */
-  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean): InstanceReason | undefined {
+  protected override assertInstanceAllowed(appId: string, multiInstance?: boolean, allowMultiple?: boolean, channel: string = STABLE_CHANNEL, channelPublished?: boolean, restoreCandidateId?: string): InstanceReason | undefined {
     if (multiInstance) return undefined;
     const existing = [...this.deployments.values()].filter(d => d.app === appId);
     if (existing.length === 0) return undefined;
@@ -5376,6 +5425,22 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       code: 'ALREADY_INSTALLED',
       existing: { id: namedCopy.id, name: namedCopy.name, channel: namedCopy.channel ?? STABLE_CHANNEL },
       channelPublished: channelPublished === true,
+      // Restore context (#493), ADDED to the spec-005 shape rather than
+      // repurposing any of it — the top-level `CONFLICT` code and
+      // `details.code` are what existing clients parse, and they are
+      // untouched. Present only when this refused install was restoring, so
+      // the non-restore refusal is byte-identical to what spec 005 shipped.
+      //
+      // `candidateIsExisting` separates the two honest sentences a client can
+      // say: the copy in the way IS the source being restored from (the
+      // ordinary local-restore case — "this will be a second live copy
+      // alongside the source"), or it is some other copy (a provider-held
+      // capture restored onto a host that already runs the app). Comparing
+      // ids is enough: a provider candidate id is `<deployment>:<capture>`
+      // and can never equal a deployment id.
+      ...(restoreCandidateId
+        ? { restore: { candidateId: restoreCandidateId, candidateIsExisting: restoreCandidateId === namedCopy.id } }
+        : {}),
     };
 
     // Messages are surface-neutral (contracts/api.md): they name the existing

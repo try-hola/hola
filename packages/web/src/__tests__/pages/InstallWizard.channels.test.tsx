@@ -290,12 +290,24 @@ describe('InstallWizard opened via a channel link (spec 005 US3)', () => {
 });
 
 describe('InstallWizard already-installed conflict (spec 005 US4)', () => {
-  function conflictError(overrides: { existing?: { id: string; name: string; channel: string }; channelPublished?: boolean } = {}) {
+  function conflictError(overrides: {
+    existing?: { id: string; name: string; channel: string };
+    channelPublished?: boolean;
+    restore?: { candidateId: string; candidateIsExisting: boolean };
+  } = {}) {
     const existing = overrides.existing ?? { id: 'dep-1', name: 'gitea', channel: 'stable' };
     const channelPublished = overrides.channelPublished ?? true;
     return Object.assign(
       new Error("'gitea' is already installed as 'gitea' and follows 'stable'. This app is single-instance."),
-      { code: 'CONFLICT', details: { code: 'ALREADY_INSTALLED', existing, channelPublished } },
+      {
+        code: 'CONFLICT',
+        details: {
+          code: 'ALREADY_INSTALLED',
+          existing,
+          channelPublished,
+          ...(overrides.restore ? { restore: overrides.restore } : {}),
+        },
+      },
     );
   }
 
@@ -372,6 +384,33 @@ describe('InstallWizard already-installed conflict (spec 005 US4)', () => {
     await waitFor(() => expect(screen.getByText(/gitea is already installed and follows beta\./)).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: /switch gitea/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /install another copy \(operator override\)/i })).toBeInTheDocument();
+  });
+
+  // ---- #493: the panel names the restore when one was in play ----
+  it('#493: with restore details, the panel says the install would be a second live copy', async () => {
+    create.mockRejectedValueOnce(
+      conflictError({
+        existing: { id: 'dep-1', name: 'gitea', channel: 'beta' },
+        restore: { candidateId: 'dep-1', candidateIsExisting: true },
+      }),
+    );
+    await installAndHitConflict(); // requests beta; existing already follows beta
+
+    await waitFor(() => expect(screen.getByText(/second live copy/i)).toBeInTheDocument());
+    expect(screen.getByText(/You chose to restore from gitea, which keeps running/i)).toBeInTheDocument();
+    // The way forward is the override the server requires, already offered.
+    expect(screen.getByRole('button', { name: /install another copy \(operator override\)/i })).toBeInTheDocument();
+    // Still no CLI flags in dashboard copy (spec 005 SC-003).
+    expect(document.body.textContent ?? '').not.toMatch(/--allow-multiple/);
+  });
+
+  it('#493 regression: with no restore details the panel says nothing about a second live copy', async () => {
+    create.mockRejectedValueOnce(conflictError());
+    await installAndHitConflict();
+
+    await waitFor(() => expect(screen.getByText(/gitea is already installed and follows stable\./)).toBeInTheDocument());
+    expect(screen.queryByText(/second live copy/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/keeps running/i)).not.toBeInTheDocument();
   });
 
   it('none of the conflict messages contain literal CLI-flag text', async () => {

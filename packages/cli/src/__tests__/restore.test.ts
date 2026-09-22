@@ -294,4 +294,71 @@ describe('restore-on-install CLI (spec 007)', () => {
     expect(hint).toContain('--name');
     errSpy.mockRestore();
   });
+
+  // ---- #493: --restore-from pairs with --allow-multiple ----
+  it('#493: an ALREADY_INSTALLED refusal carrying restore details pairs the restore with --allow-multiple', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportDeployError(
+      new HolaApiError('', 409, {
+        details: {
+          code: 'ALREADY_INSTALLED',
+          existing: { id: 'mealie-7f61df68', name: 'recipes', channel: 'stable' },
+          channelPublished: true,
+          restore: { candidateId: 'mealie-7f61df68', candidateIsExisting: true },
+        },
+      }),
+    );
+    const hint = String(errSpy.mock.calls.find(call => String(call[0]).startsWith('Hint:'))?.[0] ?? '');
+    errSpy.mockRestore();
+
+    // Built from `details`, with the message blank (contracts/cli.md's rule).
+    expect(hint).toContain('mealie-7f61df68');
+    expect(hint).toContain('--allow-multiple');
+    expect(hint).toContain('--name');
+    // The channel advice is no route to a restore, so it is not offered here.
+    expect(hint).not.toContain('hola channel');
+    expect(hint).not.toContain('--channel');
+  });
+
+  it('#493: a restore from a source that is NOT the copy in the way names that copy instead', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportDeployError(
+      new HolaApiError('', 409, {
+        details: {
+          code: 'ALREADY_INSTALLED',
+          existing: { id: 'mealie-aaaa', name: 'recipes', channel: 'stable' },
+          channelPublished: true,
+          // A provider-held capture (spec 008): the source is not the live copy.
+          restore: { candidateId: 'backrest-bbbb:cap-1', candidateIsExisting: false },
+        },
+      }),
+    );
+    const hint = String(errSpy.mock.calls.find(call => String(call[0]).startsWith('Hint:'))?.[0] ?? '');
+    errSpy.mockRestore();
+
+    expect(hint).toContain('backrest-bbbb:cap-1');
+    expect(hint).toContain("'recipes' (mealie-aaaa)");
+    expect(hint).toContain('--allow-multiple');
+  });
+
+  it('#493 regression: with no restore in details, the spec 005 ALREADY_INSTALLED hint is byte-identical', () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reportDeployError(
+      new HolaApiError('', 409, {
+        details: {
+          code: 'ALREADY_INSTALLED',
+          existing: { id: 'dep-1', name: 'gitea', channel: 'stable' },
+          channelPublished: true,
+        },
+      }),
+    );
+    const hint = String(errSpy.mock.calls.find(call => String(call[0]).startsWith('Hint:'))?.[0] ?? '');
+    errSpy.mockRestore();
+
+    expect(hint).toBe(
+      "Hint: 'gitea' (dep-1) already follows stable. Switch it with 'hola channel dep-1 <channel>', " +
+        "install a separate copy on another published channel with '--channel <name>', " +
+        "or force a second copy with '--allow-multiple --name gitea-2'.",
+    );
+  });
 });

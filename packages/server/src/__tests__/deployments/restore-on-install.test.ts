@@ -14,7 +14,7 @@
  *    containers, so anything asserting on real files or real ordering needs
  *    this harness. Covers the scenarios marked "U-fs".
  */
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -408,6 +408,10 @@ let authConfig: AppAuthConfig | undefined;
 // always has SOME upgrade block, even an empty one) would report. Tests that
 // specifically exercise the unknown-version path set this to `undefined`.
 let upgradeConfig: AppUpgradeMeta | undefined = {};
+// True by default so every restore test can install a second copy freely. The
+// #493 tests flip it off: a single-instance app is the case where the restore
+// path and spec 005's guard actually collide, which is most of the catalog.
+let multiInstanceConfig = true;
 
 function makeCatalog(): CatalogArg {
   return {
@@ -420,7 +424,7 @@ function makeCatalog(): CatalogArg {
       restore: restoreConfig,
       auth: authConfig,
       upgrade: upgradeConfig,
-      multiInstance: true, // lets these tests install a second copy of the same app freely
+      multiInstance: multiInstanceConfig, // lets these tests install a second copy of the same app freely
     }),
   } as unknown as CatalogArg;
 }
@@ -461,6 +465,7 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
     restoreConfig = undefined;
     authConfig = undefined;
     upgradeConfig = {};
+    multiInstanceConfig = true;
     docker = new MockDockerService();
   });
 
@@ -1112,6 +1117,106 @@ describe('Restore-on-install (spec 007) — real filesystem harness', () => {
     expect(existsSync(join(appsRoot, restored.deploymentId, 'anydir', 'x'))).toBe(true);
     // No hook-scoped composeUp — exactly one (the final, full) call.
     expect(docker.composeUpCalls.slice(before)).toHaveLength(1);
+  });
+
+  // ---- #493: the single-instance refusal names the restore -----------------
+  test('#493: restoring from a live source of a single-instance app is refused with the restore named in details', async () => {
+    const system = makeSystem();
+    multiInstanceConfig = false; // the case the restore path always collides with
+    const source = await install(system, { name: 'source' });
+    await writeExtraData(source.deploymentId, 'note.txt', 'hello');
+
+    const restoreFrom: RestoreChoice = { candidateId: source.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] };
+
+    // Without the override: refused — exactly as spec 005 specifies — but the
+    // refusal now says a restore was in play, so a client can explain the
+    // second live copy rather than talk only about installing.
+    let err!: { code?: string; message?: string; details?: Record<string, unknown> };
+    try {
+      await install(system, { name: 'restored', allowMultiple: false, restoreFrom });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      err = e as typeof err;
+    }
+    expect(err.code).toBe('CONFLICT');
+    expect(err.details?.code).toBe('ALREADY_INSTALLED');
+    expect(err.details?.existing).toMatchObject({ id: source.deploymentId, name: 'source' });
+    expect(err.details?.restore).toEqual({ candidateId: source.deploymentId, candidateIsExisting: true });
+    // Messages stay surface-neutral (spec 005 SC-003): the flag lives in the
+    // client's hint, built from `details`.
+    expect(err.message).not.toContain('--allow-multiple');
+    expect(err.message).not.toContain('--restore-from');
+
+    // The verdict itself is unchanged: the override — never the restore choice
+    // — is what permits the second live copy.
+    const restored = await install(system, { name: 'restored', allowMultiple: true, restoreFrom });
+    expect(restored.job?.status).toBe('completed');
+    expect((await system.deployments.getDeployment(restored.deploymentId)).instanceReason).toBe('operator-override');
+  });
+
+  test('#493 regression: a NON-restore ALREADY_INSTALLED refusal carries exactly the spec 005 details, with no restore key', async () => {
+    const system = makeSystem();
+    multiInstanceConfig = false;
+    const source = await install(system, { name: 'source' });
+
+    let err!: { code?: string; details?: Record<string, unknown> };
+    try {
+      await install(system, { name: 'second', allowMultiple: false });
+      throw new Error('expected createFromDraft to reject');
+    } catch (e) {
+      err = e as typeof err;
+    }
+    expect(err.code).toBe('CONFLICT');
+    // Byte-identical to what spec 005 shipped — no added key at all.
+    expect(err.details).toEqual({
+      code: 'ALREADY_INSTALLED',
+      existing: { id: source.deploymentId, name: 'source', channel: 'stable' },
+      channelPublished: false,
+    });
+  });
+
+  // ---- #494: the shared hook runner logs the CALLER's vocabulary ----------
+  test('#494: the restore hook logs restore vocabulary, while quiescing the source still logs backup', async () => {
+    const system = makeSystem();
+
+    // The SOURCE declares a backup participation: quiescing it before the
+    // capture genuinely IS a backup preHook, and must keep saying so.
+    acceptsConfig = ['restore@1', 'backup@1'];
+    backupConfig = [{ id: 'default', preHook: { service: 'demoapp', command: ['pg_dump'] }, postHook: { service: 'demoapp', command: ['rm', 'dump'] } }];
+    const source = await install(system, { name: 'source' });
+    await writeExtraData(source.deploymentId, 'note.txt', 'hello');
+
+    // The TARGET declares a restore hook — the phase that used to announce
+    // itself as "Running backup preHook" on a real host.
+    restoreConfig = [{ id: 'default', hook: { service: 'demoapp', command: ['psql', '-f', 'dump'] } }];
+
+    const logger = (system.deployments as unknown as { logger: { info: (...a: unknown[]) => void } }).logger;
+    const infoSpy = spyOn(logger, 'info');
+    let lines: string[];
+    try {
+      const restored = await install(system, {
+        name: 'restored',
+        restoreFrom: { candidateId: source.deploymentId, carryEnv: false, acknowledge: ['restore-env-not-carried'] },
+      });
+      expect(restored.job?.status).toBe('completed');
+      lines = infoSpy.mock.calls.map(([message]) => String(message));
+    } finally {
+      infoSpy.mockRestore();
+    }
+
+    // The source's quiesce hooks: backup vocabulary, unchanged.
+    expect(lines).toContain('Running backup preHook');
+    expect(lines).toContain('Running backup postHook');
+    expect(lines.some((l) => l.startsWith(`backup preHook ok: ${source.deploymentId}/default`))).toBe(true);
+
+    // The target's restore hook: restore vocabulary, never backup's.
+    expect(lines).toContain('Running restore preHook');
+    expect(lines.some((l) => l.startsWith('restore preHook ok:'))).toBe(true);
+
+    // The bug itself: exactly ONE "Running backup preHook" ran (the source's).
+    // Before #494 the restore hook produced a second, mislabelling the phase
+    // an operator reads when a restore has failed their install.
+    expect(lines.filter((l) => l === 'Running backup preHook')).toHaveLength(1);
   });
 
   // =========================================================================

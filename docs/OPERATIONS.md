@@ -348,6 +348,19 @@ restore choice determines what configuration gets pre-filled, so it has to
 come first. From the CLI: `hola install <app> --restore-from <id|latest>`
 (`--restore-list` to see candidates first, with no draft created).
 
+**It is a second copy, and you have to say so.** The source keeps running — a
+restore never replaces or stops it — so for a single-instance app (most of
+them, including every database-backed app that most needs restore) the
+restoring install trips the single-instance guard and is refused as
+already-installed. That pairing is the normal path here, not an edge case:
+add `--allow-multiple` (and a `--name` that differs from the source's), or
+in the wizard use the conflict panel's "Install another copy (operator
+override)". Choosing a restore source deliberately does **not** imply the
+override: the restored copy comes up live, holding the source's credentials,
+so two live copies of the same app is a thing to confirm rather than infer.
+The refusal itself says a restore was in play, so the CLI hint and the wizard
+panel name the restore rather than talking only about installing.
+
 **What it carries.** Files, always. Configuration — including secrets — only
 when you ask for it (on by default when the candidate has one recorded); an
 app that generates its own secrets on first boot will mint fresh ones for data
@@ -604,6 +617,18 @@ Failed: 'gitea' is already installed as 'gitea' and follows 'stable'. This app i
 Hint: 'gitea' (dep_1) already follows stable. Switch it with 'hola channel dep_1 <channel>',
       install a separate copy on another published channel with '--channel <name>',
       or force a second copy with '--allow-multiple --name gitea-2'.
+```
+
+An install that was **restoring** gets a restore-specific hint instead (the
+channel advice is no route to a restore), because the refusal carries the
+restore choice — see
+[Restore-on-install](#restore-on-install) above:
+
+```
+Failed: 'mealie' is already installed as 'recipes' and follows 'stable'. This app is single-instance.
+Hint: restoring from 'mealie-7f61df68' leaves that copy running, so this install is a SECOND live
+      copy of the app alongside it — which this app is not marked for. Confirm it deliberately:
+      re-run with '--allow-multiple' and a '--name' that differs from the source's.
 ```
 
 ## Troubleshooting
