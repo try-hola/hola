@@ -38,6 +38,12 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 - Always run typecheck + lint + test + build before opening a PR. Note: CI's
   typecheck has caught issues the local run missed after a lint auto-fix — re-run
   typecheck after lint fixes.
+- `bun audit` — the dependency advisory check. **Not `npm audit`**, which fails
+  `ENOLOCK` here: this is a Bun workspace with no npm lockfile. The rule is a
+  hard **zero advisories on `main`**; CI enforces it in a separate workflow
+  (`audit.yml`) that runs on dependency-manifest PRs and weekly, deliberately
+  **not** on every PR. Policy, how to fix one, and the exception procedure:
+  `docs/DEPENDENCY_AUDIT.md`.
 
 ## Architecture notes that matter
 
@@ -498,6 +504,41 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   module top level in a barrel the browser bundle imports. The meaningful
   measurement is that the check **fails on a deliberate error**, not that it
   passes.
+- **Dependency advisories are a hard zero, and the audit is not on every PR
+  (F16).** The lockfile carried 18 package/advisory entries across nine packages
+  — 17 distinct advisories, 10 high — and all 17 turned out to be fixable by a
+  **lockfile refresh within the existing declared semver ranges**: five direct
+  floors raised (`react-router-dom` 7.17.0 → 7.18.4, `postcss`, `vitest` ×2) plus
+  four root `resolutions` entries for transitives whose parents would not lift
+  them (`@tailwindcss/postcss` pins `postcss` to an *exact* version, so only a
+  resolution reaches it). No major bump, no `package.json` range widened, no
+  exception needed; after is **zero**. Only **one** of the nine was shipped to a
+  browser — `react-router-dom`, a runtime dependency of `packages/web` used in 10
+  files — and of its five advisories, three are structurally unreachable here
+  (the SPA mounts `BrowserRouter` under `createRoot`: no SSR, no RSC, no
+  hydration) and one degrades to a DoS of the visitor's own tab. The other eight
+  packages are build/test tooling; `nanoid`'s two `high` entries are the case
+  worth remembering, since it is a direct dependency of nothing, imported
+  nowhere, and reaches the lockfile only as PostCSS's build-time id generator —
+  a raw audit count is not a risk measure. They were patched anyway, because the
+  alternative is a permanent floor of 13 entries in which a real one cannot be
+  seen. **The audit runs where a red result is actionable by whoever sees it**
+  (`.github/workflows/audit.yml`): on PRs that change a dependency manifest, and
+  weekly on `main` — never on every PR, because `bun audit` fails on *any*
+  advisory at *any* severity and an overnight publication would otherwise redden
+  every open PR through no fault of its author. It must not be a required status
+  check: the `paths:` filter makes it report "not run" for most PRs. An advisory
+  that genuinely cannot be fixed gets `--ignore=<GHSA>` **in the workflow file**,
+  not in a config `bun audit` reads on its own, so an exception has to appear in
+  a reviewed diff; the reachability argument, owner and review date go in
+  `docs/DEPENDENCY_AUDIT.md`. Two pieces were deliberately left out: the server
+  image still `COPY . .` + `bun install`s every workspace including
+  devDependencies (#551), and image/OS-layer scanning needs CI to build the image
+  first (#552). **Operational trap:** `bun` does not prune a nested
+  `node_modules/<pkg>` left by an earlier `bun update`, and a stale nested copy
+  silently shadows the hoisted one — three web tests were seen failing against a
+  tree in that state and passing from a clean install of the identical lockfile.
+  Wipe `node_modules` before trusting any test result during dependency work.
 - **Release channels (ADR 0005).** A catalog `versions[]` entry may carry a
   `channel` (default `stable`) — a catalog-index attribute, not a manifest one.
   A version is eligible on channel `c` iff its own channel is `c` or `stable`
@@ -640,6 +681,8 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 ## Where to read more
 
 - `docs/MCP_VM_TESTING.md` — disposable-VM (Proxmox) e2e testing workflow.
+- `docs/DEPENDENCY_AUDIT.md` — `bun audit` policy, how to fix an advisory, the
+  exception procedure, and the F16 triage record.
 - `docs/ARCHITECTURE.md` — system design and deployment lifecycle.
 - `docs/OPERATIONS.md` — install, recovery, backup, SSO.
 - `packages/compose/README.md` — the production stack, catalog, and Authentik setup.

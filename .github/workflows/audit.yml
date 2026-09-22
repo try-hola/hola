@@ -1,0 +1,62 @@
+# Dependency advisory audit (F16). See docs/DEPENDENCY_AUDIT.md.
+#
+# `bun audit` exits non-zero on ANY advisory at ANY severity, so where this runs
+# is the whole design question. Two failure modes to avoid:
+#
+#   * Gate every PR on it, and an advisory published overnight turns every open
+#     PR red through no fault of its author — who then learns to ignore it.
+#   * Make it warning-only, and nobody looks at it at all.
+#
+# So it runs in exactly the two places where a red result is actionable by
+# whoever sees it:
+#
+#   * On a PR that CHANGES a dependency manifest (`bun.lock` / any
+#     `package.json`). If you moved the dependencies, you own the audit result.
+#     A PR that touches no manifest does not trigger this workflow at all.
+#   * On a weekly schedule against `main`, where a NEW advisory is the point of
+#     the run rather than collateral damage to someone's unrelated change. GitHub
+#     emails the repository owner when a scheduled workflow fails, and the run
+#     stays red until the advisory is fixed or an exception is recorded.
+#
+# Do NOT add this as a required status check in branch protection: the
+# `paths:` filter means it reports "not run" (not "skipped-success") for the
+# majority of PRs, which would block them from merging.
+name: Dependency audit
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'bun.lock'
+      - 'package.json'
+      - 'packages/*/package.json'
+      - '.github/workflows/audit.yml'
+  schedule:
+    # Mondays, 06:17 UTC. Off the hour so it does not queue behind the rest of
+    # the world's cron jobs.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: .bun-version
+
+      # --frozen-lockfile so the audit judges the resolution tree that is
+      # actually committed, not one re-resolved at job time.
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # Any advisory fails the job. If one genuinely cannot be fixed, add
+      # `--ignore=<GHSA-id>` HERE (visible in a reviewed diff) and record the
+      # reachability decision, owner and review date in
+      # docs/DEPENDENCY_AUDIT.md. There are no exceptions today.
+      - name: Audit dependencies
+        run: bun audit

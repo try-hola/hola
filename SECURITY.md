@@ -6,6 +6,14 @@ Hola is under active development and does not yet maintain long-term support
 branches. Security fixes are applied to the latest release and to `main`. Please
 run a recent release before reporting an issue.
 
+## Dependency advisories
+
+Advisories against Hola's own dependency tree do not need a private report — they
+are already public. `bun audit` must report **zero** on `main`, enforced by
+[`.github/workflows/audit.yml`](.github/workflows/audit.yml). The policy, how a
+finding is fixed, and the procedure for the rare advisory that cannot be fixed
+are in [`docs/DEPENDENCY_AUDIT.md`](docs/DEPENDENCY_AUDIT.md).
+
 ## Reporting a vulnerability
 
 **Please do not open a public issue for security vulnerabilities.**
