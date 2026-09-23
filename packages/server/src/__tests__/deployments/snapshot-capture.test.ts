@@ -30,6 +30,7 @@
  * the existing Linux one) is #549 — judged not worth a second runner for a P2.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { randomBytes } from 'crypto';
 import { spawnSync } from 'child_process';
 import { mkdtemp, mkdir, rm, writeFile, appendFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -65,6 +66,12 @@ describe('F15: a capture proves it produced an archive', () => {
     await mkdir(binDir, { recursive: true });
     await writeFile(join(src, 'state.txt'), 'the app data');
     await writeFile(join(src, 'nested', 'more.txt'), 'more app data');
+    // Incompressible padding, so the archive is reliably kilobytes rather than
+    // ~200 bytes. The truncation test below has to cut a real gzip stream: with
+    // only the two text files above, the whole archive is ~150-200 bytes and the
+    // cut was a no-op on some tar/gzip builds, which made that test pass by
+    // accident locally and fail on CI. Random bytes so gzip cannot shrink them.
+    await writeFile(join(src, 'blob.bin'), randomBytes(64 * 1024));
     savedPath = process.env.PATH;
   });
 
@@ -176,7 +183,11 @@ describe('F15: a capture proves it produced an archive', () => {
   test('a truncated archive is a failure even though the file is non-empty', async () => {
     await fakeTar(GNU_BANNER, [
       '"$REAL_TAR" "$@" || exit $?',
-      'head -c 200 "$2" > "$2.part" && mv "$2.part" "$2"',
+      // Cut HALF of whatever tar actually wrote. A fixed byte count is not
+      // safe: if the archive is smaller than it, `head` copies the file whole
+      // and the "truncated" archive is perfectly valid.
+      'sz=$(wc -c < "$2")',
+      'head -c $((sz / 2)) "$2" > "$2.part" && mv "$2.part" "$2"',
       'exit 0',
     ].join('\n'));
 
