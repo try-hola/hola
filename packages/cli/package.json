@@ -22,7 +22,7 @@
     "eventsource-parser": "^4.1.0",
     "picocolors": "^1.1.1",
     "sade": "^1.8.1",
-    "undici": "^8.4.1"
+    "undici": "^8.12.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -30,6 +30,6 @@
     "eslint": "^10.5.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.61.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }
