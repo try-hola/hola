@@ -311,4 +311,14 @@ describe('coerceManifestAuth', () => {
       coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'], bypassAuthPasswordEnv: 123 } })
     ).toEqual({ mode: 'forward-auth', forwardAuth: { protectedBypassPaths: ['/opds'] } });
   });
+
+  test('coerces forward-auth identitySecretEnv as a plain key name', () => {
+    expect(coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { identitySecretEnv: 'IDENTITY_SECRET' } }))
+      .toEqual({ mode: 'forward-auth', forwardAuth: { identitySecretEnv: 'IDENTITY_SECRET' } });
+    expect(coerceManifestAuth({ mode: 'forward-auth', forwardAuth: { identitySecretEnv: '' } }))
+      .toEqual({ mode: 'forward-auth', forwardAuth: {} });
+    // Only forward-auth mode parses forwardAuth at all.
+    expect(coerceManifestAuth({ mode: 'native-oidc', forwardAuth: { identitySecretEnv: 'IDENTITY_SECRET' } })?.forwardAuth)
+      .toBeUndefined();
+  });
 });

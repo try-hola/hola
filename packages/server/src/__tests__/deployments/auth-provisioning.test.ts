@@ -1130,6 +1130,49 @@ describe('Auth provisioning lifecycle', () => {
     expect(spy.provisions[0].bypassAuthSecret).toBeUndefined();
   });
 
+  test('forward-auth: identitySecretEnv resolves from the app\'s own appEnv onto the GATED router only', async () => {
+    const auth: AppAuthConfig = {
+      mode: 'forward-auth',
+      forwardAuth: { identitySecretEnv: 'IDENTITY_SECRET' },
+    };
+    const sys = makeSystem({ auth });
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride: COMPOSE,
+      appEnv: [{ key: 'IDENTITY_SECRET', value: 'identity-secret-value', isSecret: true }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    // Persisted on the rule, so a restart rebuild re-emits it.
+    const map = JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json'));
+    expect(map['gitea.local.hola'].forwardAuth.identitySecret).toBe('identity-secret-value');
+
+    const dyn = parse(await sys.storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    const gated = dyn.http.routers[created.deploymentId];
+    const secretMw = `${created.deploymentId}-identity-secret`;
+    expect(gated.middlewares.at(-1)).toBe(secretMw);
+    expect(dyn.http.middlewares[secretMw].headers.customRequestHeaders['X-Hola-Identity-Secret']).toBe('identity-secret-value');
+    // No other router (outpost, any bypass) carries the proof the gate ran.
+    for (const [name, router] of Object.entries(dyn.http.routers as Record<string, { middlewares?: string[] }>)) {
+      if (name !== created.deploymentId) expect(router.middlewares ?? []).not.toContain(secretMw);
+    }
+  });
+
+  test('forward-auth: identitySecretEnv pointing at a missing appEnv key emits no secret (the app then refuses header logins)', async () => {
+    const auth: AppAuthConfig = { mode: 'forward-auth', forwardAuth: { identitySecretEnv: 'IDENTITY_SECRET' } };
+    const sys = makeSystem({ auth });
+    const created = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts), name: 'gitea' });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const map = JSON.parse(await sys.storage.readFileAsString('runtime/traefik/routing-map.json'));
+    expect(map['gitea.local.hola'].forwardAuth.identitySecret).toBeUndefined();
+    const dyn = parse(await sys.storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(dyn.http.middlewares[`${created.deploymentId}-identity-secret`]).toBeUndefined();
+  });
+
   test('forward-auth: route activation is deferred until the gate is provisioned (no ungated window)', async () => {
     const sys = makeSystem({ auth: { mode: 'forward-auth', forwardAuth: {} } });
 

@@ -17,7 +17,7 @@
 
 import { stringify as stringifyYAML } from 'yaml';
 import type { TraefikRoutingRule, TraefikRoutingMap, RoutingConflict, GetSubdomainAvailabilityResponse } from '@hola/shared';
-import { slugifySubdomain, isValidSubdomain } from '@hola/shared';
+import { slugifySubdomain, isValidSubdomain, HOLA_IDENTITY_SECRET_HEADER } from '@hola/shared';
 
 import { getLogger } from '../../lib/logger';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -278,6 +278,27 @@ const AUTHENTIK_AUTH_RESPONSE_HEADERS = [
 ];
 
 /**
+ * One shared middleware, first on EVERY app router: drop any identity header the
+ * client sent. Authentik's headers only mean something when Authentik set them,
+ * which happens on exactly one router per app — the forward-auth-gated one, where
+ * the forwardAuth middleware that runs next replaces them with its verified
+ * values. Everywhere else (bypass and protected-bypass routers, which skip the
+ * gate by design, and every router of an app with no gate at all) Traefik would
+ * otherwise forward a client's `X-authentik-username: admin` untouched, and an
+ * app that logs users in from that header — calibre-web, paperless-ngx, dozzle —
+ * would believe it, because the request genuinely arrives from Traefik. The
+ * identity secret header is stripped for the same reason. Traefik's `headers`
+ * middleware deletes a request header whose configured value is empty.
+ */
+const STRIP_IDENTITY_MIDDLEWARE = 'hola-strip-identity';
+
+function stripIdentityMiddleware(): Record<string, unknown> {
+  const strip: Record<string, string> = {};
+  for (const header of [...AUTHENTIK_AUTH_RESPONSE_HEADERS, HOLA_IDENTITY_SECRET_HEADER]) strip[header] = '';
+  return { headers: { customRequestHeaders: strip } };
+}
+
+/**
  * The TLS block stamped on every emitted router.
  *
  * Empty `tls: {}` keeps the entrypoint's default cert resolver with on-demand,
@@ -328,11 +349,28 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
       tls: routerTlsBlock(baseDomain, certResolver),
     };
 
+    // Every app router strips client-sent identity headers first; a gated router
+    // then has the gate set the verified ones. See STRIP_IDENTITY_MIDDLEWARE.
+    router.middlewares = [STRIP_IDENTITY_MIDDLEWARE];
+    middlewares[STRIP_IDENTITY_MIDDLEWARE] = stripIdentityMiddleware();
+
     if (rule.forwardAuth) {
       const mwName = rule.forwardAuth.name;
       const outpost = rule.forwardAuth.outpostUrl.replace(/\/+$/, '');
       // Gate the app's router behind the outpost.
-      router.middlewares = [mwName];
+      router.middlewares = [STRIP_IDENTITY_MIDDLEWARE, mwName];
+      // The identity secret is set AFTER the gate, on this router alone: it is
+      // the app's proof that the identity headers beside it came from Authentik.
+      // Never on a bypass router (no gate ran) or the outpost router (not the
+      // app). A client-sent copy is already stripped above, and a `headers`
+      // middleware overwrites rather than appends.
+      if (rule.forwardAuth.identitySecret) {
+        const identityMwName = `${rule.serviceName}-identity-secret`;
+        middlewares[identityMwName] = {
+          headers: { customRequestHeaders: { [HOLA_IDENTITY_SECRET_HEADER]: rule.forwardAuth.identitySecret } },
+        };
+        router.middlewares = [STRIP_IDENTITY_MIDDLEWARE, mwName, identityMwName];
+      }
       middlewares[mwName] = {
         forwardAuth: {
           address: `${outpost}/outpost.goauthentik.io/auth/traefik`,
@@ -369,6 +407,7 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
           priority: 100,
           entryPoints: ['websecure'],
           tls: routerTlsBlock(baseDomain, certResolver),
+          middlewares: [STRIP_IDENTITY_MIDDLEWARE],
         };
       });
 
@@ -411,7 +450,7 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
             priority: 100,
             entryPoints: ['websecure'],
             tls: routerTlsBlock(baseDomain, certResolver),
-            middlewares: [basicAuthMwName],
+            middlewares: [basicAuthMwName, STRIP_IDENTITY_MIDDLEWARE],
           };
         });
       }

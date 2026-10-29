@@ -199,11 +199,15 @@ export function coerceManifestAuth(value: unknown): AppAuthConfig | undefined {
     // The env-var KEY (from this app's own defaultEnv) holding the shared
     // protectedBypassPaths password. Just a name, so plain string coercion.
     const bypassAuthPasswordEnv = asString(fa?.bypassAuthPasswordEnv);
+    // The env-var KEY whose value Traefik sends as HOLA_IDENTITY_SECRET_HEADER on
+    // the gated route only. Just a name, like bypassAuthPasswordEnv.
+    const identitySecretEnv = asString(fa?.identitySecretEnv);
     result.forwardAuth = {
       ...(allowedGroups ? { allowedGroups } : {}),
       ...(bypassPaths && bypassPaths.length > 0 ? { bypassPaths } : {}),
       ...(protectedBypassPaths && protectedBypassPaths.length > 0 ? { protectedBypassPaths } : {}),
       ...(bypassAuthPasswordEnv ? { bypassAuthPasswordEnv } : {}),
+      ...(identitySecretEnv ? { identitySecretEnv } : {}),
     };
   }
 

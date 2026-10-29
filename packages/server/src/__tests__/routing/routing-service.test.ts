@@ -142,8 +142,8 @@ describe('RoutingService', () => {
 
     const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
 
-    // The app router is gated by the middleware.
-    expect(dynamic.http.routers['grafana-dep-a'].middlewares).toEqual(['ak-grafana-dep-a']);
+    // The app router strips client-sent identity headers, then is gated.
+    expect(dynamic.http.routers['grafana-dep-a'].middlewares).toEqual(['hola-strip-identity', 'ak-grafana-dep-a']);
     // The middleware points at the outpost's forward-auth endpoint with identity headers.
     const mw = dynamic.http.middlewares['ak-grafana-dep-a'].forwardAuth;
     expect(mw.address).toBe('http://authentik-server:9000/outpost.goauthentik.io/auth/traefik');
@@ -162,7 +162,7 @@ describe('RoutingService', () => {
     expect(map['grafana.local.hola']?.forwardAuth?.name).toBe('ak-grafana-dep-a');
   });
 
-  test('forward-auth bypassPaths emit higher-priority, middleware-less routers (#356)', async () => {
+  test('forward-auth bypassPaths emit higher-priority, ungated routers (#356)', async () => {
     const base = routing.generateRule({ deploymentId: 'remo-dep-a', appName: 'remo', port: 8080 });
     const rule = {
       ...base,
@@ -173,15 +173,16 @@ describe('RoutingService', () => {
     const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
 
     // The base app router is still gated by the forward-auth middleware.
-    expect(dynamic.http.routers['remo-dep-a'].middlewares).toEqual(['ak-remo-dep-a']);
+    expect(dynamic.http.routers['remo-dep-a'].middlewares).toEqual(['hola-strip-identity', 'ak-remo-dep-a']);
 
     // The bypass router matches the exempt prefix, beats the Host router, routes
-    // straight to the app service, and carries NO middleware (the app's own token gates it).
+    // straight to the app service, and carries NO gate (the app's own token gates
+    // it) — only the identity-header strip, since no gate vouched for them.
     const bypass = dynamic.http.routers['remo-dep-a-bypass-0'];
     expect(bypass.rule).toBe('Host(`remo.local.hola`) && PathPrefix(`/api/v1/setup/`)');
     expect(bypass.priority).toBeGreaterThan(1);
     expect(bypass.service).toBe('remo-dep-a');
-    expect(bypass.middlewares).toBeUndefined();
+    expect(bypass.middlewares).toEqual(['hola-strip-identity']);
   });
 
   test('forward-auth protectedBypassPaths emit a shared basicAuth middleware attached only to those routers', async () => {
@@ -201,12 +202,12 @@ describe('RoutingService', () => {
     const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
 
     // The base app router is still gated by the forward-auth middleware.
-    expect(dynamic.http.routers['calibre-dep-a'].middlewares).toEqual(['ak-calibre-dep-a']);
+    expect(dynamic.http.routers['calibre-dep-a'].middlewares).toEqual(['hola-strip-identity', 'ak-calibre-dep-a']);
 
-    // The plain (unprotected) bypass router is unaffected — no middleware.
+    // The plain (unprotected) bypass router is unaffected — no gate.
     const plainBypass = dynamic.http.routers['calibre-dep-a-bypass-0'];
     expect(plainBypass.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/api/v1/setup/`)');
-    expect(plainBypass.middlewares).toBeUndefined();
+    expect(plainBypass.middlewares).toEqual(['hola-strip-identity']);
 
     // ONE shared basicAuth middleware for the deployment, named off the service.
     const mwName = 'calibre-dep-a-bypass-auth';
@@ -229,11 +230,62 @@ describe('RoutingService', () => {
     expect(protected0.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/opds`)');
     expect(protected0.priority).toBeGreaterThan(1);
     expect(protected0.service).toBe('calibre-dep-a');
-    expect(protected0.middlewares).toEqual([mwName]);
+    expect(protected0.middlewares).toEqual([mwName, 'hola-strip-identity']);
 
     const protected1 = dynamic.http.routers['calibre-dep-a-protected-bypass-1'];
     expect(protected1.rule).toBe('Host(`calibre-web.local.hola`) && PathPrefix(`/kobo/`)');
-    expect(protected1.middlewares).toEqual([mwName]);
+    expect(protected1.middlewares).toEqual([mwName, 'hola-strip-identity']);
+  });
+
+  test('every router an identity header could ride in on strips client-sent ones — ungated apps included', async () => {
+    // An app that logs users in from X-authentik-username believes the header
+    // because the request genuinely comes from Traefik. Only the gated router
+    // has Authentik set it; on every other app router a client-supplied copy
+    // must not survive.
+    await routing.activateRoute(routing.generateRule({ deploymentId: 'plain-dep-a', appName: 'plain', port: 80 }));
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(dynamic.http.routers['plain-dep-a'].middlewares).toEqual(['hola-strip-identity']);
+    const strip = dynamic.http.middlewares['hola-strip-identity'].headers.customRequestHeaders;
+    // Traefik deletes a request header whose configured value is empty.
+    for (const header of ['X-authentik-username', 'X-authentik-groups', 'X-authentik-email', 'X-authentik-name', 'X-authentik-uid', 'X-authentik-jwt', 'X-Hola-Identity-Secret']) {
+      expect(strip[header]).toBe('');
+    }
+  });
+
+  test('identitySecret is set on the gated router ONLY — after the gate, never on a bypass or outpost router', async () => {
+    const base = routing.generateRule({ deploymentId: 'calibre-dep-c', appName: 'calibre-web', port: 8083 });
+    const rule = {
+      ...base,
+      forwardAuth: {
+        name: 'ak-calibre-dep-c',
+        outpostUrl: 'http://authentik-server:9000',
+        bypassPaths: ['/open/'],
+        protectedBypassPaths: ['/opds'],
+        bypassAuthSecret: 'reader-secret',
+        identitySecret: 'the-identity-secret',
+      },
+    };
+    await routing.activateRoute(rule);
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    const routers = dynamic.http.routers;
+
+    // Strip first, then the gate sets verified identity, then the secret proves it.
+    expect(routers['calibre-dep-c'].middlewares).toEqual(['hola-strip-identity', 'ak-calibre-dep-c', 'calibre-dep-c-identity-secret']);
+    expect(dynamic.http.middlewares['calibre-dep-c-identity-secret'].headers.customRequestHeaders)
+      .toEqual({ 'X-Hola-Identity-Secret': 'the-identity-secret' });
+
+    // No other router references it — a request that skipped the gate must not
+    // carry the proof that it passed one.
+    for (const name of ['calibre-dep-c-bypass-0', 'calibre-dep-c-protected-bypass-0', 'calibre-dep-c-ak-outpost']) {
+      expect(routers[name]?.middlewares ?? []).not.toContain('calibre-dep-c-identity-secret');
+    }
+  });
+
+  test('a gated app with no identitySecret emits no identity-secret middleware', async () => {
+    const base = routing.generateRule({ deploymentId: 'grafana-dep-b', appName: 'grafana', port: 3000 });
+    await routing.activateRoute({ ...base, forwardAuth: { name: 'ak-grafana-dep-b', outpostUrl: 'http://authentik-server:9000' } });
+    const dynamic = parseYAML(await storage.readFileAsString('runtime/traefik/dynamic.yml'));
+    expect(Object.keys(dynamic.http.middlewares).some(k => k.endsWith('-identity-secret'))).toBe(false);
   });
 
   test('protectedBypassPaths without a secret emits no basicAuth middleware or protected routers (defensive)', async () => {
@@ -347,7 +399,10 @@ describe('RoutingService', () => {
         await routing.emitCoreRoutes(coreRoutesFromEnv({
           HOLA_DOMAIN: 'app.example.com',
           TRAEFIK_DASHBOARD_DOMAIN: HOST,
-          TRAEFIK_DASHBOARD_PASSWORD: 'pw',
+          // Contains `-`, which bcrypt's alphabet ([./A-Za-z0-9]) lacks, so the
+          // hash can never contain it by chance — a bare `pw` matched a random
+          // hash about 1 run in 80.
+          TRAEFIK_DASHBOARD_PASSWORD: 'plaintext-dashboard-pw',
         }));
         const core = parseYAML(await storage.readFileAsString('runtime/traefik/core.yml'));
 
@@ -356,7 +411,7 @@ describe('RoutingService', () => {
         expect(mw.basicAuth.users[0].startsWith('admin:$2')).toBe(true);
         expect(mw.basicAuth.removeHeader).toBe(true);
         // The plaintext never reaches the file Traefik reads.
-        expect(await storage.readFileAsString('runtime/traefik/core.yml')).not.toContain('pw');
+        expect(await storage.readFileAsString('runtime/traefik/core.yml')).not.toContain('plaintext-dashboard-pw');
 
         // The UI route is untouched — this gate is the dashboard's, not everyone's.
         expect(core.http.routers['hola-web'].middlewares).toBeUndefined();

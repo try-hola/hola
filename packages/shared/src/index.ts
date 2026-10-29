@@ -1524,6 +1524,11 @@ export type AppAuthConfig = {
     bypassPaths?: string[];
     protectedBypassPaths?: string[];
     bypassAuthPasswordEnv?: string;
+    // The env-var KEY (from this app's own defaultEnv, `isSecret` + `generate`)
+    // whose value Traefik sends as `HOLA_IDENTITY_SECRET_HEADER` on the gated
+    // route ONLY — so an app trusting `X-authentik-username` can tell a request
+    // Authentik vouched for from one that merely carries the header.
+    identitySecretEnv?: string;
   };
   // Optionally gate a `native-oidc`/no-auth app behind proxy login too.
   fallback?: 'forward-auth';
@@ -2853,7 +2858,22 @@ export type ForwardAuthMiddleware = {
   // hashing stays colocated with Traefik-format concerns. Present only when
   // `protectedBypassPaths` is non-empty.
   bypassAuthSecret?: string;
+  // Raw plaintext value of `auth.forwardAuth.identitySecretEnv`, resolved from
+  // the deployment's active appEnv. The renderer sets it as
+  // `HOLA_IDENTITY_SECRET_HEADER` on the forward-auth-gated router and on no
+  // other — never a bypass router, never the outpost router.
+  identitySecret?: string;
 };
+
+/**
+ * The request header Traefik sets to an app's `identitySecretEnv` value on its
+ * forward-auth-gated route. An app that logs users in from Authentik's identity
+ * headers (`X-authentik-username`, …) should require this header to carry its
+ * secret: Traefik replaces those identity headers on the gated route, but other
+ * containers on the shared ingress network can reach the app directly and set
+ * any header they like — they cannot know the secret.
+ */
+export const HOLA_IDENTITY_SECRET_HEADER = 'X-Hola-Identity-Secret';
 
 export type TraefikRoutingRule = {
   deploymentId: string;
