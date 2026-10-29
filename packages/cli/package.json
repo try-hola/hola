@@ -1,6 +1,6 @@
 {
   "name": "@hola/cli",
-  "version": "0.11.0-rc.10",
+  "version": "0.11.0-rc.11",
   "private": true,
   "type": "module",
   "bin": {
