@@ -2501,8 +2501,10 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
     // The dashboard user who created this deployment, captured from the
     // authenticated principal at create time (the async deploy job has no request
     // context). `email` seeds the `${HOLA_USER_EMAIL}` compose token. Only present
-    // for OIDC-authenticated dashboard users; absent for admin-key / CLI installs.
-    installedBy?: { email?: string; name?: string };
+    // for OIDC-authenticated dashboard users, or — for admin-key / CLI installs —
+    // the host's named admin (`via: 'named-admin'`); absent when neither applies.
+    // `username` seeds `${HOLA_USER_USERNAME}`.
+    installedBy?: { email?: string; name?: string; username?: string; via?: 'principal' | 'named-admin' };
     // The catalog source this app was installed from (defaults to `hola`). Used to
     // check the right source for available updates. `(ref)` for install-by-ref.
     source?: string;
@@ -2748,7 +2750,7 @@ export type CreateDeploymentFromDraftRequest = {
   // The installing user, filled in by the server from the authenticated principal
   // (not sent by clients). Persisted on the deployment so `${HOLA_USER_EMAIL}` can
   // resolve in the async deploy job, which runs without a request context.
-  installedBy?: { email?: string; name?: string };
+  installedBy?: { email?: string; name?: string; username?: string; via?: 'principal' | 'named-admin' };
   // Install a second instance of an app the catalog marks single-instance (#246).
   // By default the server rejects a duplicate install of an app whose manifest
   // does not set `multiInstance: true`; this per-install override bypasses that

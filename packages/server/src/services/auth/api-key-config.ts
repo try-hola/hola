@@ -13,6 +13,7 @@ import { dirname, join } from 'path';
 import { getHolaDataDir } from '../../config/paths';
 import { getLogger } from '../../lib/logger';
 import { ApiKeyAuthProvider, type Principal } from './auth-service';
+import { ADMIN_KEY_PROVIDER } from './installer-identity';
 
 const ADMIN_KEY_PATH = ['config', 'admin-api-key'];
 
@@ -61,6 +62,8 @@ export function createAdminApiKeyProvider(apiKey: string): ApiKeyAuthProvider {
     name: 'Administrator',
     roles: ['admin'],
     capabilities: ['*'],
+    // Lets installer-identity attribute admin-key installs to the named admin.
+    metadata: { provider: ADMIN_KEY_PROVIDER },
   };
   return new ApiKeyAuthProvider({ [apiKey]: admin });
 }

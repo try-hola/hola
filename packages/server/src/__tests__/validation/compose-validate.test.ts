@@ -412,6 +412,7 @@ services:
       DOMAIN: https://\${HOLA_APP_HOST}/
       BASE: \${HOLA_BASE_DOMAIN}
       ADMIN_EMAIL: \${HOLA_USER_EMAIL}
+      ADMIN_USER: \${HOLA_USER_USERNAME}
 `;
       expect(validateComposeDocument(yaml)).toEqual([]);
     });

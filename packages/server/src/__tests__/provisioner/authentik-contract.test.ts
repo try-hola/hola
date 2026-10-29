@@ -1158,6 +1158,38 @@ describe('RealAuthentikProvisionerService — scoped-token bootstrap', () => {
     expect(calls.some(c => c.path.startsWith('/api/v3/core/users/?email='))).toBe(false);
   });
 
+  test('ensureBootstrapAdmin reports the admin identity Authentik holds, not the configured username', async () => {
+    // The user is located BY EMAIL, so a pre-existing account can carry a
+    // different username than HOLA_ADMIN_USERNAME (or the email's local part).
+    // Admin-key installs are attributed to this identity; using the configured
+    // name instead could seed an app admin for whichever user owns THAT name.
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) {
+        return json({ results: [{ pk: 101, username: 'paul', name: 'Paul', last_login: '2026-01-01T00:00:00Z' }] });
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [101] }] });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com', adminUsername: 'me' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    expect(result.identity).toEqual({ username: 'paul', email: 'me@example.com', name: 'Paul' });
+  });
+
+  test('ensureBootstrapAdmin reports the identity of a user it just created', async () => {
+    installFetch((call) => {
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) return json({ results: [] });
+      if (call.method === 'POST' && call.path === '/api/v3/core/users/') {
+        const body = call.body as { username: string; name: string };
+        return json({ pk: 101, username: body.username, name: body.name, last_login: '2026-01-01T00:00:00Z' }, 201);
+      }
+      if (call.method === 'GET' && call.path.startsWith('/api/v3/core/groups/?name=')) return json({ results: [{ pk: 'g1', users: [101] }] });
+      return undefined;
+    });
+    const svc = new RealAuthentikProvisionerService({ ...CONFIG, adminEmail: 'me@example.com' });
+    const result = await svc.ensureBootstrapAdmin('hola-admins');
+    expect(result.identity).toEqual({ username: 'me', email: 'me@example.com', name: 'me' });
+  });
+
   test('ensureBootstrapAdmin skips the recovery link once the admin has logged in', async () => {
     installFetch((call) => {
       if (call.method === 'GET' && call.path.startsWith('/api/v3/core/users/?email=')) {

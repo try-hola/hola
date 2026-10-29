@@ -14,6 +14,9 @@ export interface Principal {
   type: 'user' | 'service' | 'system';
   name: string;
   email?: string;
+  // The identity provider's login name (OIDC `preferred_username`) — what
+  // forward-auth presents to apps as `X-authentik-username`.
+  username?: string;
   roles: string[];
   capabilities: string[];
   metadata?: Record<string, unknown>;

@@ -97,7 +97,7 @@ import type { EventBus } from './event-bus';
 import type { RoutingService } from './routing';
 import type { LoggingService } from './logging';
 import type { ProvisionerService, ProvisionResult } from './provisioner';
-import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN, USER_EMAIL_TOKEN } from '@hola/shared/compose-validate';
+import { APP_DATA_TOKEN, APP_HOST_TOKEN, BASE_DOMAIN_TOKEN, USER_EMAIL_TOKEN, USER_USERNAME_TOKEN } from '@hola/shared/compose-validate';
 import { attachToHolaNetwork, attachContractServicesToHolaNetwork, injectEnvironment } from './compose-network';
 import { applyPlatformDefaults } from './compose-defaults';
 import { composeDefaultsConfig } from '../../config/compose-defaults';
@@ -1585,7 +1585,8 @@ abstract class InMemoryDeploymentService implements DeploymentService {
           owner: 'system',
           tags: [],
           // Captured from the authenticated principal at create time (the deploy
-          // job runs async without a request context). Feeds `${HOLA_USER_EMAIL}`.
+          // job runs async without a request context). Feeds `${HOLA_USER_EMAIL}` and
+          // `${HOLA_USER_USERNAME}`.
           ...(request.installedBy ? { installedBy: request.installedBy } : {}),
           // The catalog source (default `hola`), carried through the finalized
           // manifest, so update detection checks the right source.
@@ -2529,13 +2530,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // is a token. (${HOLA_APP_DATA} above is the storage equivalent.)
     // The installing user's email (captured at create time), so an app can seed
     // its own admin with the operator's identity (e.g. `ADMIN_EMAIL:
-    // "${HOLA_USER_EMAIL}"`). Empty for admin-key/CLI installs — apps that need a
+    // "${HOLA_USER_EMAIL}"`). Empty when nobody is attributable (see
+    // installer-identity: admin-key/CLI installs fall back to the named admin) — apps that need a
     // value regardless carry a compose fallback (`"${ADMIN_EMAIL:-…}"`).
     const userEmail = deployment.metadata.installedBy?.email ?? '';
+    // The installer's identity-provider username, for apps that seed an admin the
+    // forward-auth header (`X-authentik-username`) will later log in as.
+    const userUsername = deployment.metadata.installedBy?.username ?? '';
     content = content
       .replaceAll(APP_HOST_TOKEN, rule.host)
       .replaceAll(BASE_DOMAIN_TOKEN, rule.domain)
-      .replaceAll(USER_EMAIL_TOKEN, userEmail);
+      .replaceAll(USER_EMAIL_TOKEN, userEmail)
+      .replaceAll(USER_USERNAME_TOKEN, userUsername);
 
     // Apply install-wide operational defaults (restart, log rotation,
     // no-new-privileges hardening, optional TZ/limits) to every service. The app
@@ -2661,7 +2667,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // `.env` from the project directory (the runtime dir we run it in). Auth env
     // wins on a key clash; written 0600 since it can hold secrets.
     const appEnv = await this.readActiveAppEnv(deployment);
-    // Expose the installing user's email as a Compose interpolation variable, so an
+    // Expose the installing user's email (and username, `HOLA_USER_USERNAME`, the
+    // same way) as a Compose interpolation variable, so an
     // app can reference it WITH a fallback — `ADMIN_EMAIL: "${HOLA_USER_EMAIL:-…}"` —
     // and Compose supplies the default when the operator has no email (admin-key/CLI
     // installs). This is the recommended form: it needs no wizard field and never
@@ -2669,7 +2676,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // additionally text-substituted in the compose/env above.) The `.env` is
     // interpolation-only — Compose won't inject it into a container that doesn't
     // reference it — so this doesn't leak the operator's email into every app.
-    const interp: Record<string, string> = { HOLA_USER_EMAIL: userEmail, ...appEnv, ...injectedEnv, ...contractEnv };
+    const interp: Record<string, string> = { HOLA_USER_EMAIL: userEmail, HOLA_USER_USERNAME: userUsername, ...appEnv, ...injectedEnv, ...contractEnv };
     const interpKeys = Object.keys(interp);
     if (interpKeys.length > 0) {
       // Also resolve `${HOLA_USER_EMAIL}` inside env VALUES, so an app can set it as a
@@ -2689,6 +2696,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         .map(k => `${k}=${dotenvValue(
           interp[k]
             .replaceAll(USER_EMAIL_TOKEN, userEmail)
+            .replaceAll(USER_USERNAME_TOKEN, userUsername)
             .replaceAll(APP_HOST_TOKEN, rule.host)
             .replaceAll(BASE_DOMAIN_TOKEN, rule.domain)
         )}`)

@@ -389,6 +389,60 @@ describe('Auth provisioning lifecycle', () => {
     expect(raw).toContain('${HOLA_USER_EMAIL:-admin@example.com}');
   });
 
+  test('resolves ${HOLA_USER_USERNAME} three ways — bare in compose, in appEnv values, and as a `:-` interpolation var', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      BARE: "${HOLA_USER_USERNAME}"\n' +
+        '      FALLBACK: "${HOLA_USER_USERNAME:-}"\n',
+      appEnv: [{ key: 'SEED_ADMIN', value: '${HOLA_USER_USERNAME}', isSecret: false }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    const created = await sys.deployments.createFromDraft({
+      draftId,
+      name: 'gitea',
+      installedBy: { email: 'op@example.com', username: 'op', via: 'principal' },
+    });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    expect(env.BARE).toBe('op');
+    const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+    expect(dotenv).toContain('HOLA_USER_USERNAME="op"');
+    expect(dotenv).toContain('SEED_ADMIN="op"');
+    const raw = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/docker-compose.yml`);
+    expect(raw).toContain('${HOLA_USER_USERNAME:-}');
+    const meta = JSON.parse(await sys.storage.readFileAsString(`deployments/${created.deploymentId}/metadata.json`));
+    expect(meta.metadata.installedBy).toEqual({ email: 'op@example.com', username: 'op', via: 'principal' });
+  });
+
+  test('${HOLA_USER_USERNAME} resolves to empty when nobody is attributable — an app must read that as "no admin to seed"', async () => {
+    const sys = makeSystem();
+    const { draftId } = await sys.drafts.createDraft({ appId: 'gitea', version: '1.0.0' });
+    await sys.drafts.updateDraft(draftId, {
+      composeOverride:
+        'services:\n  gitea:\n    image: gitea/gitea:1.21.0\n' +
+        '    environment:\n' +
+        '      BARE: "${HOLA_USER_USERNAME}"\n',
+      appEnv: [{ key: 'SEED_ADMIN', value: '${HOLA_USER_USERNAME}', isSecret: false }],
+    });
+    await sys.drafts.finalizeDraft(draftId);
+
+    // An email-only installer (a record from before usernames were captured) has
+    // no username either.
+    const created = await sys.deployments.createFromDraft({ draftId, name: 'gitea', installedBy: { email: 'op@example.com' } });
+    expect((await waitForJob(sys.jobs, created.jobId!)).status).toBe('completed');
+    const env = await readMaterializedEnv(sys.storage, created.deploymentId);
+    expect(env.BARE ?? '').toBe('');
+    const dotenv = await sys.storage.readFileAsString(`deployments/${created.deploymentId}/runtime/.env`);
+    expect(dotenv).toContain('HOLA_USER_USERNAME=""');
+    expect(dotenv).toContain('SEED_ADMIN=""');
+  });
+
   test('native-oidc credentialsFile: writes the provisioned OIDC creds JSON into the data root before start (for a bundle sidecar to render)', async () => {
     const prev = process.env.HOLA_APPS_BIND_ROOT;
     process.env.HOLA_APPS_BIND_ROOT = join(dataRoot, 'apps');

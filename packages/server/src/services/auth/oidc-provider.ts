@@ -189,6 +189,7 @@ export class OidcAuthProvider implements AuthProvider {
       type: 'user',
       name,
       email: claims.email,
+      ...(claims.preferred_username ? { username: claims.preferred_username } : {}),
       roles: isAdmin ? ['admin'] : ['user'],
       capabilities: isAdmin ? ['*'] : [...READONLY_CAPABILITIES],
       metadata: { provider: 'oidc', groups },

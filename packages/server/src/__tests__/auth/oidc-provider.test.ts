@@ -128,6 +128,19 @@ describe('OidcAuthProvider', () => {
     expect(res.principal?.capabilities).toContain('*');
   });
 
+  it('carries preferred_username as the principal username — the name forward-auth presents as X-authentik-username', async () => {
+    const provider = new OidcAuthProvider();
+    const named = await provider.authenticate(
+      await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc', extra: { email: 'a@b.c', name: 'Ada Lovelace', preferred_username: 'ada' } }),
+    );
+    // `name` stays the display name; the login name is its own field.
+    expect(named.principal?.name).toBe('Ada Lovelace');
+    expect(named.principal?.username).toBe('ada');
+
+    const unnamed = await provider.authenticate(await signToken({ iss: ISSUER, aud: CLIENT_ID, sub: 'abc' }));
+    expect(unnamed.principal?.username).toBeUndefined();
+  });
+
   it('fails closed to read-only when OIDC has no admin group (external IdP)', async () => {
     // beforeEach sets HOLA_OIDC_ISSUER (external IdP) and clears HOLA_OIDC_ADMIN_GROUP,
     // so adminGroup is unset — a valid token must NOT be granted admin.
