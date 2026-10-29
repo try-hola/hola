@@ -23,6 +23,7 @@ import { DEFAULT_ADMIN_GROUP } from '../../config/oidc';
 import type { AuthMode, ProvisionedAuthRef, ForwardAuthMiddleware } from '@hola/shared';
 import { APP_HOST_TOKEN } from '@hola/shared/compose-validate';
 import type { ServiceHealth, HealthCheckable } from './types';
+import type { NamedAdminIdentity } from '../auth/installer-identity';
 
 export interface ProvisionInput {
   /** Stable key for the deployment — NEVER releaseId (rollback keeps the same client). */
@@ -115,6 +116,13 @@ export interface PlatformOidcResult {
   audience: string;
 }
 
+/** The named admin, as provisioned. `identity` is absent when none is configured. */
+export interface BootstrapAdminResult {
+  created: boolean;
+  recoveryLink?: string;
+  identity?: NamedAdminIdentity;
+}
+
 export interface ProvisionerService extends HealthCheckable {
   provision(input: ProvisionInput): Promise<ProvisionResult>;
   deprovision(input: DeprovisionInput): Promise<void>;
@@ -149,7 +157,7 @@ export interface ProvisionerService extends HealthCheckable {
    * password — so the operator signs in as themselves, not the generic akadmin.
    * No-op when no admin email is configured.
    */
-  ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }>;
+  ensureBootstrapAdmin(adminGroup: string): Promise<BootstrapAdminResult>;
   /**
    * Idempotently ensure the platform's shared LDAP directory exists — an LDAP
    * provider bound to an outpost — and return that outpost's API token.
@@ -869,21 +877,26 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
     }
   }
 
-  /** Provision the named admin user + a one-time password-setup recovery link. */
-  async ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }> {
+  /**
+   * Provision the named admin user + a one-time password-setup recovery link.
+   * `identity` is the user as Authentik holds it — found by email, so its
+   * username is read back rather than assumed from config (see installer-identity).
+   */
+  async ensureBootstrapAdmin(adminGroup: string): Promise<BootstrapAdminResult> {
     const email = this.config.adminEmail;
     if (!email) return { created: false };
     const username = this.config.adminUsername || email.split('@')[0];
     const name = this.config.adminName || username;
     try {
       // Find (by email) or create the internal user.
-      const found = await this.api<{ results: Array<{ pk: number; last_login: string | null }> }>(
+      type AkUser = { pk: number; username?: string; name?: string; last_login: string | null };
+      const found = await this.api<{ results: AkUser[] }>(
         'GET', `/api/v3/core/users/?email=${encodeURIComponent(email)}`
       );
       let user = found.results?.[0];
       let created = false;
       if (!user) {
-        user = await this.api<{ pk: number; last_login: string | null }>('POST', '/api/v3/core/users/', {
+        user = await this.api<AkUser>('POST', '/api/v3/core/users/', {
           username, email, name, type: 'internal', is_active: true, path: 'users',
         });
         created = true;
@@ -891,16 +904,19 @@ export class RealAuthentikProvisionerService implements ProvisionerService {
       }
 
       await this.addUserToGroup(adminGroup, user.pk);
+      const identity = user.username
+        ? { username: user.username, email, name: user.name || name }
+        : undefined;
 
       // Only mint a recovery link until they've logged in once, so we don't emit a
       // fresh one on every restart after they're set up.
-      if (user.last_login) return { created };
+      if (user.last_login) return { created, identity };
 
       const recoveryLink = await this.mintRecoveryLink(user.pk);
       if (!recoveryLink) {
         this.logger.warn('Could not mint admin recovery link; set the password via akadmin or configure a recovery flow', { email });
       }
-      return { created, recoveryLink };
+      return { created, recoveryLink, identity };
     } catch (error) {
       this.logger.warn('Could not ensure bootstrap admin user', {
         email, error: error instanceof Error ? error.message : String(error),
@@ -1790,7 +1806,7 @@ export class MockProvisionerService implements ProvisionerService {
     this.logger.debug('Mock ensureAdminGroup', { name });
   }
 
-  async ensureBootstrapAdmin(adminGroup: string): Promise<{ created: boolean; recoveryLink?: string }> {
+  async ensureBootstrapAdmin(adminGroup: string): Promise<BootstrapAdminResult> {
     this.logger.debug('Mock ensureBootstrapAdmin', { adminGroup });
     return { created: false };
   }
@@ -1879,7 +1895,7 @@ export class NoneProvisionerService implements ProvisionerService {
     // No auth backend to hold a group.
   }
 
-  async ensureBootstrapAdmin(): Promise<{ created: boolean; recoveryLink?: string }> {
+  async ensureBootstrapAdmin(): Promise<BootstrapAdminResult> {
     return { created: false };
   }
 

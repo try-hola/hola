@@ -98,6 +98,7 @@ import { createOriginGuardMiddleware } from './middleware/origin-guard';
 import { resolveOidcConfig, setProvisionedOidc } from './config/oidc';
 import { ldapOutpostTokenPath, persistLdapOutpostToken } from './services/auth/ldap-outpost-config';
 import { authConfig } from './config/auth';
+import { resolveInstalledBy, setNamedAdminIdentity } from './services/auth/installer-identity';
 
 
 // Import development tools
@@ -1269,14 +1270,11 @@ export async function route(url: URL, req: Request): Promise<Response> {
       const body = await req.json().catch(() => ({}));
       const services = getServices();
       // Capture the installing user from the authenticated principal so the async
-      // deploy job (which has no request context) can resolve `${HOLA_USER_EMAIL}`.
-      // Only OIDC-authenticated dashboard users carry an email; admin-key/CLI
-      // principals don't, and the token then resolves empty. Server-supplied — we
-      // ignore any client-sent installedBy.
-      const principal = getPrincipal(req);
-      const installedBy = principal?.email
-        ? { email: principal.email, name: principal.name }
-        : undefined;
+      // deploy job (which has no request context) can resolve `${HOLA_USER_EMAIL}`
+      // and `${HOLA_USER_USERNAME}`. An SSO user is themselves; the admin key is
+      // attributed to the host's named admin (see installer-identity). Server-
+      // supplied — we ignore any client-sent installedBy.
+      const installedBy = resolveInstalledBy(getPrincipal(req));
       const payload = await services.deployments.createFromDraft({ ...body, installedBy });
       return json(payload);
     } catch (err) {
@@ -2427,6 +2425,9 @@ async function initializePlatformAuth(): Promise<void> {
         // Optionally provision a named admin (HOLA_ADMIN_EMAIL) and surface its
         // one-time password-setup link so the operator signs in as themselves.
         const admin = await provisioner.ensureBootstrapAdmin(adminGroup);
+        // The named admin as Authentik actually has it — admin-key installs are
+        // attributed to this identity (`${HOLA_USER_USERNAME}`).
+        setNamedAdminIdentity(admin.identity);
         if (admin.recoveryLink) {
           logger.info(
             `=== Hola admin setup: open this one-time link to set your password ===\n${admin.recoveryLink}`,

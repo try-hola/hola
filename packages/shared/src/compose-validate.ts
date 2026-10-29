@@ -183,12 +183,25 @@ export const BASE_DOMAIN_TOKEN = '${HOLA_BASE_DOMAIN}';
  */
 export const USER_EMAIL_TOKEN = '${HOLA_USER_EMAIL}';
 
+/**
+ * The installing user's identity-provider username — the same name forward-auth
+ * presents to the app as `X-authentik-username` — so an app that trusts that
+ * header can seed an admin account the installer will actually be logged in as.
+ * Admin-key and CLI installs resolve it (like `${HOLA_USER_EMAIL}`) to the host's
+ * named admin (`HOLA_ADMIN_EMAIL`) once provisioning has found that user in the
+ * identity provider, and to an empty string otherwise. Apps MUST treat empty as
+ * "no admin to seed" — use the `${HOLA_USER_USERNAME:-}` form, which an older
+ * server that doesn't know the token also resolves to empty.
+ */
+export const USER_USERNAME_TOKEN = '${HOLA_USER_USERNAME}';
+
 /** Every `${HOLA_*}` token the server knows how to resolve. */
 export const KNOWN_PLATFORM_TOKENS: readonly string[] = [
   APP_DATA_TOKEN,
   APP_HOST_TOKEN,
   BASE_DOMAIN_TOKEN,
   USER_EMAIL_TOKEN,
+  USER_USERNAME_TOKEN,
 ];
 
 /**
