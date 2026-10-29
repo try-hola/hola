@@ -3225,6 +3225,35 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     return secret;
   }
 
+  /**
+   * Resolve the value Traefik sends as HOLA_IDENTITY_SECRET_HEADER on the gated
+   * route, from the app's OWN active appEnv (`auth.forwardAuth.identitySecretEnv`).
+   * Undefined when the manifest declares none.
+   *
+   * A pointer at a missing/blank key is a manifest bug, handled like
+   * `resolveBypassAuthSecret`'s: warn and return undefined. That fails closed on
+   * the app's side too — an app configured to require the header never sees it,
+   * so it refuses header logins rather than trusting them unverified.
+   */
+  private async resolveIdentitySecret(
+    deployment: EnhancedDeploymentDetail,
+    forwardAuth: AppAuthConfig['forwardAuth'],
+  ): Promise<string | undefined> {
+    const secretEnv = forwardAuth?.identitySecretEnv;
+    if (!secretEnv) return undefined;
+
+    const appEnv = await this.readActiveAppEnv(deployment);
+    const secret = appEnv[secretEnv];
+    if (!secret) {
+      this.logger.warn('forwardAuth declares identitySecretEnv, but the key is missing/empty in appEnv', {
+        deploymentId: deployment.id,
+        identitySecretEnv: secretEnv,
+      });
+      return undefined;
+    }
+    return secret;
+  }
+
   /** Absolute path to the active release's manifest, or undefined if there's no
    *  active release. Shared by `getConfig`/`updateDeployment` so both operate on
    *  the exact same file `materializeCompose` reads at deploy time. */
@@ -5022,6 +5051,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       middleware = fa.middleware;
       fallbackRef = fa.ref;
     }
+
+    // The identity secret rides on the gate middleware so the renderer can set it
+    // on the gated router — and only there (see HOLA_IDENTITY_SECRET_HEADER).
+    // Only a forward-auth-mode app declares one: `forwardAuth` is parsed for that
+    // mode alone, so a fallback gate never carries it.
+    const identitySecret = await this.resolveIdentitySecret(deployment, auth.forwardAuth);
+    if (middleware && identitySecret) middleware = { ...middleware, identitySecret };
 
     // Persist the provisioned refs so re-deploy reuses them and delete can tear them down.
     deployment.metadata.auth = { mode: auth.mode, ref: result.ref, middleware, fallbackRef };
