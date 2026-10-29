@@ -248,6 +248,10 @@ export function looksLikeOciRef(arg: string): boolean {
  * (passed via `flagVersion`) wins over the inline suffix. Splits on the last `@`
  * so app ids that themselves contain `@` are preserved. Returns `latest` when no
  * version is given anywhere — the server resolves that to the newest release.
+ *
+ * A flag value of `latest` counts as "no flag": it is what the option parser
+ * used to supply as the default on every invocation, which made the flag always
+ * win and silently turned `hola install gitea@1.2.1` into the newest release.
  */
 export function resolveAppAndVersion(
   appId: string,
@@ -256,7 +260,8 @@ export function resolveAppAndVersion(
   const at = appId.lastIndexOf('@');
   const inlineVersion = at > 0 ? appId.slice(at + 1) : undefined;
   const bareAppId = at > 0 ? appId.slice(0, at) : appId;
-  return { appId: bareAppId, version: flagVersion || inlineVersion || 'latest' };
+  const explicitFlag = flagVersion && flagVersion !== 'latest' ? flagVersion : undefined;
+  return { appId: bareAppId, version: explicitFlag || inlineVersion || 'latest' };
 }
 
 /** Parse repeated `--set KEY=VALUE` into a map. */

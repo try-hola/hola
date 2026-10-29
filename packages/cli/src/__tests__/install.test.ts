@@ -531,6 +531,12 @@ describe('resolveAppAndVersion', () => {
     expect(resolveAppAndVersion('gitea@1.0.0', '2.0.0')).toEqual({ appId: 'gitea', version: '2.0.0' });
   });
 
+  it('keeps the inline @version when the flag carries the parser default "latest"', () => {
+    // The shape `hola install gitea@1.2.1` produced while `--app-version` had a
+    // `'latest'` default: the flag always won and the inline pin was dropped.
+    expect(resolveAppAndVersion('gitea@1.2.1', 'latest')).toEqual({ appId: 'gitea', version: '1.2.1' });
+  });
+
   it('splits on the last @ so the version is taken from the suffix', () => {
     expect(resolveAppAndVersion('ns/app@3.1.4')).toEqual({ appId: 'ns/app', version: '3.1.4' });
   });

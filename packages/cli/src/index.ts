@@ -154,7 +154,7 @@ prog
   .example('install ghcr.io/acme/hola-cms:0.1.0 --registry-cred acme')
   .example('install remo --channel rc --as remo-beta')
   .example('install remo@0.11.0-rc.1 --name remo-beta     # channel implied: rc')
-  .option('--app-version', 'App version to install (or use <appId>@<version>)', 'latest')
+  .option('--app-version', 'App version to install (or use <appId>@<version>; default: latest)')
   .option('--name', 'Deployment name (default: the app id); sets the subdomain <name>.<base>')
   .option('--as', 'Alias of --name')
   .option('--channel', 'Release channel to follow (default: stable, or the pinned version\'s channel)')
