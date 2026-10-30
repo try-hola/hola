@@ -310,6 +310,20 @@ describe('Deployment persistence (real service)', () => {
     expect((await b.routing.getRoutingMap())['gitea.local.hola']).toBeUndefined();
   });
 
+  test('warmUp rebuilds the dynamic config from persisted routes before any request', async () => {
+    const a = makeSystem();
+    await a.deployments.createFromDraft({ draftId: await finalizedDraft(a.drafts), name: 'gitea', options: { autoStart: false } });
+    const rendered = await a.storage.readFileAsString('runtime/traefik/dynamic.yml');
+
+    // A config left behind by an older release: the new one must replace it at
+    // startup, not on whichever API call happens to come first.
+    await a.storage.writeFile('runtime/traefik/dynamic.yml', 'http: {}\n');
+
+    const b = makeSystem();
+    await b.deployments.warmUp();
+    expect(await b.storage.readFileAsString('runtime/traefik/dynamic.yml')).toBe(rendered);
+  });
+
   test('deleting a deployment emits a deployment_deleted event (#331)', async () => {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const drafts = new RealDraftService(storage, makeCatalog(), makeValidation());

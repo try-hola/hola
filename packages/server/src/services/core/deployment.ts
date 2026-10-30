@@ -472,6 +472,14 @@ export interface ResolveUpgradeTargetOptions {
 }
 
 export interface DeploymentService extends HealthCheckable {
+  /**
+   * Rehydrate persisted state now rather than on the first request. Startup calls
+   * it so derived artifacts (the Traefik dynamic config) are rebuilt by the
+   * release that is actually running — otherwise an upgrade's routing changes
+   * stay unapplied until something happens to touch the API.
+   */
+  warmUp(): Promise<void>;
+
   // Deployment lifecycle
   createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse>;
   /** Stage a new release from a finalized draft onto an existing deployment and activate it. */
@@ -941,6 +949,10 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   protected async teardownContainers(deploymentId: string, options?: { force?: boolean }): Promise<void> {
     void deploymentId;
     void options;
+  }
+
+  async warmUp(): Promise<void> {
+    await this.ensureLoaded();
   }
 
   /** Rehydrate persisted deployments/releases from storage exactly once. */
