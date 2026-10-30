@@ -2499,6 +2499,17 @@ if (shouldAutoStart) {
   // Self-provision the dashboard OIDC client in the background (best-effort).
   void initializePlatformAuth();
 
+  // Rehydrate deployments eagerly: loading them is what rebuilds the Traefik
+  // dynamic config from the persisted routes, so without this an upgrade's
+  // routing changes (e.g. #565's identity-header strip) are not live until the
+  // first API call. Background, so it never delays serving; the load is shared,
+  // so a failure here is exactly the one the first request would have surfaced.
+  void getServices().deployments.warmUp().catch(error => {
+    logger.warn('Eager deployment rehydrate failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+
   const server = Bun.serve({
     port: PORT,
     fetch: handleRequest,
