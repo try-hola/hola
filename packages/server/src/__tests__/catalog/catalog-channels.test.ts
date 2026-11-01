@@ -42,6 +42,13 @@ const CATALOG = {
         { version: 'edge', refs: { oci: 'ghcr.io/try-hola/stringy:edge' } },
       ],
     },
+    {
+      id: 'betaonly',
+      name: 'Beta Only',
+      versions: [
+        { version: '0.1.0-beta.1', channel: 'beta', refs: { oci: 'ghcr.io/try-hola/betaonly:0.1.0-beta.1' } },
+      ],
+    },
   ],
 };
 
@@ -76,6 +83,21 @@ describe('Release channels: catalog parsing (#428)', () => {
     const demo = res.items.find(a => a.id === 'demo');
     expect(demo?.version).toBe('1.2.0');
     expect(demo?.channels).toEqual(['stable', 'rc']);
+  });
+
+  test('an app with no stable version is listed with no version, unless hidePrereleaseOnly', async () => {
+    const svc = makeService();
+    const all = await svc.listApps({ page: 1, limit: 12 });
+    const betaonly = all.items.find(a => a.id === 'betaonly');
+    expect(betaonly).toBeDefined();
+    expect(betaonly?.version).toBeUndefined();
+    expect(betaonly?.channels).toEqual(['beta']);
+
+    const hidden = await svc.listApps({ page: 1, limit: 12, hidePrereleaseOnly: true });
+    expect(hidden.items.map(a => a.id).sort()).toEqual(['demo', 'stringy']);
+    // Filtered before paging: the total counts what is listed, not what was fetched.
+    expect(hidden.total).toBe(2);
+    expect(all.total).toBe(3);
   });
 
   test('getApp().versions excludes the malformed and duplicate entries', async () => {

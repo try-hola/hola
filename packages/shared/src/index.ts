@@ -932,6 +932,12 @@ export type GetCatalogAppsRequest = PageRequest & {
   // Restrict the listing to a single catalog source id (Slice 2). Omitted =>
   // merge across all enabled sources. The built-in public catalog is `hola`.
   source?: string;
+  // Leave out apps that publish no stable version (only pre-release channels).
+  // The dashboard sets it for an operator not enrolled in pre-releases (ADR 0005
+  // §7): such an app has no version to show, and its Install routes to its only,
+  // pre-release, channel. Filtered before paging, so `total` and pages stay
+  // right. Omitted => listed, as before (the CLI and SDK default).
+  hidePrereleaseOnly?: boolean;
 };
 
 // ------------------------------------------------------
