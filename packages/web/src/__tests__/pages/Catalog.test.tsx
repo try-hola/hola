@@ -187,13 +187,36 @@ describe('Catalog', () => {
       expect(screen.queryByTitle(/Also published on/)).not.toBeInTheDocument();
     });
 
+    // Only an enrolled operator is shown such an app at all (the server drops it
+    // for anyone else — next tests), so this is the enrolled view of it.
     it('shows no version and routes the primary install to the first channel for an app with no stable version', async () => {
-      mockApi([app({ version: undefined, channels: ['rc'] })]);
+      mockApi([app({ version: undefined, channels: ['rc'] })], [], true);
       renderCatalog();
       await waitFor(() => expect(screen.getByText('Ubuntu Webtop')).toBeInTheDocument());
       expect(screen.queryByText(/· v/)).not.toBeInTheDocument();
       const install = screen.getByRole('link', { name: /install/i });
       expect(install).toHaveAttribute('href', '/catalog/webtop/install?channel=rc');
+    });
+
+    const catalogRequests = () => vi.mocked(global.fetch).mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes('/api/catalog/apps'));
+
+    it('asks the server to leave out pre-release-only apps when not enrolled (ADR 0005 §7)', async () => {
+      mockApi([app()], [], false);
+      renderCatalog();
+      await waitFor(() => expect(screen.getByText('Ubuntu Webtop')).toBeInTheDocument());
+      const requests = catalogRequests();
+      expect(requests.length).toBeGreaterThan(0);
+      expect(requests.every((url) => url.includes('hidePrereleaseOnly=true'))).toBe(true);
+    });
+
+    it('lists pre-release-only apps once the operator is enrolled', async () => {
+      mockApi([app()], [], true);
+      renderCatalog();
+      // Enrolment fails closed while settings load, so the first request may still
+      // hide them; the one made once enrolment is known must not.
+      await waitFor(() => expect(catalogRequests().at(-1)).not.toContain('hidePrereleaseOnly'));
     });
 
     it('does not offer "+ Another" for a single-instance installed app', async () => {

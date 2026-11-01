@@ -438,6 +438,11 @@ export class RealCatalogService implements CatalogService, HealthCheckable {
     if (category) {
       items = items.filter(a => a.category.toLowerCase() === category);
     }
+    // `version` is the newest stable version (mapApp), so its absence is exactly
+    // "this app publishes only pre-release channels".
+    if (req.hidePrereleaseOnly) {
+      items = items.filter(a => a.version !== undefined);
+    }
 
     const total = items.length;
     const start = (page - 1) * limit;

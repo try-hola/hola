@@ -122,25 +122,30 @@ export const Catalog: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMessage, setRefreshMessage] = useState<{ text: string; failed: boolean } | null>(null);
 
+  // Read before the request: an operator not enrolled in pre-releases is not
+  // shown apps that publish ONLY a pre-release channel (ADR 0005 §7). Fails
+  // closed, so the first request (settings still loading) hides them too.
+  const prereleaseEnrolled = usePrereleaseEnrolment();
+
   // Build API request parameters
   const apiParams = useMemo(() => {
     const params: GetCatalogAppsRequest = {
       page: currentPage,
       limit: appsPerPage,
     };
+    if (!prereleaseEnrolled) params.hidePrereleaseOnly = true;
     
     if (searchTerm) params.query = searchTerm;
     if (selectedCategory !== 'All') params.category = selectedCategory;
     
     return params;
-  }, [searchTerm, selectedCategory, currentPage, appsPerPage]);
+  }, [searchTerm, selectedCategory, currentPage, appsPerPage, prereleaseEnrolled]);
 
   // Use API hook for catalog apps
   const { data: appsData, loading, error, refetch } = useCatalogAppsApi(apiParams);
   // Failure here is non-fatal: no deployments data just means every card falls
   // back to offering an install, which is the pre-existing behaviour.
   const { data: deploymentsData } = useDeploymentsApi(DEPLOYMENTS_PARAMS);
-  const prereleaseEnrolled = usePrereleaseEnrolment();
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -333,8 +338,11 @@ export const Catalog: React.FC = () => {
         </div>
       )}
 
-      {/* Card grid */}
-      {!loading && !error && apps.length > 0 && (
+      {/* Card grid. Kept on screen while a new request is in flight (the hook
+          keeps the previous page until the next arrives): the first request goes
+          out before enrolment is known and a second follows it, and unmounting
+          the grid between them made every card flash. */}
+      {!error && apps.length > 0 && (
         <>
           <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(300px,1fr))]">
             {apps.map((app: CatalogApp) => {

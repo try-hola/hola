@@ -575,10 +575,11 @@ export async function route(url: URL, req: Request): Promise<Response> {
     const query = searchParams.get('query') || undefined;
     const category = searchParams.get('category') || undefined;
     const source = searchParams.get('source') || undefined;
+    const hidePrereleaseOnly = searchParams.get('hidePrereleaseOnly') === 'true';
     try {
       const services = getServices();
       const catalog = services.catalog;
-      const payload = await catalog.listApps({ page, limit, q: query, category, source });
+      const payload = await catalog.listApps({ page, limit, q: query, category, source, hidePrereleaseOnly });
       return json(payload);
     } catch (error) {
       // No bundled fallback — the only catalog is the remote one (HOLA_CATALOG_URL).

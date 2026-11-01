@@ -246,6 +246,13 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
         description: 'Filter by application category',
         required: false,
         schema: { type: 'string' }
+      },
+      {
+        name: 'hidePrereleaseOnly',
+        in: 'query',
+        description: 'When true, leave out apps that publish no stable version (only pre-release channels). The dashboard sets it for an operator not enrolled in pre-releases.',
+        required: false,
+        schema: { type: 'boolean', default: false }
       }
     ],
     responseType: 'GetCatalogAppsResponse'
@@ -1017,6 +1024,8 @@ export function generateTypeScriptSchemas(): Record<string, string> {
   q?: string;
   query?: string;
   category?: string;
+  source?: string;
+  hidePrereleaseOnly?: boolean;
 }`,
 
     GetCatalogAppsResponse: `{
