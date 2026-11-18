@@ -1838,6 +1838,11 @@ export type DeploymentDetail = {
   lineageId?: string;
   restoreFrom?: RestoreChoice;
   restoredAt?: string;
+  // The release a default rollback would move to, with whether a data-aware
+  // rollback is possible and whether an image-only one crosses a one-way
+  // upgrade boundary (#584). Detail only, derived on read; absent when there
+  // is no other release to roll back to.
+  rollbackTarget?: RollbackTarget;
 };
 
 export type GetDeploymentResponse = DeploymentDetail;
@@ -2954,10 +2959,60 @@ export type RollbackRequest = {
   /**
    * Data-aware rollback (#284 Phase 1): also restore the pre-upgrade app-data
    * snapshot taken when the target release was last active, reverting data + image
-   * together (TrueNAS-style). Off by default (compose/image-only rollback). No
-   * snapshot for the target ⇒ a warning + a containers-only rollback.
+   * together (TrueNAS-style). No snapshot for the target ⇒ the rollback job
+   * FAILS (#524) — restoring nothing is a different operation, not a lesser one.
    */
   restoreData?: boolean;
+  /**
+   * Explicit acknowledgement that an image-only rollback is wanted even though
+   * it crosses a one-way upgrade boundary (#584). Without this (or
+   * `restoreData`), such a rollback is refused with 409
+   * `ROLLBACK_REQUIRES_DATA_RESTORE`: the older image would boot against data
+   * the newer release already migrated, which is a crash loop, not a rollback.
+   * Mutually exclusive with `restoreData`.
+   */
+  imageOnly?: boolean;
+};
+
+/**
+ * Whether rolling back from the active release to a target crosses a one-way
+ * upgrade boundary (#584): some release this deployment ran with a version in
+ * (target, current] declares `upgrade.preUpgradeBackup: "required"` or
+ * `upgrade.breaking: true` — the packager's statement that the upgrade migrates
+ * data an older version cannot read — and that declaration is not the target's
+ * own (same major, same normalised upgrade block): the catalog copies a
+ * major's block onto its patch bumps, and a copy is a migration the data
+ * crossed before the target ran.
+ *
+ *   - `one-way`: such a release exists. An image-only rollback is refused
+ *     unless explicitly acknowledged (`imageOnly`).
+ *   - `none`: the releases in range declare neither (or the target is not
+ *     older than the current version).
+ *   - `unknown`: the version of the current or target release cannot be
+ *     read (e.g. a record that predates staged manifests). Never refused —
+ *     the pre-#584 behaviour is kept, because a refusal needs evidence.
+ */
+export type RollbackBoundary = 'one-way' | 'none' | 'unknown';
+
+/**
+ * The release a default rollback (no `targetReleaseId`) would move to, and
+ * what the operator needs to know to choose between an image-only and a
+ * data-aware rollback (#584). Carried on the deployment detail
+ * (`GetDeploymentResponse.rollbackTarget`) and, minus the ids, in the
+ * `ROLLBACK_REQUIRES_DATA_RESTORE` refusal's `details`.
+ */
+export type RollbackTarget = {
+  releaseId: string;
+  /** The target release's version, when known. */
+  version?: string;
+  /** The active release's version (what is being rolled back from), when known. */
+  fromVersion?: string;
+  /** A pre-upgrade snapshot recorded for the target release exists (including
+   *  one recorded as legitimately empty), so `restoreData` can succeed. */
+  snapshotAvailable: boolean;
+  boundary: RollbackBoundary;
+  /** For `one-way`: the version(s) whose upgrade declared the boundary. */
+  boundaryVersions?: string[];
 };
 
 export type RollbackResponse = {

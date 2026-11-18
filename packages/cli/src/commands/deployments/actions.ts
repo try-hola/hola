@@ -1,7 +1,7 @@
 import { HolaSdk } from '@hola/sdk';
 import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse, PromoteDeploymentResponse } from '@hola/shared';
 
-import { watchJob, reportDeployError } from '../../lib/deploy-flow';
+import { watchJob, reportDeployError, printJsonError } from '../../lib/deploy-flow';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 
@@ -47,6 +47,12 @@ export async function runDeploymentAction(
 export interface RollbackOptions extends ActionOptions {
   to?: string;
   reason?: string;
+  /** Also restore the pre-upgrade data snapshot taken when the target release
+   *  was last active (#284 Phase 1, #584). */
+  restoreData?: boolean;
+  /** Acknowledge an image-only rollback across a one-way upgrade, which the
+   *  server otherwise refuses (ROLLBACK_REQUIRES_DATA_RESTORE, #584). */
+  imageOnly?: boolean;
 }
 
 export interface UpgradeOptions extends ActionOptions {
@@ -101,12 +107,26 @@ export async function runRollback(
   injected?: { sdk?: HolaSdk }
 ): Promise<RollbackResponse | undefined> {
   const sdk = injected?.sdk ?? new HolaSdk();
-  const out = (m: string) => console.log(m);
+  // Under --json stdout carries exactly one JSON document (the result, or the
+  // refusal via reportDeployError), so the progress prose is suppressed.
+  const out = (m: string) => { if (!opts.json) console.log(m); };
   try {
-    out(`Rolling back ${deploymentId}${opts.to ? ` to ${opts.to}` : ' to the previous release'}…`);
+    if (opts.restoreData && opts.imageOnly) {
+      const message = '--restore-data and --image-only are mutually exclusive: pick one.';
+      if (opts.json) printJsonError({ code: 'ROLLBACK_OPTIONS_CONFLICT', message });
+      else console.error(message);
+      process.exitCode = 1;
+      return undefined;
+    }
+    out(
+      `Rolling back ${deploymentId}${opts.to ? ` to ${opts.to}` : ' to the previous release'}` +
+        `${opts.restoreData ? ', restoring its pre-upgrade data snapshot' : opts.imageOnly ? ' (image only)' : ''}…`,
+    );
     const res = (await sdk.deployments.rollback(deploymentId, {
       ...(opts.to ? { targetReleaseId: opts.to } : {}),
       ...(opts.reason ? { reason: opts.reason } : {}),
+      ...(opts.restoreData ? { restoreData: true } : {}),
+      ...(opts.imageOnly ? { imageOnly: true } : {}),
     })) as RollbackResponse;
     out(`Target release ${res.targetReleaseId} (was ${res.previousReleaseId}).`);
 
@@ -127,7 +147,7 @@ export async function runRollback(
     await maybeNotifyUpdate(sdk, opts);
     return res;
   } catch (err) {
-    return reportDeployError(err);
+    return reportDeployError(err, { json: opts.json });
   }
 }
 

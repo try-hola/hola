@@ -57,8 +57,9 @@ import type {
   RestoreIndexEntry,
   RestoreRequestForProvider,
   RestoreChoice,
+  RollbackTarget,
 } from '@hola/shared';
-import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
+import { checkUpgradePath, compareVersions, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import {
   isEligibleCandidate,
   checkCandidateStillEligible,
@@ -81,6 +82,7 @@ import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ForbiddenError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
+import { isOrderedVersion, oneWayBoundaries, pickDefaultRollbackTarget, type VersionedUpgrade } from './rollback-boundary';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto, locateAppRootInTree, landDirInto } from './snapshot-fs';
 import { rm } from 'node:fs/promises';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -438,6 +440,13 @@ interface SnapshotMeta {
    * gets either an archive or a recorded, auditable reason there is none.
    */
   empty?: boolean;
+}
+
+/** What an existing release's finalized manifest says about it (#584/#585). */
+interface ReleaseFacts {
+  version?: string;
+  icon?: string;
+  upgrade?: AppUpgradeMeta;
 }
 
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
@@ -1291,6 +1300,162 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     await this.onActiveReleaseChanged(deploymentId, releaseId);
   }
 
+  /**
+   * Bring the deployment's catalog-derived display fields in line with the
+   * release that is now active. Shared by `promote` and `rollback` (#585).
+   *
+   * `promoteRelease` only moves the release pointers (the Release type carries
+   * no version); without this the record — and the UI's "update available", and
+   * `hola deployments` — kept reporting the version the deployment was moved
+   * AWAY from. For `promote` that was the pre-upgrade version; for `rollback` it
+   * was the version just rolled back from, so the host claimed the bad release
+   * was still running and stopped offering it as an update.
+   *
+   * Called right after `promoteRelease`, at request time, in both callers —
+   * deliberately not on job success. `version` describes the release the
+   * `currentReleaseId` pointer names, and that pointer moves at request time
+   * (the job materializes whatever it names). A failed job leaves the pointer on
+   * the new release with status `error`; syncing only on success would leave the
+   * record pairing that release with another release's version, and a later
+   * restart would run one while reporting the other.
+   *
+   * The icon rides along for the same reason: it's persisted at install
+   * (createFromDraft) purely as a cache so the launcher needn't hit the catalog,
+   * so an app whose package changes its logo would otherwise show the icon it had
+   * on install day forever.
+   *
+   * `name` is deliberately NOT refreshed — a caller-supplied name wins at install
+   * and the record can't distinguish one from a manifest-derived default, so
+   * rewriting it here would clobber an operator's rename.
+   *
+   * A field that is absent (unknown) is left as it is, never cleared.
+   */
+  protected async syncReleaseDisplayFields(
+    deploymentId: string,
+    fields: { version?: string; icon?: string },
+  ): Promise<void> {
+    const { version, icon } = fields;
+    if (!version && !icon) return;
+    const deployment = this.requireDeployment(deploymentId);
+    let changed = false;
+    if (version && deployment.version !== version) {
+      deployment.version = version;
+      changed = true;
+    }
+    if (icon && deployment.icon !== icon) {
+      deployment.icon = icon;
+      changed = true;
+    }
+    if (changed) {
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+    }
+  }
+
+  /**
+   * What an existing release's finalized manifest says about it: its version,
+   * icon, and `upgrade` metadata. Undefined when unknown. Base: always unknown —
+   * the in-memory service keeps no manifests; RealDeploymentService reads the
+   * staged `manifest.json`. Never throws: a caller that needs a corrupt manifest
+   * to stop the operation reads it itself (the deploy job does).
+   */
+  protected async readReleaseFacts(deploymentId: string, releaseId: string): Promise<ReleaseFacts | undefined> {
+    void deploymentId;
+    void releaseId;
+    return undefined;
+  }
+
+  /**
+   * Whether a pre-upgrade snapshot is recorded for `releaseId` — i.e. whether
+   * a data-aware rollback to it has something to restore (an `empty` marker
+   * counts: it is an honoured outcome, #524). Base: none, the in-memory service
+   * keeps no snapshots. Never throws.
+   */
+  protected async hasPreUpgradeSnapshot(deploymentId: string, releaseId: string): Promise<boolean> {
+    void deploymentId;
+    void releaseId;
+    return false;
+  }
+
+  /**
+   * The release a rollback with no `targetReleaseId` moves to — the one
+   * function every default-target caller uses (the `rollback` request, and the
+   * detail's `rollbackTarget` that the dashboard and CLI show). The most
+   * recently created release whose version differs from the active one's; see
+   * `pickDefaultRollbackTarget` for why "newest other release" alone is wrong
+   * after an upgrade → rollback → upgrade-again cycle.
+   */
+  private async defaultRollbackTargetId(deploymentId: string, currentReleaseId: string | undefined): Promise<string | undefined> {
+    const own = [...this.releases.values()].filter((r) => r.deploymentId === deploymentId);
+    if (!own.some((r) => r.id !== currentReleaseId)) return undefined;
+    const activeVersion = currentReleaseId ? (await this.readReleaseFacts(deploymentId, currentReleaseId))?.version : undefined;
+    const candidates = await Promise.all(
+      own
+        .filter((r) => r.id !== currentReleaseId)
+        .map(async (r) => ({
+          id: r.id,
+          createdAt: r.createdAt,
+          version: activeVersion ? (await this.readReleaseFacts(deploymentId, r.id))?.version : undefined,
+        })),
+    );
+    return pickDefaultRollbackTarget(candidates, currentReleaseId, activeVersion);
+  }
+
+  /**
+   * Does rolling back from the active release to `targetReleaseId` cross a
+   * one-way upgrade boundary (#584)? See `RollbackBoundary` for the three
+   * verdicts, and `oneWayBoundaries` for which releases count.
+   *
+   * The boundary is judged over the RANGE (target, current], not just the
+   * active release: rolling 2.0 → 4.0 back to 2.0 crosses 3.0's migration even
+   * when 4.0 itself declares nothing, and the data on disk is 3.0's or later.
+   * Only releases this deployment actually ran are consulted — they are the
+   * ones that can have migrated its data. A release in range counts only when
+   * its one-way declaration is not one the TARGET already carries: the catalog
+   * copies a major's `upgrade` block onto that major's patch bumps, so
+   * uptime-kuma 2.0.3 → 2.0.2 (both `breaking: true, required`) crosses no
+   * migration, while gitea 3.0.0 → 2.0.2 does. An intermediate release whose
+   * manifest cannot be read is skipped rather than turning the verdict into
+   * `unknown`: a refusal needs positive evidence, and the endpoints decide
+   * whether there is a range to judge at all.
+   *
+   * Versions that are not numeric (`latest`) have no order to judge, so they
+   * read as `unknown` too.
+   */
+  protected async assessRollback(deployment: EnhancedDeploymentDetail, targetReleaseId: string): Promise<RollbackTarget> {
+    const deploymentId = deployment.id;
+    const currentReleaseId = deployment.currentReleaseId;
+    const [from, to, snapshotAvailable] = await Promise.all([
+      currentReleaseId ? this.readReleaseFacts(deploymentId, currentReleaseId) : Promise.resolve(undefined),
+      this.readReleaseFacts(deploymentId, targetReleaseId),
+      this.hasPreUpgradeSnapshot(deploymentId, targetReleaseId),
+    ]);
+    const base: RollbackTarget = {
+      releaseId: targetReleaseId,
+      ...(to?.version ? { version: to.version } : {}),
+      ...(from?.version ? { fromVersion: from.version } : {}),
+      snapshotAvailable,
+      boundary: 'unknown',
+    };
+    if (!currentReleaseId || !isOrderedVersion(from?.version) || !isOrderedVersion(to?.version)) return base;
+    const fromVersion = from.version;
+    const toVersion = to.version;
+    if (compareVersions(toVersion, fromVersion) >= 0) return { ...base, boundary: 'none' };
+
+    const inRange: VersionedUpgrade[] = [];
+    for (const r of this.releases.values()) {
+      if (r.deploymentId !== deploymentId || r.id === targetReleaseId) continue;
+      const facts = r.id === currentReleaseId ? from : await this.readReleaseFacts(deploymentId, r.id);
+      const v = facts?.version;
+      if (!isOrderedVersion(v)) continue;
+      if (compareVersions(v, toVersion) <= 0 || compareVersions(v, fromVersion) > 0) continue;
+      inRange.push({ version: v, upgrade: facts?.upgrade });
+    }
+    const boundaryVersions = oneWayBoundaries({ version: toVersion, upgrade: to?.upgrade }, inRange);
+    if (boundaryVersions.length === 0) return { ...base, boundary: 'none' };
+    return { ...base, boundary: 'one-way', boundaryVersions };
+  }
+
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
     const releaseId = crypto.randomUUID();
@@ -1714,37 +1879,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
 
-    // Sync the deployment's catalog-derived display fields to the promoted release.
-    // promoteRelease only moves the release pointers (it's shared with rollback and
-    // the Release type carries no version); without this the record (and the UI's
-    // "update available") would still report the pre-upgrade version after a
-    // successful promote.
-    //
-    // The icon rides along for the same reason: it's persisted at install
-    // (createFromDraft) purely as a cache so the launcher needn't hit the catalog,
-    // so an app whose package changes its logo would otherwise show the icon it had
-    // on install day forever. We've just resolved the new manifest, so it's free.
-    //
-    // `name` is deliberately NOT refreshed — a caller-supplied name wins at install
-    // and the record can't distinguish one from a manifest-derived default, so
-    // rewriting it here would clobber an operator's rename.
-    const promotedIcon = artifacts?.manifest.icon;
-    if (version || promotedIcon) {
-      const promoted = this.requireDeployment(deploymentId);
-      let changed = false;
-      if (version && promoted.version !== version) {
-        promoted.version = version;
-        changed = true;
-      }
-      if (promotedIcon && promoted.icon !== promotedIcon) {
-        promoted.icon = promotedIcon;
-        changed = true;
-      }
-      if (changed) {
-        this.deployments.set(deploymentId, promoted);
-        await this.persistDeployment(promoted);
-      }
-    }
+    // Sync the deployment's catalog-derived display fields to the promoted
+    // release (see `syncReleaseDisplayFields`).
+    await this.syncReleaseDisplayFields(deploymentId, { version, icon: artifacts?.manifest.icon });
 
     const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
@@ -1799,6 +1936,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     const siblings = this.deploymentSiblings(deployment);
     if (siblings) detail.siblings = siblings;
     await this.enrichUpdateInfo([detail]);
+    // What a default rollback would do (#584), for the dashboard's rollback
+    // dialog: the same assessment `rollback` refuses on, so the two cannot
+    // disagree. Best-effort — a failure here must not fail the detail read.
+    const rollbackTargetId = await this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+    if (rollbackTargetId) {
+      try {
+        detail.rollbackTarget = await this.assessRollback(deployment, rollbackTargetId);
+      } catch (err) {
+        this.logger.warn('Could not assess the rollback target', { deploymentId, error: String(err) });
+      }
+    }
     return detail;
   }
 
@@ -2169,23 +2317,65 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     this.logger.info('Rolling back deployment', { deploymentId, targetReleaseId: request.targetReleaseId });
 
+    if (request.restoreData === true && request.imageOnly === true) {
+      throw new ValidationError(
+        'restoreData and imageOnly are mutually exclusive: a rollback either restores the pre-upgrade data snapshot or moves the containers only.',
+        { code: 'ROLLBACK_OPTIONS_CONFLICT' },
+      );
+    }
+
     let targetReleaseId = request.targetReleaseId;
     if (!targetReleaseId) {
-      // Default to the most recent release other than the one currently active.
-      const candidates = Array.from(this.releases.values())
-        .filter(r => r.deploymentId === deploymentId && r.id !== deployment.currentReleaseId)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      if (candidates.length === 0) {
+      // Default to the most recent release on a different version than the
+      // active one (`defaultRollbackTargetId`).
+      targetReleaseId = await this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+      if (!targetReleaseId) {
         throw new ConflictError('No previous release available for rollback');
       }
-
-      targetReleaseId = candidates[0].id;
     }
 
     const targetRelease = this.releases.get(targetReleaseId);
     if (!targetRelease || targetRelease.deploymentId !== deploymentId) {
       throw new NotFoundError(`Target release not found: ${targetReleaseId}`);
+    }
+
+    // One-way upgrade boundary (#584). An image-only rollback across an upgrade
+    // whose packager declared it migrates data (`preUpgradeBackup: "required"`
+    // or `breaking: true`) boots the older image against data it cannot read —
+    // observed as a Gitea crash loop on "database is for a newer Gitea". That
+    // rollback can never start, so it is refused here, at request time and
+    // before anything moves (Constitution III: the job is only enqueued once
+    // the decision is made), unless the caller either asks for the data
+    // restore or explicitly acknowledges the image-only rollback. Same
+    // fail-closed reading as #524: the default must not be the operation that
+    // silently cannot work.
+    //
+    // `unknown` (a record whose versions cannot be read) is NOT refused: the
+    // pre-#584 behaviour is preserved, because refusing needs evidence.
+    if (request.restoreData !== true && request.imageOnly !== true) {
+      const assessment = await this.assessRollback(deployment, targetReleaseId);
+      if (assessment.boundary === 'one-way') {
+        const crossing = assessment.boundaryVersions?.join(', ') ?? 'a newer release';
+        const remedy = assessment.snapshotAvailable
+          ? 'Roll back with restoreData (hola rollback --restore-data) to restore the pre-upgrade data snapshot along with the release'
+          : 'No pre-upgrade data snapshot exists for the target release, so its data cannot be restored';
+        throw new ConflictError(
+          `Rolling back to ${assessment.version ?? targetReleaseId} crosses a one-way upgrade (${crossing}): the older ` +
+            `release cannot run against the data the upgrade migrated. ${remedy}, or acknowledge an image-only ` +
+            `rollback with imageOnly (hola rollback --image-only). Nothing was changed.`,
+          {
+            code: 'ROLLBACK_REQUIRES_DATA_RESTORE',
+            deploymentId,
+            targetReleaseId,
+            ...(assessment.version ? { targetVersion: assessment.version } : {}),
+            ...(assessment.fromVersion ? { fromVersion: assessment.fromVersion } : {}),
+            boundaryVersions: assessment.boundaryVersions ?? [],
+            snapshotAvailable: assessment.snapshotAvailable,
+          },
+        );
+      }
+    } else if (request.imageOnly === true) {
+      this.logger.warn('Image-only rollback explicitly acknowledged', { deploymentId, targetReleaseId });
     }
 
     const previousReleaseId = deployment.currentReleaseId || '';
@@ -2205,6 +2395,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // independent line: if this ordering is ever reverted, that turns the silent
     // wrong-release materialization into a failed job rather than a lie.
     await this.promoteRelease(deploymentId, targetReleaseId);
+
+    // The record now reports the release rolled back TO (#585), synced at the
+    // same point `promote` syncs it — see `syncReleaseDisplayFields` for why
+    // that is request time, not job success.
+    const targetFacts = await this.readReleaseFacts(deploymentId, targetReleaseId);
+    await this.syncReleaseDisplayFields(deploymentId, { version: targetFacts?.version, icon: targetFacts?.icon });
 
     const job = await this.jobService.createJob({
       type: 'start',
@@ -2812,6 +3008,30 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** The active release's manifest, or undefined when there isn't one. Throws on corruption. */
   private async readActiveManifest(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest | undefined> {
     return this.readReleaseManifest(deployment.id, deployment.currentReleaseId);
+  }
+
+  /**
+   * A release's version/icon/upgrade metadata, from its staged manifest. A
+   * missing manifest (a record that predates staging) is "unknown"; a corrupt
+   * one is logged by `readReleaseManifest` and also read as unknown here —
+   * these facts only label the record and inform the rollback boundary check,
+   * and the deploy job, which does act on the manifest, still refuses it.
+   */
+  protected override async readReleaseFacts(deploymentId: string, releaseId: string): Promise<ReleaseFacts | undefined> {
+    let manifest: FinalizedManifest | undefined;
+    try {
+      manifest = await this.readReleaseManifest(deploymentId, releaseId);
+    } catch {
+      return undefined;
+    }
+    if (!manifest) return undefined;
+    return { version: manifest.version, icon: manifest.icon, upgrade: manifest.upgrade };
+  }
+
+  /** The same lookup `restoreAppDataSnapshot` restores from, so "available"
+   *  here means that restore will find a record (#584). */
+  protected override async hasPreUpgradeSnapshot(deploymentId: string, releaseId: string): Promise<boolean> {
+    return (await this.listSnapshots(deploymentId)).some((m) => m.fromReleaseId === releaseId);
   }
 
   /** Read the active release's declared auth config (if any). */

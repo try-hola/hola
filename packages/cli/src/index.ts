@@ -259,8 +259,12 @@ prog
 prog
   .command('rollback <deploymentId>')
   .describe('Roll a deployment back to a previous release')
+  .example('rollback gitea-ab12cd34                  # to the previous release')
+  .example('rollback gitea-ab12cd34 --restore-data   # and restore its pre-upgrade data snapshot')
   .option('--to', 'Target release id (default: the previous release)')
   .option('--reason', 'Reason recorded with the rollback')
+  .option('--restore-data', 'Also restore the pre-upgrade data snapshot taken when the target release was last active', false)
+  .option('--image-only', 'Roll back the containers only, even across a one-way (data-migrating) upgrade the server would otherwise refuse', false)
   .option('--no-stream', 'Do not watch the rollback job', false)
   .option('--json', 'Print the result as JSON', false)
   .action(async (deploymentId, opts) => {

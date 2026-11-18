@@ -27,6 +27,7 @@ import type {
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
+  RollbackRequest, RollbackResponse,
   GetDeploymentHistoryResponse, GetDeploymentConfigResponse, GetDeploymentUpdateCheckResponse,
   // Job types
   GetJobsResponse, GetJobResponse, GetLogsResponse, DeleteJobsRequest, DeleteJobsResponse,
@@ -540,6 +541,15 @@ export class SdkAdapter {
         this.sdk.deployments.promote(deploymentId, body), body, false);
     },
     
+    // Roll back to a previous release (#584). `restoreData` also restores the
+    // pre-upgrade data snapshot; `imageOnly` acknowledges a containers-only
+    // rollback across a one-way upgrade, which the server otherwise refuses.
+    rollback: (deploymentId: string, body: RollbackRequest = {}): Promise<RollbackResponse> => {
+      const path = `/api/deployments/${deploymentId}/rollback`;
+      return this.enhancedRequest('POST', path, () =>
+        this.sdk.deployments.rollback(deploymentId, body), body, false);
+    },
+
     logs: (deploymentId: string, params?: { since?: string; lines?: number }): Promise<GetLogsResponse> => {
       const query = this.buildQuery(params || {});
       const path = `/api/deployments/${deploymentId}/logs${query}`;

@@ -7,7 +7,8 @@ import type {
   GetDeploymentConfigResponse,
   GetDeploymentUpdateCheckResponse,
   PatchDeploymentRequest,
-  PostDeploymentActionRequest
+  PostDeploymentActionRequest,
+  RollbackRequest
 } from '@hola/shared';
 
 /**
@@ -77,6 +78,20 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
   const upgradeDeployment = (body?: { version?: string; snapshot?: boolean }) =>
     upgradeDeploymentMutation.mutateAsync(body);
 
+  // Roll back to a previous release (#584) via POST /api/deployments/:id/rollback.
+  // `restoreData` also restores the pre-upgrade data snapshot; `imageOnly`
+  // acknowledges a containers-only rollback across a one-way upgrade.
+  const rollbackDeploymentMutation = useMutation({
+    mutationFn: (body?: RollbackRequest) => api.deployments.rollback(deploymentId!, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.detail(deploymentId!) });
+      qc.invalidateQueries({ queryKey: queryKeys.deployments.all });
+      qc.invalidateQueries({ queryKey: queryKeys.jobs.all });
+      qc.invalidateQueries({ queryKey: queryKeys.summary });
+    },
+  });
+  const rollbackDeployment = (body?: RollbackRequest) => rollbackDeploymentMutation.mutateAsync(body);
+
   // Remove the deployment entirely (stop + deprovision auth + release route +
   // delete record + clean storage) via DELETE /api/deployments/:id. The caller
   // navigates away on success since the deployment no longer exists.
@@ -99,6 +114,7 @@ export function useDeploymentDetailApi(deploymentId: string | undefined) {
     executeAction,
     upgradeDeployment,
     removeDeployment,
+    rollbackDeployment,
   };
 }
 

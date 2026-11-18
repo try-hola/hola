@@ -8,6 +8,8 @@ import type {
   GetDeploymentConfigResponse,
   PatchDeploymentRequest,
   PatchDeploymentResponse,
+  RollbackRequest,
+  RollbackTarget,
   SSEEvent,
   SSEConnectionState,
 } from '@hola/shared';
@@ -88,6 +90,7 @@ const deploymentsApi = {
   action: vi.fn(),
   promote: vi.fn(),
   remove: vi.fn(),
+  rollback: vi.fn(async (_deploymentId: string, _body: RollbackRequest) => ({ jobId: 'j1', targetReleaseId: 'r1', previousReleaseId: 'r2' })),
   updateCheck: vi.fn(),
 };
 
@@ -1142,5 +1145,115 @@ describe('DeploymentDetail remove confirmation (#446)', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(deploymentsApi.remove).not.toHaveBeenCalled();
+  });
+});
+
+// #584: data-aware rollback was unreachable from the dashboard (the Rollback
+// button only switched to the History tab). The dialog offers the restore and
+// pre-ticks it exactly when the server says an image-only rollback crosses a
+// one-way upgrade and a snapshot for the target exists.
+describe('DeploymentDetail rollback dialog (#584)', () => {
+  const withTarget = (rollbackTarget: RollbackTarget): GetDeploymentResponse => ({
+    ...deployment,
+    version: '2.0.0',
+    rollbackTarget,
+  });
+  const oneWay: RollbackTarget = {
+    releaseId: 'r1',
+    version: '1.0.0',
+    fromVersion: '2.0.0',
+    snapshotAvailable: true,
+    boundary: 'one-way',
+    boundaryVersions: ['2.0.0'],
+  };
+
+  beforeEach(() => {
+    deploymentsApi.rollback.mockClear();
+  });
+  afterEach(() => {
+    deploymentsApi.byId.mockResolvedValue(deployment);
+  });
+
+  async function openDialog() {
+    renderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /^rollback$/i }));
+    const dialog = await screen.findByRole('dialog');
+    const checkbox = within(dialog).getByRole('checkbox', { name: /also restore the pre-upgrade data snapshot/i });
+    return { dialog, checkbox: checkbox as HTMLInputElement };
+  }
+
+  it('defaults the restore ON across a one-way upgrade with a snapshot, and sends restoreData', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget(oneWay));
+    const { dialog, checkbox } = await openDialog();
+    expect(within(dialog).getByText('Roll My App back to 1.0.0?')).toBeInTheDocument();
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back' }));
+    await waitFor(() =>
+      expect(deploymentsApi.rollback).toHaveBeenCalledWith(deploymentId, { targetReleaseId: 'r1', restoreData: true }),
+    );
+  });
+
+  it('unticking across a one-way upgrade warns, and sends the explicit imageOnly acknowledgement', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget(oneWay));
+    const { dialog, checkbox } = await openDialog();
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(false);
+    expect(within(dialog).getByText('One-way upgrade.')).toBeInTheDocument();
+
+    const confirm = within(dialog).getByRole('button', { name: 'Roll back containers only' });
+    expect(confirm).toHaveClass('bg-danger');
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(deploymentsApi.rollback).toHaveBeenCalledWith(deploymentId, { targetReleaseId: 'r1', imageOnly: true }),
+    );
+  });
+
+  it('defaults the restore OFF when there is no one-way boundary, and sends a plain rollback', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget({ ...oneWay, boundary: 'none', boundaryVersions: undefined }));
+    const { dialog, checkbox } = await openDialog();
+    expect(checkbox.checked).toBe(false);
+    expect(within(dialog).queryByText('One-way upgrade.')).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back' }));
+    await waitFor(() => expect(deploymentsApi.rollback).toHaveBeenCalledWith(deploymentId, { targetReleaseId: 'r1' }));
+  });
+
+  it('the restore can still be chosen when nothing forces it', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget({ ...oneWay, boundary: 'unknown', boundaryVersions: undefined }));
+    const { dialog, checkbox } = await openDialog();
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back' }));
+    await waitFor(() =>
+      expect(deploymentsApi.rollback).toHaveBeenCalledWith(deploymentId, { targetReleaseId: 'r1', restoreData: true }),
+    );
+  });
+
+  it('with no snapshot the restore is unavailable, and a one-way rollback is the warned containers-only one', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget({ ...oneWay, snapshotAvailable: false }));
+    const { dialog, checkbox } = await openDialog();
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    expect(within(dialog).getByText(/No pre-upgrade snapshot exists for 1.0.0/)).toBeInTheDocument();
+    expect(within(dialog).getByText('One-way upgrade.')).toBeInTheDocument();
+  });
+
+  it('shows a server refusal inline and keeps the dialog open', async () => {
+    deploymentsApi.byId.mockResolvedValue(withTarget({ ...oneWay, boundary: 'none', boundaryVersions: undefined }));
+    deploymentsApi.rollback.mockRejectedValueOnce(new Error('Rolling back to 1.0.0 crosses a one-way upgrade (2.0.0)'));
+    const { dialog } = await openDialog();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Roll back' }));
+    expect(await within(dialog).findByText(/crosses a one-way upgrade/)).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('with nothing to roll back to, the button still just opens History', async () => {
+    deploymentsApi.byId.mockResolvedValue(deployment);
+    renderDetail();
+    fireEvent.click(await screen.findByRole('button', { name: /^rollback$/i }));
+    expect(await screen.findByText('Release & job history')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

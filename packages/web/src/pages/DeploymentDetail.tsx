@@ -38,6 +38,7 @@ import type { ProviderGrantKind } from '@hola/shared/contracts';
 import { AppIcon } from '../components/ui/AppIcon';
 import { StatusDot, StatusBadge } from '../components/ui/StatusBadge';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { defaultRestoreData } from '../utils/rollback';
 import { ChannelPill, pillFor } from '../components/ui/ChannelPill';
 import { ParamField } from '../components/ui/fields/ParamField';
 import { useDeploymentDetailApi, useDeploymentHistoryApi, useDeploymentConfigApi, useDeploymentUpdateCheckApi } from '../hooks/useDeploymentDetailApi';
@@ -126,7 +127,8 @@ export const DeploymentDetail: React.FC = () => {
     updateConfiguration,
     executeAction,
     upgradeDeployment,
-    removeDeployment
+    removeDeployment,
+    rollbackDeployment
   } = useDeploymentDetailApi(deploymentId);
 
   // Richer, on-demand update check (#299). Only fires when the cheap
@@ -170,6 +172,11 @@ export const DeploymentDetail: React.FC = () => {
   const [canForceRemove, setCanForceRemove] = useState(false);
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false);
   const [upgradeError, setUpgradeError] = useState<string | null>(null);
+  // Rollback dialog (#584). `restoreData` is seeded from the server's
+  // assessment each time the dialog opens (see `defaultRestoreData`).
+  const [showRollbackConfirm, setShowRollbackConfirm] = useState(false);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [rollbackRestoreData, setRollbackRestoreData] = useState(false);
 
   const {
     data: historyData,
@@ -395,6 +402,41 @@ export const DeploymentDetail: React.FC = () => {
       setUpgradeError(error instanceof Error ? error.message : 'Upgrade failed');
     } finally {
       setOperationLoading(prev => ({ ...prev, upgrade: false }));
+    }
+  };
+
+  // Open the rollback dialog with the data-restore option pre-set from the
+  // server's assessment of the default target (#584).
+  const openRollback = () => {
+    if (!deployment?.rollbackTarget) {
+      // Nothing to roll back to: keep the old behaviour of showing history.
+      setActiveTab('history');
+      return;
+    }
+    setRollbackError(null);
+    setRollbackRestoreData(defaultRestoreData(deployment.rollbackTarget));
+    setShowRollbackConfirm(true);
+  };
+
+  const confirmRollback = async () => {
+    const target = deployment?.rollbackTarget;
+    if (!target) return;
+    setRollbackError(null);
+    setOperationLoading(prev => ({ ...prev, rollback: true }));
+    try {
+      // Unticking the restore across a one-way upgrade, with the warning shown,
+      // IS the acknowledgement the server asks for (`imageOnly`). Anywhere
+      // else an image-only rollback is the plain default and needs no flag.
+      await rollbackDeployment({
+        targetReleaseId: target.releaseId,
+        ...(rollbackRestoreData ? { restoreData: true } : target.boundary === 'one-way' ? { imageOnly: true } : {}),
+      });
+      setShowRollbackConfirm(false);
+    } catch (error) {
+      console.error('Error rolling back deployment:', error);
+      setRollbackError(error instanceof Error ? error.message : 'Rollback failed');
+    } finally {
+      setOperationLoading(prev => ({ ...prev, rollback: false }));
     }
   };
 
@@ -1262,6 +1304,66 @@ export const DeploymentDetail: React.FC = () => {
         )}
       </ConfirmDialog>
 
+      {/* Rollback confirmation dialog (#584). */}
+      {deployment.rollbackTarget && (() => {
+        const target = deployment.rollbackTarget;
+        const oneWay = target.boundary === 'one-way';
+        const label = target.version ?? 'the previous release';
+        return (
+          <ConfirmDialog
+            open={showRollbackConfirm}
+            title={`Roll ${deployment.name} back to ${label}?`}
+            body={
+              <>
+                {target.fromVersion ? `This replaces ${target.fromVersion} with ${label}.` : `This replaces the running release with ${label}.`}
+                {' '}Your settings carry over from that release.
+              </>
+            }
+            confirmLabel={
+              operationLoading.rollback
+                ? 'Rolling back…'
+                : oneWay && !rollbackRestoreData
+                  ? 'Roll back containers only'
+                  : 'Roll back'
+            }
+            busy={operationLoading.rollback}
+            error={rollbackError}
+            danger={oneWay && !rollbackRestoreData}
+            onConfirm={confirmRollback}
+            onCancel={() => { setShowRollbackConfirm(false); setRollbackError(null); }}
+          >
+            <label className="mt-4 flex items-start gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                checked={rollbackRestoreData}
+                disabled={!target.snapshotAvailable}
+                onChange={(e) => setRollbackRestoreData(e.target.checked)}
+              />
+              <span className="min-w-0">
+                <span className="font-medium text-text-strong">Also restore the pre-upgrade data snapshot</span>
+                <span className="block text-text-muted">
+                  {target.snapshotAvailable
+                    ? `Puts the app's data back to how it was when ${label} was last running. Changes made since are lost.`
+                    : `No pre-upgrade snapshot exists for ${label}, so only the containers can be rolled back.`}
+                </span>
+              </span>
+            </label>
+            {oneWay && !rollbackRestoreData && (
+              <div className="mt-3 flex items-start gap-2 text-sm bg-danger-weak border border-danger/30 rounded-[9px] p-3">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5 text-danger" />
+                <div className="min-w-0 text-text-muted">
+                  <span className="font-semibold text-text-strong">One-way upgrade.</span>{' '}
+                  {target.boundaryVersions?.length ? `The upgrade to ${target.boundaryVersions.join(', ')}` : 'An upgrade since this release'}{' '}
+                  migrated the app&apos;s data. {label} will most likely fail to start against it without
+                  the data restore. Continue only if you know it can read the migrated data.
+                </div>
+              </div>
+            )}
+          </ConfirmDialog>
+        );
+      })()}
+
       {/* Join/Leave-a-channel confirmation dialog (spec 005, Channel block). */}
       <ConfirmDialog
         open={!!channelDialog}
@@ -1363,8 +1465,10 @@ export const DeploymentDetail: React.FC = () => {
               {isRunning ? 'Stop' : 'Start'}
             </button>
             <button
-              onClick={() => setActiveTab('history')}
-              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors"
+              onClick={openRollback}
+              disabled={operationLoading.rollback}
+              title={deployment.rollbackTarget?.version ? `Roll back to ${deployment.rollbackTarget.version}` : undefined}
+              className="h-[38px] px-[14px] flex items-center gap-[7px] bg-surface-2 text-text-strong border border-border rounded-[9px] text-[13.5px] font-semibold hover:border-primary transition-colors disabled:opacity-60"
             >
               <RotateCw className="w-4 h-4" />
               Rollback

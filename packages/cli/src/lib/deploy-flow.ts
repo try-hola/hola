@@ -122,17 +122,25 @@ export function isUnauthorizedError(err: unknown): boolean {
   return /401|unauthor/i.test(msg);
 }
 
-/** Map a CLI error to a friendly message + non-zero exit code. Returns undefined. */
-export function reportDeployError(err: unknown): undefined {
+/**
+ * Map a CLI error to a friendly message + non-zero exit code. Returns
+ * undefined. With `json`, the failure is printed as one JSON document instead
+ * (`printJsonError`).
+ */
+export function reportDeployError(err: unknown, opts: { json?: boolean } = {}): undefined {
+  process.exitCode = 1;
   if (err instanceof DeployAbort) {
-    console.error(err.message);
-    process.exitCode = 1;
+    if (opts.json) printJsonError({ message: err.message });
+    else console.error(err.message);
     return undefined;
   }
   const msg = err instanceof Error ? err.message : String(err);
-  console.error(`Failed: ${msg}`);
-  if (isUnauthorizedError(err)) console.error('Hint: set HOLA_TOKEN to your admin API key.');
-  if (/fetch failed|ECONNREFUSED|network|connect/i.test(msg)) console.error('Hint: set HOLA_API_URL (default http://localhost:3001).');
+  // Hints are collected rather than printed so `--json` can carry them inside
+  // the one JSON document instead of interleaving prose with it.
+  const hints: string[] = [];
+  const hint = (m: string) => { hints.push(m.replace(/^Hint: /, '')); };
+  if (isUnauthorizedError(err)) hint('Hint: set HOLA_TOKEN to your admin API key.');
+  if (/fetch failed|ECONNREFUSED|network|connect/i.test(msg)) hint('Hint: set HOLA_API_URL (default http://localhost:3001).');
 
   // Structured ALREADY_INSTALLED conflict (spec 005, contracts/cli.md): the
   // server names the existing copy in `details` rather than in the message
@@ -155,6 +163,9 @@ export function reportDeployError(err: unknown): undefined {
         subdomain?: string;
         // The install that was refused was also restoring (#493).
         restore?: { candidateId: string; candidateIsExisting: boolean };
+        // ROLLBACK_REQUIRES_DATA_RESTORE (#584).
+        snapshotAvailable?: boolean;
+        boundaryVersions?: string[];
       } | undefined)
     : undefined;
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
@@ -167,7 +178,7 @@ export function reportDeployError(err: unknown): undefined {
       // restore choice on purpose: the restored copy comes up live beside the
       // source, with the source's credentials, so it is the operator's call.
       const alongside = details.restore.candidateIsExisting ? 'it' : `'${name}' (${id})`;
-      console.error(
+      hint(
         `Hint: restoring from '${details.restore.candidateId}' leaves that copy running, so this install is a ` +
           `SECOND live copy of the app alongside ${alongside} — which this app is not marked for. Confirm it ` +
           `deliberately: re-run with '--allow-multiple' and a '--name' that differs from the source's.`,
@@ -176,7 +187,7 @@ export function reportDeployError(err: unknown): undefined {
       const channelClause = details.channelPublished
         ? `install a separate copy on another published channel with '--channel <name>', `
         : '';
-      console.error(
+      hint(
         `Hint: '${name}' (${id}) already follows ${channel}. Switch it with 'hola channel ${id} <channel>', ` +
           channelClause +
           `or force a second copy with '--allow-multiple --name ${name}-2'.`,
@@ -187,49 +198,93 @@ export function reportDeployError(err: unknown): undefined {
   // hints built from `details` alone — never from the message, for the same
   // reason as ALREADY_INSTALLED above (contracts/cli.md's mapping table).
   else if (details?.code === 'RESTORE_SOURCE_NEWER') {
-    console.error(
+    hint(
       `Hint: this candidate was captured on ${details.candidateVersion ?? 'a newer version'}, newer than ` +
         `${details.targetVersion ?? 'the version being installed'}. Install ${details.candidateVersion ?? 'that version'} instead: ` +
         `--app-version ${details.candidateVersion ?? '<candidateVersion>'}.`,
     );
   } else if (details?.code === 'RESTORE_UPGRADE_PATH' && details.suggestedVersion) {
-    console.error(
+    hint(
       `Hint: install ${details.suggestedVersion} first (--app-version ${details.suggestedVersion}), restore there, then promote.`,
     );
   } else if (details?.code === 'RESTORE_ENV_REQUIRED') {
-    console.error(
+    hint(
       `Hint: this app cannot restore without its captured configuration` +
         (details.missingKeys?.length ? ` (${details.missingKeys.join(', ')})` : '') +
         `. Pick a candidate with an environment record, or use --carry-env.`,
     );
   } else if (details?.code === 'RESTORE_ACK_REQUIRED' && details.required?.length) {
-    console.error(`Hint: add ${details.required.map(c => `--ack ${c}`).join(' ')} to proceed.`);
+    hint(`Hint: add ${details.required.map(c => `--ack ${c}`).join(' ')} to proceed.`);
   } else if (details?.code === 'RESTORE_CANDIDATE_GONE' || details?.code === 'RESTORE_CANDIDATE_BUSY') {
-    console.error('Hint: the candidate changed since it was chosen. Re-read the current set with --restore-list.');
+    hint('Hint: the candidate changed since it was chosen. Re-read the current set with --restore-list.');
   } else if (details?.code === 'RESTORE_NOT_SUPPORTED') {
-    console.error('Hint: install-by-ref cannot restore — use the catalog install path instead.');
+    hint('Hint: install-by-ref cannot restore — use the catalog install path instead.');
   } else if (details?.code === 'RESTORE_NOT_ACCEPTED') {
-    console.error('Hint: this app has not declared that it can be restored; install it fresh and move data in yourself.');
+    hint('Hint: this app has not declared that it can be restored; install it fresh and move data in yourself.');
   } else if (details?.code === 'RESTORE_ADDRESS_REQUIRED') {
     // #490: the restore would have defaulted to an address the candidate still
     // holds. The address is the operator's call, so name what is in the way and
     // ask for one — never invent a suffixed slug on their behalf.
-    console.error(
+    hint(
       `Hint: ${details.candidateName ? `'${details.candidateName}'` : 'the restore source'} still uses ` +
         `${details.subdomain ? `'${details.subdomain}'` : 'that address'}. Give the restored copy its own address ` +
         `with --name (e.g. --name ${details.subdomain ? `${details.subdomain}-restored` : 'myapp-restored'}).`,
     );
   }
+  // #584: an image-only rollback across a one-way (data-migrating) upgrade.
+  // Built from `details`, like the codes above: whether a snapshot exists
+  // decides which of the two ways forward is actually available.
+  else if (details?.code === 'ROLLBACK_REQUIRES_DATA_RESTORE') {
+    const crossing = details.boundaryVersions?.length ? ` (${details.boundaryVersions.join(', ')})` : '';
+    if (details.snapshotAvailable) {
+      hint(
+        `Hint: the upgrade being rolled back${crossing} migrated this app's data, and a pre-upgrade snapshot ` +
+          `exists. Re-run with '--restore-data' to restore it along with the release.`,
+      );
+    } else {
+      hint(
+        `Hint: the upgrade being rolled back${crossing} migrated this app's data, and no pre-upgrade snapshot ` +
+          `exists to restore, so the older release will likely fail to start. Re-run with '--image-only' only ` +
+          `if you know it can read the migrated data.`,
+      );
+    }
+  }
   // #246: a single-instance app already installed (older/untyped error shape,
   // e.g. a pre-spec-005 server) — the message already names the
   // --allow-multiple escape hatch, but pair it with the distinct-name it needs.
-  else if (/single-instance/i.test(msg)) console.error('Hint: pass a distinct name too, e.g. --allow-multiple --name myapp-2.');
+  else if (/single-instance/i.test(msg)) hint('Hint: pass a distinct name too, e.g. --allow-multiple --name myapp-2.');
   // A taken/reserved/invalid subdomain — the instance name must be distinct.
   else if (/is already in use|reserved by a core|valid DNS label/i.test(msg)) {
-    console.error('Hint: choose a different instance name with --name (e.g. --name myapp-2).');
+    hint('Hint: choose a different instance name with --name (e.g. --name myapp-2).');
   }
-  process.exitCode = 1;
+  if (opts.json) {
+    printJsonError({
+      ...(err instanceof HolaApiError
+        ? { status: err.status, code: err.code, details: err.details, requestId: err.requestId }
+        : {}),
+      message: msg,
+    }, hints);
+  } else {
+    console.error(`Failed: ${msg}`);
+    for (const h of hints) console.error(`Hint: ${h}`);
+  }
   return undefined;
+}
+
+/**
+ * A failure under `--json` (#584 follow-up): one JSON document on stdout — the
+ * stream `--json` results go to, so `hola … --json | jq` sees the refusal too —
+ * shaped like the server's own error envelope (`{ error: { code, message,
+ * details, requestId } }`, plus the HTTP `status`), with the CLI's hints
+ * alongside. `details.code` is the machine-readable reason
+ * (`ROLLBACK_REQUIRES_DATA_RESTORE`, `ALREADY_INSTALLED`, …); undefined fields
+ * are dropped by `JSON.stringify`.
+ */
+export function printJsonError(
+  error: { status?: number; code?: string; message: string; details?: unknown; requestId?: string },
+  hints: string[] = [],
+): void {
+  console.log(JSON.stringify({ error, ...(hints.length ? { hints } : {}) }, null, 2));
 }
 
 function sleep(ms: number): Promise<void> {
