@@ -35,6 +35,7 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   **gated on a reachable Docker daemon** (`describe.skipIf(!dockerOk)`). Run via
   `bun run test:integration`. Some boot real Authentik (slow: image pull +
   migrations).
+- **Harness selftests**: `bin/**/*.selftest.sh`. These are offline, stubbed, and take seconds. CI runs them on PRs that touch `bin/**`, in `harness-selftest.yml`. Run them yourself after changing any `bin/` script: `for t in $(find bin -name '*.selftest.sh'); do bash "$t" || echo "FAIL $t"; done`.
 - Always run typecheck + lint + test + build before opening a PR. Note: CI's
   typecheck has caught issues the local run missed after a lint auto-fix — re-run
   typecheck after lint fixes.
