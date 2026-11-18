@@ -7,6 +7,11 @@
 //   HOLA_BASE_URL   e.g. https://apps.10.0.0.5.sslip.io   (required)
 //   HOLA_API_KEY    admin key for the sign-in step        (optional)
 //   WEB_CHECK_OUT   screenshot output dir (default ./logs/web-check)
+//   WEB_CHECK_SPKI  base64 SHA-256 SPKI of the test CA's leaf (bin/vm-test-ca spki). When
+//                   set (trusted-TLS mode, spec 009) Chromium accepts that key via
+//                   --ignore-certificate-errors-spki-list and certificate errors are NOT
+//                   ignored, so the check really verifies TLS (and the page is a secure
+//                   context, so service workers register). Unset: unchanged behaviour.
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,9 +25,13 @@ mkdirSync(OUT, { recursive: true });
 const log = (m) => console.log(`[web-check] ${m}`);
 const shot = async (page, name) => { const p = join(OUT, `${name}.png`); await page.screenshot({ path: p, fullPage: true }); log(`screenshot: ${p}`); };
 
-const browser = await chromium.launch({ headless: true });
-// ignoreHTTPSErrors: the test stack serves a self-signed cert by design.
-const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1280, height: 800 } });
+const SPKI = process.env.WEB_CHECK_SPKI || '';
+const browser = SPKI
+  ? await chromium.launch({ headless: true, args: [`--ignore-certificate-errors-spki-list=${SPKI}`] })
+  : await chromium.launch({ headless: true });
+// Untrusted mode: ignoreHTTPSErrors, the test stack serves a self-signed cert by design.
+// Trusted mode (WEB_CHECK_SPKI): errors are NOT ignored; the test CA's leaf is accepted by SPKI.
+const ctx = await browser.newContext({ ignoreHTTPSErrors: !SPKI, viewport: { width: 1280, height: 800 } });
 const page = await ctx.newPage();
 let ok = true;
 

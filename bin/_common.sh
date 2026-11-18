@@ -12,6 +12,10 @@ AUDIT_LOG="${VM_AUDIT_LOG:-$ROOT_DIR/logs/vm-actions.log}"
 # Per-VM ephemeral SSH keys live here (gitignored). One keypair per VM, created
 # at vm-create time and removed at vm-destroy — never shared, never committed.
 KEYS_DIR="${VM_KEYS_DIR:-$ROOT_DIR/.devcontainer/.vm-keys}"
+# The test CA (spec 009) lives here (gitignored, dir 0700, ca.key 0600). Its
+# presence is what turns trusted-TLS mode on for the vm-* suites; the key never
+# leaves the devcontainer.
+CA_DIR="${VM_TEST_CA_DIR:-$ROOT_DIR/.devcontainer/.test-ca}"
 
 # --- logging ----------------------------------------------------------------
 # Colors only when stderr is a TTY, so CI logs stay clean.

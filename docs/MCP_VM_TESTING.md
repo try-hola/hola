@@ -141,7 +141,8 @@ bin/vm-test -- bin/vm-web-check                # run the web check in the contai
 flow** and asserts every step. It's the cheap, repeatable end-to-end test: a
 fresh VM with `HOLA_AUTH_MODE=none` (no Authentik — saves ~2 GB RAM and several
 minutes) and a single light app. It renders a creds-free Hola `.env` (sslip.io +
-self-signed TLS) with a deterministic per-run admin key, then:
+a private test-CA certificate in trusted mode, Traefik's self-signed default
+otherwise; see "DNS & TLS" below) with a deterministic per-run admin key, then:
 
 ```
 create VM → wait-ssh → render .env → hola bootstrap → verify stack →
@@ -293,10 +294,98 @@ HOLA_DOMAIN=apps.10.0.0.50.sslip.io
 Chromium (and `curl`) reach the dashboard with no DNS setup. A static IP keeps the
 URL stable across boots (DHCP also works — just re-read the IP after `vm-wait-ssh`).
 
-**TLS:** without DNS-01 the VM gets no real Let's Encrypt cert (it isn't reachable
-on :80 for HTTP-01), so Traefik serves its **default self-signed cert**.
-`bin/vm-web-check` launches Chromium with `ignoreHTTPSErrors`, and `hola
-bootstrap`'s verify uses `curl -k`. Correct for functional testing; don't ship
+**TLS: trusted mode (the default once you have a test CA).** Without DNS-01 the VM
+gets no real Let's Encrypt cert (it isn't reachable on :80 for HTTP-01), so Traefik
+would serve its **default self-signed cert** and every probe would need `-k` /
+`NODE_TLS_REJECT_UNAUTHORIZED=0` / `ignoreHTTPSErrors`. That also hides real bugs:
+a native-OIDC app whose container cannot verify Authentik's certificate (gitea 28 and
+friends) fails at login while every "is it up" probe stays green. So the harness
+runs a **private test CA**, and the VM serves, and every container trusts, a cert
+signed by it. **Test infrastructure only: nothing in the Hola product changes, and
+nothing here ships anywhere real.**
+
+```bash
+bin/vm-test-ca init       # once: creates .devcontainer/.test-ca/{ca.pem,ca.key} (gitignored)
+bin/vm-test-ca status     # trusted | untrusted: <why>
+```
+
+- **On when** the CA exists and `VM_TRUSTED_TLS` is not `0`. **Off** (`VM_TRUSTED_TLS=0`,
+  or no CA) the suites behave exactly as they always did: `-k`, the bypass,
+  `ignoreHTTPSErrors`, no VM-side files (an offline golden selftest guards it). A
+  one-line banner on stderr says which mode a run is in.
+- `bin/vm-test-ca init` **refuses to overwrite** an existing CA (exit 2; `--force`
+  replaces it). `ca.key` is mode 0600, never printed and **never copied to a VM**.
+  `bin/vm-test-ca issue --ip <ip>` makes the per-VM wildcard leaf
+  (`<ip>.sslip.io` + `*.<ip>.sslip.io`, 365 days, re-issued under 30 days left);
+  `spki --ip <ip>` prints the leaf's base64 SHA-256 SPKI.
+
+**What the harness puts on the VM** (trusted mode only):
+
+| Path on the VM | What | When |
+|---|---|---|
+| `/etc/hola-test-ca/bundle.pem` | the devcontainer's system roots + the test CA | before bootstrap |
+| `/usr/local/libexec/hola-test-ca-runtime` | the OCI runtime shim (`bin/lib/test-ca-runtime.py`) | before bootstrap |
+| `/etc/docker/daemon.json` | merged: runtime `hola-test-ca`, `default-runtime` | before bootstrap |
+| volume `hola-data`: `/test-tls/{cert,key}.pem` | the leaf and its key | right after bootstrap |
+| volume `hola-data`: `/runtime/traefik/test-tls.yml` | Traefik's default-store certificate | right after bootstrap |
+
+- **Traefik** picks `test-tls.yml` up through its watched dynamic-config directory
+  with no restart, and serves the CA-signed leaf for every router kind (core hosts,
+  app hosts, bypass and protected-bypass paths, the Authentik outpost path), because
+  the product configures no per-router certificate resolver on a creds-free VM.
+- **Containers** trust the CA through the **runtime shim**, deliberately *below* Hola:
+  it is registered as Docker's default runtime and, on every container `create`,
+  bind-mounts the bundle read-only and sets `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and
+  `REQUESTS_CA_BUNDLE` (only where the container hasn't set them), then `exec`s the
+  real `runc` with the original arguments. Because it sits under container creation
+  it covers every container Hola ever (re)creates (restart, redeploy, rollback,
+  promote) with no change to the product, the server image or any bundle. (A
+  server-side hook was considered and rejected: this stays test-harness only.) It must
+  be installed **before** `hola bootstrap` (a container records its runtime at
+  creation), which the suites do. It is inert if the bundle file is missing, so it can
+  never stop a container starting.
+- **`docker exec` caveat:** an exec'd process does **not** inherit the shim's env
+  (exec builds its env from Docker's config, not the OCI spec), and `/proc/1/environ`
+  is unreadable in many images (non-root PID 1, s6-overlay). The `sso-trust` probe
+  therefore checks the container's recorded runtime and the mounted bundle, then runs
+  the fetch with the three variables passed explicitly (`docker exec -e …`).
+
+**Per-bundle OIDC trust** (`bin/lib/oidc-trust.tsv`, read by the `sso-trust` stage of
+the per-app test). In trusted mode, after `verify-up` (and again after `--restart`), a
+native-OIDC app's container must be able to fetch Authentik's OIDC discovery document
+(or its liveness URL) over TLS with its **own runtime**:
+
+| Bundle | Runtime | Mechanism | If it can't |
+|---|---|---|---|
+| gitea | Go | the system trust-store overlay (its `compose exec`'d setup never sees `SSL_CERT_FILE`) | **FAIL** at `sso-trust` |
+| immich, postiz, actual-budget | Node | `NODE_EXTRA_CA_CERTS` | **FAIL** at `sso-trust` |
+| mealie | Python | `SSL_CERT_FILE` + `REQUESTS_CA_BUNDLE` | **FAIL** at `sso-trust` |
+| hangar | unverified | not yet checked | **SKIP**: `[sso-trust: SKIP (trust not covered)]` on its result line |
+
+A SKIP never hides the app's install/verify/restart results. An app absent from the
+table isn't native-OIDC and the step doesn't run.
+
+**Full SSO logins:** `bin/vm-sso-check` drives headless Chromium through the whole
+login (app login page, "Login with Authentik", akadmin, consent, an authenticated API
+call) on a **kept** trusted VM, with TLS verified. It can also assert a service worker
+registers (which needs a trusted secure context):
+
+```bash
+bin/vm-catalog-test --apps gitea,immich,mealie --keep          # prints the kept VMID
+bin/vm-sso-check --vmid <id> --app gitea --app immich --app mealie
+bin/vm-sso-check --vmid <id> --app craft-apps --service-worker /effectcraft/
+bin/vm-destroy --vmid <id> --yes
+```
+
+`bin/vm-web-check` likewise verifies TLS (Chromium gets the leaf's SPKI, errors are
+not ignored) when the URL is `<ip>.sslip.io` and trusted mode is on.
+
+**Out of scope:** `hola bootstrap`'s own post-install verify still does `curl -sk`
+inside the product CLI. That is product code and is left alone.
+
+**Untrusted mode** (no CA, or `VM_TRUSTED_TLS=0`): Traefik serves its default
+self-signed cert, `bin/vm-web-check` launches Chromium with `ignoreHTTPSErrors`, and
+`hola bootstrap`'s verify uses `curl -k`. Correct for functional testing; don't ship
 these certs anywhere real.
 
 ### Testing the ACME flow with the staging CA

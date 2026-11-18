@@ -691,5 +691,5 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/008-restore-provider/plan.md`
+`specs/009-trusted-test-tls/plan.md`
 <!-- SPECKIT END -->

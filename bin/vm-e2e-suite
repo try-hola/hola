@@ -41,8 +41,12 @@
 # Env knobs (all optional): BOOTSTRAP_TIMEOUT (900), INSTALL_TIMEOUT (420),
 # ACTION_TIMEOUT (180), HTTP_TIMEOUT (150), HOLA_E2E_REF (pin a bootstrap ref).
 set -euo pipefail
-source "$(dirname "$0")/_common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 load_env
+# Trusted TLS (spec 009): with a test CA (bin/vm-test-ca init) and VM_TRUSTED_TLS != 0,
+# the VM serves a CA-signed cert, containers trust it, and the probes below verify TLS
+# instead of skipping it. With no CA everything is exactly as before (-k / bypass).
+source "$(dirname "${BASH_SOURCE[0]}")/lib/trusted-tls.sh"
 
 # --- args -------------------------------------------------------------------
 KEEP_ON_FAIL=0
@@ -122,15 +126,16 @@ cleanup() {
 abort() { fail "$1"; exit 1; }
 
 # --- small helpers ----------------------------------------------------------
-# Run the working-tree CLI against the VM's server with a self-signed-TLS bypass
-# and the deterministic admin token.
+# Run the working-tree CLI against the VM's server, trusting the test CA (or, with no
+# CA, a self-signed-TLS bypass) and the deterministic admin token.
 api_cli() {
-  NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+  env "$(tt_node_tls_env)" HOLA_NO_UPDATE_NOTICE=1 \
     HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
     bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "$@"
 }
 
-http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+# shellcheck disable=SC2046  # tt_curl_tls is deliberately word-split (`--cacert <path>` / `-k`)
+http_code() { curl $(tt_curl_tls) -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
 
 # wait_http <url> <code-regex> <timeout>
 wait_http() {
@@ -172,6 +177,7 @@ step_wait_ssh() {
 
 step_render_env() {
   log "── STEP 3/10: render creds-free Hola .env (mode=none, sslip.io)"
+  log "  $(tt_mode_line)"
   DOMAIN_BASE="$IP.sslip.io"
   DASHBOARD_URL="https://apps.$DOMAIN_BASE"
   APP_URL="https://$APP.$DOMAIN_BASE"
@@ -197,6 +203,23 @@ HOLA_AUTH_MODE=none
 EOF
   chmod 600 "$HOLA_ENV_OUT"
   log "  wrote $HOLA_ENV_OUT  (dashboard: $DASHBOARD_URL)"
+}
+
+# Trusted TLS (spec 009) — no-ops unless trusted mode is on; a failure aborts the suite.
+# Runtime shim BEFORE bootstrap (containers record their runtime at creation); the
+# default certificate right AFTER it and BEFORE verify_stack, whose dashboard probe
+# now verifies TLS. mode=none has no auth host, so the dashboard is what we wait on.
+step_trust_runtime() {
+  tt_enabled || return 0
+  log "── trusted TLS: installing the container-trust runtime shim (before bootstrap)"
+  if is_dry; then log "DRY_RUN: tt_install_runtime $VMID $IP"; return 0; fi
+  tt_install_runtime "$VMID" "$IP"
+}
+step_trust_traefik() {
+  tt_enabled || return 0
+  log "── trusted TLS: installing the CA-signed default certificate into Traefik"
+  if is_dry; then log "DRY_RUN: tt_install_traefik_cert $VMID $IP; tt_wait_trusted $DASHBOARD_URL/"; return 0; fi
+  tt_install_traefik_cert "$VMID" "$IP" && tt_wait_trusted "$DASHBOARD_URL/"
 }
 
 step_bootstrap() {
@@ -283,7 +306,7 @@ step_install() {
     log "  install attempt $attempt/3 (up to ${INSTALL_TIMEOUT}s)"
     set +e
     out=$(timeout "$INSTALL_TIMEOUT" \
-      env NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+      env "$(tt_node_tls_env)" HOLA_NO_UPDATE_NOTICE=1 \
         HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
         bun --cwd "$ROOT_DIR/packages/cli" src/index.ts install "$APP" --json 2>"$LOG_DIR/install-$attempt.err")
     rc=$?
@@ -327,7 +350,7 @@ step_install() {
 
 step_reachable() {
   log "── STEP 8/10: assert $APP is reachable at its subdomain (mode=none → direct, 200)"
-  if is_dry; then log "DRY_RUN: curl -k $APP_URL  (expect 200)"; return 0; fi
+  if is_dry; then log "DRY_RUN: curl $(tt_curl_tls) $APP_URL  (expect 200)"; return 0; fi
   # Prefer the URL the server reports for the deployment.
   local url; url=$(api_cli deployments --json 2>/dev/null | jq -r --arg id "$DEPLOY_ID" \
     '.items[]? | select(.id == $id) | .url // empty' || true)
@@ -423,6 +446,8 @@ step_uninstall() {
 # ===========================================================================
 # Orchestration
 # ===========================================================================
+# Sourced (by bin/lib/untrusted-golden.selftest.sh) -> expose the functions only.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 log "=== vm-e2e-suite: deterministic Hola end-to-end (app=$APP, mode=none) ==="
 audit "vm-e2e-suite start app=$APP dry_run=${DRY_RUN:-0}"
 trap 'cleanup $?' EXIT
@@ -431,7 +456,9 @@ trap 'cleanup $?' EXIT
 step_create         || abort "create VM";            pass "create VM ($VMID)"
 step_wait_ssh       || abort "wait for SSH";          pass "wait for SSH"
 step_render_env     || abort "render Hola .env";      pass "render Hola .env"
+step_trust_runtime  || abort "trusted TLS: container-trust runtime"
 step_bootstrap      || abort "hola bootstrap";        pass "hola bootstrap"
+step_trust_traefik  || abort "trusted TLS: Traefik certificate"
 step_verify_stack   || abort "verify stack";          pass "verify stack (traefik/server/web + dashboard)"
 step_catalog          || abort "browse catalog";      pass "browse catalog ($APP listed)"
 step_wait_deploy_ready|| abort "server deploy-ready";  pass "server deploy-ready"
