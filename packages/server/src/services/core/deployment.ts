@@ -82,7 +82,7 @@ import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ForbiddenError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
-import { isOrderedVersion, oneWayBoundaries, type VersionedUpgrade } from './rollback-boundary';
+import { isOrderedVersion, oneWayBoundaries, pickDefaultRollbackTarget, type VersionedUpgrade } from './rollback-boundary';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto, locateAppRootInTree, landDirInto } from './snapshot-fs';
 import { rm } from 'node:fs/promises';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -1377,15 +1377,28 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return false;
   }
 
-  /** The release a rollback with no `targetReleaseId` moves to: the most
-   *  recently created release other than the active one. */
-  private defaultRollbackTargetId(deploymentId: string, currentReleaseId: string | undefined): string | undefined {
-    let best: Release | undefined;
-    for (const r of this.releases.values()) {
-      if (r.deploymentId !== deploymentId || r.id === currentReleaseId) continue;
-      if (!best || new Date(r.createdAt).getTime() > new Date(best.createdAt).getTime()) best = r;
-    }
-    return best?.id;
+  /**
+   * The release a rollback with no `targetReleaseId` moves to — the one
+   * function every default-target caller uses (the `rollback` request, and the
+   * detail's `rollbackTarget` that the dashboard and CLI show). The most
+   * recently created release whose version differs from the active one's; see
+   * `pickDefaultRollbackTarget` for why "newest other release" alone is wrong
+   * after an upgrade → rollback → upgrade-again cycle.
+   */
+  private async defaultRollbackTargetId(deploymentId: string, currentReleaseId: string | undefined): Promise<string | undefined> {
+    const own = [...this.releases.values()].filter((r) => r.deploymentId === deploymentId);
+    if (!own.some((r) => r.id !== currentReleaseId)) return undefined;
+    const activeVersion = currentReleaseId ? (await this.readReleaseFacts(deploymentId, currentReleaseId))?.version : undefined;
+    const candidates = await Promise.all(
+      own
+        .filter((r) => r.id !== currentReleaseId)
+        .map(async (r) => ({
+          id: r.id,
+          createdAt: r.createdAt,
+          version: activeVersion ? (await this.readReleaseFacts(deploymentId, r.id))?.version : undefined,
+        })),
+    );
+    return pickDefaultRollbackTarget(candidates, currentReleaseId, activeVersion);
   }
 
   /**
@@ -1926,7 +1939,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // What a default rollback would do (#584), for the dashboard's rollback
     // dialog: the same assessment `rollback` refuses on, so the two cannot
     // disagree. Best-effort — a failure here must not fail the detail read.
-    const rollbackTargetId = this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+    const rollbackTargetId = await this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
     if (rollbackTargetId) {
       try {
         detail.rollbackTarget = await this.assessRollback(deployment, rollbackTargetId);
@@ -2313,8 +2326,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     let targetReleaseId = request.targetReleaseId;
     if (!targetReleaseId) {
-      // Default to the most recent release other than the one currently active.
-      targetReleaseId = this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+      // Default to the most recent release on a different version than the
+      // active one (`defaultRollbackTargetId`).
+      targetReleaseId = await this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
       if (!targetReleaseId) {
         throw new ConflictError('No previous release available for rollback');
       }

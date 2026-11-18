@@ -84,3 +84,38 @@ export function oneWayBoundaries(target: VersionedUpgrade, inRange: readonly Ver
   }
   return out;
 }
+
+/** A release as the default-target choice sees it. */
+export interface RollbackCandidate {
+  id: string;
+  createdAt: string;
+  /** Undefined when the release's version cannot be read. */
+  version?: string;
+}
+
+/**
+ * The release a rollback with no explicit target moves to: the most recently
+ * created release whose version differs from the active release's.
+ *
+ * "Most recently created other release" alone is wrong after
+ * upgrade(3.0.0) → rollback(2.0.2) → upgrade(3.0.0 again): the newest other
+ * release is the FIRST 3.0.0, and "rolling back" to it replaces 3.0.0 with
+ * 3.0.0. A release whose version is unknown counts as different (it cannot be
+ * shown to be the same). When the active version is unknown, or every other
+ * release shares it, this is the newest other release — the pre-fix behaviour.
+ */
+export function pickDefaultRollbackTarget(
+  candidates: readonly RollbackCandidate[],
+  activeReleaseId: string | undefined,
+  activeVersion: string | undefined,
+): string | undefined {
+  const others = candidates
+    .filter((c) => c.id !== activeReleaseId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  if (others.length === 0) return undefined;
+  if (activeVersion) {
+    const differing = others.find((c) => !c.version || c.version !== activeVersion);
+    if (differing) return differing.id;
+  }
+  return others[0].id;
+}

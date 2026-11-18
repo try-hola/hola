@@ -385,6 +385,51 @@ describe('rollback across a one-way upgrade boundary (#584)', () => {
     });
   });
 
+  // After upgrade(3.0.0) -> rollback(2.0.2) -> upgrade(3.0.0 again), the newest
+  // OTHER release is the first 3.0.0: the default target must be the release
+  // on a different version, or "rolling back" replaces 3.0.0 with 3.0.0.
+  describe('the default rollback target', () => {
+    const G2: AppUpgradeMeta = { breaking: true, preUpgradeBackup: 'recommended' };
+    const G3: AppUpgradeMeta = { breaking: true, preUpgradeBackup: 'required' };
+
+    test('is the most recent release on a DIFFERENT version than the active one', async () => {
+      upgradeByVersion = { '2.0.2': G2, '3.0.0': G3 };
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['2.0.2', '3.0.0']);
+      const back = await sys.deployments.rollback(deploymentId, { restoreData: true });
+      expect(back.targetReleaseId).toBe(releases[0]);
+      await waitForJob(sys.jobs, back.jobId);
+      const again = await sys.deployments.promote(deploymentId, { draftId: await finalizedDraft(sys.drafts, '3.0.0'), snapshot: true, options: { autoStart: false } });
+
+      // Detail (dashboard + CLI) and the request agree on the 2.0.2 release.
+      const detail = await sys.deployments.getDeployment(deploymentId);
+      expect(detail.version).toBe('3.0.0');
+      expect(detail.rollbackTarget).toMatchObject({ releaseId: releases[0], version: '2.0.2', fromVersion: '3.0.0', boundary: 'one-way' });
+      const r = await refusal(sys.deployments.rollback(deploymentId, {}));
+      expect(r.details).toMatchObject({ targetReleaseId: releases[0], targetVersion: '2.0.2' });
+      const rb = await sys.deployments.rollback(deploymentId, { restoreData: true });
+      expect(rb.targetReleaseId).toBe(releases[0]);
+      expect(rb.previousReleaseId).toBe(again.releaseId);
+      expect((await waitForJob(sys.jobs, rb.jobId)).status).toBe('completed');
+      expect((await sys.deployments.getDeployment(deploymentId)).version).toBe('2.0.2');
+    });
+
+    test('falls back to the newest other release when every other release shares the active version', async () => {
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['1.0.0', '1.0.0']);
+      expect((await sys.deployments.getDeployment(deploymentId)).rollbackTarget?.releaseId).toBe(releases[0]);
+    });
+
+    test('falls back to the newest other release when the active version is unknown (legacy record)', async () => {
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['1.0.0', '2.0.0', '3.0.0']);
+      await rm(join(dataRoot, 'deployments', deploymentId, 'releases', releases[2], 'manifest.json'));
+      const fresh = makeSystem();
+      const target = (await fresh.deployments.getDeployment(deploymentId)).rollbackTarget;
+      expect(target).toMatchObject({ releaseId: releases[1], boundary: 'unknown' });
+    });
+  });
+
   test('a single-release deployment carries no rollbackTarget', async () => {
     const sys = makeSystem();
     const dep = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts, '1.0.0'), name: 'gitea', options: { autoStart: false } });

@@ -347,7 +347,11 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   crossed before the target ran; a different major with the same block is a
   new one. `unknown` (versions unreadable, a pre-manifest record) is never
   refused: a refusal needs evidence. The same assessment rides the detail read
-  as `rollbackTarget`, so the dashboard's restore checkbox (pre-ticked exactly
+  as `rollbackTarget`, whose default target comes from the same
+  `defaultRollbackTargetId` the request uses — the newest release on a
+  **different version** than the active one, not merely the newest other
+  release (after upgrade → rollback → upgrade-again that was the first copy of
+  the active version) — so the dashboard's restore checkbox (pre-ticked exactly
   for `one-way` + snapshot) and the server's refusal cannot disagree.
   `restoreData` with no snapshot still fails in the job (#524). Rollback also
   syncs `version`/`icon` to the target via the helper `promote` uses
