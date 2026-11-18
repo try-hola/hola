@@ -5,7 +5,7 @@
 # Usage: bin/vm-catalog-test [--dry-run] [--keep-on-fail] [--vmid VMID]
 #                            [--apps a,b,c] [--skip x,y] [--restart] [--lifecycle]
 #                            [--server-image released|local] [--no-prune]
-#                            [--memory MB] [--ref cli-vX.Y.Z] [-h]
+#                            [--memory MB] [--ref cli-vX.Y.Z] [--keep] [-h]
 #
 # Brings up ONE Authentik-mode VM (so apps of every auth mode — none, forward-auth,
 # native-oidc — can provision), then walks the catalog installing each app one at a
@@ -48,21 +48,33 @@
 # upstream try-hola/apps issue). Those surface as FAIL with the deploy error in the
 # per-app logs — read them to tell a real regression from an app-config gap.
 #
+# TRUSTED TLS (spec 009): when the test CA exists (bin/vm-test-ca init) and
+# VM_TRUSTED_TLS is not 0, the VM serves a CA-signed certificate, every container on it
+# trusts the CA (OCI runtime shim, installed before bootstrap), and every probe here
+# verifies TLS instead of skipping it. Native-OIDC apps also get an `sso-trust` check
+# (bin/lib/oidc-trust.tsv); a bundle whose trust is not covered is reported as a note
+# on its result line, e.g. `PASS hangar (1m02s)  [sso-trust: SKIP (trust not covered)]`.
+# With no CA the run is byte-identical to before. A one-line banner on STDERR says which.
+#
 # Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
 # and keeps the VM if any app failed (default: always destroy so reruns stay cheap).
+# --keep never destroys the VM (whatever the result) and prints its VMID, so
+# bin/vm-sso-check (full SSO logins) can run against it; destroy it with
+# bin/vm-destroy --vmid <id> --yes.
 set -euo pipefail
-source "$(dirname "$0")/_common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 load_env
 # NOTE: bin/lib/app-test.sh is sourced AFTER the timeout defaults below, so the
 # driver's values win over the library's own `:=` fallbacks (the library defaults
 # only apply when a knob is otherwise unset).
 
 # --- args -------------------------------------------------------------------
-KEEP_ON_FAIL=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1; SERVER_IMAGE="released"
+KEEP_ON_FAIL=0; KEEP=0; ONLY_APPS=""; SKIP_APPS=""; REF="${HOLA_E2E_REF:-}"; VM_MEMORY=""; PRUNE=1; SERVER_IMAGE="released"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
     --keep-on-fail) KEEP_ON_FAIL=1; shift ;;
+    --keep) KEEP=1; shift ;;
     --vmid) VM_ID=$2; shift 2 ;;
     --apps) ONLY_APPS=$2; shift 2 ;;
     --skip) SKIP_APPS=$2; shift 2 ;;
@@ -89,7 +101,7 @@ export HTTP_TIMEOUT
 
 # Per-app test library — sourced here (not at the top) so the timeout defaults set
 # above take precedence over the library's own fallback defaults.
-source "$(dirname "$0")/lib/app-test.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/app-test.sh"
 
 # --- paths / per-run state --------------------------------------------------
 LOG_DIR="$ROOT_DIR/logs/vm-catalog-test"
@@ -109,7 +121,8 @@ emit() {  # emit <PASS|FAIL|SKIP> <app> <stage|reason> <seconds>
   local res=$1 app=$2 stage=$3 secs=$4 dur; dur=$(fmt_dur "$secs")
   RESULTS+=("$res"$'\t'"$app"$'\t'"$stage"$'\t'"$secs")
   case "$res" in
-    PASS) printf 'PASS %-16s (%s)\n' "$app" "$dur" ;;
+    PASS) if [[ "$stage" == "-" ]]; then printf 'PASS %-16s (%s)\n' "$app" "$dur"
+          else printf 'PASS %-16s (%s)  [%s]\n' "$app" "$dur" "$stage"; fi ;;   # stage = a SKIP note (trusted TLS only)
     SKIP) printf 'SKIP %-16s (%s) — %s\n' "$app" "$dur" "$stage"; SKIPPED=$((SKIPPED+1)) ;;
     *)    printf 'FAIL %-16s (%s, %s)  logs: %s\n' "$app" "$stage" "$dur" "logs/vm-catalog-test/$app/"; FAILED=$((FAILED+1)) ;;
   esac
@@ -123,7 +136,8 @@ print_summary() {
     for r in "${RESULTS[@]}"; do
       IFS=$'\t' read -r res app stage secs <<<"$r"
       case "$res" in
-        PASS) printf '  PASS  %-16s %s\n' "$app" "$(fmt_dur "$secs")" ;;
+        PASS) if [[ "$stage" == "-" ]]; then printf '  PASS  %-16s %s\n' "$app" "$(fmt_dur "$secs")"
+              else printf '  PASS  %-16s %s  [%s]\n' "$app" "$(fmt_dur "$secs")" "$stage"; fi ;;
         SKIP) printf '  SKIP  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
         *)    printf '  FAIL  %-16s %s  (%s)\n' "$app" "$(fmt_dur "$secs")" "$stage" ;;
       esac
@@ -142,9 +156,15 @@ print_summary() {
 cleanup() {
   local rc=$1
   print_summary
-  [[ -n "$ALIAS" ]] && remove_ssh_config "$VMID" 2>/dev/null || true
   [[ -z "$VMID" ]] && exit "$rc"
   if is_dry; then exit "$rc"; fi
+  if [[ "$KEEP" == "1" ]]; then
+    # Keep the ssh alias too, so the kept VM stays drivable by alias.
+    warn "--keep: leaving VM $VMID running (id: $VMID). Destroy it when done: bin/vm-destroy --vmid $VMID --yes"
+    echo "kept VM: $VMID"
+    exit "$rc"
+  fi
+  [[ -n "$ALIAS" ]] && remove_ssh_config "$VMID" 2>/dev/null || true
   if [[ "$FAILED" -ne 0 && "$KEEP_ON_FAIL" == "1" ]]; then
     warn "failures — keeping VM $VMID and snapshotting for inspection."
     "$BIN_DIR/vm-snapshot" --vmid "$VMID" --name "catalog-fail-$(date -u +%Y%m%d-%H%M%S)" \
@@ -158,7 +178,8 @@ cleanup() {
 }
 abort() { err "$1"; exit 1; }
 
-http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+# shellcheck disable=SC2046  # tt_curl_tls is deliberately word-split (`--cacert <path>` / `-k`)
+http_code() { curl $(tt_curl_tls) -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
 wait_http() {
   local url=$1 want=$2 timeout=$3 code deadline; deadline=$(( $(date +%s) + timeout ))
   while :; do
@@ -206,6 +227,7 @@ setup_wait_ssh() {
 
 setup_render_env() {
   log "── rendering Hola .env (HOLA_AUTH_MODE=authentik, sslip.io, self-signed TLS)"
+  log "  $(tt_mode_line)"
   DOMAIN_BASE="$IP.sslip.io"
   DASHBOARD_URL="https://apps.$DOMAIN_BASE"
   AUTH_URL="https://auth.$DOMAIN_BASE"
@@ -243,6 +265,25 @@ setup_bootstrap() {
   timeout "$BOOTSTRAP_TIMEOUT" \
     bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "${args[@]}" 2>&1 | tee "$LOG_DIR/bootstrap.log"
   return "${PIPESTATUS[0]}"
+}
+
+# Trusted TLS (spec 009) — both are no-ops unless trusted mode is on, and either failing
+# fails setup before any app is installed (FR-004a).
+#  * runtime: the OCI shim that makes every container trust the CA. MUST precede
+#    bootstrap, because a container records its runtime at creation.
+#  * traefik: the CA-signed default certificate, dropped into Traefik's watched dir
+#    right after bootstrap — BEFORE verify_stack, whose dashboard probe now verifies TLS.
+setup_trust_runtime() {
+  tt_enabled || return 0
+  log "── trusted TLS: installing the container-trust runtime shim (before bootstrap)"
+  if is_dry; then log "DRY_RUN: tt_install_runtime $VMID $IP"; return 0; fi
+  tt_install_runtime "$VMID" "$IP"
+}
+setup_trust_traefik() {
+  tt_enabled || return 0
+  log "── trusted TLS: installing the CA-signed default certificate into Traefik"
+  if is_dry; then log "DRY_RUN: tt_install_traefik_cert $VMID $IP; tt_wait_trusted $DASHBOARD_URL"; return 0; fi
+  tt_install_traefik_cert "$VMID" "$IP" && tt_wait_trusted "$DASHBOARD_URL/"
 }
 
 setup_verify_stack() {
@@ -305,7 +346,11 @@ setup_local_server_image() {
 setup_wait_authentik() {
   log "── waiting for Authentik login UI ($AUTH_URL) — first boot runs migrations"
   if is_dry; then return 0; fi
-  wait_http "$AUTH_URL" '^(200|30[0-9])$' "$AUTHENTIK_TIMEOUT"
+  wait_http "$AUTH_URL" '^(200|30[0-9])$' "$AUTHENTIK_TIMEOUT" || return 1
+  # Name a TLS failure on the auth host as such (trusted mode only) — and, like every
+  # trusted setup step, fail setup on it (FR-004a).
+  if tt_enabled; then tt_wait_trusted "$AUTH_URL/-/health/live/" || return 1; fi
+  return 0
 }
 
 # Wait until the SERVER container can spawn `docker compose` (defeats the
@@ -355,6 +400,8 @@ resolve_apps() {
 # ===========================================================================
 # Orchestration
 # ===========================================================================
+# Sourced (by bin/lib/untrusted-golden.selftest.sh) -> expose the functions only.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 log "=== vm-catalog-test: install every catalog app, verify it comes up (mode=authentik) ==="
 audit "vm-catalog-test start restart=${AT_TEST_RESTART} dry_run=${DRY_RUN:-0}"
 trap 'cleanup $?' EXIT
@@ -362,9 +409,16 @@ trap 'cleanup $?' EXIT
 setup_create            || abort "create VM"
 setup_wait_ssh          || abort "wait for SSH"
 setup_render_env        || abort "render Hola .env"
+setup_trust_runtime     || abort "trusted TLS: install container-trust runtime"
 setup_bootstrap         || abort "hola bootstrap"
+setup_trust_traefik     || abort "trusted TLS: install Traefik certificate"
 setup_verify_stack      || abort "verify core stack"
 setup_local_server_image || abort "load local server image"
+# --server-image local recreated the server container; Traefik's certificate is
+# untouched, but re-prove the front door still verifies (trusted mode only).
+if [[ "$SERVER_IMAGE" == "local" ]] && tt_enabled && ! is_dry; then
+  tt_wait_trusted "$DASHBOARD_URL/" || abort "trusted TLS: dashboard no longer verifies after server image swap"
+fi
 setup_wait_authentik    || abort "Authentik not ready"
 setup_wait_deploy_ready || abort "server not deploy-ready"
 
@@ -389,7 +443,7 @@ for app in "${APP_ARR[@]}"; do
   at_run_app "$app" "$app_log" 2>"$app_log/run.log" || rc=$?
   secs=$(( $(date +%s) - start ))
   case "$rc" in
-    0) emit PASS "$app" "-" "$secs" ;;
+    0) emit PASS "$app" "${AT_NOTE:--}" "$secs" ;;
     2) emit SKIP "$app" "${AT_SKIP_REASON:-needs config}" "$secs" ;;
     *) emit FAIL "$app" "${AT_LAST_STAGE:-?}" "$secs" ;;
   esac

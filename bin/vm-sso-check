@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# bin/vm-sso-check — full headless SSO logins (and the service-worker check) against an
+# EXISTING trusted-TLS test VM, e.g. one kept by `bin/vm-catalog-test --keep`.
+#
+# Usage: bin/vm-sso-check --vmid VMID --app NAME [--app NAME …]
+#                         [--service-worker PATH] [--out DIR] [--dry-run] [-h]
+#
+# For each --app it makes sure the app is installed (installing it with the same
+# at_install the catalog sweep uses if it is not; an installed app is left alone), then
+# drives real Chromium through the whole login: the app's login page -> "Login with
+# Authentik" -> akadmin + password -> consent -> an authenticated request on the app
+# (gitea /user/settings, immich /api/users/me, mealie /api/users/self; any other app is
+# treated as forward-auth: load the root, which must redirect to Authentik, log in
+# there, land back on the app).
+# TLS is VERIFIED against the test CA (Chromium gets the leaf's SPKI), never skipped.
+#
+# --service-worker PATH additionally loads https://<app>.<base>PATH after login and
+# asserts navigator.serviceWorker.ready resolves within 30 s (e.g. craft-apps with
+# --service-worker /effectcraft/ — a service worker needs a trusted secure context).
+#
+# Requires trusted mode (bin/vm-test-ca init; VM_TRUSTED_TLS != 0) AND a VM that was
+# bootstrapped in trusted mode. Prints `PASS sso <app>` / `FAIL sso <app> <hop>` per
+# app and writes screenshots under --out (default logs/vm-sso-check). The Authentik
+# akadmin password is read from /opt/hola/.env on the VM into a variable and handed
+# to the browser script through its environment; it is never printed or written.
+# Exit 0 if every app passed, else 1.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+load_env
+
+APPS=(); SW_PATH=""; OUT="$ROOT_DIR/logs/vm-sso-check"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --vmid) export VM_ID=$2; shift 2 ;;
+    --app) APPS+=("$2"); shift 2 ;;
+    --service-worker) SW_PATH=$2; shift 2 ;;
+    --out) OUT=$2; shift 2 ;;
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
+(( ${#APPS[@]} )) || die "pass at least one --app NAME"
+VMID=$(resolve_vmid)
+
+# The SSO login helpers share the per-app library with the sweep (at_install, at_cli, …).
+source "$BIN_DIR/lib/app-test.sh"   # also sources lib/trusted-tls.sh
+tt_enabled || die "trusted TLS is off ($(tt_mode_line)). vm-sso-check needs the test CA: bin/vm-test-ca init (and VM_TRUSTED_TLS != 0)."
+command -v bun >/dev/null || die "bun is required."
+[[ -d "$ROOT_DIR/node_modules/playwright" ]] || die "playwright not installed. Run: bun install && bunx playwright install --with-deps chromium"
+
+if is_dry; then
+  IP="203.0.113.10"
+else
+  # Re-resolve THIS VM's IP (the shared state may point at another VM).
+  state_set VM_IP ""
+  "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" >/dev/null 2>&1 || die "VM $VMID is not reachable over SSH."
+  IP=$(state_get VM_IP); [[ -n "$IP" ]] || die "could not resolve the IP of VM $VMID."
+fi
+DOMAIN_BASE="$IP.sslip.io"; DASHBOARD_URL="https://apps.$DOMAIN_BASE"
+
+if is_dry; then
+  API_KEY="dry-run"; AKPW="dry-run"; SPKI="dry-run-spki"
+  log "DRY_RUN: would read HOLA_API_KEY + AUTHENTIK_BOOTSTRAP_PASSWORD from /opt/hola/.env on VM $VMID (values never printed)"
+else
+  envget() { "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "grep -m1 '^$1=' /opt/hola/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n'; }
+  API_KEY=$(envget HOLA_API_KEY); AKPW=$(envget AUTHENTIK_BOOTSTRAP_PASSWORD)
+  [[ -n "$API_KEY" ]] || die "no HOLA_API_KEY in /opt/hola/.env on VM $VMID"
+  [[ -n "$AKPW" ]] || die "no AUTHENTIK_BOOTSTRAP_PASSWORD in /opt/hola/.env on VM $VMID (is it an Authentik-mode VM?)"
+  SPKI=$("$BIN_DIR/vm-test-ca" spki --ip "$IP" 2>/dev/null) || SPKI=""
+  [[ -n "$SPKI" ]] || die "no test leaf for $IP — was this VM bootstrapped in trusted mode? (bin/vm-test-ca issue --ip $IP)"
+  export ROOT_DIR BIN_DIR VMID DASHBOARD_URL API_KEY DOMAIN_BASE
+fi
+
+mkdir -p "$OUT"
+audit "vm-sso-check vmid=$VMID apps=${APPS[*]} service-worker=${SW_PATH:-none}"
+FAILED=0
+for app in "${APPS[@]}"; do
+  app_out="$OUT/$app"; mkdir -p "$app_out"
+  if is_dry; then
+    log "DRY_RUN: ensure $app installed (at_install); SSO_APP=$app SSO_BASE=$DOMAIN_BASE ${SW_PATH:+SSO_SW_PATH=$SW_PATH }bun bin/lib/sso-login.mjs"
+    echo "DRY-RUN sso $app (no browser, no install)"; continue
+  fi
+  dep=$(at_cli deployments --json 2>/dev/null | jq -r --arg a "$app" '[.items[]? | select(.app == $a and .status == "running")][0].id // empty' || true)
+  if [[ -z "$dep" ]]; then
+    log "[$app] not installed — installing"
+    irc=0; at_install "$app" "$app_out" 2>"$app_out/install.log" || irc=$?
+    if [[ "$irc" != 0 ]]; then
+      echo "FAIL sso $app install$([[ "$irc" == 2 ]] && echo " (needs manual config: ${AT_SKIP_REASON})")"; FAILED=$((FAILED+1)); continue
+    fi
+    # wait until the front door answers before driving a browser at it
+    at_wait_http "https://$app.$DOMAIN_BASE/" "$AT_HEALTHY_HTTP" "${HTTP_TIMEOUT:-180}" 2>>"$app_out/install.log" || true
+  else
+    log "[$app] already installed ($dep)"
+  fi
+  rc=0
+  SSO_BASE="$DOMAIN_BASE" SSO_APP="$app" SSO_PASSWORD="$AKPW" WEB_CHECK_SPKI="$SPKI" SSO_OUT="$app_out" \
+    SSO_SW_PATH="$SW_PATH" bun "$BIN_DIR/lib/sso-login.mjs" > "$app_out/sso.log" 2>&1 || rc=$?
+  grep -E '^(PASS|FAIL) sso ' "$app_out/sso.log" || echo "FAIL sso $app script-error (see $app_out/sso.log)"
+  (( rc == 0 )) || FAILED=$((FAILED+1))
+done
+(( FAILED == 0 ))

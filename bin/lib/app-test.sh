@@ -30,6 +30,11 @@
 [[ -n "${__APP_TEST_SH_LOADED:-}" ]] && return 0
 __APP_TEST_SH_LOADED=1
 
+# Trusted TLS (spec 009): the TLS flags below come from tt_curl_tls / tt_node_tls_env,
+# which return today's `-k` / NODE_TLS_REJECT_UNAUTHORIZED=0 unless a test CA exists.
+# shellcheck source=/dev/null
+source "$(dirname "${BASH_SOURCE[0]}")/trusted-tls.sh"
+
 # --- per-app timeouts (overridable via env) ---------------------------------
 : "${INSTALL_TIMEOUT:=600}"
 : "${ACTION_TIMEOUT:=240}"
@@ -44,10 +49,11 @@ AT_DEPLOY_ID=""
 AT_APP_URL=""
 
 # --- low-level helpers ------------------------------------------------------
-# Run the working-tree CLI against the VM's server, with the self-signed-TLS
-# bypass and the deterministic admin token. Stdout is the command's stdout.
+# Run the working-tree CLI against the VM's server, trusting the test CA (or, with no
+# CA, the self-signed-TLS bypass) and the deterministic admin token. Stdout is the
+# command's stdout.
 at_cli() {
-  NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+  env "$(tt_node_tls_env)" HOLA_NO_UPDATE_NOTICE=1 \
     HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
     bun --cwd "$ROOT_DIR/packages/cli" src/index.ts "$@"
 }
@@ -55,7 +61,8 @@ at_cli() {
 # Run a command on the VM over SSH (quietly). Returns the command's exit code.
 at_ssh() { "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "$@" 2>/dev/null; }
 
-at_http_code() { curl -k -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
+# shellcheck disable=SC2046  # tt_curl_tls is deliberately word-split (`--cacert <path>` / `-k`)
+at_http_code() { curl $(tt_curl_tls) -s -o /dev/null -w '%{http_code}' --max-time 10 "$1" 2>/dev/null || echo 000; }
 
 # at_wait_http <url> <code-regex> <timeout> — poll until the front door answers
 # with an acceptable code, or time out. Logs the final code either way.
@@ -101,7 +108,7 @@ at_capture_diag() {
 _at_install_exec() {
   local app=$1 errf=$2; shift 2   # remaining args are the --set pairs
   timeout "$INSTALL_TIMEOUT" \
-    env NODE_TLS_REJECT_UNAUTHORIZED=0 HOLA_NO_UPDATE_NOTICE=1 \
+    env "$(tt_node_tls_env)" HOLA_NO_UPDATE_NOTICE=1 \
       HOLA_API_URL="$DASHBOARD_URL" HOLA_TOKEN="$API_KEY" \
       bun --cwd "$ROOT_DIR/packages/cli" src/index.ts install "$app" "$@" --json 2>"$errf"
 }
@@ -266,6 +273,27 @@ at_uninstall() {
   return 0
 }
 
+# at_sso_trust <app> <logdir> — (trusted TLS only) assert a native-OIDC app's container
+# trusts the test CA, so its back-channel call to Authentik can verify (spec 009,
+# FR-014/FR-015). Maps the probe result: ok -> pass; covered bundle fails -> FAIL (stage
+# sso-trust); bundle not covered/unverified -> SKIP, recorded as a note on the app's
+# result line and never hiding the app's other stages; app not native-OIDC or trusted
+# mode off -> not run (nothing printed, so an untrusted run's logs are unchanged).
+# Detail goes to <logdir>/sso-trust[-<tag>].log; <tag> (e.g. after-restart) keeps a
+# re-probe from overwriting the first probe's evidence.
+AT_NOTE=""
+at_sso_trust() {
+  local app=$1 logdir=$2 tag=${3:-} rc=0
+  TT_PROBE_LOG="$logdir/sso-trust${tag:+-$tag}.log" tt_oidc_probe "$VMID" "$app" "$AT_DEPLOY_ID" || rc=$?
+  local stage="  [$app] sso-trust${tag:+ ($tag)}"
+  case "$rc" in
+    0) log "$stage: ok (${TT_PROBE_URL})"; return 0 ;;
+    1) err "$stage: FAIL — ${TT_PROBE_REASON}"; return 1 ;;
+    2) AT_NOTE="sso-trust: SKIP (${TT_PROBE_REASON})"; warn "$stage: SKIP (${TT_PROBE_REASON})"; return 0 ;;
+    *) return 0 ;;   # 3 = not run
+  esac
+}
+
 # at_run_app <app> <logdir> — the full deterministic per-app test used by the
 # catalog sweep: install -> verify up -> [restart -> verify] -> [stop] -> uninstall.
 # Lifecycle steps are opt-in (the sweep's default is just install/verify/uninstall):
@@ -278,7 +306,7 @@ AT_LAST_STAGE=""
 at_run_app() {
   local app=$1 logdir=$2 failed=0
   mkdir -p "$logdir"
-  AT_LAST_STAGE=""
+  AT_LAST_STAGE=""; AT_NOTE=""
   # Record the first failing stage without clobbering it on later failures.
   _mark() { [[ "$failed" == 0 ]] && AT_LAST_STAGE="$1"; failed=1; }
 
@@ -290,9 +318,20 @@ at_run_app() {
   log "  [$app] verify up"
   if ! at_verify_up "$app" "$logdir"; then _mark "verify"; fi
 
+  # Trusted TLS: does a native-OIDC app's container trust the test CA? (a no-op unless
+  # trusted mode is on and the app is in bin/lib/oidc-trust.tsv)
+  if [[ "$failed" == 0 ]]; then
+    if ! at_sso_trust "$app" "$logdir"; then _mark "sso-trust"; fi
+  fi
+
   if [[ "$failed" == 0 && "${AT_TEST_RESTART:-0}" == "1" ]]; then
     log "  [$app] restart"
     if ! at_restart "$app" "$logdir"; then _mark "restart"; fi
+    # The restart re-materializes the compose and recreates the containers: the CA trust
+    # must survive it (SC-005), so prove it again.
+    if [[ "$failed" == 0 ]]; then
+      if ! at_sso_trust "$app" "$logdir" after-restart; then _mark "sso-trust"; fi
+    fi
   fi
 
   if [[ "$failed" == 0 && "${AT_TEST_STOP:-0}" == "1" ]]; then

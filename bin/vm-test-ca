@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+# bin/vm-test-ca — the private test CA behind trusted TLS on disposable VMs (spec 009).
+#
+# Usage: bin/vm-test-ca [--dry-run] <init [--force] | issue --ip IP | spki --ip IP | status>
+#
+#   init [--force]   create the CA in $CA_DIR (RSA-3072, 10 y). Refuses (exit 2) if it
+#                    already exists, so a fleet-wide trust anchor is never silently
+#                    replaced; --force replaces it.
+#   issue --ip IP    (re)issue the wildcard leaf for <IP>.sslip.io under
+#                    $CA_DIR/vms/<IP>/{cert.pem,key.pem,bundle.pem,spki.txt} and print
+#                    that dir. Re-issues only when the leaf is absent or has < 30 days
+#                    left. bundle.pem = the system root bundle + the CA (one file serves
+#                    NODE_EXTRA_CA_CERTS, SSL_CERT_FILE and REQUESTS_CA_BUNDLE).
+#   spki --ip IP     print the base64 SHA-256 of the leaf's public key (for Chromium's
+#                    --ignore-certificate-errors-spki-list).
+#   status           print `trusted` or `untrusted: <why>`; exit 0 either way.
+#
+# CA_DIR defaults to .devcontainer/.test-ca (gitignored, dir 0700, ca.key 0600);
+# override with VM_TEST_CA_DIR. The CA private key never leaves this directory and is
+# never printed, copied or pushed to a VM. Trusted mode is on when ca.pem exists and
+# VM_TRUSTED_TLS is not 0.
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+SYSTEM_ROOTS="${VM_TEST_CA_SYSTEM_ROOTS:-/etc/ssl/certs/ca-certificates.crt}"
+LEAF_RENEW_DAYS=30
+FORCE_INIT=0; IP=""; CMD=""
+is_dry() { [[ "${DRY_RUN:-0}" == "1" ]]; }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; export DRY_RUN; shift ;;
+    --force) FORCE_INIT=1; shift ;;
+    --ip) [[ $# -ge 2 ]] || die "--ip needs a value"; IP=$2; shift 2 ;;
+    init|issue|spki|status) CMD=$1; shift ;;
+    -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) die "unknown arg: $1" ;;
+  esac
+done
+[[ -n "$CMD" ]] || die "no command (init|issue|spki|status). See --help."
+
+# run <cmd…>: execute, or just print under --dry-run. Output of openssl is discarded
+# by the callers that could carry key material; nothing here ever echoes a key.
+run() { if is_dry; then echo "DRY_RUN: $*"; else "$@"; fi; }
+
+need_ip() {
+  [[ "$IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "--ip <IPv4> is required (got '${IP:-}')"
+}
+
+spki_of() {  # spki_of <cert.pem> — base64 sha256 of the DER public key
+  openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der \
+    | openssl dgst -sha256 -binary | base64
+}
+
+cmd_init() {
+  if [[ -f "$CA_DIR/ca.pem" || -f "$CA_DIR/ca.key" ]] && [[ "$FORCE_INIT" != 1 ]]; then
+    err "test CA already exists in $CA_DIR — refusing to overwrite (use --force to replace it)"
+    exit 2
+  fi
+  if is_dry; then
+    run openssl genrsa -out "$CA_DIR/ca.key" 3072
+    run openssl req -x509 -new -key "$CA_DIR/ca.key" -sha256 -days 3650 -subj "/CN=Hola Test CA" \
+      -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -out "$CA_DIR/ca.pem"
+    return 0
+  fi
+  mkdir -p "$CA_DIR"; chmod 700 "$CA_DIR"
+  ( umask 077; openssl genrsa -out "$CA_DIR/ca.key.new" 3072 2>/dev/null )
+  openssl req -x509 -new -key "$CA_DIR/ca.key.new" -sha256 -days 3650 -subj "/CN=Hola Test CA" \
+    -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -out "$CA_DIR/ca.pem.new" 2>/dev/null || die "init: openssl req failed"
+  chmod 600 "$CA_DIR/ca.key.new"; chmod 644 "$CA_DIR/ca.pem.new"
+  mv -f "$CA_DIR/ca.key.new" "$CA_DIR/ca.key"; mv -f "$CA_DIR/ca.pem.new" "$CA_DIR/ca.pem"
+  rm -rf "$CA_DIR/vms"   # leaves signed by a replaced CA are useless
+  audit "vm-test-ca init force=$FORCE_INIT"
+  log "test CA created: $CA_DIR/ca.pem (fingerprint $(openssl x509 -in "$CA_DIR/ca.pem" -noout -fingerprint -sha256 | cut -d= -f2 | cut -c1-23))"
+}
+
+cmd_issue() {
+  need_ip
+  [[ -f "$CA_DIR/ca.pem" && -f "$CA_DIR/ca.key" ]] || die "issue: no test CA in $CA_DIR — run: bin/vm-test-ca init"
+  local d="$CA_DIR/vms/$IP" host="$IP.sslip.io"
+  if is_dry; then
+    run openssl req -new -newkey rsa:2048 -nodes -keyout "$d/key.pem" -subj "/CN=*.$host" -out "$d/csr.pem"
+    run openssl x509 -req -in "$d/csr.pem" -CA "$CA_DIR/ca.pem" -CAkey "$CA_DIR/ca.key" -days 365 -sha256 \
+      -extfile "<san: DNS:$host,DNS:*.$host; EKU serverAuth>" -out "$d/cert.pem"
+    echo "$d"; return 0
+  fi
+  mkdir -p "$d"; chmod 700 "$CA_DIR" "$CA_DIR/vms" "$d" 2>/dev/null || true
+  if [[ ! -f "$d/cert.pem" || ! -f "$d/key.pem" ]] \
+     || ! openssl x509 -in "$d/cert.pem" -noout -checkend $(( LEAF_RENEW_DAYS * 86400 )) >/dev/null 2>&1 \
+     || ! openssl verify -CAfile "$CA_DIR/ca.pem" "$d/cert.pem" >/dev/null 2>&1; then
+    local ext; ext=$(mktemp)
+    printf 'subjectAltName=DNS:%s,DNS:*.%s\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n' "$host" "$host" > "$ext"
+    # Build the new pair beside the old one and swap both in only once signing succeeded:
+    # writing key.pem in place first would, on a failed or interrupted signing, leave a
+    # new key next to a still-valid old cert that no later run re-issues (a mismatch
+    # Traefik refuses to load).
+    ( umask 077; openssl req -new -newkey rsa:2048 -nodes -keyout "$d/key.pem.new" -subj "/CN=*.$host" -out "$d/csr.pem" 2>/dev/null ) \
+      || { rm -f "$ext" "$d/key.pem.new" "$d/csr.pem"; die "issue: key/CSR generation failed"; }
+    openssl x509 -req -in "$d/csr.pem" -CA "$CA_DIR/ca.pem" -CAkey "$CA_DIR/ca.key" -CAcreateserial \
+      -days 365 -sha256 -extfile "$ext" -out "$d/cert.pem.new" 2>/dev/null \
+      || { rm -f "$ext" "$d/key.pem.new" "$d/cert.pem.new" "$d/csr.pem"; die "issue: signing failed"; }
+    rm -f "$ext" "$d/csr.pem"
+    chmod 600 "$d/key.pem.new"; chmod 644 "$d/cert.pem.new"
+    mv -f "$d/key.pem.new" "$d/key.pem"; mv -f "$d/cert.pem.new" "$d/cert.pem"
+    spki_of "$d/cert.pem" > "$d/spki.txt"; chmod 644 "$d/spki.txt"
+    audit "vm-test-ca issue ip=$IP"
+  fi
+  [[ -s "$d/spki.txt" ]] || { spki_of "$d/cert.pem" > "$d/spki.txt"; chmod 644 "$d/spki.txt"; }
+  # The bundle is cheap and tracks the devcontainer's roots, so rebuild it every run.
+  [[ -f "$SYSTEM_ROOTS" ]] || die "issue: system root bundle $SYSTEM_ROOTS not found (set VM_TEST_CA_SYSTEM_ROOTS)"
+  cat "$SYSTEM_ROOTS" "$CA_DIR/ca.pem" > "$d/bundle.pem"; chmod 644 "$d/bundle.pem"
+  echo "$d"
+}
+
+cmd_spki() {
+  need_ip
+  local f="$CA_DIR/vms/$IP/spki.txt"
+  [[ -s "$f" ]] || die "spki: no leaf for $IP — run: bin/vm-test-ca issue --ip $IP"
+  cat "$f"
+}
+
+cmd_status() {
+  if [[ ! -f "$CA_DIR/ca.pem" ]]; then echo "untrusted: no test CA in $CA_DIR (run bin/vm-test-ca init)"
+  elif [[ "${VM_TRUSTED_TLS:-1}" == "0" ]]; then echo "untrusted: VM_TRUSTED_TLS=0"
+  else echo "trusted"; fi
+}
+
+case "$CMD" in
+  init) cmd_init ;; issue) cmd_issue ;; spki) cmd_spki ;; status) cmd_status ;;
+esac

@@ -9,6 +9,11 @@
 #
 # Defaults: URL from HOLA_DOMAIN and key from HOLA_API_KEY in the Hola env
 # (HOLA_ENV_FILE, default .devcontainer/hola.env — the same file bootstrap uses).
+#
+# Trusted TLS (spec 009): when the test CA exists (bin/vm-test-ca init) and
+# VM_TRUSTED_TLS is not 0, and the URL's host is <ip>.sslip.io, Chromium is given the
+# leaf's SPKI (WEB_CHECK_SPKI) and certificate errors are NOT ignored. Otherwise the
+# check behaves exactly as before (ignoreHTTPSErrors).
 set -euo pipefail
 source "$(dirname "$0")/_common.sh"
 load_env
@@ -31,11 +36,22 @@ done
 [[ -z "$KEY" ]] && KEY=$(hola_env_get HOLA_API_KEY)
 [[ -z "$URL" ]] && die "no dashboard URL — pass --url or set HOLA_DOMAIN in $HOLA_ENV"
 
+source "$BIN_DIR/lib/trusted-tls.sh"
+SPKI=""
+if tt_enabled; then
+  # The leaf is per VM IP; recover it from the <ip>.sslip.io host of the URL.
+  ip=$(sed -nE 's#^https?://([^/]+\.)?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.sslip\.io(:[0-9]+)?(/.*)?$#\2#p' <<<"$URL")
+  if [[ -n "$ip" ]]; then
+    SPKI=$("$BIN_DIR/vm-test-ca" spki --ip "$ip" 2>/dev/null) \
+      || die "trusted TLS is on but there is no test leaf for $ip — was the VM bootstrapped in trusted mode? (bin/vm-test-ca issue --ip $ip, or VM_TRUSTED_TLS=0)"
+  fi
+fi
+
 command -v bun > /dev/null || die "bun is required to run the headless check."
 if [[ ! -d "$ROOT_DIR/node_modules/playwright" ]]; then
   die "playwright not installed. Run: bun install && bunx playwright install --with-deps chromium"
 fi
 
-log "headless front-door check: $URL"
+log "headless front-door check: $URL${SPKI:+  (trusted TLS: verifying against the test CA)}"
 audit "vm-web-check url=$URL"
-HOLA_BASE_URL="$URL" HOLA_API_KEY="$KEY" WEB_CHECK_OUT="$OUT" bun "$BIN_DIR/lib/web-check.mjs"
+HOLA_BASE_URL="$URL" HOLA_API_KEY="$KEY" WEB_CHECK_OUT="$OUT" WEB_CHECK_SPKI="$SPKI" bun "$BIN_DIR/lib/web-check.mjs"

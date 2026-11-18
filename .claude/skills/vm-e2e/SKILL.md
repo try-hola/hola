@@ -42,8 +42,12 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    .devcontainer/hola.env`. Do NOT pass `.devcontainer/mcp.env` here — that's the
    MCP/infra env, not a Hola config. For DNS, use the creds-free `sslip.io` setup
    and leave `ACME_DNS_PROVIDER` unset so no AWS/provider creds are ever written to
-   `hola.env` (self-signed TLS; the verify uses `curl -k`). See "DNS & TLS" in
-   docs/MCP_VM_TESTING.md.
+   `hola.env`. **TLS is trusted by default once you have a test CA**: run
+   `bin/vm-test-ca init` once (it creates a gitignored private CA; the key never
+   leaves the devcontainer) and the VM serves a CA-signed cert, containers trust it,
+   and the suites verify TLS instead of using `-k`. With no CA, or
+   `VM_TRUSTED_TLS=0`, TLS is Traefik's self-signed default and the verify uses
+   `curl -k`, exactly as before. See "DNS & TLS" in docs/MCP_VM_TESTING.md.
 
    **`VM_IPCONFIG0` is optional — DHCP works fine.** `vm-create` only sends
    `ipconfig0` when the var is set, so leaving it empty just means the VM takes a
@@ -98,6 +102,14 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    ALIAS="hola-vm-$VMID"
    ```
    It prints the resolved IP — capture it for the domain rewrite in Preflight 2.
+   **Trusted mode only (a test CA exists): install the container-trust runtime shim
+   now, before bootstrap** (containers record their runtime at creation, so it can't
+   be added afterwards): `bash -c 'source bin/lib/trusted-tls.sh && tt_install_runtime
+   "$1" "$2"' _ "$VMID" "$IP"` (the suites do this for you). After bootstrap run the
+   same with `tt_install_traefik_cert`. Skip both when untrusted. **Always through
+   `bash -c`**: the library derives its paths from `BASH_SOURCE`, so sourcing it from
+   zsh (this session's shell) resolves the CA dir to the wrong place, `tt_enabled`
+   answers false, and both calls silently do nothing.
    **SSH can go refused again shortly after this succeeds** (cloud-init reboots on
    first boot). If the next step fails with `ssh exit 255`, just re-run
    `bin/vm-wait-ssh` rather than debugging it; anything already `docker load`ed

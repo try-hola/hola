@@ -1,0 +1,17 @@
+# Per-bundle OIDC trust expectation (spec 009, FR-014). HARNESS TEST DATA: this
+# table is read only by bin/lib/trusted-tls.sh; nothing in the product consumes it.
+# Columns (tab-separated):
+#   app       catalog app id
+#   service   compose service that makes the OIDC back-channel call
+#   runtime   go | node | python | unknown   (what the app's image runs)
+#   probe     node | python | curl | none     (what the probe execs in the container)
+#   expected  covered | unverified | not-covered
+# covered      -> a failed probe FAILS the app at stage sso-trust
+# unverified / not-covered -> SKIP "trust not covered" (never hides install failures)
+# An app absent from this table is not a native-oidc app: the step is not run.
+gitea	gitea	go	curl	covered
+immich	immich-server	node	node	covered
+postiz	postiz	node	node	covered
+actual-budget	actual-budget	node	node	covered
+mealie	mealie	python	python	covered
+hangar	hangar	unknown	none	unverified
