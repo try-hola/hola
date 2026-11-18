@@ -82,6 +82,7 @@ import { validateParams } from '@hola/shared/param-validate';
 
 import { getLogger } from '../../lib/logger';
 import { NotFoundError, ConflictError, ForbiddenError, ValidationError, DraftValidationError, ServiceError, assertValidChannelName } from '../../middleware/error-mapping';
+import { isOrderedVersion, oneWayBoundaries, type VersionedUpgrade } from './rollback-boundary';
 import { dirHasContents, fileSize, tarGzipDir, restoreTarGzInto, locateAppRootInTree, landDirInto } from './snapshot-fs';
 import { rm } from 'node:fs/promises';
 import type { HealthCheckable, ServiceHealth } from './types';
@@ -1390,13 +1391,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   /**
    * Does rolling back from the active release to `targetReleaseId` cross a
    * one-way upgrade boundary (#584)? See `RollbackBoundary` for the three
-   * verdicts.
+   * verdicts, and `oneWayBoundaries` for which releases count.
    *
    * The boundary is judged over the RANGE (target, current], not just the
    * active release: rolling 2.0 → 4.0 back to 2.0 crosses 3.0's migration even
    * when 4.0 itself declares nothing, and the data on disk is 3.0's or later.
    * Only releases this deployment actually ran are consulted — they are the
-   * ones that can have migrated its data. An intermediate release whose
+   * ones that can have migrated its data. A release in range counts only when
+   * its one-way declaration is not one the TARGET already carries: the catalog
+   * copies a major's `upgrade` block onto that major's patch bumps, so
+   * uptime-kuma 2.0.3 → 2.0.2 (both `breaking: true, required`) crosses no
+   * migration, while gitea 3.0.0 → 2.0.2 does. An intermediate release whose
    * manifest cannot be read is skipped rather than turning the verdict into
    * `unknown`: a refusal needs positive evidence, and the endpoints decide
    * whether there is a range to judge at all.
@@ -1419,27 +1424,23 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       snapshotAvailable,
       boundary: 'unknown',
     };
-    const ordered = (v: string | undefined): v is string => !!v && /^v?\d/.test(v.trim());
-    if (!currentReleaseId || !ordered(from?.version) || !ordered(to?.version)) return base;
+    if (!currentReleaseId || !isOrderedVersion(from?.version) || !isOrderedVersion(to?.version)) return base;
     const fromVersion = from.version;
     const toVersion = to.version;
     if (compareVersions(toVersion, fromVersion) >= 0) return { ...base, boundary: 'none' };
 
-    const boundaryVersions = new Set<string>();
+    const inRange: VersionedUpgrade[] = [];
     for (const r of this.releases.values()) {
       if (r.deploymentId !== deploymentId || r.id === targetReleaseId) continue;
       const facts = r.id === currentReleaseId ? from : await this.readReleaseFacts(deploymentId, r.id);
       const v = facts?.version;
-      if (!ordered(v)) continue;
+      if (!isOrderedVersion(v)) continue;
       if (compareVersions(v, toVersion) <= 0 || compareVersions(v, fromVersion) > 0) continue;
-      if (facts?.upgrade?.preUpgradeBackup === 'required' || facts?.upgrade?.breaking === true) boundaryVersions.add(v);
+      inRange.push({ version: v, upgrade: facts?.upgrade });
     }
-    if (boundaryVersions.size === 0) return { ...base, boundary: 'none' };
-    return {
-      ...base,
-      boundary: 'one-way',
-      boundaryVersions: [...boundaryVersions].sort(compareVersions),
-    };
+    const boundaryVersions = oneWayBoundaries({ version: toVersion, upgrade: to?.upgrade }, inRange);
+    if (boundaryVersions.length === 0) return { ...base, boundary: 'none' };
+    return { ...base, boundary: 'one-way', boundaryVersions };
   }
 
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {

@@ -540,8 +540,9 @@ target release was last active, then brings that release up.
 
 **A rollback across a one-way upgrade is refused unless you choose how.** If
 any release this deployment ran between the target and the current one declares
-`preUpgradeBackup: required` or `breaking: true`, its upgrade migrated the data,
-and the older image cannot start against it (Gitea, for example, crash-loops on
+`preUpgradeBackup: required` or `breaking: true` — and the target release does
+not already carry that same declaration — its upgrade migrated the data, and the
+older image cannot start against it (Gitea, for example, crash-loops on
 "your database is for a newer Gitea"). A plain rollback across that boundary is
 refused before anything changes (409, `details.code:
 ROLLBACK_REQUIRES_DATA_RESTORE`, saying whether a snapshot exists). Choose
@@ -549,7 +550,10 @@ ROLLBACK_REQUIRES_DATA_RESTORE`, saying whether a snapshot exists). Choose
 older release can read the migrated data. The dashboard pre-ticks the restore
 option in exactly this case when a snapshot exists. A deployment whose release
 versions cannot be read (a record that predates staged manifests) is never
-refused — the check needs evidence, so it keeps the earlier behaviour.
+refused — the check needs evidence, so it keeps the earlier behaviour. A patch
+rollback within a major (say uptime-kuma 2.0.3 → 2.0.2, where both carry the
+same upgrade notice copied from 2.0.0) crosses no migration and runs as a plain
+rollback.
 
 Restores are **staged**: the archive is extracted and checked in a scratch
 directory, and only then swapped into place, with the original preserved until

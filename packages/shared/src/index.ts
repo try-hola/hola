@@ -2979,7 +2979,10 @@ export type RollbackRequest = {
  * upgrade boundary (#584): some release this deployment ran with a version in
  * (target, current] declares `upgrade.preUpgradeBackup: "required"` or
  * `upgrade.breaking: true` — the packager's statement that the upgrade migrates
- * data an older version cannot read.
+ * data an older version cannot read — and that declaration is not the target's
+ * own (same major, same normalised upgrade block): the catalog copies a
+ * major's block onto its patch bumps, and a copy is a migration the data
+ * crossed before the target ran.
  *
  *   - `one-way`: such a release exists. An image-only rollback is refused
  *     unless explicitly acknowledged (`imageOnly`).

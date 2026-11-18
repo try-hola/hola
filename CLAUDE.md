@@ -332,11 +332,20 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   was always image-only and crash-looped on the migrated database. Now
   `rollback` judges the range (target, current]: if any release this
   deployment ran in it declares `upgrade.preUpgradeBackup: "required"` or
-  `breaking: true` (`assessRollback` → `RollbackBoundary` `one-way`), a request
+  `breaking: true` **and that block is not the target's own** (`assessRollback`
+  → `oneWayBoundaries` → `RollbackBoundary` `one-way`), a request
   with neither `restoreData` nor an explicit `imageOnly` is refused **before
   anything moves** — 409 `ROLLBACK_REQUIRES_DATA_RESTORE`, `details` carrying
   `snapshotAvailable` and `boundaryVersions` so clients can name the way
-  forward. `unknown` (versions unreadable, a pre-manifest record) is never
+  forward. The "not the target's own" clause is load-bearing: the catalog
+  copies a major's `upgrade` block onto that major's patch bumps (uptime-kuma
+  2.0.2/2.0.3 both `breaking: true, required`), so counting every declaration
+  refused 2.0.3 → 2.0.2 — a rollback crossing no migration — and pushed
+  `--restore-data`, which discards the operator's changes. An identical block
+  (normalised: `breaking`, `preUpgradeBackup`, `minFromVersion`, `waypoints`;
+  absent ≡ default) **on the same major** is a migration the data had already
+  crossed before the target ran; a different major with the same block is a
+  new one. `unknown` (versions unreadable, a pre-manifest record) is never
   refused: a refusal needs evidence. The same assessment rides the detail read
   as `rollbackTarget`, so the dashboard's restore checkbox (pre-ticked exactly
   for `one-way` + snapshot) and the server's refusal cannot disagree.

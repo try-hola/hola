@@ -4,7 +4,9 @@
  * asks for the data restore (`restoreData`) or acknowledges the image-only
  * rollback (`imageOnly`). A boundary is a release this deployment ran, with a
  * version in (target, current], whose manifest declares
- * `upgrade.preUpgradeBackup: "required"` or `upgrade.breaking: true`.
+ * `upgrade.preUpgradeBackup: "required"` or `upgrade.breaking: true` — and
+ * whose upgrade block is not the target's own (a copied block is a migration
+ * the data crossed before the target ran).
  *
  * Runs against the real deployment service with a temp data root and the
  * success-simulating MockDockerService (no Docker daemon).
@@ -301,6 +303,85 @@ describe('rollback across a one-way upgrade boundary (#584)', () => {
       snapshotAvailable: true,
       boundary: 'one-way',
       boundaryVersions: ['2.0.0'],
+    });
+  });
+
+  /** Install `versions[0]`, then promote through the rest in order. */
+  async function chain(sys: ReturnType<typeof makeSystem>, versions: string[]) {
+    const dep = await sys.deployments.createFromDraft({ draftId: await finalizedDraft(sys.drafts, versions[0]), name: 'gitea', options: { autoStart: false } });
+    const releases = [dep.releaseId];
+    for (const v of versions.slice(1)) {
+      const up = await sys.deployments.promote(dep.deploymentId, { draftId: await finalizedDraft(sys.drafts, v), snapshot: true, options: { autoStart: false } });
+      releases.push(up.releaseId);
+    }
+    return { deploymentId: dep.deploymentId, releases };
+  }
+
+  // The catalog copies a major's `upgrade` block onto that major's patch bumps
+  // verbatim (uptime-kuma 2.0.2/2.0.3 both `breaking: true, required`); a
+  // block identical to the target's is a migration crossed before the target.
+  describe('a copied upgrade block is not a boundary', () => {
+    const KUMA2: AppUpgradeMeta = { breaking: true, preUpgradeBackup: 'required' };
+
+    test('patch within a major (2.0.3 -> 2.0.2, same block) -> allowed, boundary none', async () => {
+      upgradeByVersion = { '2.0.2': KUMA2, '2.0.3': { ...KUMA2 } };
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['2.0.2', '2.0.3']);
+      expect((await sys.deployments.getDeployment(deploymentId)).rollbackTarget).toMatchObject({ releaseId: releases[0], boundary: 'none' });
+      const rb = await sys.deployments.rollback(deploymentId, {});
+      expect(rb.targetReleaseId).toBe(releases[0]);
+      expect((await waitForJob(sys.jobs, rb.jobId)).status).toBe('completed');
+      expect((await sys.deployments.getDeployment(deploymentId)).version).toBe('2.0.2');
+    });
+
+    test('a missing field and its default compare equal', async () => {
+      upgradeByVersion = { '2.0.2': { breaking: true, preUpgradeBackup: 'none', waypoints: [] }, '2.0.3': { breaking: true } };
+      const sys = makeSystem();
+      const { deploymentId } = await chain(sys, ['2.0.2', '2.0.3']);
+      expect((await sys.deployments.getDeployment(deploymentId)).rollbackTarget?.boundary).toBe('none');
+    });
+
+    test('major boundary (3.0.0 required -> 2.0.2 breaking/recommended: blocks differ) -> refused', async () => {
+      upgradeByVersion = { '2.0.2': { breaking: true, preUpgradeBackup: 'recommended' }, '3.0.0': { breaking: true, preUpgradeBackup: 'required' } };
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['2.0.2', '3.0.0']);
+      const r = await refusal(sys.deployments.rollback(deploymentId, {}));
+      expect(r.details).toMatchObject({ code: 'ROLLBACK_REQUIRES_DATA_RESTORE', targetReleaseId: releases[0], targetVersion: '2.0.2', boundaryVersions: ['3.0.0'] });
+    });
+
+    test('multi-hop (1.0.0 -> 2.0.0 required -> 2.0.1 same block) back to 1.0.0 -> refused, reported once at 2.0.0', async () => {
+      upgradeByVersion = { '2.0.0': KUMA2, '2.0.1': { ...KUMA2 } };
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['1.0.0', '2.0.0', '2.0.1']);
+      const r = await refusal(sys.deployments.rollback(deploymentId, { targetReleaseId: releases[0] }));
+      expect(r.details).toMatchObject({ code: 'ROLLBACK_REQUIRES_DATA_RESTORE', fromVersion: '2.0.1', boundaryVersions: ['2.0.0'] });
+      // ...while 2.0.1 -> 2.0.0 (same block) is a plain rollback.
+      const rb = await sys.deployments.rollback(deploymentId, { targetReleaseId: releases[1] });
+      expect(rb.targetReleaseId).toBe(releases[1]);
+    });
+
+    test('a target with NO upgrade block vs a release with one -> differs -> refused', async () => {
+      upgradeByVersion = { '1.0.1': { breaking: true } };
+      const sys = makeSystem();
+      const { deploymentId } = await chain(sys, ['1.0.0', '1.0.1']);
+      const r = await refusal(sys.deployments.rollback(deploymentId, {}));
+      expect(r.details).toMatchObject({ code: 'ROLLBACK_REQUIRES_DATA_RESTORE', boundaryVersions: ['1.0.1'] });
+    });
+
+    test('an identical block on a DIFFERENT major is a new migration -> refused', async () => {
+      upgradeByVersion = { '3.0.0': KUMA2, '4.0.0': { ...KUMA2 } };
+      const sys = makeSystem();
+      const { deploymentId } = await chain(sys, ['3.0.0', '4.0.0']);
+      const r = await refusal(sys.deployments.rollback(deploymentId, {}));
+      expect(r.details).toMatchObject({ code: 'ROLLBACK_REQUIRES_DATA_RESTORE', boundaryVersions: ['4.0.0'] });
+    });
+
+    test("a block that repeats the target's across an intermediate with none -> allowed", async () => {
+      upgradeByVersion = { '2.0.2': KUMA2, '2.0.5': { ...KUMA2 } };
+      const sys = makeSystem();
+      const { deploymentId, releases } = await chain(sys, ['2.0.2', '2.0.4', '2.0.5']);
+      const rb = await sys.deployments.rollback(deploymentId, { targetReleaseId: releases[0] });
+      expect(rb.targetReleaseId).toBe(releases[0]);
     });
   });
 
