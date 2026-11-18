@@ -9,13 +9,52 @@ ROOT_DIR=$(cd "$BIN_DIR/.." && pwd)
 MCP_ENV_FILE="${MCP_ENV_FILE:-$ROOT_DIR/.devcontainer/mcp.env}"
 STATE_FILE="${VM_STATE_FILE:-$ROOT_DIR/.devcontainer/.vm-state}"
 AUDIT_LOG="${VM_AUDIT_LOG:-$ROOT_DIR/logs/vm-actions.log}"
-# Per-VM ephemeral SSH keys live here (gitignored). One keypair per VM, created
-# at vm-create time and removed at vm-destroy — never shared, never committed.
-KEYS_DIR="${VM_KEYS_DIR:-$ROOT_DIR/.devcontainer/.vm-keys}"
-# The test CA (spec 009) lives here (gitignored, dir 0700, ca.key 0600). Its
-# presence is what turns trusted-TLS mode on for the vm-* suites; the key never
-# leaves the devcontainer.
-CA_DIR="${VM_TEST_CA_DIR:-$ROOT_DIR/.devcontainer/.test-ca}"
+
+# --- env-file lookup --------------------------------------------------------
+# _env_file_get KEY: print KEY's value from $MCP_ENV_FILE (exit 1 if absent),
+# parsed EXACTLY as load_env parses it (comments/blank lines skipped, spaces
+# stripped from the key, the value is everything after the first '=', first
+# occurrence wins) — so a value read here is the value load_env would export.
+# Reads one key only; nothing is exported, and only the asked-for value is printed.
+_env_file_get() {
+  local want=$1 line key
+  [[ -f "$MCP_ENV_FILE" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+    key=${line%%=*}; key=${key// /}
+    [[ "$key" == "$want" ]] || continue
+    printf '%s' "${line#*=}"; return 0
+  done < "$MCP_ENV_FILE"
+  return 1
+}
+
+# _env_setting VAR: VAR's effective value under load_env's precedence — the
+# process environment (non-empty) > $MCP_ENV_FILE > empty.
+_env_setting() {
+  local var=$1
+  if [[ -n "${!var:-}" ]]; then printf '%s' "${!var}"; return 0; fi
+  _env_file_get "$var" || true
+}
+
+# resolve_dirs: (re)compute the directories configurable via VM_KEYS_DIR and
+# VM_TEST_CA_DIR. Precedence: explicit process env > mcp.env > default. Runs at
+# source time — reading the env file directly, so a script that never calls
+# load_env (bin/vm-test-ca) or uses these before it agrees with its children —
+# and again at the end of load_env (#579).
+resolve_dirs() {
+  local v
+  # Per-VM ephemeral SSH keys live here (gitignored). One keypair per VM, created
+  # at vm-create time and removed at vm-destroy — never shared, never committed.
+  v=$(_env_setting VM_KEYS_DIR)
+  KEYS_DIR="${v:-$ROOT_DIR/.devcontainer/.vm-keys}"
+  # The test CA (spec 009) lives here (gitignored, dir 0700, ca.key 0600). Its
+  # presence is what turns trusted-TLS mode on for the vm-* suites; the key never
+  # leaves the devcontainer.
+  v=$(_env_setting VM_TEST_CA_DIR)
+  CA_DIR="${v:-$ROOT_DIR/.devcontainer/.test-ca}"
+}
+resolve_dirs
 
 # --- logging ----------------------------------------------------------------
 # Colors only when stderr is a TTY, so CI logs stay clean.
@@ -53,6 +92,7 @@ load_env() {
     warn "$MCP_ENV_FILE not found — relying on the current environment."
     warn "run 'bin/mcp-setup' to create it from the template."
   fi
+  resolve_dirs
 }
 
 require_vars() {

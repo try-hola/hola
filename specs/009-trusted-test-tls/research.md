@@ -68,13 +68,13 @@ It reaches the volume with `docker run --rm -i -v hola_hola-data:/data <an image
 - `daemon.json` has no "default mount" or "default env" option.
 
 **Decision: an OCI runtime shim installed as the VM's default Docker runtime.**
-- The harness installs `/usr/local/libexec/hola-test-ca-runtime`, a small Python 3 script, before `hola bootstrap`.
-- It registers it in `/etc/docker/daemon.json` (`runtimes.hola-test-ca.path` + `default-runtime: hola-test-ca`) and reloads `dockerd`.
+- The harness installs `/usr/local/libexec/hola-test-ca-runtime.py`, a small Python 3 script, and in front of it `/usr/local/libexec/hola-test-ca-runtime`, a POSIX `sh` front end, before `hola bootstrap`. The front end is the registered runtime path: it `exec`s the real `runc` directly unless `create` appears as an argv element, so healthcheck `exec`s and every other non-`create` call never start Python (#578). The authoritative argv parse stays in the Python shim; a front-end false positive only costs a Python start.
+- It registers the front end in `/etc/docker/daemon.json` (`runtimes.hola-test-ca.path` + `default-runtime: hola-test-ca`) and reloads `dockerd`.
 - Docker's containerd shim invokes the runtime binary with runc's CLI. On `create --bundle <dir>`, the shim edits `<dir>/config.json`, then `exec`s the real `runc` with the original arguments. Every other subcommand passes straight through. This is the same mechanism `nvidia-container-runtime` uses to inject devices into every container.
 - The edit:
   - appends one read-only bind mount, `/etc/hola-test-ca/bundle.pem` → `/etc/hola-test-ca/bundle.pem` (`rbind`, `ro`);
   - appends `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` to `process.env`, all pointing at that path, and only for keys the container does not already set.
-- The shim is **inert** when the bundle file is missing (passthrough), so a broken setup can never stop containers from starting.
+- The shim is **inert** when the bundle file is missing or `config.json` cannot be read (passthrough), and the front end is inert when the Python shim or `python3` is missing, so an error *in the shim* can never stop a container from being created. That is a claim about the shim only: what the container then does with what was injected is the container's (see the addendum on the system-store overlay).
 
 **Why this satisfies the requirements.**
 - **FR-011 (survives everything):** it sits below Docker's container creation, so every container Hola (re)creates, on any lifecycle path, inherits it. That includes Hola's own server (whose dashboard OIDC discovery fetch, `oidc-provider.ts:142-143`, gains trust too), Traefik and Authentik, all harmlessly, because the bundle is a superset of public roots.
@@ -93,6 +93,8 @@ It reaches the volume with `docker run --rm -i -v hola_hola-data:/data <an image
 - One file serves all three variables. Node tolerates duplicate roots in `NODE_EXTRA_CA_CERTS`, and Go and Python need the full set.
 
 **Addendum (found by running it, see "Spike results" and "Acceptance results").** The three env vars only reach a container's *main* process. Hola runs some apps' post-deploy setup through `docker compose exec` (gitea's `gitea admin auth add-oauth`, a Go binary), and `exec` builds its environment from Docker's config, not the OCI spec, so that process never saw `SSL_CERT_FILE` and failed with `x509: certificate signed by unknown authority`, which is the very failure this feature exists to catch. The shim therefore also overlays the bundle, read-only, on each system trust-store file the image already has (Go, curl and OpenSSL read those by default). Still harness-only and below Hola.
+
+**Narrowing the overlay (#577).** A read-only bind mount over the system store breaks an image that rewrites that store at startup (`update-ca-certificates` gets EROFS/EBUSY; under `set -e` that is a crash loop). A per-image opt-in keyed on the catalog app was the preferred fix, but the shim cannot see the image: the OCI spec Docker generates fills `annotations` only from `HostConfig.Annotations` (`coci.WithAnnotations(c.HostConfig.Annotations)` in moby `daemon/oci_linux.go`, checked at `docker-v29.1.3`), so `config.json` carries no image name and no container labels unless Hola itself set annotations, which would be a product change. The shim therefore skips the overlay (keeping the bundle mount and the env) when a CA-store rewriter (`update-ca-certificates`, `update-ca-trust`, `c_rehash`, `trust extract`) appears in `process.args`, in a script `process.args` names (args[0] resolved via the container's `PATH`, later path-looking args such as a tini chain's target; resolved inside the rootfs, never on the host; binaries are not scanned), or in a well-known entrypoint hook directory (`/docker-entrypoint.d`, `/docker-entrypoint-initdb.d`, `/entrypoint.d`, `/etc/cont-init.d`, `/custom-cont-init.d`, `/etc/s6-overlay/scripts`, `/etc/s6-overlay/s6-rc.d/*/{up,run}`). gitea keeps the overlay: its `process.args` are `/usr/bin/entrypoint /usr/bin/s6-svscan /etc/s6`, and that entrypoint renames users and `exec`s s6 without touching the CA store. A rewriter reached any other way (a helper sourced from elsewhere, a compiled init) is not seen; such an image still gets the overlay and can still fail, and `VM_TRUSTED_TLS=0` remains the escape hatch.
 
 **Risk and fallback.** If the shim proves non-viable on the VM's Docker version (spike task T001), the run **stops and reports**. It does not fall back to a server hook, because the user ruled that out.
 
@@ -189,7 +191,9 @@ The SPKI hash comes from `bin/vm-test-ca spki`.
     - the mount and env are added on `create`;
     - existing env keys are not overridden;
     - non-`create` subcommands and a missing bundle file are pure passthrough;
-    - argv reaches runc byte-for-byte.
+    - argv reaches runc byte-for-byte;
+    - the system-store overlay is applied to the gitea shape and skipped for each rewriter signal (#577);
+    - the `sh` front end sends non-`create` calls (a healthcheck-style `exec` included) straight to runc without starting Python, routes `create` through the Python shim, and the argv is byte-identical through both layers (#578).
   - `bin/vm-test-ca` selftest, in a temp dir: init, refuse to overwrite, `--force`, issue (SANs and validity checked with `openssl x509 -text`), `spki` hash stable, bundle = system roots + CA.
 - **"Absent ⇒ unchanged" (FR-018/SC-004):** a selftest renders the env and the command lines with the CA absent and diffs them against a golden copy captured from today's scripts.
 - **Product suites:** `bun run test` etc. are unaffected (no `packages/` change) but are still run once as the gate.

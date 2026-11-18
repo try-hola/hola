@@ -25,7 +25,8 @@ TT_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${TT_CLOUD_INIT_TIMEOUT:=900}"          # max wait for the VM's first-boot cloud-init to finish
 : "${TT_SETTLE:=20}"                       # seconds the VM must stay up after cloud-init says done
 TT_BUNDLE_DEST=/etc/hola-test-ca/bundle.pem        # path inside containers AND on the VM
-TT_SHIM_DEST=/usr/local/libexec/hola-test-ca-runtime
+TT_SHIM_DEST=/usr/local/libexec/hola-test-ca-runtime        # sh front end = Docker's runtime path
+TT_SHIM_PY_DEST=/usr/local/libexec/hola-test-ca-runtime.py  # the Python shim it hands `create` to
 TT_OIDC_TABLE="${TT_OIDC_TABLE:-$TT_LIB_DIR/oidc-trust.tsv}"
 TT_PROBE_REASON=""; TT_PROBE_URL=""
 
@@ -59,24 +60,12 @@ _tt_vm() { local vmid=$1; shift; "$BIN_DIR/vm-ssh" --vmid "$vmid" -- "$@"; }
 _tt_fail() { err "trusted TLS: $1 failed${2:+ — $2}"; return 1; }
 
 # A fresh template VM runs cloud-init's package upgrade and may REBOOT a few minutes after
-# SSH first answers (the vm-e2e skill's "ssh refused again" note). A reboot in the middle
-# of `hola bootstrap` kills its install.sh, so wait here until cloud-init is done and the
-# VM has stayed up (uptime kept counting) for TT_SETTLE seconds. Only runs in trusted mode.
-_tt_wait_cloud_init() {
-  local vmid=$1 deadline=$(( $(date +%s) + TT_CLOUD_INIT_TIMEOUT )) out up1 up2
-  while :; do
-    # Bound the remote wait too: the deadline below is only checked between iterations.
-    out=$(_tt_vm "$vmid" "timeout $TT_CLOUD_INIT_TIMEOUT cloud-init status --wait >/dev/null 2>&1; cut -d. -f1 /proc/uptime" 2>/dev/null) || out=""
-    up1=$(tr -dc '0-9' <<<"$out")
-    if [[ -n "$up1" ]]; then
-      sleep "$TT_SETTLE"
-      up2=$(_tt_vm "$vmid" "cut -d. -f1 /proc/uptime" 2>/dev/null | tr -dc '0-9') || up2=""
-      [[ -n "$up2" && "$up2" -gt "$up1" ]] && return 0   # uptime kept counting: no reboot in between
-    fi
-    [[ $(date +%s) -ge $deadline ]] && return 1
-    sleep 5
-  done
-}
+# SSH first answers (#574). That wait now lives in the shared bin/lib/vm-settle.sh
+# (vm_wait_settled) so the untrusted flows get it too. tt_install_runtime still calls it
+# (a cheap re-check when the suite already waited) because the vm-e2e skill calls
+# tt_install_runtime on its own. TT_CLOUD_INIT_TIMEOUT / TT_SETTLE remain its fallbacks.
+# shellcheck source=/dev/null
+source "$TT_LIB_DIR/vm-settle.sh"
 
 # --- half 2: containers trust the CA (runtime shim), BEFORE bootstrap ----------
 # tt_install_runtime <vmid> <ip>
@@ -86,15 +75,21 @@ tt_install_runtime() {
   d=$("$BIN_DIR/vm-test-ca" issue --ip "$ip" 2>/dev/null) && [[ -s "$d/bundle.pem" ]] \
     || { _tt_fail "issue leaf/bundle for $ip" "bin/vm-test-ca issue"; return 1; }
 
-  _tt_wait_cloud_init "$vmid" \
-    || { _tt_fail "wait for the VM's first-boot cloud-init to finish" "not done and stable within ${TT_CLOUD_INIT_TIMEOUT}s"; return 1; }
+  vm_wait_settled "$vmid" \
+    || { _tt_fail "wait for the VM's first-boot cloud-init to finish" "not done and stable within ${VM_SETTLE_TIMEOUT:-$TT_CLOUD_INIT_TIMEOUT}s"; return 1; }
 
   _tt_vm "$vmid" "sudo mkdir -p /etc/hola-test-ca /usr/local/libexec && sudo tee $TT_BUNDLE_DEST >/dev/null && sudo chmod 644 $TT_BUNDLE_DEST" \
     < "$d/bundle.pem" >/dev/null 2>&1 \
     || { _tt_fail "push CA bundle to the VM"; return 1; }
-  _tt_vm "$vmid" "sudo tee $TT_SHIM_DEST >/dev/null && sudo chmod 755 $TT_SHIM_DEST" \
+  # The Python shim first, then the sh front end that Docker runs (#578): the front end
+  # execs runc directly for everything but `create`, so healthchecks never start Python.
+  # (It is inert without the shim, but push order keeps that window from ever existing.)
+  _tt_vm "$vmid" "sudo tee $TT_SHIM_PY_DEST >/dev/null && sudo chmod 755 $TT_SHIM_PY_DEST" \
     < "$TT_LIB_DIR/test-ca-runtime.py" >/dev/null 2>&1 \
     || { _tt_fail "push the runtime shim to the VM"; return 1; }
+  _tt_vm "$vmid" "sudo tee $TT_SHIM_DEST >/dev/null && sudo chmod 755 $TT_SHIM_DEST" \
+    < "$TT_LIB_DIR/test-ca-runtime.sh" >/dev/null 2>&1 \
+    || { _tt_fail "push the runtime shim front end to the VM"; return 1; }
 
   # Merge (never clobber) /etc/docker/daemon.json: register the runtime and make it the default.
   # /etc/docker need not exist (a stock engine writes no daemon.json), and an empty file

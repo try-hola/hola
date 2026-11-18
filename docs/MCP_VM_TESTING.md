@@ -324,7 +324,8 @@ bin/vm-test-ca status     # trusted | untrusted: <why>
 | Path on the VM | What | When |
 |---|---|---|
 | `/etc/hola-test-ca/bundle.pem` | the devcontainer's system roots + the test CA | before bootstrap |
-| `/usr/local/libexec/hola-test-ca-runtime` | the OCI runtime shim (`bin/lib/test-ca-runtime.py`) | before bootstrap |
+| `/usr/local/libexec/hola-test-ca-runtime` | the runtime front end (`bin/lib/test-ca-runtime.sh`), Docker's runtime path | before bootstrap |
+| `/usr/local/libexec/hola-test-ca-runtime.py` | the OCI runtime shim (`bin/lib/test-ca-runtime.py`) | before bootstrap |
 | `/etc/docker/daemon.json` | merged: runtime `hola-test-ca`, `default-runtime` | before bootstrap |
 | volume `hola-data`: `/test-tls/{cert,key}.pem` | the leaf and its key | right after bootstrap |
 | volume `hola-data`: `/runtime/traefik/test-tls.yml` | Traefik's default-store certificate | right after bootstrap |
@@ -337,13 +338,28 @@ bin/vm-test-ca status     # trusted | untrusted: <why>
   it is registered as Docker's default runtime and, on every container `create`,
   bind-mounts the bundle read-only and sets `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and
   `REQUESTS_CA_BUNDLE` (only where the container hasn't set them), then `exec`s the
-  real `runc` with the original arguments. Because it sits under container creation
+  real `runc` with the original arguments. Docker actually runs a tiny `sh` front end
+  that `exec`s `runc` directly for every call without a `create` argument (healthcheck
+  `exec`s, `state`, `kill`, `delete`), so only container creation starts Python. Because it sits under container creation
   it covers every container Hola ever (re)creates (restart, redeploy, rollback,
   promote) with no change to the product, the server image or any bundle. (A
   server-side hook was considered and rejected: this stays test-harness only.) It must
   be installed **before** `hola bootstrap` (a container records its runtime at
-  creation), which the suites do. It is inert if the bundle file is missing, so it can
-  never stop a container starting.
+  creation), which the suites do. It is inert if the bundle file (or the Python shim
+  behind the front end) is missing, so an error in the shim never stops a container
+  being created; that is not a promise about what the container does next (below).
+- **System trust-store overlay:** because exec'd processes never see the env (next
+  bullet), the shim also bind-mounts the bundle read-only over each system trust-store
+  file the image already has (`/etc/ssl/certs/ca-certificates.crt` and friends), which
+  is what gitea's `compose exec`'d Go setup relies on. A read-only store breaks an image
+  that rewrites it at startup, so the overlay (only the overlay) is **skipped** when
+  `update-ca-certificates`, `update-ca-trust`, `c_rehash` or `trust extract` appears in
+  the container's command, in a script that command names (resolved inside the image),
+  or in a standard entrypoint hook directory (`/docker-entrypoint.d`, `cont-init.d`,
+  s6-overlay `s6-rc.d`, ...). It is a heuristic: Docker puts no image name or label in
+  the OCI config, so no per-image rule is possible below Hola. An image that reaches a
+  rewriter some other way still gets the overlay and may crash-loop; run that app with
+  `VM_TRUSTED_TLS=0`.
 - **`docker exec` caveat:** an exec'd process does **not** inherit the shim's env
   (exec builds its env from Docker's config, not the OCI spec), and `/proc/1/environ`
   is unreadable in many images (non-root PID 1, s6-overlay). The `sso-trust` probe

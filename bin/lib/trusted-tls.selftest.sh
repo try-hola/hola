@@ -14,11 +14,16 @@ CALLS="$T/calls.log"; : > "$CALLS"
 cat > "$T/bin/vm-ssh" <<'S'
 #!/usr/bin/env bash
 shift 2; [[ "$1" == "--" ]] && shift          # --vmid N --
-cmd="$*"; cat > /dev/null 2>&1 || true        # drain stdin (pushes)
+cmd="$*"
+case "$cmd" in                                # drain stdin; keep what was pushed where
+  "sudo tee "*) d=${cmd#sudo tee }; d=${d%% *}; cat > "$STUB_PUSHES/${d##*/}" 2>/dev/null || true ;;
+  "sudo python3 -") cat > "$STUB_PUSHES/daemon-merge.py" 2>/dev/null || true ;;
+  *) cat > /dev/null 2>&1 || true ;;
+esac
 echo "vm-ssh $cmd" >> "$STUB_CALLS"
 [[ -n "${STUB_FAIL:-}" && "$cmd" == *"$STUB_FAIL"* ]] && exit 1
 case "$cmd" in
-  *"cloud-init status"*)    echo 100 ;;
+  *"cloud-init status"*)    printf "ci=0\nup=100\n" ;;
   *"cut -d. -f1 /proc/uptime"*) echo 200 ;;
   *"docker info --format"*) echo "${STUB_DEFAULT_RUNTIME:-hola-test-ca}" ;;
   *"docker volume ls"*)     echo "hola_hola-data" ;;
@@ -43,13 +48,14 @@ echo "curl $*" >> "$STUB_CALLS"; exit "${STUB_CURL_RC:-0}"
 S
 chmod +x "$T/bin/vm-ssh" "$T/bin/vm-test-ca" "$T/stubs/curl"
 exec < /dev/null   # stubs drain stdin; never inherit a terminal/pipe that does not close
-export STUB_CALLS="$CALLS" STUB_LEAF="$T/leaf" PATH="$T/stubs:$PATH"
+mkdir -p "$T/pushes"
+export STUB_CALLS="$CALLS" STUB_LEAF="$T/leaf" STUB_PUSHES="$T/pushes" PATH="$T/stubs:$PATH"
 
 # An OIDC table the probe tests control.
 printf 'gitea\tgitea\tgo\tcurl\tcovered\nimmich\timmich-server\tnode\tnode\tcovered\nmealie\tmealie\tpython\tpython\tcovered\nhangar\thangar\tunknown\tnone\tunverified\n' > "$T/oidc.tsv"
 
 BIN_DIR="$T/bin"; CA_DIR="$T/ca"; DOMAIN_BASE=1.2.3.4.sslip.io
-export TT_OIDC_TABLE="$T/oidc.tsv" TRUSTED_TLS_TIMEOUT=1 TT_WAIT_INTERVAL=1 TT_RUNTIME_POLLS=1 TT_RUNTIME_POLL_SLEEP=0 TT_SETTLE=0 TT_CLOUD_INIT_TIMEOUT=1
+export TT_OIDC_TABLE="$T/oidc.tsv" TRUSTED_TLS_TIMEOUT=1 TT_WAIT_INTERVAL=1 TT_RUNTIME_POLLS=1 TT_RUNTIME_POLL_SLEEP=0 TT_SETTLE=0 TT_CLOUD_INIT_TIMEOUT=1 VM_SETTLE_RETRY=0
 # shellcheck source=/dev/null
 source "$HERE/trusted-tls.sh"
 # trusted-tls.sh must have taken BIN_DIR/CA_DIR from us, not re-derived them.
@@ -93,6 +99,13 @@ grep -q 'docker info' "$CALLS" && grep -q 'systemctl reload docker' "$CALLS" && 
 tt_install_traefik_cert 101 1.2.3.4 2>/dev/null && grep -q 'hola_hola-data:/data' "$CALLS" && ok "tt_install_traefik_cert writes via the resolved volume" || bad "tt_install_traefik_cert"
 tt_wait_trusted https://auth.x/ 2>/dev/null && grep -q -- "--cacert $CA_DIR/ca.pem" "$CALLS" && ok "tt_wait_trusted polls with --cacert (never -k)" || bad "tt_wait_trusted"
 grep -qE 'curl .*(^| )-k( |$)' "$CALLS" && bad "-k used in trusted mode" || ok "no -k in any trusted call"
+# #578: the sh front end is what Docker runs; the Python shim sits beside it.
+cmp -s "$T/pushes/hola-test-ca-runtime" "$HERE/test-ca-runtime.sh" && ok "front end (test-ca-runtime.sh) pushed to $TT_SHIM_DEST" || bad "front end not pushed to $TT_SHIM_DEST"
+cmp -s "$T/pushes/hola-test-ca-runtime.py" "$HERE/test-ca-runtime.py" && ok "Python shim pushed to $TT_SHIM_PY_DEST" || bad "Python shim not pushed to $TT_SHIM_PY_DEST"
+grep -qF '{"path":"'"$TT_SHIM_DEST"'"}' "$T/pushes/daemon-merge.py" && ! grep -qF "$TT_SHIM_PY_DEST" "$T/pushes/daemon-merge.py" \
+  && ok "daemon.json registers the front end (not the .py) as the runtime path" || bad "daemon.json runtime path"
+py_at=$(grep -n "tee $TT_SHIM_PY_DEST" "$CALLS" | head -1 | cut -d: -f1); sh_at=$(grep -n "tee $TT_SHIM_DEST " "$CALLS" | head -1 | cut -d: -f1)
+[[ -n "$py_at" && -n "$sh_at" && "$py_at" -lt "$sh_at" ]] && ok "Python shim pushed before the front end" || bad "push order (py@${py_at:-?} sh@${sh_at:-?})"
 
 # --- FR-004a: every setup failure is fatal and names its step ----------------------
 named() { grep -q "$1" "$T/err.txt"; }
@@ -101,6 +114,7 @@ rc=$(export STUB_FAIL="cloud-init"; rc_of tt_install_runtime 101 1.2.3.4); [[ "$
 grep -q 'cloud-init status --wait' "$CALLS" && ok "tt_install_runtime waits for first-boot cloud-init before pushing anything" || bad "no cloud-init wait"
 rc=$(export STUB_FAIL="tee /etc/hola-test-ca"; rc_of tt_install_runtime 101 1.2.3.4); [[ "$rc" == 1 ]] && named "push CA bundle" && ok "FR-004a: bundle push failure -> 1, names 'push CA bundle'" || bad "bundle push rc=$rc"
 rc=$(export STUB_FAIL="tee /usr/local/libexec"; rc_of tt_install_runtime 101 1.2.3.4); [[ "$rc" == 1 ]] && named "runtime shim" && ok "FR-004a: shim push failure -> 1, names the shim" || bad "shim push rc=$rc"
+rc=$(export STUB_FAIL="hola-test-ca-runtime >"; rc_of tt_install_runtime 101 1.2.3.4); [[ "$rc" == 1 ]] && named "front end" && ok "FR-004a: front-end push failure -> 1, names the front end" || bad "front-end push rc=$rc"
 rc=$(export STUB_FAIL="sudo python3"; rc_of tt_install_runtime 101 1.2.3.4); [[ "$rc" == 1 ]] && named "daemon.json" && ok "FR-004a: daemon.json merge failure -> 1, names it" || bad "daemon.json rc=$rc"
 rc=$(export STUB_DEFAULT_RUNTIME=runc; rc_of tt_install_runtime 101 1.2.3.4); [[ "$rc" == 1 ]] && named "default runtime" && ok "FR-004a: wrong DefaultRuntime -> 1, names it" || bad "DefaultRuntime rc=$rc"
 grep -q 'systemctl restart docker' "$CALLS" && ok "falls back from reload to restart before failing" || bad "no restart fallback"
