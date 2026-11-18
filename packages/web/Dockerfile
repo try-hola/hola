@@ -9,7 +9,10 @@ COPY . .
 RUN bun install --frozen-lockfile
 RUN bun run --cwd packages/web build
 
-FROM nginx:1.31-alpine
+# Pinned to 1.31.9, the release that fixes CVE-2026-123633 (HTTP/2 use-after-free) and
+# nine other CVEs. hola-web serves plain HTTP behind Traefik, so it was not exploitable, but
+# the shipped version should be deliberate. Dependabot keeps this pin moving.
+FROM nginx:1.31.9-alpine@sha256:0713660ff64e819a478be0d69ae314e52d21623c93672edd9f381a6e66fd95ff
 COPY packages/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/packages/web/dist /usr/share/nginx/html
 EXPOSE 80
