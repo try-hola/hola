@@ -47,6 +47,12 @@ export async function runDeploymentAction(
 export interface RollbackOptions extends ActionOptions {
   to?: string;
   reason?: string;
+  /** Also restore the pre-upgrade data snapshot taken when the target release
+   *  was last active (#284 Phase 1, #584). */
+  restoreData?: boolean;
+  /** Acknowledge an image-only rollback across a one-way upgrade, which the
+   *  server otherwise refuses (ROLLBACK_REQUIRES_DATA_RESTORE, #584). */
+  imageOnly?: boolean;
 }
 
 export interface UpgradeOptions extends ActionOptions {
@@ -103,10 +109,20 @@ export async function runRollback(
   const sdk = injected?.sdk ?? new HolaSdk();
   const out = (m: string) => console.log(m);
   try {
-    out(`Rolling back ${deploymentId}${opts.to ? ` to ${opts.to}` : ' to the previous release'}…`);
+    if (opts.restoreData && opts.imageOnly) {
+      console.error('--restore-data and --image-only are mutually exclusive: pick one.');
+      process.exitCode = 1;
+      return undefined;
+    }
+    out(
+      `Rolling back ${deploymentId}${opts.to ? ` to ${opts.to}` : ' to the previous release'}` +
+        `${opts.restoreData ? ', restoring its pre-upgrade data snapshot' : opts.imageOnly ? ' (image only)' : ''}…`,
+    );
     const res = (await sdk.deployments.rollback(deploymentId, {
       ...(opts.to ? { targetReleaseId: opts.to } : {}),
       ...(opts.reason ? { reason: opts.reason } : {}),
+      ...(opts.restoreData ? { restoreData: true } : {}),
+      ...(opts.imageOnly ? { imageOnly: true } : {}),
     })) as RollbackResponse;
     out(`Target release ${res.targetReleaseId} (was ${res.previousReleaseId}).`);
 

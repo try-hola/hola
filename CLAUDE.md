@@ -326,6 +326,24 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   `createFromDraft`/`promote`), and a second, independent guard in
   `runLifecycleJob` refuses when a job's recorded target release is no longer the
   active one, so reverting the ordering yields a failed job rather than a lie.
+- **A rollback across a one-way upgrade must say how it treats the data
+  (#584).** Data-aware rollback (`restoreData`) existed in the server but no
+  client could send it, so rolling back a migrating upgrade (Gitea 1.27 ← 28)
+  was always image-only and crash-looped on the migrated database. Now
+  `rollback` judges the range (target, current]: if any release this
+  deployment ran in it declares `upgrade.preUpgradeBackup: "required"` or
+  `breaking: true` (`assessRollback` → `RollbackBoundary` `one-way`), a request
+  with neither `restoreData` nor an explicit `imageOnly` is refused **before
+  anything moves** — 409 `ROLLBACK_REQUIRES_DATA_RESTORE`, `details` carrying
+  `snapshotAvailable` and `boundaryVersions` so clients can name the way
+  forward. `unknown` (versions unreadable, a pre-manifest record) is never
+  refused: a refusal needs evidence. The same assessment rides the detail read
+  as `rollbackTarget`, so the dashboard's restore checkbox (pre-ticked exactly
+  for `one-way` + snapshot) and the server's refusal cannot disagree.
+  `restoreData` with no snapshot still fails in the job (#524). Rollback also
+  syncs `version`/`icon` to the target via the helper `promote` uses
+  (`syncReleaseDisplayFields`, #585) — at request time with the pointer, not on
+  job success, so a failed job's record names the release it now points at.
 - **A capture proves it produced an archive (F15).** `tarGzipDir` treats `tar`
   exiting 1 as success **on purpose**: archiving a *live* data root races the
   app's own writes, and a file changing or vanishing between tar's stat and read

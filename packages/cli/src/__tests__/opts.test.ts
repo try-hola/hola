@@ -131,3 +131,53 @@ describe('parseOpts (--carry-env tri-state, #488)', () => {
     }
   });
 });
+
+/**
+ * `hola rollback --restore-data` / `--image-only` (#584): both are plain
+ * booleans with a `false` default, so the positional after them is not
+ * swallowed and they reach the handler camelCased through `streamOpts`.
+ */
+describe('rollback flags (#584)', () => {
+  /** Mirrors `rollback`'s registration in src/index.ts. */
+  const rollbackProg = () =>
+    sade('hola')
+      .command('rollback <deploymentId>')
+      .option('--to', 'Target release id')
+      .option('--reason', 'Reason recorded with the rollback')
+      .option('--restore-data', 'Also restore the pre-upgrade data snapshot', false)
+      .option('--image-only', 'Roll back the containers only', false)
+      .option('--no-stream', 'Do not watch the rollback job', false)
+      .option('--json', 'Print the result as JSON', false)
+      .action(() => {});
+
+  function parseRollback(argv: string[]) {
+    const parsed = rollbackProg().parse(['node', 'hola', ...argv], { ...parseOpts(), lazy: true }) as
+      | { args: unknown[] }
+      | undefined;
+    if (!parsed) throw new Error('sade refused the argv');
+    return {
+      deploymentId: parsed.args[0] as string,
+      opts: streamOpts(parsed.args[parsed.args.length - 1] as Record<string, unknown>),
+    };
+  }
+
+  it('reads --restore-data before or after the positional', () => {
+    const before = parseRollback(['rollback', '--restore-data', 'gitea-1']);
+    expect(before.deploymentId).toBe('gitea-1');
+    expect(before.opts.restoreData).toBe(true);
+    expect(parseRollback(['rollback', 'gitea-1', '--restore-data']).opts.restoreData).toBe(true);
+  });
+
+  it('reads --image-only, and both default to false', () => {
+    expect(parseRollback(['rollback', 'gitea-1', '--image-only']).opts.imageOnly).toBe(true);
+    const none = parseRollback(['rollback', 'gitea-1']).opts;
+    expect(none.restoreData).toBe(false);
+    expect(none.imageOnly).toBe(false);
+  });
+
+  it('the registration in src/index.ts declares both flags', () => {
+    const src = readFileSync(join(__dirname, '../index.ts'), 'utf8');
+    expect(src).toMatch(/\.option\('--restore-data',[^\n]*, false\)/);
+    expect(src).toMatch(/\.option\('--image-only',[^\n]*, false\)/);
+  });
+});

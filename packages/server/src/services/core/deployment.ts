@@ -57,8 +57,9 @@ import type {
   RestoreIndexEntry,
   RestoreRequestForProvider,
   RestoreChoice,
+  RollbackTarget,
 } from '@hola/shared';
-import { checkUpgradePath, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
+import { checkUpgradePath, compareVersions, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import {
   isEligibleCandidate,
   checkCandidateStillEligible,
@@ -1363,6 +1364,84 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return undefined;
   }
 
+  /**
+   * Whether a pre-upgrade snapshot is recorded for `releaseId` — i.e. whether
+   * a data-aware rollback to it has something to restore (an `empty` marker
+   * counts: it is an honoured outcome, #524). Base: none, the in-memory service
+   * keeps no snapshots. Never throws.
+   */
+  protected async hasPreUpgradeSnapshot(deploymentId: string, releaseId: string): Promise<boolean> {
+    void deploymentId;
+    void releaseId;
+    return false;
+  }
+
+  /** The release a rollback with no `targetReleaseId` moves to: the most
+   *  recently created release other than the active one. */
+  private defaultRollbackTargetId(deploymentId: string, currentReleaseId: string | undefined): string | undefined {
+    let best: Release | undefined;
+    for (const r of this.releases.values()) {
+      if (r.deploymentId !== deploymentId || r.id === currentReleaseId) continue;
+      if (!best || new Date(r.createdAt).getTime() > new Date(best.createdAt).getTime()) best = r;
+    }
+    return best?.id;
+  }
+
+  /**
+   * Does rolling back from the active release to `targetReleaseId` cross a
+   * one-way upgrade boundary (#584)? See `RollbackBoundary` for the three
+   * verdicts.
+   *
+   * The boundary is judged over the RANGE (target, current], not just the
+   * active release: rolling 2.0 → 4.0 back to 2.0 crosses 3.0's migration even
+   * when 4.0 itself declares nothing, and the data on disk is 3.0's or later.
+   * Only releases this deployment actually ran are consulted — they are the
+   * ones that can have migrated its data. An intermediate release whose
+   * manifest cannot be read is skipped rather than turning the verdict into
+   * `unknown`: a refusal needs positive evidence, and the endpoints decide
+   * whether there is a range to judge at all.
+   *
+   * Versions that are not numeric (`latest`) have no order to judge, so they
+   * read as `unknown` too.
+   */
+  protected async assessRollback(deployment: EnhancedDeploymentDetail, targetReleaseId: string): Promise<RollbackTarget> {
+    const deploymentId = deployment.id;
+    const currentReleaseId = deployment.currentReleaseId;
+    const [from, to, snapshotAvailable] = await Promise.all([
+      currentReleaseId ? this.readReleaseFacts(deploymentId, currentReleaseId) : Promise.resolve(undefined),
+      this.readReleaseFacts(deploymentId, targetReleaseId),
+      this.hasPreUpgradeSnapshot(deploymentId, targetReleaseId),
+    ]);
+    const base: RollbackTarget = {
+      releaseId: targetReleaseId,
+      ...(to?.version ? { version: to.version } : {}),
+      ...(from?.version ? { fromVersion: from.version } : {}),
+      snapshotAvailable,
+      boundary: 'unknown',
+    };
+    const ordered = (v: string | undefined): v is string => !!v && /^v?\d/.test(v.trim());
+    if (!currentReleaseId || !ordered(from?.version) || !ordered(to?.version)) return base;
+    const fromVersion = from.version;
+    const toVersion = to.version;
+    if (compareVersions(toVersion, fromVersion) >= 0) return { ...base, boundary: 'none' };
+
+    const boundaryVersions = new Set<string>();
+    for (const r of this.releases.values()) {
+      if (r.deploymentId !== deploymentId || r.id === targetReleaseId) continue;
+      const facts = r.id === currentReleaseId ? from : await this.readReleaseFacts(deploymentId, r.id);
+      const v = facts?.version;
+      if (!ordered(v)) continue;
+      if (compareVersions(v, toVersion) <= 0 || compareVersions(v, fromVersion) > 0) continue;
+      if (facts?.upgrade?.preUpgradeBackup === 'required' || facts?.upgrade?.breaking === true) boundaryVersions.add(v);
+    }
+    if (boundaryVersions.size === 0) return { ...base, boundary: 'none' };
+    return {
+      ...base,
+      boundary: 'one-way',
+      boundaryVersions: [...boundaryVersions].sort(compareVersions),
+    };
+  }
+
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
     const releaseId = crypto.randomUUID();
@@ -1843,6 +1922,17 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     const siblings = this.deploymentSiblings(deployment);
     if (siblings) detail.siblings = siblings;
     await this.enrichUpdateInfo([detail]);
+    // What a default rollback would do (#584), for the dashboard's rollback
+    // dialog: the same assessment `rollback` refuses on, so the two cannot
+    // disagree. Best-effort — a failure here must not fail the detail read.
+    const rollbackTargetId = this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+    if (rollbackTargetId) {
+      try {
+        detail.rollbackTarget = await this.assessRollback(deployment, rollbackTargetId);
+      } catch (err) {
+        this.logger.warn('Could not assess the rollback target', { deploymentId, error: String(err) });
+      }
+    }
     return detail;
   }
 
@@ -2213,23 +2303,64 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
     this.logger.info('Rolling back deployment', { deploymentId, targetReleaseId: request.targetReleaseId });
 
+    if (request.restoreData === true && request.imageOnly === true) {
+      throw new ValidationError(
+        'restoreData and imageOnly are mutually exclusive: a rollback either restores the pre-upgrade data snapshot or moves the containers only.',
+        { code: 'ROLLBACK_OPTIONS_CONFLICT' },
+      );
+    }
+
     let targetReleaseId = request.targetReleaseId;
     if (!targetReleaseId) {
       // Default to the most recent release other than the one currently active.
-      const candidates = Array.from(this.releases.values())
-        .filter(r => r.deploymentId === deploymentId && r.id !== deployment.currentReleaseId)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-      if (candidates.length === 0) {
+      targetReleaseId = this.defaultRollbackTargetId(deploymentId, deployment.currentReleaseId);
+      if (!targetReleaseId) {
         throw new ConflictError('No previous release available for rollback');
       }
-
-      targetReleaseId = candidates[0].id;
     }
 
     const targetRelease = this.releases.get(targetReleaseId);
     if (!targetRelease || targetRelease.deploymentId !== deploymentId) {
       throw new NotFoundError(`Target release not found: ${targetReleaseId}`);
+    }
+
+    // One-way upgrade boundary (#584). An image-only rollback across an upgrade
+    // whose packager declared it migrates data (`preUpgradeBackup: "required"`
+    // or `breaking: true`) boots the older image against data it cannot read —
+    // observed as a Gitea crash loop on "database is for a newer Gitea". That
+    // rollback can never start, so it is refused here, at request time and
+    // before anything moves (Constitution III: the job is only enqueued once
+    // the decision is made), unless the caller either asks for the data
+    // restore or explicitly acknowledges the image-only rollback. Same
+    // fail-closed reading as #524: the default must not be the operation that
+    // silently cannot work.
+    //
+    // `unknown` (a record whose versions cannot be read) is NOT refused: the
+    // pre-#584 behaviour is preserved, because refusing needs evidence.
+    if (request.restoreData !== true && request.imageOnly !== true) {
+      const assessment = await this.assessRollback(deployment, targetReleaseId);
+      if (assessment.boundary === 'one-way') {
+        const crossing = assessment.boundaryVersions?.join(', ') ?? 'a newer release';
+        const remedy = assessment.snapshotAvailable
+          ? 'Roll back with restoreData (hola rollback --restore-data) to restore the pre-upgrade data snapshot along with the release'
+          : 'No pre-upgrade data snapshot exists for the target release, so its data cannot be restored';
+        throw new ConflictError(
+          `Rolling back to ${assessment.version ?? targetReleaseId} crosses a one-way upgrade (${crossing}): the older ` +
+            `release cannot run against the data the upgrade migrated. ${remedy}, or acknowledge an image-only ` +
+            `rollback with imageOnly (hola rollback --image-only). Nothing was changed.`,
+          {
+            code: 'ROLLBACK_REQUIRES_DATA_RESTORE',
+            deploymentId,
+            targetReleaseId,
+            ...(assessment.version ? { targetVersion: assessment.version } : {}),
+            ...(assessment.fromVersion ? { fromVersion: assessment.fromVersion } : {}),
+            boundaryVersions: assessment.boundaryVersions ?? [],
+            snapshotAvailable: assessment.snapshotAvailable,
+          },
+        );
+      }
+    } else if (request.imageOnly === true) {
+      this.logger.warn('Image-only rollback explicitly acknowledged', { deploymentId, targetReleaseId });
     }
 
     const previousReleaseId = deployment.currentReleaseId || '';
@@ -2880,6 +3011,12 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     }
     if (!manifest) return undefined;
     return { version: manifest.version, icon: manifest.icon, upgrade: manifest.upgrade };
+  }
+
+  /** The same lookup `restoreAppDataSnapshot` restores from, so "available"
+   *  here means that restore will find a record (#584). */
+  protected override async hasPreUpgradeSnapshot(deploymentId: string, releaseId: string): Promise<boolean> {
+    return (await this.listSnapshots(deploymentId)).some((m) => m.fromReleaseId === releaseId);
   }
 
   /** Read the active release's declared auth config (if any). */

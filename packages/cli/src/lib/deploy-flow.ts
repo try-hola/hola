@@ -155,6 +155,9 @@ export function reportDeployError(err: unknown): undefined {
         subdomain?: string;
         // The install that was refused was also restoring (#493).
         restore?: { candidateId: string; candidateIsExisting: boolean };
+        // ROLLBACK_REQUIRES_DATA_RESTORE (#584).
+        snapshotAvailable?: boolean;
+        boundaryVersions?: string[];
       } | undefined)
     : undefined;
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
@@ -219,6 +222,24 @@ export function reportDeployError(err: unknown): undefined {
         `${details.subdomain ? `'${details.subdomain}'` : 'that address'}. Give the restored copy its own address ` +
         `with --name (e.g. --name ${details.subdomain ? `${details.subdomain}-restored` : 'myapp-restored'}).`,
     );
+  }
+  // #584: an image-only rollback across a one-way (data-migrating) upgrade.
+  // Built from `details`, like the codes above: whether a snapshot exists
+  // decides which of the two ways forward is actually available.
+  else if (details?.code === 'ROLLBACK_REQUIRES_DATA_RESTORE') {
+    const crossing = details.boundaryVersions?.length ? ` (${details.boundaryVersions.join(', ')})` : '';
+    if (details.snapshotAvailable) {
+      console.error(
+        `Hint: the upgrade being rolled back${crossing} migrated this app's data, and a pre-upgrade snapshot ` +
+          `exists. Re-run with '--restore-data' to restore it along with the release.`,
+      );
+    } else {
+      console.error(
+        `Hint: the upgrade being rolled back${crossing} migrated this app's data, and no pre-upgrade snapshot ` +
+          `exists to restore, so the older release will likely fail to start. Re-run with '--image-only' only ` +
+          `if you know it can read the migrated data.`,
+      );
+    }
   }
   // #246: a single-instance app already installed (older/untyped error shape,
   // e.g. a pre-spec-005 server) — the message already names the

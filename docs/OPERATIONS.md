@@ -533,6 +533,24 @@ An app that had written no data when the snapshot was taken records an empty
 snapshot rather than nothing at all, so rolling back to it correctly does
 nothing to your data instead of refusing.
 
+**Asking for a data-aware rollback.** `hola rollback <id> --restore-data` (SDK:
+`rollback(id, { restoreData: true })`; dashboard: the Rollback dialog's "Also
+restore the pre-upgrade data snapshot") restores the snapshot taken when the
+target release was last active, then brings that release up.
+
+**A rollback across a one-way upgrade is refused unless you choose how.** If
+any release this deployment ran between the target and the current one declares
+`preUpgradeBackup: required` or `breaking: true`, its upgrade migrated the data,
+and the older image cannot start against it (Gitea, for example, crash-loops on
+"your database is for a newer Gitea"). A plain rollback across that boundary is
+refused before anything changes (409, `details.code:
+ROLLBACK_REQUIRES_DATA_RESTORE`, saying whether a snapshot exists). Choose
+`--restore-data` to put the data back too, or `--image-only` if you know the
+older release can read the migrated data. The dashboard pre-ticks the restore
+option in exactly this case when a snapshot exists. A deployment whose release
+versions cannot be read (a record that predates staged manifests) is never
+refused — the check needs evidence, so it keeps the earlier behaviour.
+
 Restores are **staged**: the archive is extracted and checked in a scratch
 directory, and only then swapped into place, with the original preserved until
 the swap succeeds. A corrupt or truncated archive fails with your data
