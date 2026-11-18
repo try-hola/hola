@@ -132,6 +132,71 @@ describe('deployment lifecycle actions', () => {
     expect(errors.some((m) => m.includes("Re-run with '--restore-data'"))).toBe(false);
   });
 
+  // `hola rollback --json`: stdout is exactly one JSON document, refusal included.
+  const stdout = () => (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0])).join('\n');
+  const stderr = () => (console.error as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => String(c[0]));
+
+  it('rollback --json prints a ROLLBACK_REQUIRES_DATA_RESTORE refusal as one JSON document', async () => {
+    const details = {
+      code: 'ROLLBACK_REQUIRES_DATA_RESTORE',
+      deploymentId: 'dep1',
+      targetReleaseId: 'r0',
+      targetVersion: '2.0.2',
+      fromVersion: '3.0.0',
+      boundaryVersions: ['3.0.0'],
+      snapshotAvailable: true,
+    };
+    const sdk = makeSdk({
+      deployments: {
+        rollback: vi.fn(async () => {
+          throw new HolaApiError('Rolling back to 2.0.2 crosses a one-way upgrade (3.0.0)…', 409, { code: 'CONFLICT', details, requestId: 'req-1' });
+        }),
+      },
+    });
+    const res = await runRollback('dep1', { json: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(res).toBeUndefined();
+    expect(process.exitCode).toBe(1);
+    const parsed = JSON.parse(stdout());
+    expect(parsed.error).toEqual({
+      status: 409,
+      code: 'CONFLICT',
+      message: 'Rolling back to 2.0.2 crosses a one-way upgrade (3.0.0)…',
+      details,
+      requestId: 'req-1',
+    });
+    expect(parsed.error.details.code).toBe('ROLLBACK_REQUIRES_DATA_RESTORE');
+    expect(parsed.hints.some((h: string) => h.includes("'--restore-data'"))).toBe(true);
+    // Nothing on stderr either: the prose form is not printed alongside.
+    expect(stderr()).toEqual([]);
+  });
+
+  it('rollback --json on success prints only the JSON result (no progress prose)', async () => {
+    const sdk = makeSdk();
+    await runRollback('dep1', { json: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(JSON.parse(stdout())).toMatchObject({ targetReleaseId: 'r0', previousReleaseId: 'r1', status: 'completed' });
+  });
+
+  it('rollback --json reports the local --restore-data/--image-only conflict as JSON', async () => {
+    const sdk = makeSdk();
+    await runRollback('dep1', { json: true, restoreData: true, imageOnly: true, noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(JSON.parse(stdout()).error).toMatchObject({ code: 'ROLLBACK_OPTIONS_CONFLICT' });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('without --json the refusal stays prose on stderr', async () => {
+    const sdk = makeSdk({
+      deployments: {
+        rollback: vi.fn(async () => {
+          throw new HolaApiError('refused', 409, { code: 'CONFLICT', details: { code: 'ROLLBACK_REQUIRES_DATA_RESTORE', snapshotAvailable: true } });
+        }),
+      },
+    });
+    await runRollback('dep1', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(stderr()[0]).toBe('Failed: refused');
+    expect(stderr()[1]).toMatch(/^Hint: .*'--restore-data'/);
+    expect(stdout()).not.toMatch(/"error"/);
+  });
+
   it('uninstall deletes after confirmation', async () => {
     const sdk = makeSdk();
     const res = await runUninstall('dep1', {}, {

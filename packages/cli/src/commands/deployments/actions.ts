@@ -1,7 +1,7 @@
 import { HolaSdk } from '@hola/sdk';
 import type { GetDeploymentResponse, PostDeploymentActionResponse, RollbackResponse, PromoteDeploymentResponse } from '@hola/shared';
 
-import { watchJob, reportDeployError } from '../../lib/deploy-flow';
+import { watchJob, reportDeployError, printJsonError } from '../../lib/deploy-flow';
 import { maybeNotifyUpdate } from '../../lib/update-notice';
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 
@@ -107,10 +107,14 @@ export async function runRollback(
   injected?: { sdk?: HolaSdk }
 ): Promise<RollbackResponse | undefined> {
   const sdk = injected?.sdk ?? new HolaSdk();
-  const out = (m: string) => console.log(m);
+  // Under --json stdout carries exactly one JSON document (the result, or the
+  // refusal via reportDeployError), so the progress prose is suppressed.
+  const out = (m: string) => { if (!opts.json) console.log(m); };
   try {
     if (opts.restoreData && opts.imageOnly) {
-      console.error('--restore-data and --image-only are mutually exclusive: pick one.');
+      const message = '--restore-data and --image-only are mutually exclusive: pick one.';
+      if (opts.json) printJsonError({ code: 'ROLLBACK_OPTIONS_CONFLICT', message });
+      else console.error(message);
       process.exitCode = 1;
       return undefined;
     }
@@ -143,7 +147,7 @@ export async function runRollback(
     await maybeNotifyUpdate(sdk, opts);
     return res;
   } catch (err) {
-    return reportDeployError(err);
+    return reportDeployError(err, { json: opts.json });
   }
 }
 
