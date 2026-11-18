@@ -4,7 +4,7 @@
 # Usage: bin/vm-test [--dry-run] [--keep-on-fail] [--ssh] [-- <test command...>]
 #
 # Runs the full lifecycle a developer (or Claude Code) would drive:
-#   create VM -> wait for SSH -> run tests ->
+#   create VM -> wait for SSH -> wait for first-boot settle -> run tests ->
 #   snapshot on failure (if --keep-on-fail) -> always destroy on success.
 #
 # --ssh runs the test command ON the VM over SSH. Without it, the command runs
@@ -17,6 +17,7 @@
 #   bin/vm-test --ssh -- ./run-integration.sh
 set -euo pipefail
 source "$(dirname "$0")/_common.sh"
+source "$(dirname "$0")/lib/vm-settle.sh"
 load_env
 
 KEEP_ON_FAIL=0; USE_SSH=0
@@ -55,6 +56,9 @@ log "current test VM: $VMID"
 
 log "=== vm-test: waiting for SSH ==="
 "$BIN_DIR/vm-wait-ssh" --vmid "$VMID"
+# A fresh VM's first-boot cloud-init may still upgrade packages and REBOOT it (#574);
+# settle before the test command so the reboot cannot land mid-test.
+vm_wait_settled "$VMID" || die "VM $VMID never settled after first boot"
 
 log "=== vm-test: running tests ==="
 log "test command: ${TEST_CMD[*]} ($([[ "$USE_SSH" == 1 ]] && echo "on VM via SSH" || echo "in container"))"

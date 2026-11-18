@@ -18,7 +18,7 @@ cmd="$*"; cat > /dev/null 2>&1 || true        # drain stdin (pushes)
 echo "vm-ssh $cmd" >> "$STUB_CALLS"
 [[ -n "${STUB_FAIL:-}" && "$cmd" == *"$STUB_FAIL"* ]] && exit 1
 case "$cmd" in
-  *"cloud-init status"*)    echo 100 ;;
+  *"cloud-init status"*)    printf "ci=0\nup=100\n" ;;
   *"cut -d. -f1 /proc/uptime"*) echo 200 ;;
   *"docker info --format"*) echo "${STUB_DEFAULT_RUNTIME:-hola-test-ca}" ;;
   *"docker volume ls"*)     echo "hola_hola-data" ;;
@@ -49,7 +49,7 @@ export STUB_CALLS="$CALLS" STUB_LEAF="$T/leaf" PATH="$T/stubs:$PATH"
 printf 'gitea\tgitea\tgo\tcurl\tcovered\nimmich\timmich-server\tnode\tnode\tcovered\nmealie\tmealie\tpython\tpython\tcovered\nhangar\thangar\tunknown\tnone\tunverified\n' > "$T/oidc.tsv"
 
 BIN_DIR="$T/bin"; CA_DIR="$T/ca"; DOMAIN_BASE=1.2.3.4.sslip.io
-export TT_OIDC_TABLE="$T/oidc.tsv" TRUSTED_TLS_TIMEOUT=1 TT_WAIT_INTERVAL=1 TT_RUNTIME_POLLS=1 TT_RUNTIME_POLL_SLEEP=0 TT_SETTLE=0 TT_CLOUD_INIT_TIMEOUT=1
+export TT_OIDC_TABLE="$T/oidc.tsv" TRUSTED_TLS_TIMEOUT=1 TT_WAIT_INTERVAL=1 TT_RUNTIME_POLLS=1 TT_RUNTIME_POLL_SLEEP=0 TT_SETTLE=0 TT_CLOUD_INIT_TIMEOUT=1 VM_SETTLE_RETRY=0
 # shellcheck source=/dev/null
 source "$HERE/trusted-tls.sh"
 # trusted-tls.sh must have taken BIN_DIR/CA_DIR from us, not re-derived them.
