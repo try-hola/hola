@@ -16,7 +16,7 @@
 #   status           print `trusted` or `untrusted: <why>`; exit 0 either way.
 #
 # CA_DIR defaults to .devcontainer/.test-ca (gitignored, dir 0700, ca.key 0600);
-# override with VM_TEST_CA_DIR. The CA private key never leaves this directory and is
+# override with VM_TEST_CA_DIR (process env, else .devcontainer/mcp.env). The CA private key never leaves this directory and is
 # never printed, copied or pushed to a VM. Trusted mode is on when ca.pem exists and
 # VM_TRUSTED_TLS is not 0.
 set -euo pipefail
