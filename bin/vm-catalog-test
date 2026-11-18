@@ -102,6 +102,8 @@ export HTTP_TIMEOUT
 # Per-app test library — sourced here (not at the top) so the timeout defaults set
 # above take precedence over the library's own fallback defaults.
 source "$(dirname "${BASH_SOURCE[0]}")/lib/app-test.sh"
+# First-boot settle (#574): wait out cloud-init's package upgrade + reboot before bootstrap.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/vm-settle.sh"
 
 # --- paths / per-run state --------------------------------------------------
 LOG_DIR="$ROOT_DIR/logs/vm-catalog-test"
@@ -217,12 +219,14 @@ setup_create() {
 }
 
 setup_wait_ssh() {
-  log "── waiting for SSH + resolving IP"
-  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; return 0; fi
+  log "── waiting for SSH + resolving IP + first-boot settle"
+  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; vm_wait_settled "$VMID"; return 0; fi
   "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" || return 1
   IP=$(state_get VM_IP); [[ -n "$IP" ]] || { err "  no VM IP after wait-ssh"; return 1; }
   ALIAS=$(vm_alias "$VMID")
   log "  VM IP: $IP  (ssh alias: $ALIAS)"
+  # cloud-init may still be upgrading packages and reboot the VM (#574): settle first.
+  vm_wait_settled "$VMID"
 }
 
 setup_render_env() {

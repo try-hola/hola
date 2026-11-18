@@ -47,6 +47,8 @@ load_env
 # the VM serves a CA-signed cert, containers trust it, and the probes below verify TLS
 # instead of skipping it. With no CA everything is exactly as before (-k / bypass).
 source "$(dirname "${BASH_SOURCE[0]}")/lib/trusted-tls.sh"
+# First-boot settle (#574): wait out cloud-init's package upgrade + reboot before bootstrap.
+source "$(dirname "${BASH_SOURCE[0]}")/lib/vm-settle.sh"
 
 # --- args -------------------------------------------------------------------
 KEEP_ON_FAIL=0
@@ -167,12 +169,14 @@ step_create() {
 }
 
 step_wait_ssh() {
-  log "── STEP 2/10: wait for SSH + resolve IP"
-  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; log "DRY_RUN: bin/vm-wait-ssh --vmid $VMID"; return 0; fi
+  log "── STEP 2/10: wait for SSH + resolve IP + first-boot settle"
+  if is_dry; then IP="203.0.113.10"; ALIAS="hola-vm-$VMID"; log "DRY_RUN: bin/vm-wait-ssh --vmid $VMID"; vm_wait_settled "$VMID"; return 0; fi
   "$BIN_DIR/vm-wait-ssh" --vmid "$VMID" || return 1
   IP=$(state_get VM_IP); [[ -n "$IP" ]] || { err "  no VM IP after wait-ssh"; return 1; }
   ALIAS=$(vm_alias "$VMID")
   log "  VM IP: $IP  (ssh alias: $ALIAS)"
+  # cloud-init may still be upgrading packages and reboot the VM (#574): settle first.
+  vm_wait_settled "$VMID"
 }
 
 step_render_env() {

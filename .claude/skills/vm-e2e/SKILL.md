@@ -102,6 +102,14 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    ALIAS="hola-vm-$VMID"
    ```
    It prints the resolved IP — capture it for the domain rewrite in Preflight 2.
+   **Then wait for first boot to settle** (cloud-init's package upgrade can REBOOT the
+   VM a few minutes after SSH first answers, killing a bootstrap in flight — #574):
+   ```bash
+   bash -c 'source bin/lib/vm-settle.sh && vm_wait_settled "$1"' _ "$VMID"
+   ```
+   It waits for `cloud-init status --wait`, then for the VM to stay up 20 s
+   (`VM_SETTLE_SECS`), retrying through the reboot, up to 900 s (`VM_SETTLE_TIMEOUT`);
+   no cloud-init on the guest means no wait. The suites do this for you.
    **Trusted mode only (a test CA exists): install the container-trust runtime shim
    now, before bootstrap** (containers record their runtime at creation, so it can't
    be added afterwards): `bash -c 'source bin/lib/trusted-tls.sh && tt_install_runtime
@@ -110,10 +118,10 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    `bash -c`**: the library derives its paths from `BASH_SOURCE`, so sourcing it from
    zsh (this session's shell) resolves the CA dir to the wrong place, `tt_enabled`
    answers false, and both calls silently do nothing.
-   **SSH can go refused again shortly after this succeeds** (cloud-init reboots on
-   first boot). If the next step fails with `ssh exit 255`, just re-run
-   `bin/vm-wait-ssh` rather than debugging it; anything already `docker load`ed
-   survives the reboot.
+   **If you skipped the settle wait, SSH can go refused again shortly after wait-ssh
+   succeeds** (that first-boot reboot). If the next step fails with `ssh exit 255`,
+   re-run `bin/vm-wait-ssh` and the settle wait rather than debugging it; anything
+   already `docker load`ed survives the reboot.
 3. **Bootstrap the hola CLI onto the VM.** Use the Hola `.env`
    (`HOLA_ENV_FILE`, default `.devcontainer/hola.env`) — NOT mcp.env. Run
    `--dry-run` first to print the plan, then for real. Pick the CLI per the mode:
