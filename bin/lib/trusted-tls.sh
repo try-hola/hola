@@ -25,7 +25,8 @@ TT_LIB_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${TT_CLOUD_INIT_TIMEOUT:=900}"          # max wait for the VM's first-boot cloud-init to finish
 : "${TT_SETTLE:=20}"                       # seconds the VM must stay up after cloud-init says done
 TT_BUNDLE_DEST=/etc/hola-test-ca/bundle.pem        # path inside containers AND on the VM
-TT_SHIM_DEST=/usr/local/libexec/hola-test-ca-runtime
+TT_SHIM_DEST=/usr/local/libexec/hola-test-ca-runtime        # sh front end = Docker's runtime path
+TT_SHIM_PY_DEST=/usr/local/libexec/hola-test-ca-runtime.py  # the Python shim it hands `create` to
 TT_OIDC_TABLE="${TT_OIDC_TABLE:-$TT_LIB_DIR/oidc-trust.tsv}"
 TT_PROBE_REASON=""; TT_PROBE_URL=""
 
@@ -80,9 +81,15 @@ tt_install_runtime() {
   _tt_vm "$vmid" "sudo mkdir -p /etc/hola-test-ca /usr/local/libexec && sudo tee $TT_BUNDLE_DEST >/dev/null && sudo chmod 644 $TT_BUNDLE_DEST" \
     < "$d/bundle.pem" >/dev/null 2>&1 \
     || { _tt_fail "push CA bundle to the VM"; return 1; }
-  _tt_vm "$vmid" "sudo tee $TT_SHIM_DEST >/dev/null && sudo chmod 755 $TT_SHIM_DEST" \
+  # The Python shim first, then the sh front end that Docker runs (#578): the front end
+  # execs runc directly for everything but `create`, so healthchecks never start Python.
+  # (It is inert without the shim, but push order keeps that window from ever existing.)
+  _tt_vm "$vmid" "sudo tee $TT_SHIM_PY_DEST >/dev/null && sudo chmod 755 $TT_SHIM_PY_DEST" \
     < "$TT_LIB_DIR/test-ca-runtime.py" >/dev/null 2>&1 \
     || { _tt_fail "push the runtime shim to the VM"; return 1; }
+  _tt_vm "$vmid" "sudo tee $TT_SHIM_DEST >/dev/null && sudo chmod 755 $TT_SHIM_DEST" \
+    < "$TT_LIB_DIR/test-ca-runtime.sh" >/dev/null 2>&1 \
+    || { _tt_fail "push the runtime shim front end to the VM"; return 1; }
 
   # Merge (never clobber) /etc/docker/daemon.json: register the runtime and make it the default.
   # /etc/docker need not exist (a stock engine writes no daemon.json), and an empty file

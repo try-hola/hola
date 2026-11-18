@@ -36,7 +36,7 @@ These are the functions the suites and `app-test.sh` call. Every function is sid
 | `tt_enabled` | returns 1 | returns 0 |
 | `tt_curl_tls` | echoes `-k` | echoes `--cacert <ca.pem>` |
 | `tt_node_tls_env` | echoes `NODE_TLS_REJECT_UNAUTHORIZED=0` | echoes `NODE_EXTRA_CA_CERTS=<ca.pem>` |
-| `tt_install_runtime <vmid> <ip>` | no-op | issues leaf/bundle; pushes bundle and shim; merges daemon.json; reloads; asserts `DefaultRuntime=hola-test-ca`; **fails** otherwise |
+| `tt_install_runtime <vmid> <ip>` | no-op | issues leaf/bundle; pushes bundle, Python shim (`…/hola-test-ca-runtime.py`) and its `sh` front end (`…/hola-test-ca-runtime`, the registered runtime path); merges daemon.json; reloads; asserts `DefaultRuntime=hola-test-ca`; **fails** otherwise |
 | `tt_install_traefik_cert <vmid> <ip>` | no-op | pushes leaf into `hola-data`; writes `test-tls.yml` |
 | `tt_wait_trusted <url>` | no-op | polls with `--cacert` until it verifies; **fails** on timeout |
 | `tt_oidc_probe <vmid> <app> <deploymentId>` | returns 3 (not run) | returns 0 ok, 1 fail, 2 skip (with `TT_PROBE_REASON`/`TT_PROBE_URL` set). Checks the container's recorded runtime and the mounted bundle (PID 1's environment is not readable in many images), then fetches the URL with the app's own runtime; the `curl` (Go) probe passes **no env and no `--cacert`**, proving the system-store overlay that `compose exec` relies on |
