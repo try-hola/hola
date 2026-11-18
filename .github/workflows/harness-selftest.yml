@@ -1,0 +1,66 @@
+# Offline selftests for the disposable-VM test harness (bin/, bin/lib/).
+#
+# Every `bin/**/*.selftest.sh` stubs the VM, the Hola CLI and the network and
+# runs in seconds. They need no VM, no Docker, no Proxmox credentials and no
+# test CA: just bash, openssl, python3 and coreutils, all present on the
+# standard runner. One of them, `bin/lib/untrusted-golden.selftest.sh`, is the
+# guard for spec 009's FR-018: with the test CA absent, the suites must render
+# the same env and command lines as before trusted TLS existed. Before this
+# workflow, nothing ran these files automatically, so a harness regression
+# stayed green in CI and only surfaced on the next real VM run.
+#
+# The job runs only on PRs that touch the harness. The test files are discovered
+# with `find`, so a new selftest is picked up without editing this file. A
+# selftest that does not exit 0 fails the job, and so does finding no selftests.
+#
+# Do NOT make this a required status check: the `paths:` filter means it
+# reports "not run" for most PRs, which would block them from merging (the
+# same caveat as audit.yml).
+name: Harness selftests
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'bin/**'
+      - '.claude/skills/vm-e2e/**'
+      - '.github/workflows/harness-selftest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Run harness selftests
+        run: |
+          set -uo pipefail
+          mapfile -t tests < <(find bin -name '*.selftest.sh' -type f | sort)
+          if [[ ${#tests[@]} -eq 0 ]]; then
+            echo "::error::no bin/**/*.selftest.sh files found"
+            exit 1
+          fi
+          failed=()
+          for t in "${tests[@]}"; do
+            echo "::group::$t"
+            if bash "$t"; then
+              echo "PASS $t"
+            else
+              echo "::error file=$t::selftest failed"
+              failed+=("$t")
+            fi
+            echo "::endgroup::"
+          done
+          {
+            echo "## Harness selftests"
+            echo
+            echo "${#tests[@]} run, ${#failed[@]} failed"
+            for t in "${failed[@]}"; do echo "- FAIL \`$t\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ ${#failed[@]} -eq 0 ]]
