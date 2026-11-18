@@ -440,6 +440,13 @@ interface SnapshotMeta {
   empty?: boolean;
 }
 
+/** What an existing release's finalized manifest says about it (#584/#585). */
+interface ReleaseFacts {
+  version?: string;
+  icon?: string;
+  upgrade?: AppUpgradeMeta;
+}
+
 /** Pre-upgrade snapshots kept per deployment (bounded retention; oldest pruned). */
 const SNAPSHOT_RETENTION = 5;
 
@@ -1291,6 +1298,71 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     await this.onActiveReleaseChanged(deploymentId, releaseId);
   }
 
+  /**
+   * Bring the deployment's catalog-derived display fields in line with the
+   * release that is now active. Shared by `promote` and `rollback` (#585).
+   *
+   * `promoteRelease` only moves the release pointers (the Release type carries
+   * no version); without this the record — and the UI's "update available", and
+   * `hola deployments` — kept reporting the version the deployment was moved
+   * AWAY from. For `promote` that was the pre-upgrade version; for `rollback` it
+   * was the version just rolled back from, so the host claimed the bad release
+   * was still running and stopped offering it as an update.
+   *
+   * Called right after `promoteRelease`, at request time, in both callers —
+   * deliberately not on job success. `version` describes the release the
+   * `currentReleaseId` pointer names, and that pointer moves at request time
+   * (the job materializes whatever it names). A failed job leaves the pointer on
+   * the new release with status `error`; syncing only on success would leave the
+   * record pairing that release with another release's version, and a later
+   * restart would run one while reporting the other.
+   *
+   * The icon rides along for the same reason: it's persisted at install
+   * (createFromDraft) purely as a cache so the launcher needn't hit the catalog,
+   * so an app whose package changes its logo would otherwise show the icon it had
+   * on install day forever.
+   *
+   * `name` is deliberately NOT refreshed — a caller-supplied name wins at install
+   * and the record can't distinguish one from a manifest-derived default, so
+   * rewriting it here would clobber an operator's rename.
+   *
+   * A field that is absent (unknown) is left as it is, never cleared.
+   */
+  protected async syncReleaseDisplayFields(
+    deploymentId: string,
+    fields: { version?: string; icon?: string },
+  ): Promise<void> {
+    const { version, icon } = fields;
+    if (!version && !icon) return;
+    const deployment = this.requireDeployment(deploymentId);
+    let changed = false;
+    if (version && deployment.version !== version) {
+      deployment.version = version;
+      changed = true;
+    }
+    if (icon && deployment.icon !== icon) {
+      deployment.icon = icon;
+      changed = true;
+    }
+    if (changed) {
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+    }
+  }
+
+  /**
+   * What an existing release's finalized manifest says about it: its version,
+   * icon, and `upgrade` metadata. Undefined when unknown. Base: always unknown —
+   * the in-memory service keeps no manifests; RealDeploymentService reads the
+   * staged `manifest.json`. Never throws: a caller that needs a corrupt manifest
+   * to stop the operation reads it itself (the deploy job does).
+   */
+  protected async readReleaseFacts(deploymentId: string, releaseId: string): Promise<ReleaseFacts | undefined> {
+    void deploymentId;
+    void releaseId;
+    return undefined;
+  }
+
   async createFromDraft(request: CreateDeploymentFromDraftRequest): Promise<CreateDeploymentFromDraftResponse> {
     await this.ensureLoaded();
     const releaseId = crypto.randomUUID();
@@ -1714,37 +1786,9 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // Atomically switch the active release to the new one.
     await this.promoteRelease(deploymentId, releaseId);
 
-    // Sync the deployment's catalog-derived display fields to the promoted release.
-    // promoteRelease only moves the release pointers (it's shared with rollback and
-    // the Release type carries no version); without this the record (and the UI's
-    // "update available") would still report the pre-upgrade version after a
-    // successful promote.
-    //
-    // The icon rides along for the same reason: it's persisted at install
-    // (createFromDraft) purely as a cache so the launcher needn't hit the catalog,
-    // so an app whose package changes its logo would otherwise show the icon it had
-    // on install day forever. We've just resolved the new manifest, so it's free.
-    //
-    // `name` is deliberately NOT refreshed — a caller-supplied name wins at install
-    // and the record can't distinguish one from a manifest-derived default, so
-    // rewriting it here would clobber an operator's rename.
-    const promotedIcon = artifacts?.manifest.icon;
-    if (version || promotedIcon) {
-      const promoted = this.requireDeployment(deploymentId);
-      let changed = false;
-      if (version && promoted.version !== version) {
-        promoted.version = version;
-        changed = true;
-      }
-      if (promotedIcon && promoted.icon !== promotedIcon) {
-        promoted.icon = promotedIcon;
-        changed = true;
-      }
-      if (changed) {
-        this.deployments.set(deploymentId, promoted);
-        await this.persistDeployment(promoted);
-      }
-    }
+    // Sync the deployment's catalog-derived display fields to the promoted
+    // release (see `syncReleaseDisplayFields`).
+    await this.syncReleaseDisplayFields(deploymentId, { version, icon: artifacts?.manifest.icon });
 
     const jobId = await this.maybeStartJob(deploymentId, releaseId, request.options?.autoStart);
 
@@ -2205,6 +2249,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     // independent line: if this ordering is ever reverted, that turns the silent
     // wrong-release materialization into a failed job rather than a lie.
     await this.promoteRelease(deploymentId, targetReleaseId);
+
+    // The record now reports the release rolled back TO (#585), synced at the
+    // same point `promote` syncs it — see `syncReleaseDisplayFields` for why
+    // that is request time, not job success.
+    const targetFacts = await this.readReleaseFacts(deploymentId, targetReleaseId);
+    await this.syncReleaseDisplayFields(deploymentId, { version: targetFacts?.version, icon: targetFacts?.icon });
 
     const job = await this.jobService.createJob({
       type: 'start',
@@ -2812,6 +2862,24 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** The active release's manifest, or undefined when there isn't one. Throws on corruption. */
   private async readActiveManifest(deployment: EnhancedDeploymentDetail): Promise<FinalizedManifest | undefined> {
     return this.readReleaseManifest(deployment.id, deployment.currentReleaseId);
+  }
+
+  /**
+   * A release's version/icon/upgrade metadata, from its staged manifest. A
+   * missing manifest (a record that predates staging) is "unknown"; a corrupt
+   * one is logged by `readReleaseManifest` and also read as unknown here —
+   * these facts only label the record and inform the rollback boundary check,
+   * and the deploy job, which does act on the manifest, still refuses it.
+   */
+  protected override async readReleaseFacts(deploymentId: string, releaseId: string): Promise<ReleaseFacts | undefined> {
+    let manifest: FinalizedManifest | undefined;
+    try {
+      manifest = await this.readReleaseManifest(deploymentId, releaseId);
+    } catch {
+      return undefined;
+    }
+    if (!manifest) return undefined;
+    return { version: manifest.version, icon: manifest.icon, upgrade: manifest.upgrade };
   }
 
   /** Read the active release's declared auth config (if any). */
