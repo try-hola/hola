@@ -2,13 +2,26 @@
 # bin/vm-web-check — headless-Chrome front-door test of a deployed Hola dashboard.
 #
 # No desktop, no VNC: drives Chromium (Playwright) from the container against the
-# dashboard URL over the network — loads the login page, signs in with the admin
-# key, asserts the dashboard renders, and writes screenshots to logs/web-check.
+# dashboard URL over the network — loads the login page, signs in the way the
+# dashboard asks for, asserts the dashboard renders, and writes screenshots to
+# logs/web-check.
 #
-# Usage: bin/vm-web-check [--url URL] [--key KEY] [--out DIR]
+# Usage: bin/vm-web-check [--url URL] [--key KEY] [--vmid VMID] [--out DIR]
 #
 # Defaults: URL from HOLA_DOMAIN and key from HOLA_API_KEY in the Hola env
 # (HOLA_ENV_FILE, default .devcontainer/hola.env — the same file bootstrap uses).
+#
+# Sign-in follows the server's real GET /api/auth/config (#575):
+#   apikey / none  the admin key, exactly as before (no VM access needed).
+#   oidc           (HOLA_AUTH_MODE=authentik) the dashboard redirects to Authentik;
+#                  the check signs in there as akadmin. The password is
+#                  AUTHENTIK_BOOTSTRAP_PASSWORD from /opt/hola/.env on the VM (--vmid,
+#                  default the VM in harness state), read over bin/vm-ssh ONLY in this
+#                  mode, held in a variable and handed to the browser script through
+#                  its environment — never printed, never on a command line. A caller
+#                  that already holds it may export WEB_CHECK_SSO_PASSWORD instead.
+#                  The VM's HOLA_DOMAIN must match the URL, so a stale VM id in state
+#                  cannot hand over another host's password.
 #
 # Trusted TLS (spec 009): when the test CA exists (bin/vm-test-ca init) and
 # VM_TRUSTED_TLS is not 0, and the URL's host is <ip>.sslip.io, Chromium is given the
@@ -21,11 +34,12 @@ load_env
 HOLA_ENV="${HOLA_ENV_FILE:-$ROOT_DIR/.devcontainer/hola.env}"
 hola_env_get() { [[ -f "$HOLA_ENV" ]] && grep -E "^$1=" "$HOLA_ENV" | tail -1 | cut -d= -f2- || true; }
 
-URL=""; KEY=""; OUT="$ROOT_DIR/logs/web-check"
+URL=""; KEY=""; OUT="$ROOT_DIR/logs/web-check"; ARG_VMID=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --url) URL=$2; shift 2 ;;
     --key) KEY=$2; shift 2 ;;
+    --vmid) ARG_VMID=$2; shift 2 ;;
     --out) OUT=$2; shift 2 ;;
     -h|--help) grep -E '^# ' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown arg: $1" ;;
@@ -53,5 +67,27 @@ if [[ ! -d "$ROOT_DIR/node_modules/playwright" ]]; then
 fi
 
 log "headless front-door check: $URL${SPKI:+  (trusted TLS: verifying against the test CA)}"
-audit "vm-web-check url=$URL"
-HOLA_BASE_URL="$URL" HOLA_API_KEY="$KEY" WEB_CHECK_OUT="$OUT" WEB_CHECK_SPKI="$SPKI" bun "$BIN_DIR/lib/web-check.mjs"
+
+# Which login will the dashboard present? Ask the server (same TLS posture as the
+# browser: the test CA when trusted, -k otherwise). Only an OIDC dashboard needs the
+# Authentik password, so only then is the VM touched.
+if [[ -n "$SPKI" ]]; then tls=(--cacert "$CA_DIR/ca.pem"); else tls=(-k); fi
+MODE=$(curl -fsS --max-time 20 "${tls[@]}" "${URL%/}/api/auth/config" 2>/dev/null \
+  | sed -nE 's/.*"mode"[[:space:]]*:[[:space:]]*"([A-Za-z]+)".*/\1/p' || true)
+log "dashboard auth mode: ${MODE:-unknown (could not read /api/auth/config; the browser will follow the page)}"
+SSO_PW="${WEB_CHECK_SSO_PASSWORD:-}"
+if [[ "$MODE" == oidc && -z "$SSO_PW" ]]; then
+  VMID=$(resolve_vmid "$ARG_VMID")
+  url_host=$(sed -nE 's#^https?://([^/:]+).*#\1#p' <<<"$URL")
+  envget() { "$BIN_DIR/vm-ssh" --vmid "$VMID" -- "grep -m1 '^$1=' /opt/hola/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r\n' || true; }
+  vm_domain=$(envget HOLA_DOMAIN)
+  [[ -n "$vm_domain" ]] || die "the dashboard signs in through Authentik, but VM $VMID has no HOLA_DOMAIN in /opt/hola/.env (wrong --vmid? not reachable?)"
+  [[ "$vm_domain" == "$url_host" ]] || die "VM $VMID serves $vm_domain, not $url_host — pass the right --vmid"
+  SSO_PW=$(envget AUTHENTIK_BOOTSTRAP_PASSWORD)
+  [[ -n "$SSO_PW" ]] || die "the dashboard signs in through Authentik, but VM $VMID has no AUTHENTIK_BOOTSTRAP_PASSWORD in /opt/hola/.env"
+  log "Authentik sign-in: akadmin password read from VM $VMID (not printed)"
+fi
+
+audit "vm-web-check url=$URL mode=${MODE:-unknown}"
+HOLA_BASE_URL="$URL" HOLA_API_KEY="$KEY" WEB_CHECK_OUT="$OUT" WEB_CHECK_SPKI="$SPKI" \
+  WEB_CHECK_SSO_PASSWORD="$SSO_PW" bun "$BIN_DIR/lib/web-check.mjs"

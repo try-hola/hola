@@ -161,8 +161,11 @@ Chromium against the dashboard URL — no in-VM desktop or VNC). Background:
    ```bash
    bin/vm-web-check          # reads URL+key from hola.env; screenshots to logs/web-check
    ```
-   It loads the dashboard, signs in with the admin key, asserts the authenticated
-   `/apps` view, and exits non-zero on failure. Read the screenshots
+   It loads the dashboard, signs in the way the server's `/api/auth/config` says
+   (admin key for `apikey`/`none`; on an Authentik-mode VM, through Authentik as
+   `akadmin`, reading `AUTHENTIK_BOOTSTRAP_PASSWORD` from the VM over `bin/vm-ssh`
+   — pass `--vmid "$VMID"` — and asserting the session is dashboard admin), asserts
+   the authenticated `/apps` view, and exits non-zero on failure. Read the screenshots
    (`logs/web-check/*.png`) and describe what you observe. For deeper UI flows
    (browse the catalog, install an app), extend `bin/lib/web-check.mjs`.
 6. **Decide outcome**:

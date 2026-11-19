@@ -16,6 +16,7 @@
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { authentikFlow as walkAuthentik, AuthentikHopError } from './authentik-login.mjs';
 
 const BASE = process.env.SSO_BASE;
 const APP = process.env.SSO_APP;
@@ -84,29 +85,10 @@ const onApp = () => { try { return new URL(page.url()).host === APP_HOST; } catc
 class Hop extends Error { constructor(hop, detail) { super(detail || hop); this.hop = hop; } }
 
 // Walk Authentik's flow: identification -> password -> (optional) consent, tolerating an
-// already-authenticated session (it then redirects straight back to the app).
-async function authentikFlow() {
-  const deadline = Date.now() + 90_000;
-  let sawUser = false, sawPassword = false;
-  while (Date.now() < deadline) {
-    if (onApp()) return;
-    const uid = page.locator('input[name="uidField"]');
-    const pw = page.locator('input[name="password"]');
-    if (await uid.isVisible().catch(() => false) && !sawUser) {
-      await uid.fill(USER); await page.keyboard.press('Enter'); sawUser = true; await page.waitForTimeout(1500); continue;
-    }
-    if (await pw.isVisible().catch(() => false) && !sawPassword) {
-      await page.waitForTimeout(1500);                       // the field re-renders once; let it settle
-      await pw.fill(PASSWORD);
-      if ((await pw.inputValue()) !== PASSWORD) await pw.fill(PASSWORD);
-      await page.keyboard.press('Enter'); sawPassword = true; await page.waitForTimeout(2500); continue;
-    }
-    const cont = page.getByRole('button', { name: /^(continue|consent|authorize|allow|accept)/i }).first();
-    if (onAuth() && await cont.isEnabled().catch(() => false)) { await shot('consent'); await cont.click(); await page.waitForTimeout(2500); continue; }
-    await page.waitForTimeout(1000);
-  }
-  throw new Hop(sawPassword ? 'consent' : sawUser ? 'authentik-password' : 'authentik-user', 'did not return to the app within 90s');
-}
+// already-authenticated session (it then redirects straight back to the app). Shared
+// with web-check.mjs; it throws an AuthentikHopError carrying the same hop names.
+const authentikFlow = () =>
+  walkAuthentik(page, { authHost: AUTH_HOST, user: USER, password: PASSWORD, isDone: onApp, shot });
 
 try {
   if (PREPARE[APP]) await PREPARE[APP](page, `https://${APP_HOST}`);
@@ -168,7 +150,7 @@ try {
   process.exit(0);
 } catch (e) {
   await shot('error').catch(() => {});
-  const hop = e instanceof Hop ? e.hop : 'unexpected';
+  const hop = e instanceof Hop || e instanceof AuthentikHopError ? e.hop : 'unexpected';
   log(`failed at ${hop}: ${String(e.message || e).split('\n')[0]}`);
   console.log(`FAIL sso ${APP} ${hop}`);
   await browser.close().catch(() => {});
