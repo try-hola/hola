@@ -357,6 +357,26 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   syncs `version`/`icon` to the target via the helper `promote` uses
   (`syncReleaseDisplayFields`, #585) — at request time with the pointer, not on
   job success, so a failed job's record names the release it now points at.
+- **Catalog packaging rule: ship every new one-way data migration as a bundle
+  MAJOR bump (try-hola/apps).** This follows from the "not the target's own"
+  clause above. Within one major, the rollback guard reads a copied `upgrade`
+  block as "no new migration". Example: the bundle is at 2.0.2 with
+  `{breaking: true, preUpgradeBackup: "required"}`, and a 2.0.3 patch carries
+  the same block but its upstream image migrates the database again. A plain
+  rollback from 2.0.3 to 2.0.2 is then **allowed** (`boundary: none`), and the
+  app crash-loops on the newer schema, which is the Gitea failure #584 fixed.
+  The guard cannot tell the difference, because no manifest field says which
+  origin versions a migration applies to. So when an upstream bump migrates
+  data in a way the previous image cannot read (one-way DB migrations, the
+  "database is for a newer version" class), bump the **bundle major** and give
+  it its own `upgrade` block (`preUpgradeBackup: "required"`, plus
+  `breaking: true` when it is). Hola's semver describes impact on the Hola
+  user, so a one-way migration is a major even when upstream calls it a minor
+  or patch. Patch bumps that change no schema may keep copying the major's
+  block; that is what keeps patch rollbacks within a major from being refused.
+  If a one-way migration ever has to ship inside a major, its `upgrade` block
+  must differ from every earlier release of that major. Changing only
+  `upgradeNotesUrl` does not count, because the comparison ignores it.
 - **A capture proves it produced an archive (F15).** `tarGzipDir` treats `tar`
   exiting 1 as success **on purpose**: archiving a *live* data root races the
   app's own writes, and a file changing or vanishing between tar's stat and read
