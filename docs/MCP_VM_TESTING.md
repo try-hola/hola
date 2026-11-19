@@ -112,12 +112,33 @@ the both-modes flow and the advanced local-image path.
 ### Headless front-door check (no desktop / VNC)
 
 `bin/vm-web-check` drives Chromium (Playwright) from the container against the
-dashboard URL: it loads the page, signs in with the admin key, asserts the
+dashboard URL: it loads the page, signs in the way the dashboard asks, asserts the
 authenticated `/apps` view, and writes screenshots to `logs/web-check/`.
+
+Which sign-in it performs follows the server's real `GET /api/auth/config` — the
+check never stubs it, so it exercises the dashboard's actual login:
+
+- **`apikey` / `none`** (e.g. `bin/vm-e2e-suite`'s `mode=none` VMs) — the admin-key
+  field, with the key from `HOLA_API_KEY` / `--key`. The VM is never contacted.
+- **`oidc`** (`HOLA_AUTH_MODE=authentik`, e.g. `bin/vm-catalog-test` VMs) — the
+  dashboard redirects to Authentik by itself; the check signs in there as
+  `akadmin` (the same flow as `bin/vm-sso-check`, shared in
+  `bin/lib/authentik-login.mjs`), lets the dashboard finish `/auth/callback`, and
+  then asks `GET /api/auth/me` which role the session got. `akadmin` is an
+  Authentik superuser, which the server seeds into the dashboard admin group
+  (`HOLA_OIDC_ADMIN_GROUP`, default `hola-admins`), so anything but admin fails
+  the check. The password is `AUTHENTIK_BOOTSTRAP_PASSWORD` from the VM's
+  `/opt/hola/.env`, read over `bin/vm-ssh` (`--vmid`, default the VM in harness
+  state) **only** in this mode and handed to the browser through its environment
+  — never printed or put on a command line. The VM's `HOLA_DOMAIN` must match the
+  URL, so a stale VM id cannot hand over another host's password. A caller that
+  already holds the password may export `WEB_CHECK_SSO_PASSWORD` instead.
 
 ```bash
 bin/vm-web-check                       # URL + key read from .devcontainer/hola.env
 bin/vm-web-check --url https://apps.10.0.0.50.sslip.io --key <admin-key>
+# an Authentik-mode VM kept by vm-catalog-test --keep:
+HOLA_ENV_FILE=.devcontainer/hola-catalog.env bin/vm-web-check --vmid <id>
 ```
 
 It exits non-zero on failure (so it slots into CI / `vm-test`). For deeper UI
