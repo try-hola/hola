@@ -48,10 +48,11 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
 
 ## Architecture notes that matter
 
-- **Traefik-only ingress.** Apps have **no host ports**; the server emits Traefik
+- **Traefik is the default ingress.** Apps have **no host ports**; the server emits Traefik
   file-provider config (`/data/runtime/traefik/dynamic.yml`) and joins each app's
   ingress service to the external `hola` network. The compose **validator rejects
-  host ports** and requires pinned image tags.
+  host ports** and requires pinned image tags. The one exception is the opt-in,
+  platform-injected private Tailscale companion (spec 010, below).
 - **Compose policy is enforced twice (F02).** The validator refuses
   privilege-bearing service keys (host/foreign namespaces, `devices`, `cap_add`,
   `group_add`, widening `security_opt`, `env_file`, `extends`, `volumes_from`,
@@ -683,6 +684,39 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   (`judgeRestoreCoverage`) is reported with its **own** vocabulary
   (`'undeclared' | 'copy-back' | 'incomplete' | 'restorable'`), independent of
   and never derived from backup coverage.
+- **Private Tailscale ingress is a second path in, so it is injected last and
+  driven by exec (spec 010, ADR 0007).** An operator can opt one deployment into
+  its own Tailscale Service (`PUT /api/deployments/:id/tailscale-ingress`,
+  `hola tailscale enable`), because a tailnet grant names a destination and the
+  only one the host offers is the shared Traefik, which picks the app from a
+  caller-controlled `Host` — a grant to it is a grant to every app. The
+  `hola-tailscale` companion (`tailscale/tailscale` pinned by digest;
+  `HOLA_TAILSCALE_IMAGE` overrides) is added at the **end** of
+  `materializeCompose`, after every helper that fans out to all services except
+  `hola-docker-proxy` (contract tokens, `DOCKER_HOST`, the restore-staging
+  mount, `hola` membership); injected last it receives none of them with no skip
+  list to maintain, and a test fails if a later helper starts to. It sits on an
+  `internal` `hola-ts-backend` network with only the chosen backend (never
+  `default` or `hola`) plus an egress bridge, with no privileges, ports or
+  binds. The entrypoint is bare `tailscaled`: Hola signs in and serves by
+  `compose exec`, so the credential never enters the compose, a job payload or
+  the container environment — it is a 0600 file on the server volume, piped over
+  stdin once, and **deleted once the companion reports a signed-in state** (never on
+  `NoState` or an unreadable status, which keep it for a retry). The identity
+  is a named volume (`hola-ts-state`), not under the apps root, because that
+  root is snapshotted, restored and mounted into a consented `backup@1`
+  provider, so a device key there would be copied; `compose down` never removes
+  it, so disable, uninstall and force removal call `removeVolume`. Changes ride
+  the restart job with a **before-up** hook (drain, log out, `compose rm -sf` the
+  companion, since `up` has no `--remove-orphans`) and an **after-up** hook
+  (sign in, re-apply the idempotent serve config on every job — research V1 is
+  unverified — wait up to 60 s, delete the credential); a companion failure never
+  fails the job, except failing to remove the companion on disable. The Traefik forward-auth gate does not cover this path,
+  so enabling it on a forward-auth app needs an explicit acknowledgement.
+  **Constitution Principle I changed** (2.0.0): Traefik is the *default* ingress
+  and this companion is the one permitted, operator-enabled, platform-owned
+  second path. Tailscale-side behaviour (V1–V10) is not yet verified on a real
+  tailnet. Operator guide: `docs/TAILSCALE_INGRESS.md`.
 
 ## Conventions
 
@@ -738,10 +772,12 @@ Full guide: `docs/MCP_VM_TESTING.md`.
 - `docs/ARCHITECTURE.md` — system design and deployment lifecycle.
 - `docs/OPERATIONS.md` — install, recovery, backup, SSO.
 - `packages/compose/README.md` — the production stack, catalog, and Authentik setup.
+- `docs/TAILSCALE_INGRESS.md` — opt-in private Tailscale ingress: prerequisites, enable/disable,
+  the tailnet-side steps, status meanings (ADR 0007).
 - `docs/adr/` — architecture decision records (e.g. authentication).
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/009-trusted-test-tls/plan.md`
+`specs/010-tailscale-ingress/plan.md`
 <!-- SPECKIT END -->

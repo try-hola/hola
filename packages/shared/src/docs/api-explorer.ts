@@ -597,6 +597,62 @@ export const API_ENDPOINTS: EndpointMetadata[] = [
     }
   },
   {
+    path: '/api/deployments/{deploymentId}/tailscale-ingress',
+    method: 'GET',
+    operationId: 'getTailscaleIngress',
+    summary: 'Get Private Tailscale Ingress',
+    description: 'The opt-in private Tailscale ingress setting, live status (cached 30 s; refresh=true bypasses), defaults and setup guidance. Never contains the joining credential.',
+    tags: ['deployments'],
+    parameters: [
+      {
+        name: 'deploymentId',
+        in: 'path',
+        description: 'Deployment identifier',
+        required: true,
+        schema: { type: 'string' }
+      },
+      { name: 'refresh', in: 'query', description: "When 'true', bypass the 30-second status cache", required: false, schema: { type: 'boolean' } }
+    ],
+    responseType: 'GetTailscaleIngressResponse'
+  },
+  {
+    path: '/api/deployments/{deploymentId}/tailscale-ingress',
+    method: 'PUT',
+    operationId: 'setTailscaleIngress',
+    summary: 'Enable or Replace Private Tailscale Ingress',
+    description: 'Replaces the setting. A running app is restarted once (jobId returned). Errors: 400 INVALID_TAILSCALE_INGRESS, TAILSCALE_BACKEND_UNKNOWN, TAILSCALE_BACKEND_UNSUPPORTED, TAILSCALE_FORWARD_AUTH_ACK_REQUIRED, TAILSCALE_CREDENTIAL_REQUIRED; 409 CONFLICT with details.code TAILSCALE_SERVICE_NAME_TAKEN or DEPLOYMENT_BUSY.',
+    tags: ['deployments'],
+    parameters: [
+      {
+        name: 'deploymentId',
+        in: 'path',
+        description: 'Deployment identifier',
+        required: true,
+        schema: { type: 'string' }
+      }
+    ],
+    requestBodyType: 'SetTailscaleIngressRequest',
+    responseType: 'SetTailscaleIngressResponse'
+  },
+  {
+    path: '/api/deployments/{deploymentId}/tailscale-ingress',
+    method: 'DELETE',
+    operationId: 'disableTailscaleIngress',
+    summary: 'Disable Private Tailscale Ingress',
+    description: 'Withdraws the Service, signs the device out where possible and removes the companion. Returns the removal report naming the device record left to delete. 409 DEPLOYMENT_BUSY while other work is in flight.',
+    tags: ['deployments'],
+    parameters: [
+      {
+        name: 'deploymentId',
+        in: 'path',
+        description: 'Deployment identifier',
+        required: true,
+        schema: { type: 'string' }
+      }
+    ],
+    responseType: 'DisableTailscaleIngressResponse'
+  },
+  {
     path: '/api/deployments/{deploymentId}/history',
     method: 'GET',
     operationId: 'getDeploymentHistory',

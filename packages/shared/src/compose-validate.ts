@@ -33,6 +33,7 @@
 
 import { parse as parseYAML } from 'yaml';
 import type { ValidationIssue, ValidationSeverity, ComposeIssueCode } from './index';
+import { TAILSCALE_SERVICE, TAILSCALE_BACKEND_NETWORK, TAILSCALE_EGRESS_NETWORK } from './tailscale-ingress';
 
 // Loose structural shapes — we validate them, so they are deliberately permissive.
 interface RawService {
@@ -74,7 +75,18 @@ const SERVICE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 // Service names reserved for platform-injected components (spec 004): a
 // user-authored service of this name is a validation error, never silently
 // shadowed or merged. Currently just the container-logs proxy sidecar.
-export const RESERVED_SERVICE_NAMES: ReadonlySet<string> = new Set(['hola-docker-proxy']);
+export const RESERVED_SERVICE_NAMES: ReadonlySet<string> = new Set([
+  'hola-docker-proxy',
+  // Opt-in private Tailscale ingress companion (spec 010): platform-injected
+  // after validation, so an app-authored service of this name is refused.
+  TAILSCALE_SERVICE,
+]);
+// Networks the private-ingress injection declares (spec 010). An app that
+// pre-declared one could widen the "backend only" network the companion joins.
+export const RESERVED_NETWORK_NAMES: ReadonlySet<string> = new Set([
+  TAILSCALE_BACKEND_NETWORK,
+  TAILSCALE_EGRESS_NETWORK,
+]);
 // Permissive image reference: optional registry[:port]/, path, optional :tag, optional @sha256:digest.
 const IMAGE_REF_RE =
   /^([a-z0-9.-]+(:[0-9]+)?\/)?[a-z0-9][a-z0-9._/-]*(:[\w][\w.-]*)?(@sha256:[a-f0-9]{64})?$/i;
@@ -665,6 +677,13 @@ export function validateComposeObject(parsed: unknown): ValidationIssue[] {
   // defined, rather than per reference.
   validateFileSources(doc.secrets, 'secrets', issues);
   validateFileSources(doc.configs, 'configs', issues);
+
+  // Reserved platform network names (spec 010): declared only by the injection.
+  for (const netName of networkNames) {
+    if (RESERVED_NETWORK_NAMES.has(netName)) {
+      issues.push(issue('RESERVED_NETWORK_NAME', 'error', `Network name '${netName}' is reserved for a platform-injected component`, `networks.${netName}`));
+    }
+  }
 
   for (const [name, rawSvc] of Object.entries(doc.services)) {
     if (!SERVICE_NAME_RE.test(name)) {

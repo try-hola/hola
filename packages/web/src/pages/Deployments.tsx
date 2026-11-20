@@ -59,6 +59,11 @@ export const Deployments: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(
     (location.state as { notice?: string } | null)?.notice ?? null
   );
+  // A notice carrying an action the operator must take (e.g. the tailnet device
+  // record left after an uninstall) is not auto-dismissed on a short timer.
+  const [noticeSticky] = useState<boolean>(
+    (location.state as { sticky?: boolean } | null)?.sticky === true
+  );
 
   useEffect(() => {
     if ((location.state as { notice?: string } | null)?.notice) {
@@ -191,7 +196,7 @@ export const Deployments: React.FC = () => {
 
   return (
     <div className="animate-fadein">
-      {notice && <TransientNotice message={notice} onDismiss={() => setNotice(null)} />}
+      {notice && <TransientNotice message={notice} duration={noticeSticky ? 10 * 60 * 1000 : undefined} onDismiss={() => setNotice(null)} />}
 
       {/* Removal confirmation dialog */}
       <ConfirmDialog

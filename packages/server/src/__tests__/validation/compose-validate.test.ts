@@ -303,6 +303,52 @@ services:
       const errs = errors(validateComposeDocument(yaml));
       expect(errs.map((e) => e.code)).toContain('RESERVED_SERVICE_NAME');
     });
+
+    test('a user-authored service named hola-tailscale is rejected (spec 010: reserved for the platform)', () => {
+      const yaml = `
+services:
+  hola-tailscale:
+    image: nginx:1.27
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('RESERVED_SERVICE_NAME');
+    });
+
+    test.each(['hola-ts-backend', 'hola-ts-egress'])('a user-declared network %s is rejected (spec 010)', (net) => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    networks: [${net}]
+networks:
+  ${net}: {}
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('RESERVED_NETWORK_NAME');
+    });
+
+    test('a named volume hola-ts-state is refused by the existing named-volume rule (spec 010)', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    volumes:
+      - hola-ts-state:/var/lib/tailscale
+volumes:
+  hola-ts-state: {}
+`;
+      expect(codes(validateComposeDocument(yaml))).toContain('NAMED_VOLUME_NOT_ALLOWED');
+    });
+
+    test('an unrelated network name is still accepted (spec 010)', () => {
+      const yaml = `
+services:
+  web:
+    image: nginx:1.27
+    networks: [backend]
+networks:
+  backend: {}
+`;
+      expect(errors(validateComposeDocument(yaml))).toEqual([]);
+    });
   });
 
   describe('environment forms', () => {

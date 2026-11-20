@@ -1331,6 +1331,29 @@ export async function route(url: URL, req: Request): Promise<Response> {
     }
   }
 
+  // Opt-in private Tailscale ingress (spec 010). Before the generic `/:id` match.
+  // Mutations resolve to `write:deployments` through the existing mutating-method default.
+  const tailscaleIngressMatch = pathname.match(/^\/api\/deployments\/([^/]+)\/tailscale-ingress$/);
+  if (tailscaleIngressMatch) {
+    const id = tailscaleIngressMatch[1];
+    try {
+      const services = getServices();
+      if (req.method === 'GET') {
+        const refresh = new URL(req.url).searchParams.get('refresh') === 'true';
+        return json(await services.deployments.getTailscaleIngress(id, { refresh }));
+      }
+      if (req.method === 'PUT') {
+        const body = await req.json().catch(() => undefined);
+        return json(await services.deployments.setTailscaleIngress(id, body));
+      }
+      if (req.method === 'DELETE') {
+        return json(await services.deployments.disableTailscaleIngress(id));
+      }
+    } catch (err) {
+      return errorResponse(req, err);
+    }
+  }
+
   const deploymentMatch = pathname.match(/^\/api\/deployments\/([^/]+)$/);
   if (deploymentMatch && req.method === 'GET') {
     const id = deploymentMatch[1];
@@ -1363,8 +1386,8 @@ export async function route(url: URL, req: Request): Promise<Response> {
       // uninstall otherwise refuses when the containers cannot be confirmed
       // stopped, which would leave a genuinely wedged container unremovable.
       const force = new URL(req.url).searchParams.get('force') === 'true';
-      await services.deployments.deleteDeployment(id, { force });
-      return json({ ok: true });
+      const result = await services.deployments.deleteDeployment(id, { force });
+      return json({ ok: true, ...(result && result.warnings?.length ? { warnings: result.warnings } : {}) });
     } catch (err) {
       return errorResponse(req, err);
     }

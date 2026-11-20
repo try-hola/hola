@@ -41,7 +41,10 @@ import type {
   // System types
   GetSystemStatusResponse, GetUpdateCheckResponse,
   // Restore-on-install (spec 007)
-  ListRestoreCandidatesResponse
+  ListRestoreCandidatesResponse,
+  // Private Tailscale ingress (spec 010)
+  GetTailscaleIngressResponse, SetTailscaleIngressRequest, SetTailscaleIngressResponse,
+  DisableTailscaleIngressResponse
 } from '@hola/shared';
 import { globalCache, CacheTTL } from './cache';
 import { safeFetchEnhanced, createEnhancedError, type EnhancedError } from './error-enhanced';
@@ -145,7 +148,7 @@ export class SdkAdapter {
 
   // Enhanced request method with smart deduplication and caching
   private async enhancedRequest<T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     sdkCall: () => Promise<T>,
     body?: unknown,
@@ -492,7 +495,9 @@ export class SdkAdapter {
     // than deleting the data root out from under a live database. Without a way
     // to reach it from here, a wedged container would make a deployment
     // unremovable from the dashboard.
-    remove: (deploymentId: string, opts?: { force?: boolean }): Promise<void> =>
+    // Resolves to the server's `{ ok, warnings? }` (spec 010: the private-ingress
+    // device record left to delete), or undefined from an older server.
+    remove: (deploymentId: string, opts?: { force?: boolean }): Promise<{ ok: true; warnings?: string[] } | undefined> =>
       this.enhancedRequest(
         'DELETE',
         `/api/deployments/${deploymentId}${opts?.force ? '?force=true' : ''}`,
@@ -563,6 +568,25 @@ export class SdkAdapter {
     config: (deploymentId: string): Promise<GetDeploymentConfigResponse> => {
       const path = `/api/deployments/${deploymentId}/config`;
       return this.getWithCache(path, () => this.sdk.deployments.config(deploymentId));
+    },
+
+    // Opt-in private Tailscale ingress (spec 010). Never goes through
+    // `getWithCache`, and mutations opt out of in-flight dedupe: the request
+    // key embeds the body, and the body may carry the joining credential, which
+    // must not be retained anywhere beyond the one request.
+    tailscaleIngress: {
+      get: (deploymentId: string, opts?: { refresh?: boolean }): Promise<GetTailscaleIngressResponse> => {
+        const path = `/api/deployments/${deploymentId}/tailscale-ingress`;
+        return this.enhancedRequest('GET', path, () => this.sdk.deployments.tailscaleIngress.get(deploymentId, opts), undefined, false);
+      },
+      set: (deploymentId: string, body: SetTailscaleIngressRequest): Promise<SetTailscaleIngressResponse> => {
+        const path = `/api/deployments/${deploymentId}/tailscale-ingress`;
+        return this.enhancedRequest('PUT', path, () => this.sdk.deployments.tailscaleIngress.set(deploymentId, body), undefined, false);
+      },
+      disable: (deploymentId: string): Promise<DisableTailscaleIngressResponse> => {
+        const path = `/api/deployments/${deploymentId}/tailscale-ingress`;
+        return this.enhancedRequest('DELETE', path, () => this.sdk.deployments.tailscaleIngress.disable(deploymentId), undefined, false);
+      },
     },
 
     // On-demand richer update check (#299): safe-bump vs. guided upgrade, with the

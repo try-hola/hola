@@ -44,7 +44,8 @@ browser ──TLS──▶ Traefik ──▶ web (nginx: SPA + /api proxy) ─�
   UI at `HOLA_DOMAIN`, the dashboard, the Authentik UI) and each deployed app at
   `<app>.<HOLA_BASE_DOMAIN>` (`dynamic.yml`). Traefik runs **no Docker provider and
   mounts no Docker socket** — only the server holds the socket.
-- **Ingress is Traefik-only.** Apps are reachable through Traefik routing, not
+- **Ingress is Traefik by default.** (The one exception is the opt-in, platform-injected
+  private Tailscale companion; see ADR 0007.) Apps are reachable through Traefik routing, not
   by publishing host ports. There is no host-port registry; the Compose
   validator rejects `ports:` exposure (use `expose:` for container-internal
   ports). The server attaches one **ingress service** to the `hola` network and
