@@ -397,9 +397,10 @@ native-OIDC app's container must be able to fetch Authentik's OIDC discovery doc
 | gitea | Go | the system trust-store overlay (its `compose exec`'d setup never sees `SSL_CERT_FILE`) | **FAIL** at `sso-trust` |
 | immich, postiz, actual-budget | Node | `NODE_EXTRA_CA_CERTS` | **FAIL** at `sso-trust` |
 | mealie | Python | `SSL_CERT_FILE` + `REQUESTS_CA_BUNDLE` | **FAIL** at `sso-trust` |
-| hangar | unverified | not yet checked | **SKIP**: `[sso-trust: SKIP (trust not covered)]` on its result line |
+| hangar | Python (Authlib over httpx) | `SSL_CERT_FILE` (httpx otherwise uses certifi's bundle) | **FAIL** at `sso-trust` |
 
-A SKIP never hides the app's install/verify/restart results. An app absent from the
+A bundle marked `unverified` or `not-covered` in the table is reported as a **SKIP**
+(`[sso-trust: SKIP (trust not covered)]` on its result line); none is today. A SKIP never hides the app's install/verify/restart results. An app absent from the
 table isn't native-OIDC and the step doesn't run.
 
 **Full SSO logins:** `bin/vm-sso-check` drives headless Chromium through the whole

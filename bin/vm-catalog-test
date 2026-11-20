@@ -53,7 +53,7 @@
 # trusts the CA (OCI runtime shim, installed before bootstrap), and every probe here
 # verifies TLS instead of skipping it. Native-OIDC apps also get an `sso-trust` check
 # (bin/lib/oidc-trust.tsv); a bundle whose trust is not covered is reported as a note
-# on its result line, e.g. `PASS hangar (1m02s)  [sso-trust: SKIP (trust not covered)]`.
+# on its result line, e.g. `PASS <app> (1m02s)  [sso-trust: SKIP (trust not covered)]`.
 # With no CA the run is byte-identical to before. A one-line banner on STDERR says which.
 #
 # Exit code = number of apps that failed (0 = all green). --keep-on-fail snapshots
