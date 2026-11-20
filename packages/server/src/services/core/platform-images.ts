@@ -7,9 +7,44 @@
  * digest that is not `latest`.
  */
 
-/** Tailscale companion image: tag + multi-arch index digest (research R9). */
-export const DEFAULT_TAILSCALE_IMAGE =
-  'tailscale/tailscale:v1.104.7@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4';
+import tailscalePinFile from '../../../platform-images/tailscale/Dockerfile' with { type: 'text' };
+
+const TAILSCALE_PIN_RE = /^tailscale\/tailscale:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/;
+
+/**
+ * Read the companion image reference out of the pin file
+ * (`packages/server/platform-images/tailscale/Dockerfile`).
+ *
+ * Strict on purpose: Dependabot edits that file, and whatever this returns is
+ * what the server runs. Comments and blank lines aside, the file must hold
+ * exactly one instruction, a FROM of `tailscale/tailscale:vX.Y.Z@sha256:<digest>`.
+ * Anything else throws, which stops the server at startup.
+ */
+export function parseTailscaleImagePin(dockerfile: string): string {
+  const where = 'platform-images/tailscale/Dockerfile';
+  const instructions = dockerfile
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '' && !line.startsWith('#'));
+  const from = instructions.filter((line) => /^FROM\s/i.test(line));
+  if (from.length !== 1) {
+    throw new Error(`${where} must contain exactly one FROM line, found ${from.length}`);
+  }
+  if (instructions.length !== 1) {
+    throw new Error(`${where} must contain only a FROM line; it is a pin file and is never built`);
+  }
+  const ref = from[0].replace(/^FROM\s+/i, '');
+  if (!TAILSCALE_PIN_RE.test(ref)) {
+    throw new Error(`${where} must pin tailscale/tailscale:vX.Y.Z@sha256:<64 hex digits>, got "${ref}"`);
+  }
+  return ref;
+}
+
+/**
+ * Tailscale companion image: tag + multi-arch index digest (research R9). The
+ * pin file is the only place the reference is written; Dependabot updates it.
+ */
+export const DEFAULT_TAILSCALE_IMAGE = parseTailscaleImagePin(tailscalePinFile);
 
 const DIGEST_RE = /@sha256:[0-9a-f]{64}$/;
 

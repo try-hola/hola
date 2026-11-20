@@ -262,6 +262,42 @@ Omnigraph.
 - Private ingress settings are not carried by restore-on-install or included in app backups.
 - Only Tailscale is built.
 
+## Updating the companion image
+
+This section is for people maintaining Hola, not for operators. An operator who mirrors
+registries sets `HOLA_TAILSCALE_IMAGE` instead.
+
+The companion image is pinned by version and digest in one place:
+`packages/server/platform-images/tailscale/Dockerfile`. That file is never built. It holds a
+single `FROM tailscale/tailscale:vX.Y.Z@sha256:<digest>` line, which the server imports as text
+and uses as its default. The server refuses to start if the line is anything else. Changing
+that line is the whole update.
+
+Dependabot checks the file every Monday and, once a release is seven days old, opens a pull
+request that changes the tag and the digest together. The pull request is titled
+`chore(tailscale): …` and labelled `tailscale-companion`. It is separate from the base-image
+updates and is not merged automatically.
+
+Before merging one:
+
+1. Unit CI passing shows only that the new reference is well formed. CI does not start the
+   real image.
+2. Run the real-Docker integration test against a Docker daemon. It starts the pinned image
+   without signing in and checks the flags Hola passes:
+
+   ```bash
+   cd packages/server
+   bun test ./src/__tests__/integration/tailscale-ingress.it.ts
+   ```
+
+3. For a new minor version (`v1.104` to `v1.106`), also go through the real-tailnet list in
+   `specs/010-tailscale-ingress/validation.md`. Hola drives `tailscale up`, `tailscale serve`
+   and `tailscale status --json`, and a new release can change them.
+
+To update by hand, edit the `FROM` line. Take the digest from
+`docker buildx imagetools inspect tailscale/tailscale:vX.Y.Z`: it is the index digest that
+covers every architecture, not a single platform's.
+
 ## See also
 
 - [ADR 0007](adr/0007-private-tailscale-ingress.md) for the design and its boundaries.

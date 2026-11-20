@@ -115,6 +115,8 @@ The only precedent for a platform sidecar image falls back to `:latest` (`deploy
 
 **Resolved (T001, 2026-11-20)**: `tailscale/tailscale:v1.104.7` is still the newest stable tag on Docker Hub. Multi-arch index digest `sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4` (via `docker buildx imagetools inspect`). The image contains `/usr/local/bin/tailscaled` and `tailscale`, and ships `/usr/bin/nc` (used by the integration test for TCP probes). Dependabot does not see image references in TypeScript, so keeping the pin fresh is a filed follow-up issue, not solved here.
 
+**Updated (#592)**: The pin now lives in `packages/server/platform-images/tailscale/Dockerfile`, a never-built one-line `FROM` that `platform-images.ts` imports as text and parses strictly. Dependabot tracks that file weekly in its own `docker` entry (label `tailscale-companion`), so a bump PR changes what the server runs with no second edit.
+
 ## R10. Status
 
 Read on demand with `compose exec hola-tailscale tailscale --socket=/tmp/tailscaled.sock status --json`, cached in memory for 30 seconds per deployment.
