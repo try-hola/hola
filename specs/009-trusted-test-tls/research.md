@@ -113,7 +113,7 @@ It reaches the volume with `docker run --rm -i -v hola_hola-data:/data <an image
 | postiz | `postiz` | Node 22 | `NODE_EXTRA_CA_CERTS` | covered |
 | actual-budget | `actual-budget` | Node 24 | `NODE_EXTRA_CA_CERTS` | covered |
 | mealie | `mealie` | Python 3.14 | `SSL_CERT_FILE` + `REQUESTS_CA_BUNDLE` | covered |
-| hangar | `hangar` | unverified (image not cached) | — | **unverified**: the first trusted run records it; until then the check SKIPs it |
+| hangar | `hangar` | Python 3.12 (Debian 13, FastAPI/uvicorn; Authlib over httpx 0.28) | `SSL_CERT_FILE` (httpx's `trust_env` path; without it httpx would use certifi's bundle) | covered (#576) |
 
 The table lives as data in the harness (`bin/lib/oidc-trust.tsv`) so `app-test.sh` reads one source. The docs reproduce it.
 
@@ -143,6 +143,7 @@ The table lives as data in the harness (`bin/lib/oidc-trust.tsv`) so `app-test.s
   | gitea (Go) | `/user/login` | `/api/v1/user` |
   | immich (Node) | `/auth/login` | `/api/users/me` |
   | mealie (Python) | `/login` | `/api/users/self` |
+  | hangar (Python) | `/` (the SPA's "Sign in with SSO" link to `/auth/login`) | `/api/v1/me` (added for #576) |
 
 ## R6 — Browser trust and service workers (FR-017)
 
@@ -238,8 +239,37 @@ PASS postiz           (4m30s)
 ```
 
 - **SC-001: PASS.** 5/5 PASS, no `sso-trust` FAIL, and `grep -rn -- ' -k \|NODE_TLS_REJECT_UNAUTHORIZED' logs/vm-catalog-test/` printed nothing. The setup log shows `trusted TLS: on`, `runtime shim active … DefaultRuntime=hola-test-ca`, and `https://auth.<base>/-/health/live/ verifies against the test CA`.
-- **SC-005: PASS.** With `--restart` each app's `sso-trust` probe ran, the server restarted it (recreating its containers and re-materialising the compose), and the probe ran again and passed: gitea, immich, mealie, postiz, actual-budget (per-app `run.log`: `[<app>] sso-trust: ok` and `[<app>] sso-trust (after restart): ok`). mealie and actual-budget fetched their real OIDC discovery document (`…/application/o/hola-<app>-<id>/.well-known/openid-configuration`); gitea, immich and postiz used Authentik's liveness URL (their env names no issuer), and the report names which. The upgrade variant (rc-upgrade recipe) was **not** run; restart is the stated primary coverage.
-- Not exercised: `hangar` (still `unverified` in `bin/lib/oidc-trust.tsv`, so SKIP: `trust not covered`; T021 therefore changed nothing).
+- **SC-005: PASS.** With `--restart` each app's `sso-trust` probe ran, the server restarted it (recreating its containers and re-materialising the compose), and the probe ran again and passed: gitea, immich, mealie, postiz, actual-budget (per-app `run.log`: `[<app>] sso-trust: ok` and `[<app>] sso-trust (after restart): ok`). mealie and actual-budget fetched their real OIDC discovery document (`…/application/o/hola-<app>-<id>/.well-known/openid-configuration`); gitea, immich and postiz used Authentik's liveness URL (their env names no issuer), and the report names which. The upgrade variant was not run in this acceptance pass; restart is the stated primary coverage. It was verified afterwards (see "SC-005, upgrade variant" below).
+- Not exercised here: `hangar` (then `unverified` in `bin/lib/oidc-trust.tsv`, so SKIP: `trust not covered`; T021 therefore changed nothing). Covered since by #576, below.
+
+### SC-005, upgrade variant (#576)
+
+Not re-run for #576; it had already been verified twice on trusted-TLS VMs, with gitea as the subject (a one-way-migration major upgrade, which recreates the containers on a new image as well as re-materialising the compose):
+- **try-hola/apps#192** (2026-11-18, Hola 0.11.0-rc.12, Authentik mode, trusted TLS): gitea bundle 2.0.2 (Gitea 1.27.3) → `hola upgrade --app-version 3.0.0-rc.1 --snapshot` (Gitea 28.4) gave `Done (completed)`; `bin/vm-sso-check --app gitea` gave `PASS sso gitea` on 1.27 before the upgrade **and** on 28.4 after it (OAuth source still exactly one, the SSO user not duplicated). `hola restart` + `PASS sso gitea` and a fresh 3.0.0-rc.1 install + `PASS sso gitea` passed on the same VM. The evidence table is in that PR's body.
+- **try-hola/hola#586** (VM tests, Authentik mode, trusted TLS): gitea 2.0.2 → 3.0.0 `--snapshot` with `PASS sso gitea` before the upgrade, then a data-aware rollback (`--restore-data`) back to 2.0.2 with `PASS sso gitea` again after it.
+
+**SC-005 (upgrade): PASS** on that evidence. The issue named immich as the subject; gitea is the stronger case (Go, the bundle that needed the system trust-store overlay, and an upgrade that crosses one-way migrations).
+
+### hangar (#576): runtime recorded, trust covered
+
+Image `ghcr.io/get2knowio/hangar:0.3.11@sha256:fd57a43e…` (bundle 1.4.10), inspected locally: Debian 13, **Python 3.12.13**, OpenSSL 3.5.6, `uvicorn hangar.main:app`, runs as the non-root `hangar` user. The OIDC back-channel (discovery, token exchange, JWKS) is made by the **`hangar`** service through **Authlib's Starlette client over httpx 0.28.1** (`hangar/auth/oidc.py`: `server_metadata_url = <HANGAR_OIDC_ISSUER>/.well-known/openid-configuration`). httpx's `create_ssl_context` with the defaults (`verify=True`, `trust_env=True`) loads `SSL_CERT_FILE` when it is set and otherwise **certifi's** bundle, not the system store, so the shim's `SSL_CERT_FILE` is the mechanism (the system-store overlay alone would not reach it). `hangar-init` is a one-shot `chown` and makes no network call. The row is now `hangar	hangar	python	python	covered`; the `python` probe (urllib, same OpenSSL, same `SSL_CERT_FILE`) fits, and the full login proves httpx itself.
+
+`bin/vm-catalog-test --apps hangar --restart --keep` (trusted mode, VM 101, Hola 0.11.0-rc.13), stdout excerpt:
+
+```
+# catalog sweep: 1 app(s) on VM 101 (mode=authentik, restart=1)
+PASS hangar           (0m44s)
+  1 app(s): 1 passed, 0 failed, 0 skipped
+```
+
+No `[sso-trust: SKIP …]` note on the line. `run.log`:
+
+```
+[hangar] sso-trust: ok (https://auth.<base>/application/o/hola-hangar-77339d74/.well-known/openid-configuration)
+[hangar] sso-trust (after-restart): ok (https://auth.<base>/application/o/hola-hangar-77339d74/.well-known/openid-configuration)
+```
+
+The probe fetched hangar's real discovery document (the issuer from `HANGAR_OIDC_ISSUER`), not the liveness fallback. Then `bin/vm-sso-check --vmid 101 --app hangar` → `PASS sso hangar`: `/` → "Sign in with SSO" → Authentik (akadmin) → back on `/`, `GET /api/v1/me -> 200`. That route answers `401` without a session (checked with `curl --cacert`, `ssl_verify_result=0`), and the hangar container logged `auth.oidc_login actor=akadmin`, so the server-side httpx token exchange verified Authentik's certificate. The container's `HostConfig.Runtime` was `hola-test-ca`. `sso-login.mjs` gained a `hangar` recipe (`login: '/'`, `check: '/api/v1/me'`).
 
 ### §4, SC-002: full SSO per runtime
 

@@ -14,4 +14,4 @@ immich	immich-server	node	node	covered
 postiz	postiz	node	node	covered
 actual-budget	actual-budget	node	node	covered
 mealie	mealie	python	python	covered
-hangar	hangar	unknown	none	unverified
+hangar	hangar	python	python	covered

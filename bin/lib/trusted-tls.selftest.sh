@@ -52,7 +52,7 @@ mkdir -p "$T/pushes"
 export STUB_CALLS="$CALLS" STUB_LEAF="$T/leaf" STUB_PUSHES="$T/pushes" PATH="$T/stubs:$PATH"
 
 # An OIDC table the probe tests control.
-printf 'gitea\tgitea\tgo\tcurl\tcovered\nimmich\timmich-server\tnode\tnode\tcovered\nmealie\tmealie\tpython\tpython\tcovered\nhangar\thangar\tunknown\tnone\tunverified\n' > "$T/oidc.tsv"
+printf 'gitea\tgitea\tgo\tcurl\tcovered\nimmich\timmich-server\tnode\tnode\tcovered\nmealie\tmealie\tpython\tpython\tcovered\nexample-app\texample-app\tunknown\tnone\tunverified\n' > "$T/oidc.tsv"
 
 BIN_DIR="$T/bin"; CA_DIR="$T/ca"; DOMAIN_BASE=1.2.3.4.sslip.io
 export TT_OIDC_TABLE="$T/oidc.tsv" TRUSTED_TLS_TIMEOUT=1 TT_WAIT_INTERVAL=1 TT_RUNTIME_POLLS=1 TT_RUNTIME_POLL_SLEEP=0 TT_SETTLE=0 TT_CLOUD_INIT_TIMEOUT=1 VM_SETTLE_RETRY=0
@@ -128,7 +128,7 @@ p() { local rc=0; tt_oidc_probe 101 "$@" >/dev/null 2>&1 || rc=$?; echo "$rc"; }
 [[ "$(p immich dep1)" == 0 ]] && ok "covered + probe ok -> 0" || bad "covered ok"
 STUB_PROBE_RC=1 bash -c 'true'; export STUB_PROBE_RC=1; rc=$(p immich dep1); unset STUB_PROBE_RC
 [[ "$rc" == 1 ]] && ok "covered + probe fail -> 1" || bad "covered fail rc=$rc"
-tt_oidc_probe 101 hangar dep1 || rc=$?; [[ "${rc:-0}" == 2 && "$TT_PROBE_REASON" == "trust not covered" ]] && ok "unverified -> 2 'trust not covered'" || bad "unverified rc=${rc:-0} reason=$TT_PROBE_REASON"
+tt_oidc_probe 101 example-app dep1 || rc=$?; [[ "${rc:-0}" == 2 && "$TT_PROBE_REASON" == "trust not covered" ]] && ok "unverified -> 2 'trust not covered'" || bad "unverified rc=${rc:-0} reason=$TT_PROBE_REASON"
 rc=0; tt_oidc_probe 101 vaultwarden dep1 || rc=$?; [[ "$rc" == 3 ]] && ok "app absent from the table -> 3 (not run)" || bad "absent app rc=$rc"
 rc=0; VM_TRUSTED_TLS=0 tt_oidc_probe 101 immich dep1 || rc=$?; [[ "$rc" == 3 ]] && ok "untrusted -> 3 (not run)" || bad "untrusted probe rc=$rc"
 rc=0; STUB_RT=runc tt_oidc_probe 101 immich dep1 || rc=$?; [[ "$rc" == 1 && "$TT_PROBE_REASON" == *"runtime shim did not apply"* ]] && ok "container not on the shim runtime -> 1" || bad "wrong runtime rc=$rc ($TT_PROBE_REASON)"

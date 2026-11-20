@@ -43,6 +43,9 @@ const RECIPES = {
   gitea: { login: '/user/login', check: '/user/settings', noRedirect: true },
   immich: { login: '/auth/login', check: '/api/users/me' },
   mealie: { login: '/login', check: '/api/users/self' },
+  // hangar (Python/FastAPI, Authlib over httpx): "/" renders the SPA's "Sign in with SSO"
+  // link to /auth/login; /api/v1/me sits behind the auth middleware (401 with no session).
+  hangar: { login: '/', check: '/api/v1/me' },
 };
 const recipe = RECIPES[APP] || { login: '/', check: null };   // generic forward-auth (e.g. craft-apps)
 

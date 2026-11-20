@@ -9,7 +9,8 @@
 # at_install the catalog sweep uses if it is not; an installed app is left alone), then
 # drives real Chromium through the whole login: the app's login page -> "Login with
 # Authentik" -> akadmin + password -> consent -> an authenticated request on the app
-# (gitea /user/settings, immich /api/users/me, mealie /api/users/self; any other app is
+# (gitea /user/settings, immich /api/users/me, mealie /api/users/self, hangar
+# /api/v1/me; any other app is
 # treated as forward-auth: load the root, which must redirect to Authentik, log in
 # there, land back on the app).
 # TLS is VERIFIED against the test CA (Chromium gets the leaf's SPKI), never skipped.
