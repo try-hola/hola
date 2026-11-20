@@ -319,6 +319,66 @@ prog
     await runChannel(deploymentId, channel, camelKeys(opts));
   });
 
+// tailscale — opt-in private Tailscale ingress (spec 010). The credential is
+// read from a file or stdin ONLY; there is deliberately no flag that takes it
+// as a value.
+prog
+  .command('tailscale <deploymentId>')
+  .describe('Show private Tailscale ingress status and setup guidance')
+  .example('tailscale omnigraph-ab12cd34')
+  .option('--refresh', 'Bypass the 30-second status cache', false)
+  .option('--json', 'Print raw JSON output', false)
+  .action(async (deploymentId, opts) => {
+    const { runTailscaleShow } = await load(import('./commands/deployments/tailscale'));
+    await runTailscaleShow(deploymentId, camelKeys(opts));
+  });
+
+prog
+  .command('tailscale enable <deploymentId>')
+  .describe('Enable (or replace) private Tailscale ingress for a deployment')
+  .example('tailscale enable omnigraph-ab12cd34 --service svc:omnigraph --tag tag:hola-ingress --auth-key-file ./ts.key')
+  .example('tailscale enable omnigraph-ab12cd34 --service svc:omnigraph --tag tag:hola-ingress --auth-key-stdin --yes < ./ts.key')
+  .option('--service', 'Tailscale Service name (svc:<name>)')
+  .option('--tag', 'Tag the device joins with (tag:<name>)')
+  .option('--backend', 'Backend as <service>:<port> (default: the app ingress service)')
+  .option('--mode', 'https (default) or tcp')
+  .option('--port', 'Port the Service listens on (default 443)')
+  .option('--auth-key-file', 'Read the Tailscale credential from this file')
+  .option('--auth-key-stdin', 'Read the Tailscale credential from standard input', false)
+  .option('--ack-forward-auth', 'Acknowledge the private address bypasses forward-auth', false)
+  .option('--yes', 'Skip the restart confirmation', false)
+  .option('--no-stream', 'Do not watch the restart job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runTailscaleEnable } = await load(import('./commands/deployments/tailscale'));
+    await runTailscaleEnable(deploymentId, streamOpts(opts));
+  });
+
+prog
+  .command('tailscale login <deploymentId>')
+  .describe('Supply a new Tailscale credential, leaving the setting unchanged')
+  .example('tailscale login omnigraph-ab12cd34 --auth-key-file ./ts.key')
+  .option('--auth-key-file', 'Read the Tailscale credential from this file')
+  .option('--auth-key-stdin', 'Read the Tailscale credential from standard input', false)
+  .option('--no-stream', 'Do not watch the restart job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runTailscaleLogin } = await load(import('./commands/deployments/tailscale'));
+    await runTailscaleLogin(deploymentId, streamOpts(opts));
+  });
+
+prog
+  .command('tailscale disable <deploymentId>')
+  .describe('Disable private Tailscale ingress for a deployment')
+  .example('tailscale disable omnigraph-ab12cd34 --yes')
+  .option('--yes', 'Skip the confirmation', false)
+  .option('--no-stream', 'Do not watch the restart job', false)
+  .option('--json', 'Print the result as JSON', false)
+  .action(async (deploymentId, opts) => {
+    const { runTailscaleDisable } = await load(import('./commands/deployments/tailscale'));
+    await runTailscaleDisable(deploymentId, streamOpts(opts));
+  });
+
 // settings prerelease — the dashboard-wide gate that shows pre-release
 // (beta, rc) catalog channels in discovery chrome (spec 005). Never changes
 // what channel an installed copy follows — see `hola channel`.

@@ -47,6 +47,7 @@ import { usePrereleaseEnrolment } from '../hooks/usePrereleaseEnrolment';
 import { TransientNotice } from '../components/ui/TransientNotice';
 import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
 import { AppBackupCoverage } from '../components/BackupCoverage';
+import { TailscaleIngressCard } from '../components/TailscaleIngressCard';
 import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 
 // `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
@@ -449,8 +450,14 @@ export const DeploymentDetail: React.FC = () => {
     setRemoving(true);
     setRemoveError(null);
     try {
-      await removeDeployment(force ? { force: true } : undefined);
-      navigate('/deployments');
+      const res = await removeDeployment(force ? { force: true } : undefined);
+      // Private ingress (spec 010): the server names the tailnet device record
+      // the operator must still delete. Carry it to the list page, where it
+      // stays until dismissed rather than auto-dismissing like a plain notice.
+      const warnings = res?.warnings ?? [];
+      navigate('/deployments', warnings.length
+        ? { state: { notice: `${deployment.name} was removed. ${warnings.join(' ')}`, sticky: true } }
+        : undefined);
     } catch (error) {
       console.error('Error removing deployment:', error);
       const message = error instanceof Error ? error.message : 'Failed to remove deployment';
@@ -718,6 +725,9 @@ export const DeploymentDetail: React.FC = () => {
             {channelWarning && (
               <TransientNotice message={channelWarning} onDismiss={() => setChannelWarning(null)} />
             )}
+
+            {/* Private Tailscale ingress (spec 010). */}
+            <TailscaleIngressCard deploymentId={deployment.id} appName={deployment.app} />
 
             <div className="grid grid-cols-[1.5fr_1fr] gap-4">
               {/* Details */}

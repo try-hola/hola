@@ -209,6 +209,16 @@ describe('deployment lifecycle actions', () => {
     expect(process.exitCode).toBe(0);
   });
 
+  it('uninstall prints the warnings the server returns (spec 010: the device record left to delete)', async () => {
+    const sdk = makeSdk({
+      deployments: { delete: vi.fn(async () => ({ ok: true, warnings: ["Delete the device record 'hola-omnigraph'."] })) },
+    });
+    const lines: string[] = [];
+    vi.mocked(console.log).mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    await runUninstall('dep1', { yes: true }, { sdk: sdk as unknown as HolaSdk });
+    expect(lines).toContain("Warning: Delete the device record 'hola-omnigraph'.");
+  });
+
   // F09: the server refuses to uninstall when it cannot confirm the containers
   // stopped, so `--force` is the explicit separate operation that removes the
   // deployment anyway. It must reach the wire — a flag that is parsed, printed

@@ -166,8 +166,13 @@ export function reportDeployError(err: unknown, opts: { json?: boolean } = {}): 
         // ROLLBACK_REQUIRES_DATA_RESTORE (#584).
         snapshotAvailable?: boolean;
         boundaryVersions?: string[];
+        // TAILSCALE_SERVICE_NAME_TAKEN (spec 010).
+        deploymentId?: string;
       } | undefined)
     : undefined;
+  // Spec 010: the 400 codes are top-level, the 409 ones ride `details.code`
+  // under a CONFLICT envelope; either way one code decides the hint.
+  const tsCode = details?.code ?? (err instanceof HolaApiError ? err.code : undefined);
   if (details?.code === 'ALREADY_INSTALLED' && details.existing) {
     const { id, name, channel } = details.existing;
     if (details.restore) {
@@ -248,6 +253,22 @@ export function reportDeployError(err: unknown, opts: { json?: boolean } = {}): 
           `if you know it can read the migrated data.`,
       );
     }
+  }
+  // Private Tailscale ingress (spec 010). Hints never mention the credential.
+  else if (tsCode === 'TAILSCALE_SERVICE_NAME_TAKEN') {
+    hint(
+      `Hint: that Tailscale Service name is already used by ${details?.deploymentId ? `deployment ${details.deploymentId}` : 'another deployment on this host'}. ` +
+        `Choose a different --service, or free it with 'hola tailscale disable ${details?.deploymentId ?? '<deploymentId>'}'.`,
+    );
+  } else if (tsCode === 'TAILSCALE_FORWARD_AUTH_ACK_REQUIRED') {
+    hint(
+      'Hint: this app is gated by forward-auth at its normal address, and the private address does not pass through that gate. ' +
+        'Re-run with --ack-forward-auth to confirm you accept that.',
+    );
+  } else if (tsCode === 'TAILSCALE_CREDENTIAL_REQUIRED') {
+    hint('Hint: supply a Tailscale credential with --auth-key-file <path> or --auth-key-stdin (never as a flag value).');
+  } else if (tsCode === 'DEPLOYMENT_BUSY') {
+    hint('Hint: another operation is in flight for this deployment. Wait for it to finish, then retry.');
   }
   // #246: a single-instance app already installed (older/untyped error shape,
   // e.g. a pre-spec-005 server) — the message already names the

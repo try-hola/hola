@@ -12,6 +12,7 @@ import {
   GetDeploymentsRequest, GetDeploymentsResponse, GetDeploymentResponse,
   PatchDeploymentRequest, PatchDeploymentResponse,
   PostDeploymentActionRequest, PostDeploymentActionResponse,
+  GetTailscaleIngressResponse, SetTailscaleIngressRequest, SetTailscaleIngressResponse, DisableTailscaleIngressResponse,
   RollbackRequest, RollbackResponse, GetDeploymentHistoryResponse,
   PromoteDeploymentRequest, PromoteDeploymentResponse,
   GetDeploymentConfigResponse,
@@ -107,6 +108,15 @@ export class HolaSdk {
   async post<T>(path: string, body?: unknown): Promise<T> {
     const res = await this.fetchImpl(this.url(path), {
       method: 'POST',
+      headers: this.headers(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    return parseJson<T>(res);
+  }
+
+  async put<T>(path: string, body?: unknown): Promise<T> {
+    const res = await this.fetchImpl(this.url(path), {
+      method: 'PUT',
       headers: this.headers(),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
@@ -222,8 +232,20 @@ export class HolaSdk {
     // when the app's containers cannot be confirmed stopped, and this is the
     // separate, opt-in way past that for a genuinely wedged container. It can
     // leave orphaned containers behind.
+    // `warnings` carries what the operator must still do by hand — today the
+    // private-ingress device record to delete in the Tailscale admin console (spec 010).
     delete: (deploymentId: string, opts?: { force?: boolean }) =>
-      this.delete<void>(`${API.deployments.byId(deploymentId)}${opts?.force ? '?force=true' : ''}`),
+      this.delete<{ ok: true; warnings?: string[] } | undefined>(`${API.deployments.byId(deploymentId)}${opts?.force ? '?force=true' : ''}`),
+    // Opt-in private Tailscale ingress (spec 010). The credential only ever
+    // travels in `set`'s request body; no response contains it.
+    tailscaleIngress: {
+      get: (deploymentId: string, opts?: { refresh?: boolean }) =>
+        this.get<GetTailscaleIngressResponse>(`${API.deployments.tailscaleIngress(deploymentId)}${buildQuery({ refresh: opts?.refresh })}`),
+      set: (deploymentId: string, body: SetTailscaleIngressRequest) =>
+        this.put<SetTailscaleIngressResponse>(API.deployments.tailscaleIngress(deploymentId), body),
+      disable: (deploymentId: string) =>
+        this.delete<DisableTailscaleIngressResponse>(API.deployments.tailscaleIngress(deploymentId)),
+    },
     history: (deploymentId: string, qs?: Record<string, string | number | boolean | undefined>) => this.get<GetDeploymentHistoryResponse>(`${API.deployments.history(deploymentId)}${buildQuery(qs)}`),
     action: (deploymentId: string, action: PostDeploymentActionRequest) => this.post<PostDeploymentActionResponse>(API.deployments.actions(deploymentId), action),
     rollback: (deploymentId: string, rollback: RollbackRequest) => this.post<RollbackResponse>(API.deployments.rollback(deploymentId), rollback),

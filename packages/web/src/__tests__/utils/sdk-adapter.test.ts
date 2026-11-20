@@ -26,6 +26,12 @@ describe('SDK Adapter', () => {
     expect(sdkAdapter.settings).toBeDefined();
   });
 
+  it('exposes private Tailscale ingress get/set/disable (spec 010)', () => {
+    expect(sdkAdapter.deployments.tailscaleIngress.get).toBeTypeOf('function');
+    expect(sdkAdapter.deployments.tailscaleIngress.set).toBeTypeOf('function');
+    expect(sdkAdapter.deployments.tailscaleIngress.disable).toBeTypeOf('function');
+  });
+
   it('should have cache management methods', () => {
     expect(sdkAdapter.cache.clear).toBeDefined();
     expect(sdkAdapter.cache.invalidate).toBeDefined();

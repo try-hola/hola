@@ -108,6 +108,9 @@ export const API = {
     // Run a push target's manifest-declared postHook after the bytes have landed
     // (#409). Returns PostDeploymentPushHookResponse.
     pushHook: (deploymentId: string) => `/api/deployments/${deploymentId}/push-hooks`,
+    // Opt-in private Tailscale ingress for one deployment (spec 010). GET reads
+    // setting + status + guidance; PUT replaces the setting; DELETE disables.
+    tailscaleIngress: (deploymentId: string) => `/api/deployments/${deploymentId}/tailscale-ingress`,
   },
 
   jobs: {
@@ -1838,6 +1841,9 @@ export type DeploymentDetail = {
   lineageId?: string;
   restoreFrom?: RestoreChoice;
   restoredAt?: string;
+  // Opt-in private Tailscale ingress (spec 010), summary only: no live status
+  // here (detail and list reads must not run an exec).
+  tailscaleIngress?: TailscaleIngressSummary;
   // The release a default rollback would move to, with whether a data-aware
   // rollback is possible and whether an image-only one crosses a one-way
   // upgrade boundary (#584). Detail only, derived on read; absent when there
@@ -2242,6 +2248,8 @@ export type MetricsResponse = {
 // Documentation utilities
 // ------------------------------------------------------
 export * from './docs';
+export * from './tailscale-ingress';
+import type { TailscaleIngressSetting, TailscaleIngressSummary } from './tailscale-ingress';
 
 // ------------------------------------------------------
 // Phase 7 core types - simplified for production use
@@ -2282,7 +2290,8 @@ export type ComposeIssueCode =
   | 'PRIVILEGED_SERVICE'
   | 'FILE_SOURCE_NOT_ALLOWED'
   | 'UNKNOWN_PLATFORM_TOKEN'
-  | 'RESERVED_SERVICE_NAME';
+  | 'RESERVED_SERVICE_NAME'
+  | 'RESERVED_NETWORK_NAME';
 
 /**
  * Stable, machine-readable codes emitted by typed app-parameter validation
@@ -2509,6 +2518,9 @@ export type EnhancedDeploymentDetail = DeploymentDetail & {
   // consumption marker: a restart/promote/rollback finds it set and skips the
   // restore sequence — a restore applies to the first deploy only.
   restoredAt?: string;
+  // Opt-in private Tailscale ingress (spec 010): the full persisted setting.
+  // Never contains the joining credential. Absent = off.
+  tailscaleIngress?: TailscaleIngressSetting;
   metadata: {
     createdAt: string;
     owner?: string;

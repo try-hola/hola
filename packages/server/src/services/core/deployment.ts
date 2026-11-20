@@ -59,6 +59,32 @@ import type {
   RestoreChoice,
   RollbackTarget,
 } from '@hola/shared';
+import {
+  TAILSCALE_SERVICE,
+  TAILSCALE_BACKEND_NETWORK,
+  TAILSCALE_EGRESS_NETWORK,
+  TAILSCALE_STATE_VOLUME,
+  DEFAULT_TAILSCALE_TAG,
+  DEFAULT_TAILSCALE_LISTEN_PORT,
+  validateTailscaleIngressInput,
+  buildTailscaleGuidance,
+  type TailscaleIngressSetting,
+  type TailscaleIngressStatus,
+  type TailscaleIngressDefaults,
+  type TailscaleRemovalReport,
+  type GetTailscaleIngressResponse,
+  type SetTailscaleIngressResponse,
+  type DisableTailscaleIngressResponse,
+} from '@hola/shared';
+import { injectTailscaleIngress, TailscaleBackendError } from './compose-tailscale';
+import { tailscaleImage } from './platform-images';
+import {
+  RealTailscaleIngressService,
+  type TailscaleIngressService,
+  type TailscaleObservation,
+  type TailscaleSetting,
+  type TailscaleTarget,
+} from './tailscale-ingress';
 import { checkUpgradePath, compareVersions, isNewerVersion, slugifySubdomain, isEligibleOnChannel, newestEligibleVersion, STABLE_CHANNEL, type InstanceReason } from '@hola/shared';
 import {
   isEligibleCandidate,
@@ -221,6 +247,9 @@ const RESTORE_HOOK_WAIT_TIMEOUT_MS = 900_000; // 15 minutes
  * deploy runs immediately beforehand.
  */
 const COMPOSE_UP_TIMEOUT_MS = 900_000; // 15 minutes
+/** Private-ingress status cache lifetime and the window a not-yet-answering companion reads as "starting" (spec 010). */
+const TS_STATUS_TTL_MS = 30_000;
+const TS_STARTING_WINDOW_MS = 60_000;
 
 /**
  * Reserved locations for this feature's platform-authored JSON records (spec
@@ -480,6 +509,11 @@ export interface ResolveUpgradeTargetOptions {
   detail?: GetDeploymentResponse;
 }
 
+/** What an uninstall may report back beyond success (spec 010: the private-ingress removal message). */
+export interface DeleteDeploymentResult {
+  warnings?: string[];
+}
+
 export interface DeploymentService extends HealthCheckable {
   /**
    * Rehydrate persisted state now rather than on the first request. Startup calls
@@ -608,7 +642,12 @@ export interface DeploymentService extends HealthCheckable {
    * and removes storage and data regardless of what `docker compose down` said.
    * It can orphan containers. Never a default, never a retry.
    */
-  deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void>;
+  deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void | DeleteDeploymentResult>;
+
+  // Opt-in private Tailscale ingress (spec 010)
+  getTailscaleIngress(deploymentId: string, options?: { refresh?: boolean }): Promise<GetTailscaleIngressResponse>;
+  setTailscaleIngress(deploymentId: string, body: unknown): Promise<SetTailscaleIngressResponse>;
+  disableTailscaleIngress(deploymentId: string): Promise<DisableTailscaleIngressResponse>;
 
   // Deployment actions
   executeAction(deploymentId: string, request: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse>;
@@ -720,6 +759,10 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     ...(d.lineageId ? { lineageId: d.lineageId } : {}),
     ...(d.restoreFrom ? { restoreFrom: d.restoreFrom } : {}),
     ...(d.restoredAt ? { restoredAt: d.restoredAt } : {}),
+    // Private Tailscale ingress (spec 010): summary only, no exec on a detail read.
+    ...(d.tailscaleIngress
+      ? { tailscaleIngress: { enabled: d.tailscaleIngress.enabled, serviceName: d.tailscaleIngress.serviceName } }
+      : {}),
   };
 }
 
@@ -962,6 +1005,41 @@ abstract class InMemoryDeploymentService implements DeploymentService {
 
   async warmUp(): Promise<void> {
     await this.ensureLoaded();
+  }
+
+  // Private Tailscale ingress (spec 010). The in-memory/mock service has no
+  // companion to drive: the real service overrides all of these.
+  async getTailscaleIngress(deploymentId: string, options?: { refresh?: boolean }): Promise<GetTailscaleIngressResponse> {
+    void deploymentId; void options;
+    throw new ServiceError('Private Tailscale ingress is not available in this mode.');
+  }
+  async setTailscaleIngress(deploymentId: string, body: unknown): Promise<SetTailscaleIngressResponse> {
+    void deploymentId; void body;
+    throw new ServiceError('Private Tailscale ingress is not available in this mode.');
+  }
+  async disableTailscaleIngress(deploymentId: string): Promise<DisableTailscaleIngressResponse> {
+    void deploymentId;
+    throw new ServiceError('Private Tailscale ingress is not available in this mode.');
+  }
+  /** Sign the device out and withdraw its Service before uninstall. Base: nothing to do. */
+  protected async tsOffboard(deploymentId: string, setting: TailscaleIngressSetting): Promise<boolean> {
+    void deploymentId; void setting;
+    return false;
+  }
+  /** Remove the state volume, networks and any credential. Base: nothing to remove. */
+  protected async tsRemoveLocalState(deploymentId: string): Promise<void> {
+    void deploymentId;
+  }
+  protected tsRemovalMessage(nodeName: string, signedOut: boolean | null): string {
+    void signedOut;
+    return `Delete the device record '${nodeName}' in the Tailscale admin console.`;
+  }
+  protected tsInvalidate(deploymentId: string): void {
+    void deploymentId;
+  }
+  /** Drop every piece of per-deployment private-ingress bookkeeping (uninstall). Base: nothing kept. */
+  protected tsForget(deploymentId: string): void {
+    void deploymentId;
   }
 
   /** Rehydrate persisted deployments/releases from storage exactly once. */
@@ -2178,7 +2256,7 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return { ok: true, ...(warnings ? { warnings } : {}) };
   }
 
-  async deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void> {
+  async deleteDeployment(deploymentId: string, options?: { force?: boolean }): Promise<void | DeleteDeploymentResult> {
     await this.ensureLoaded();
     const force = options?.force === true;
     // Capture the live record up front so its provisioned-auth ref is available
@@ -2205,10 +2283,19 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     return this.jobService.runExclusive(deploymentId, () => this.performDelete(deploymentId, false));
   }
 
-  private async performDelete(deploymentId: string, force: boolean): Promise<void> {
+  private async performDelete(deploymentId: string, force: boolean): Promise<void | DeleteDeploymentResult> {
     // Re-read under the lock: the record may have gone while we waited.
     const deployment = this.deployments.get(deploymentId);
     if (!deployment) return;
+    const tsSetting = deployment.tailscaleIngress;
+    const warnings: string[] = [];
+
+    // Private ingress (spec 010): sign the device out BEFORE its container goes
+    // (best effort, bounded; skipped under force, which exists for a wedged stack).
+    let tsSignedOut = false;
+    if (tsSetting && !force) {
+      tsSignedOut = await this.tsOffboard(deploymentId, tsSetting);
+    }
 
     this.logger.info('Deleting deployment', { deploymentId, force });
 
@@ -2231,13 +2318,29 @@ abstract class InMemoryDeploymentService implements DeploymentService {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn('Failed to stop deployment before deletion', { deploymentId, error: message });
       if (!force) {
+        // Private ingress (spec 010): the sign-out above has to happen while the
+        // companion still runs, so it precedes the stop that just failed. The
+        // refusal must say so — the deployment is kept, but its tailnet identity
+        // is not, and status alone would not explain why.
+        const tsNote = tsSetting && tsSignedOut
+          ? ` Its private Tailscale ingress device '${tsSetting.nodeName}' was already signed out before the stop ` +
+            `failed; if you keep this app, supply a new credential (hola tailscale login) to restore private access.`
+          : '';
+        this.tsInvalidate(deploymentId);
         throw new ConflictError(
           `Refusing to uninstall '${deployment.name}': its containers could not be stopped, and removing its data ` +
             `while they are running risks corrupting it. Stop the app and retry, or uninstall with force to remove ` +
-            `the deployment anyway (this can leave orphaned containers). Cause: ${message}`,
+            `the deployment anyway (this can leave orphaned containers). Cause: ${message}${tsNote}`,
           { code: 'TEARDOWN_FAILED', deploymentId },
         );
       }
+    }
+
+    // Private ingress: the state volume and networks outlive `compose down` (named
+    // volumes are never removed by it); remove them, force or not (spec 010, FR-026).
+    if (tsSetting) {
+      await this.tsRemoveLocalState(deploymentId);
+      warnings.push(this.tsRemovalMessage(tsSetting.nodeName, tsSignedOut));
     }
 
     // Tear down auth artifacts (OIDC client, etc.). Must never block deletion:
@@ -2281,6 +2384,8 @@ abstract class InMemoryDeploymentService implements DeploymentService {
     }
 
     await this.onDeploymentRemoved(deploymentId);
+    this.tsForget(deploymentId);
+    if (warnings.length) return { warnings };
   }
 
   async executeAction(deploymentId: string, request: PostDeploymentActionRequest): Promise<PostDeploymentActionResponse> {
@@ -2524,14 +2629,32 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // call its own broker endpoints (ADR 0004 §6). Absent ⇒ no token is injected,
     // so a provider simply can't announce its runs.
     private contractTokens?: ContractTokenService,
+    // Optional; drives the opt-in private Tailscale ingress companion (spec 010).
+    // Defaults to the real exec-driven implementation over this docker service.
+    tailscaleIngress?: TailscaleIngressService,
   ) {
     super(jobService);
+    this.tailscale = tailscaleIngress ?? new RealTailscaleIngressService(dockerService);
     // Perform real Compose lifecycle work when a deployment job runs.
     this.jobService.setExecutor(ctx => this.runLifecycleJob(ctx));
     this.brokerState = new BackupBrokerStateStore(storageService);
     this.restoreBroker = new RestoreBrokerStateStore(storageService);
     this.restoreIndex = new RestoreIndexStore(storageService);
   }
+
+  /** Private-ingress companion driver (spec 010). */
+  private readonly tailscale: TailscaleIngressService;
+  private readonly tsStatusCache = new Map<string, { at: number; status: TailscaleIngressStatus }>();
+  /** Why the companion was not rendered on the last materialise (missing/unsupported backend). */
+  private readonly tsBackendProblems = new Map<string, TailscaleBackendError>();
+  private readonly tsHookErrors = new Map<string, string>();
+  private readonly tsLastUp = new Map<string, number>();
+  private readonly tsRemovalReports = new Map<string, TailscaleRemovalReport>();
+  private readonly tsPendingSignedOut = new Map<string, boolean>();
+  /** After-up hook tuning (overridable in tests to avoid real waits). */
+  tsPollIntervalMs = 2000;
+  tsHookBudgetMs = 60_000;
+  tsOffboardBudgetMs = 20_000;
 
   /** Broker bookkeeping for `backup@1` — see backup-broker-state.ts. */
   private readonly brokerState: BackupBrokerStateStore;
@@ -2857,6 +2980,35 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     if (grantedKinds.includes('restore-staging')) {
       content = injectWritableMount(content, { hostPath: this.restoreStagingRoot() });
       platformMounts.push(this.restoreStagingRoot());
+    }
+
+    // Opt-in private Tailscale ingress (spec 010): LAST, after every other
+    // platform transform, so the companion receives no contract token, no
+    // DOCKER_HOST, no staging/apps-data mount and no `hola` membership (R6).
+    // Nothing is added unless the operator enabled it.
+    this.tsBackendProblems.delete(deployment.id);
+    if (deployment.tailscaleIngress?.enabled === true) {
+      const ts = deployment.tailscaleIngress;
+      try {
+        content = injectTailscaleIngress(content, {
+          image: tailscaleImage(),
+          backendService: ts.backend.service,
+          nodeName: ts.nodeName,
+          labels,
+          logging: composeDefaultsConfig.logMaxSize
+            ? { driver: 'json-file', options: { 'max-size': composeDefaultsConfig.logMaxSize, 'max-file': composeDefaultsConfig.logMaxFile } }
+            : undefined,
+        });
+      } catch (error) {
+        if (!(error instanceof TailscaleBackendError)) throw error;
+        // FR-028: the app deploys; nothing is forwarded; status names the problem.
+        this.tsBackendProblems.set(deployment.id, error);
+        this.logger.warn('Private ingress backend unavailable in the active release; rendering without the companion', {
+          deploymentId: deployment.id,
+          backendService: error.backendService,
+          reason: error.reason,
+        });
+      }
     }
 
     // The runtime compose may hold a client secret in cleartext; restrict it.
@@ -3652,6 +3804,563 @@ export class RealDeploymentService extends InMemoryDeploymentService {
   /** The active release's declared ingress/web compose service, if any. */
   private async readActiveIngressService(deployment: EnhancedDeploymentDetail): Promise<string | undefined> {
     return (await this.readActiveManifest(deployment))?.ingressService;
+  }
+
+  // ───────────────────────── Private Tailscale ingress (spec 010) ─────────────────────────
+
+  private tsCredentialPath(deploymentId: string): string {
+    return `deployments/${deploymentId}/tailscale/credential`;
+  }
+
+  private tsTarget(deploymentId: string): TailscaleTarget {
+    return {
+      projectPath: this.runtimeDir(deploymentId),
+      projectName: this.projectName(deploymentId),
+      profiles: this.deployments.get(deploymentId)?.selectedProfiles,
+    };
+  }
+
+  private tsStateVolume(deploymentId: string): string {
+    return `${this.projectName(deploymentId)}_${TAILSCALE_STATE_VOLUME}`;
+  }
+
+  private tsNetworks(deploymentId: string): string[] {
+    return [TAILSCALE_BACKEND_NETWORK, TAILSCALE_EGRESS_NETWORK].map((n) => `${this.projectName(deploymentId)}_${n}`);
+  }
+
+  private async tsCredentialHeld(deploymentId: string): Promise<boolean> {
+    return this.storageService.fileExists(this.tsCredentialPath(deploymentId));
+  }
+
+  private async tsDeleteCredential(deploymentId: string): Promise<void> {
+    try {
+      if (await this.tsCredentialHeld(deploymentId)) await this.storageService.deleteFile(this.tsCredentialPath(deploymentId));
+    } catch (error) {
+      this.logger.warn('Could not delete the private-ingress credential file', {
+        deploymentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /** Services declared by the active release's compose, for backend choice and validation. */
+  private async tsDeclaredServices(deployment: EnhancedDeploymentDetail): Promise<Array<{ name: string; hasNetworkMode: boolean }>> {
+    if (!deployment.currentReleaseId) return [];
+    const src = `deployments/${deployment.id}/releases/${deployment.currentReleaseId}/compose-override.yml`;
+    try {
+      if (!(await this.storageService.fileExists(src))) return [];
+      const doc = parseYaml(await this.storageService.readFileAsString(src)) as { services?: Record<string, Record<string, unknown> | null> } | null;
+      return Object.entries(doc?.services ?? {}).map(([name, svc]) => ({ name, hasNetworkMode: svc?.network_mode !== undefined }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async tsDefaults(deployment: EnhancedDeploymentDetail): Promise<TailscaleIngressDefaults> {
+    const services = await this.tsDeclaredServices(deployment);
+    const ingress = (await this.readActiveIngressService(deployment).catch(() => undefined)) ?? deployment.app;
+    const names = services.map((s) => s.name);
+    const service = names.includes(ingress) ? ingress : (names[0] ?? ingress);
+    const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
+    const port = release?.ports?.[0]?.container ?? null;
+    return {
+      backend: { service, port },
+      services: names,
+      tag: DEFAULT_TAILSCALE_TAG,
+      mode: 'https',
+      listenPort: DEFAULT_TAILSCALE_LISTEN_PORT,
+      requiresForwardAuthAcknowledgement: await this.tsRequiresForwardAuthAck(deployment),
+    };
+  }
+
+  private async tsRequiresForwardAuthAck(deployment: EnhancedDeploymentDetail): Promise<boolean> {
+    if (deployment.metadata?.auth?.mode === 'forward-auth') return true;
+    if (deployment.metadata?.auth) return false;
+    const declared = await this.readActiveAuth(deployment).catch(() => undefined);
+    return declared?.mode === 'forward-auth';
+  }
+
+  private tsSettingForDriver(setting: TailscaleIngressSetting): TailscaleSetting {
+    return {
+      serviceName: setting.serviceName,
+      tag: setting.tag,
+      mode: setting.mode,
+      listenPort: setting.listenPort,
+      nodeName: setting.nodeName,
+      backend: { port: setting.backend.port },
+    };
+  }
+
+  protected override tsInvalidate(deploymentId: string): void {
+    this.tsStatusCache.delete(deploymentId);
+  }
+
+  protected override tsForget(deploymentId: string): void {
+    this.tsStatusCache.delete(deploymentId);
+    this.tsBackendProblems.delete(deploymentId);
+    this.tsHookErrors.delete(deploymentId);
+    this.tsLastUp.delete(deploymentId);
+    this.tsRemovalReports.delete(deploymentId);
+    this.tsPendingSignedOut.delete(deploymentId);
+  }
+
+  protected override tsRemovalMessage(nodeName: string, signedOut: boolean | null): string {
+    const base = `Delete the device record '${nodeName}' in the Tailscale admin console (Machines) so it does not linger.`;
+    if (signedOut === true) return `The device '${nodeName}' was signed out of the tailnet and no longer serves. ${base}`;
+    if (signedOut === false) {
+      return `The device '${nodeName}' could NOT be signed out and may still be signed in to your tailnet. Remove it in the Tailscale admin console (Machines > ${nodeName} > Delete) to revoke it. ${base}`;
+    }
+    return `Disabling: the device '${nodeName}' will be signed out when the app restarts. ${base}`;
+  }
+
+  /** Bound a best-effort step so a hung tailnet can never hold a job. */
+  private async tsBounded<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<T>((resolve) => {
+          timer = setTimeout(() => resolve(fallback), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  override async getTailscaleIngress(deploymentId: string, options?: { refresh?: boolean }): Promise<GetTailscaleIngressResponse> {
+    await this.ensureLoaded();
+    const deployment = this.requireDeployment(deploymentId);
+    const setting = deployment.tailscaleIngress ?? null;
+    const defaults = await this.tsDefaults(deployment);
+    const guidance = buildTailscaleGuidance(
+      setting
+        ? { serviceName: setting.serviceName, tag: setting.tag, listenPort: setting.listenPort, mode: setting.mode }
+        : {
+            serviceName: `svc:${slugifySubdomain(deployment.app) || 'app'}`,
+            tag: defaults.tag,
+            listenPort: defaults.listenPort,
+            mode: defaults.mode,
+          },
+    );
+    return {
+      setting,
+      credentialHeld: await this.tsCredentialHeld(deploymentId),
+      defaults,
+      status: await this.tsComputeStatus(deployment, options?.refresh === true),
+      guidance,
+    };
+  }
+
+  private async tsComputeStatus(deployment: EnhancedDeploymentDetail, refresh: boolean): Promise<TailscaleIngressStatus> {
+    const observedAt = new Date().toISOString();
+    const setting = deployment.tailscaleIngress;
+    if (!setting || !setting.enabled) {
+      const report = this.tsRemovalReports.get(deployment.id);
+      return {
+        state: 'off',
+        message: setting?.removalPending
+          ? this.tsRemovalMessage(setting.nodeName, null)
+          : report?.message ?? 'Private Tailscale ingress is off.',
+        observedAt,
+      };
+    }
+    const base = { port: setting.listenPort, nodeName: setting.nodeName, observedAt };
+
+    // Decided from the active release at READ time so it survives a server restart.
+    const declared = await this.tsDeclaredServices(deployment);
+    const backend = declared.find((s) => s.name === setting.backend.service);
+    if (!backend || backend.hasNetworkMode) {
+      return {
+        ...base,
+        state: 'error',
+        message: !backend
+          ? `The backend service '${setting.backend.service}' is not declared by the active release (an upgrade or rollback removed it), so nothing is forwarded.`
+          : `The backend service '${setting.backend.service}' uses network_mode and cannot be attached, so nothing is forwarded.`,
+        action: 'Choose a backend service the active release declares (Edit private ingress).',
+      };
+    }
+
+    if (deployment.status !== 'running') {
+      return { ...base, state: 'disconnected', message: 'The app is not running, so the private address is not serving.' };
+    }
+
+    const cached = this.tsStatusCache.get(deployment.id);
+    if (!refresh && cached && Date.now() - cached.at < TS_STATUS_TTL_MS) return cached.status;
+
+    const obs = await this.tailscale.observe(this.tsTarget(deployment.id), setting.serviceName);
+    let status: TailscaleIngressStatus;
+    const hookError = this.tsHookErrors.get(deployment.id);
+    if (obs.probeFailed) {
+      const sinceUp = Date.now() - (this.tsLastUp.get(deployment.id) ?? 0);
+      status = sinceUp < TS_STARTING_WINDOW_MS
+        ? { ...base, state: 'starting', message: 'The companion is starting.' }
+        : {
+            ...base,
+            state: 'error',
+            message: 'The companion is not responding.',
+            action: 'Restart the app. If this persists, check the app logs for the hola-tailscale container.',
+          };
+    } else if (hookError && obs.state !== 'connected' && obs.state !== 'needs-sign-in') {
+      status = { ...base, state: 'error', message: hookError, action: 'Fix the cause, then restart the app to retry.' };
+    } else {
+      status = { ...base, state: obs.state, message: obs.message, ...(obs.dnsName ? { dnsName: obs.dnsName } : {}), ...(obs.addresses ? { addresses: obs.addresses } : {}) };
+      if (obs.state === 'needs-sign-in') {
+        status.action = (await this.tsCredentialHeld(deployment.id))
+          ? 'A credential is held but sign-in has not completed. Check it is valid and unexpired, supply a new one if not, then restart the app.'
+          : 'Supply a new Tailscale credential (the device identity expired, was revoked, or was never signed in).';
+        if (hookError) status.message = hookError;
+      } else if (obs.state === 'waiting-for-approval') {
+        status.action = `In the Tailscale admin console: define the Service ${setting.serviceName} if you have not, then approve this host (${setting.nodeName}) for it, or add an auto-approver.`;
+      } else if (obs.state === 'disconnected') {
+        status.action = 'Check the host can reach the internet and that the device was not expired or removed in the Tailscale admin console.';
+      } else if (obs.state === 'error') {
+        status.action = 'Restart the app; if it persists, check the hola-tailscale container logs.';
+      }
+    }
+    this.tsStatusCache.set(deployment.id, { at: Date.now(), status });
+    return status;
+  }
+
+  override async setTailscaleIngress(deploymentId: string, body: unknown): Promise<SetTailscaleIngressResponse> {
+    await this.ensureLoaded();
+    const deployment = this.requireDeployment(deploymentId);
+    const existing = deployment.tailscaleIngress;
+
+    const services = await this.tsDeclaredServices(deployment);
+    const defaults = await this.tsDefaults(deployment);
+    const credentialHeld = await this.tsCredentialHeld(deploymentId);
+    const result = validateTailscaleIngressInput(body, {
+      services,
+      defaultBackend: defaults.backend,
+      requiresForwardAuthAcknowledgement: defaults.requiresForwardAuthAcknowledgement,
+      identityEnrolled: Boolean(existing?.enrolledAt),
+      credentialHeld,
+    });
+    if (!result.ok) {
+      // Same shape as INVALID_CHANNEL: the specific code IS the top-level code.
+      const err = new ValidationError(result.message, {
+        ...(result.field ? { field: result.field } : {}),
+        ...(result.details ?? {}),
+      });
+      err.code = result.code;
+      throw err;
+    }
+    const v = result.value;
+    // An enrolled device keeps its name across a Service rename (the tailnet
+    // already knows it by that name), so the device name is decided here, once.
+    const nodeName = existing?.enrolledAt ? existing.nodeName : v.nodeName;
+
+    // One Service name — and one device name — per host, counting settings that
+    // still own a device. The device name is checked too: a rename keeps the old
+    // one, and `nodeNameFor` truncates, so two settings can derive the same name.
+    // Two companions with one hostname get a suffixed second record on the
+    // tailnet, and every cleanup message would then name the OTHER deployment's
+    // live device as the one to delete.
+    for (const other of this.deployments.values()) {
+      if (other.id === deploymentId) continue;
+      const o = other.tailscaleIngress;
+      if (!o || !(o.enabled || o.removalPending)) continue;
+      if (o.serviceName === v.serviceName) {
+        throw new ConflictError(`The Service name ${v.serviceName} is already used by another deployment on this host.`, {
+          code: 'TAILSCALE_SERVICE_NAME_TAKEN',
+          deploymentId: other.id,
+        });
+      }
+      if (o.nodeName === nodeName) {
+        throw new ConflictError(
+          `The Tailscale device name ${nodeName} (derived from ${v.serviceName}) is already used by another deployment on this host. Choose a different Service name.`,
+          { code: 'TAILSCALE_SERVICE_NAME_TAKEN', deploymentId: other.id },
+        );
+      }
+    }
+    if (existing?.removalPending) {
+      throw new ConflictError('Private ingress for this deployment is still being removed; wait for it to finish.', {
+        code: 'DEPLOYMENT_BUSY',
+        deploymentId,
+        operation: 'tailscale-ingress',
+      });
+    }
+    this.assertNotBusy(deploymentId, 'tailscale-ingress');
+
+    // The credential goes to a 0600 file and nowhere else: not the record, not the job payload, not a log line.
+    if (v.authKey) {
+      await this.storageService.ensureDir(`deployments/${deploymentId}/tailscale`, 0o700);
+      await this.storageService.writeFile(this.tsCredentialPath(deploymentId), v.authKey, 0o600);
+    }
+
+    const warnings: string[] = [];
+    if (existing?.enrolledAt && existing.tag !== v.tag) {
+      warnings.push('The device is already signed in; a changed tag takes effect only after disabling and re-enabling private ingress.');
+    }
+    const setting: TailscaleIngressSetting = {
+      enabled: true,
+      serviceName: v.serviceName,
+      tag: v.tag,
+      backend: v.backend,
+      mode: v.mode,
+      listenPort: v.listenPort,
+      forwardAuthAcknowledged: v.forwardAuthAcknowledged,
+      nodeName,
+      ...(existing?.applied ? { applied: existing.applied } : {}),
+      ...(existing?.enrolledAt ? { enrolledAt: existing.enrolledAt } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    deployment.tailscaleIngress = setting;
+    deployment.lastUpdated = new Date().toISOString();
+    this.deployments.set(deploymentId, deployment);
+    await this.persistDeployment(deployment);
+    this.tsInvalidate(deploymentId);
+    this.tsHookErrors.delete(deploymentId);
+    this.tsRemovalReports.delete(deploymentId);
+
+    let jobId: string | undefined;
+    if (deployment.status === 'running') {
+      ({ jobId } = await this.executeAction(deploymentId, { action: 'restart' }));
+    } else {
+      warnings.push('The app is not running; private ingress takes effect the next time it starts.');
+    }
+    return {
+      ok: true,
+      ...(jobId ? { jobId } : {}),
+      setting,
+      credentialHeld: await this.tsCredentialHeld(deploymentId),
+      ...(warnings.length ? { warnings } : {}),
+    };
+  }
+
+  override async disableTailscaleIngress(deploymentId: string): Promise<DisableTailscaleIngressResponse> {
+    await this.ensureLoaded();
+    const deployment = this.requireDeployment(deploymentId);
+    const setting = deployment.tailscaleIngress;
+    if (!setting) return { ok: true };
+    this.assertNotBusy(deploymentId, 'tailscale-ingress');
+
+    if (deployment.status === 'running') {
+      if (!setting.removalPending) {
+        deployment.tailscaleIngress = { ...setting, enabled: false, removalPending: true, updatedAt: new Date().toISOString() };
+        this.deployments.set(deploymentId, deployment);
+        await this.persistDeployment(deployment);
+        this.tsInvalidate(deploymentId);
+      }
+      const { jobId } = await this.executeAction(deploymentId, { action: 'restart' });
+      return { ok: true, jobId, removal: { nodeName: setting.nodeName, signedOut: null, message: this.tsRemovalMessage(setting.nodeName, null) } };
+    }
+
+    // Not `running` per the record — but the record can say so while the
+    // containers are up (a failed job leaves `error`, a crash mid-job leaves
+    // `installing`). So ask Docker rather than trust the status: a companion
+    // still running here must be signed out and removed now, or it outlives the
+    // setting as an orphan that `up -d` (no `--remove-orphans`) never removes,
+    // still signed in and still serving the Service. When it is genuinely gone
+    // (a stopped app), the device cannot be signed out; clean up locally.
+    return this.jobService.runExclusive(deploymentId, async () => {
+      let signedOut = false;
+      if (await this.tsCompanionRunning(deploymentId)) {
+        signedOut = await this.tsOffboard(deploymentId, setting);
+        const rm = await this.dockerService.composeRemoveService(
+          this.runtimeDir(deploymentId), this.projectName(deploymentId), TAILSCALE_SERVICE, deployment.selectedProfiles,
+        );
+        if (!rm.success) {
+          this.tsInvalidate(deploymentId);
+          throw new ServiceError(
+            'Could not remove the private-ingress companion container, so private ingress was left in place rather than half-removed. Retry, or stop the app and retry.',
+          );
+        }
+      }
+      await this.tsRemoveLocalState(deploymentId);
+      delete deployment.tailscaleIngress;
+      deployment.lastUpdated = new Date().toISOString();
+      this.deployments.set(deploymentId, deployment);
+      await this.persistDeployment(deployment);
+      this.tsInvalidate(deploymentId);
+      const removal: TailscaleRemovalReport = { nodeName: setting.nodeName, signedOut, message: this.tsRemovalMessage(setting.nodeName, signedOut) };
+      this.tsRemovalReports.set(deploymentId, removal);
+      return { ok: true as const, removal };
+    });
+  }
+
+  /** The volume, both networks and any held credential. Every step tolerates "already gone". */
+  protected override async tsRemoveLocalState(deploymentId: string): Promise<void> {
+    const vol = await this.dockerService.removeVolume(this.tsStateVolume(deploymentId));
+    if (!vol.success) this.logger.warn('Could not remove the private-ingress state volume', { deploymentId });
+    for (const net of this.tsNetworks(deploymentId)) {
+      const r = await this.dockerService.removeNetwork(net);
+      if (!r.success) this.logger.warn('Could not remove a private-ingress network', { deploymentId, network: net });
+    }
+    await this.tsDeleteCredential(deploymentId);
+  }
+
+  /** Withdraw the Service and sign the device out, best effort and bounded. Returns whether sign-out succeeded. */
+  protected override async tsOffboard(deploymentId: string, setting: TailscaleIngressSetting): Promise<boolean> {
+    const target = this.tsTarget(deploymentId);
+    const work = (async () => {
+      const serviceName = setting.applied?.serviceName ?? setting.serviceName;
+      await this.tailscale.withdraw(target, serviceName).catch(() => ({ ok: false }));
+      const out = await this.tailscale.signOut(target).catch(() => ({ ok: false }));
+      return out.ok;
+    })();
+    return this.tsBounded(work, this.tsOffboardBudgetMs, false);
+  }
+
+  private async tsCompanionRunning(deploymentId: string): Promise<boolean> {
+    try {
+      const ps = await this.dockerService.composePs(this.runtimeDir(deploymentId), this.projectName(deploymentId));
+      return ps.services.some((s) => s.name === TAILSCALE_SERVICE && s.state === 'running');
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Before `up`, disable-with-removal-pending: withdraw, sign out, remove the
+   * companion container. Runs BEFORE the compose is re-materialized, because
+   * `compose rm` needs the service to still be in the file, and `up -d` has no
+   * `--remove-orphans` (research R7). The only hook failure that fails a job.
+   */
+  private async tsBeforeUp(deployment: EnhancedDeploymentDetail, log: (l: 'info' | 'warn', m: string) => Promise<void>): Promise<void> {
+    const setting = deployment.tailscaleIngress;
+    if (!setting?.removalPending) return;
+    const id = deployment.id;
+    if (await this.tsCompanionRunning(id)) {
+      const signedOut = await this.tsOffboard(id, setting);
+      this.tsPendingSignedOut.set(id, signedOut);
+      const rm = await this.dockerService.composeRemoveService(this.runtimeDir(id), this.projectName(id), TAILSCALE_SERVICE, deployment.selectedProfiles);
+      if (!rm.success) {
+        throw new Error('Could not remove the private-ingress companion container; the deployment was left unchanged so it is not left half-removed.');
+      }
+      await log('info', 'Private ingress: companion removed');
+    } else if (!this.tsPendingSignedOut.has(id)) {
+      // Keep an outcome an earlier attempt recorded: a retry after a job that
+      // signed out and removed the companion, then failed later, finds no
+      // companion — which does not mean the sign-out failed.
+      this.tsPendingSignedOut.set(id, false);
+    }
+  }
+
+  /** After `up` in a job, for private ingress. Never throws (FR-027). */
+  private async tsAfterUp(deployment: EnhancedDeploymentDetail, log: (l: 'info' | 'warn', m: string) => Promise<void>): Promise<void> {
+    const setting = deployment.tailscaleIngress;
+    const id = deployment.id;
+    this.tsLastUp.set(id, Date.now());
+    if (!setting) return;
+    try {
+      if (setting.removalPending && !setting.enabled) {
+        await this.tsRemoveLocalState(id);
+        const signedOut = this.tsPendingSignedOut.get(id) ?? false;
+        this.tsPendingSignedOut.delete(id);
+        this.tsRemovalReports.set(id, { nodeName: setting.nodeName, signedOut, message: this.tsRemovalMessage(setting.nodeName, signedOut) });
+        delete deployment.tailscaleIngress;
+        this.deployments.set(id, deployment);
+        await this.persistDeployment(deployment);
+        await log('info', `Private ingress disabled. ${this.tsRemovalMessage(setting.nodeName, signedOut)}`);
+      } else if (setting.enabled) {
+        await this.tsEnabledAfterUp(deployment, setting, log);
+      }
+    } catch (error) {
+      this.tsHookErrors.set(id, 'Private ingress setup did not complete.');
+      this.logger.warn('Private ingress after-up hook failed', { deploymentId: id, error: error instanceof Error ? error.message : String(error) });
+      await log('warn', 'Private ingress setup did not complete; the app itself is unaffected.');
+    } finally {
+      this.tsInvalidate(id);
+    }
+  }
+
+  private async tsPoll(budgetEndsAt: number, probe: () => Promise<TailscaleObservation>, done: (o: TailscaleObservation) => boolean): Promise<TailscaleObservation> {
+    let obs = await probe();
+    while (!done(obs) && Date.now() + this.tsPollIntervalMs < budgetEndsAt) {
+      await new Promise((r) => setTimeout(r, this.tsPollIntervalMs));
+      obs = await probe();
+    }
+    return obs;
+  }
+
+  private async tsEnabledAfterUp(
+    deployment: EnhancedDeploymentDetail,
+    setting: TailscaleIngressSetting,
+    log: (l: 'info' | 'warn', m: string) => Promise<void>,
+  ): Promise<void> {
+    const id = deployment.id;
+    this.tsHookErrors.delete(id);
+    if (this.tsBackendProblems.has(id)) return; // companion not rendered; status reports why
+    const target = this.tsTarget(id);
+    const endsAt = Date.now() + this.tsHookBudgetMs;
+    const probe = () => this.tailscale.observe(target, setting.serviceName);
+
+    // An identity is only evidenced by a state that has one. `starting`
+    // (tailscaled's `NoState`, before it has loaded its state) and `error` (a
+    // status Hola could not read) say nothing either way, so neither may be
+    // taken for "already signed in" — that branch deletes the credential.
+    const hasIdentity = (o: TailscaleObservation) =>
+      !o.probeFailed && (o.state === 'connected' || o.state === 'waiting-for-approval' || o.state === 'disconnected');
+
+    let obs = await this.tsPoll(endsAt, probe, (o) => !o.probeFailed && o.state !== 'starting');
+    if (obs.probeFailed) {
+      this.tsHookErrors.set(id, 'The private-ingress companion did not respond after start.');
+      return;
+    }
+    if (obs.state === 'starting' || obs.state === 'error') {
+      this.tsHookErrors.set(id, 'The private-ingress companion did not report whether it is signed in; any credential was kept for a retry.');
+      await log('warn', 'Private ingress: the companion did not report a sign-in state; nothing was changed.');
+      return;
+    }
+
+    const held = await this.tsCredentialHeld(id);
+    let signedInNow = false;
+    if (obs.state === 'needs-sign-in') {
+      if (!held) return; // status reads needs-sign-in with its action
+      const credential = (await this.storageService.readFileAsString(this.tsCredentialPath(id))).trim();
+      const res = await this.tailscale.signIn(target, this.tsSettingForDriver(setting), credential);
+      if (!res.ok) {
+        this.tsHookErrors.set(id, res.message ?? 'Signing in to the tailnet failed.');
+        await log('warn', 'Private ingress: sign-in did not succeed; the credential was kept for a retry.');
+        return;
+      }
+      signedInNow = true;
+      await log('info', 'Private ingress: signed in to the tailnet');
+    } else if (held && hasIdentity(obs)) {
+      // Already signed in: a credential would only be a reusable secret at rest (FR-023).
+      await this.tsDeleteCredential(id);
+      await log('info', 'Private ingress: device already signed in; the supplied credential was discarded unused');
+    }
+
+    const desired = { serviceName: setting.serviceName, mode: setting.mode, listenPort: setting.listenPort, backendPort: setting.backend.port };
+    const a = setting.applied;
+    const same = !!a && a.serviceName === desired.serviceName && a.mode === desired.mode && a.listenPort === desired.listenPort && a.backendPort === desired.backendPort;
+    // Re-apply on EVERY after-up, even when `applied` matches (`serve` is
+    // idempotent). `applied` records what Hola last wrote, not what the device
+    // holds: a sign-in in this hook is a new login whose profile carries no
+    // serve config, and whether a bare tailscaled resumes a persisted Service
+    // across a container restart is unverified (research.md V1, whose stated
+    // fallback is exactly this). One exec per job is the price of not trusting it.
+    //
+    // `serve` adds a listener per port; it never removes the old one. So a
+    // changed name, mode or listen port must clear what was applied first, or
+    // the old listener keeps forwarding (and https<->tcp on one port conflicts).
+    // Only a changed backend port replaces in place.
+    if (a && (a.serviceName !== desired.serviceName || a.mode !== desired.mode || a.listenPort !== desired.listenPort)) {
+      await this.tailscale.withdraw(target, a.serviceName);
+    }
+    const applyRes = await this.tailscale.applyServe(target, this.tsSettingForDriver(setting));
+    if (!applyRes.ok) {
+      this.tsHookErrors.set(id, applyRes.message ?? 'Configuring the Service failed.');
+      await log('warn', 'Private ingress: the Service configuration was not applied.');
+    } else if (!same || signedInNow) {
+      setting.applied = desired;
+      setting.updatedAt = new Date().toISOString();
+      this.deployments.set(id, deployment);
+      await this.persistDeployment(deployment);
+    }
+
+    obs = await this.tsPoll(endsAt, probe, hasIdentity);
+    if (hasIdentity(obs)) {
+      if (!setting.enrolledAt) {
+        setting.enrolledAt = new Date().toISOString();
+        this.deployments.set(id, deployment);
+        await this.persistDeployment(deployment);
+      }
+      await this.tsDeleteCredential(id); // signed in: the credential is no longer needed
+    }
   }
 
   /** Absolute host base that holds every app's data root. */
@@ -5945,6 +6654,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         nextStatus = 'stopped';
         nextLifecycle = 'stopped';
       } else if (action === 'restart') {
+        // Private ingress removal must run while the companion is still in the compose file (spec 010).
+        await this.tsBeforeUp(deployment, logBoth);
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
         if (provisioned) await this.writeOidcCredentialsFile(deployment, provisioned, logBoth);
@@ -5981,6 +6692,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const restarted = await this.restartUntouchedServices(composeDir, projectName, before, deployment.selectedProfiles, logBoth);
         if (restarted.length > 0) output = `${output}\nRestarted: ${restarted.join(', ')}`;
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
+        // Private ingress after-up hook (spec 010). Never fails the job.
+        await this.tsAfterUp(deployment, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
@@ -6020,6 +6733,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         // this flag is the ONLY thing that changes about the no-restore path.
         const willRestore = Boolean(deployment.restoreFrom) && !deployment.restoredAt && !deployment.previousReleaseId;
 
+        // Private ingress removal must run while the companion is still in the compose file (spec 010).
+        await this.tsBeforeUp(deployment, logBoth);
         const provisioned = await this.provisionAuth(deployment);
         const composeDir = await this.materializeCompose(deployment, provisioned?.env ?? {});
         // Drop the provisioned OIDC creds file into the data root before `up` so a
@@ -6035,7 +6750,17 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         const registryAuth = await this.resolveRegistryAuth(deployment);
         await logBoth('info', 'Pulling images (first install can take several minutes)…');
         const pull = await this.dockerService.composePull(composeDir, projectName, registryAuth, deployment.selectedProfiles);
-        if (!pull.success) throw new Error(`Image pull failed: ${pull.output}`);
+        if (!pull.success) {
+          // A companion image that cannot be pulled fails the deploy like any other image (spec 010):
+          // name it, so the operator is not left guessing which of the stack's images it was.
+          const companion = deployment.tailscaleIngress?.enabled === true && !this.tsBackendProblems.has(deploymentId)
+            ? tailscaleImage()
+            : undefined;
+          const hint = companion && !pull.output.includes(companion)
+            ? ` (private ingress companion image: ${companion})`
+            : '';
+          throw new Error(`Image pull failed${hint}: ${pull.output}`);
+        }
         await ctx.setProgress(60);
 
         // Cooperative cancellation: bail out before recreating containers (the
@@ -6063,10 +6788,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         output = res.output;
         if (!res.success) throw new Error(res.output);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
+        // Private ingress after-up hook (spec 010). Never fails the job.
+        await this.tsAfterUp(deployment, logBoth);
         nextStatus = 'running';
         nextLifecycle = 'active';
       }
 
+      this.tsInvalidate(deploymentId);
       if (output) await logBoth('info', output);
       await ctx.setProgress(90);
 
@@ -6082,6 +6810,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       await logBoth('info', `Deployment action '${action}' completed`);
       return true;
     } catch (error) {
+      this.tsInvalidate(deploymentId);
       deployment.status = 'error';
       deployment.lastUpdated = new Date().toISOString();
       this.deployments.set(deploymentId, deployment);

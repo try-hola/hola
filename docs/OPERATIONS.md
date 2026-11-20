@@ -357,8 +357,12 @@ When an app is deployed, the server writes a Traefik router/service for it into
 `/data/runtime/traefik/dynamic.yml` (and records canonical state in
 `routing-map.json`). Traefik watches that file and picks up the route
 automatically. For Traefik to reach the app, the app's Compose services join the
-external `hola` network under the service name Hola expects. Ingress is
-Traefik-only — apps do not publish host ports.
+external `hola` network under the service name Hola expects. Traefik is the
+default ingress — apps do not publish host ports; the only other path is the
+opt-in private Tailscale address below.
+
+An app can also be given an opt-in, per-app *private* address on your Tailscale network,
+beside its normal one; see [Private Tailscale ingress](TAILSCALE_INGRESS.md).
 
 ### The Traefik dashboard requires a credential
 

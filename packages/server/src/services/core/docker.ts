@@ -54,6 +54,18 @@ export interface DockerLogs {
   nextSince?: string;
 }
 
+/** Options for `composeExec`. */
+export interface ComposeExecOptions {
+  user?: string;
+  profiles?: string[];
+  /** Written to the command's stdin. Never logged and never placed in argv. */
+  input?: string;
+  /** Log no output at any level, on success or failure: only the service name and exit status. */
+  quiet?: boolean;
+  /** Overrides the 60 s default. */
+  timeoutMs?: number;
+}
+
 export interface DockerService {
   // Docker availability and info
   getDockerInfo(): Promise<DockerInfo>;
@@ -105,8 +117,16 @@ export interface DockerService {
     projectName: string,
     service: string,
     command: string[],
-    opts?: { user?: string; profiles?: string[] }
+    opts?: ComposeExecOptions
   ): Promise<{ success: boolean; output: string }>;
+  /** Stop and remove ONE service container (`compose rm -sf <service>`). Compose never
+   *  removes a service that was dropped from the file, so this is how a platform-injected
+   *  companion is taken out (spec 010). Succeeds when the container is already absent. */
+  composeRemoveService(projectPath: string, projectName: string, service: string, profiles?: string[]): Promise<{ success: boolean; output: string }>;
+  /** Remove a named volume. Succeeds when it is already absent. */
+  removeVolume(name: string): Promise<{ success: boolean; output: string }>;
+  /** Remove a network. Succeeds when it is already absent. */
+  removeNetwork(name: string): Promise<{ success: boolean; output: string }>;
 
   // Log operations
   getContainerLogs(containerName: string, since?: string, tail?: number): Promise<DockerLogs>;
@@ -534,26 +554,77 @@ export class RealDockerService implements DockerService, HealthCheckable {
     projectName: string,
     service: string,
     command: string[],
-    opts?: { user?: string; profiles?: string[] }
+    opts?: ComposeExecOptions
   ): Promise<{ success: boolean; output: string }> {
     const composeFile = join(projectPath, 'docker-compose.yml');
     // Build argv directly (no shell) so provisioned values can't be injected.
     const args = ['compose', '-f', composeFile, '-p', projectName, 'exec', '-T'];
     if (opts?.user) args.push('--user', opts.user);
     args.push(service, ...command);
+    const quiet = opts?.quiet === true;
     try {
       // Carry active profiles so an exec targeting a profiled service (#162) still
       // resolves it — Compose treats a service in an inactive profile as unknown.
       const env = appComposeEnv({ profiles: opts?.profiles });
-      const { stdout, stderr } = await execFileAsync('docker', args, { cwd: projectPath, timeout: 60000, env });
+      const pending = execFileAsync('docker', args, { cwd: projectPath, timeout: opts?.timeoutMs ?? 60000, env });
+      if (opts?.input !== undefined) {
+        // stdin only: the value never reaches argv or a log line. An EPIPE (the
+        // command exited without reading) surfaces through the exec result.
+        pending.child.stdin?.on('error', () => undefined);
+        pending.child.stdin?.end(opts.input);
+      }
+      const { stdout, stderr } = await pending;
       const output = [stdout, stderr].filter(Boolean).join('\n');
-      this.logger.info('Compose exec succeeded', { projectName, service, output: output.substring(0, 1000) });
+      if (quiet) this.logger.info('Compose exec succeeded', { projectName, service, quiet: true });
+      else this.logger.info('Compose exec succeeded', { projectName, service, output: output.substring(0, 1000) });
       return { success: true, output };
     } catch (error) {
       // execFile rejects on non-zero exit; surface stdout+stderr+message for the caller.
+      const e = error as { stdout?: string; stderr?: string; message?: string; code?: unknown };
+      const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n');
+      if (quiet) this.logger.warn('Compose exec failed', { projectName, service, quiet: true, exitStatus: e.code });
+      else this.logger.warn('Compose exec failed', { projectName, service, output: output.substring(0, 1000) });
+      return { success: false, output };
+    }
+  }
+
+  async composeRemoveService(projectPath: string, projectName: string, service: string, profiles?: string[]): Promise<{ success: boolean; output: string }> {
+    const composeFile = join(projectPath, 'docker-compose.yml');
+    try {
+      this.logger.info('Removing compose service', { projectName, service });
+      // argv, no shell: `rm -s -f` stops then removes, and is a no-op for an absent container.
+      const { stdout, stderr } = await execFileAsync(
+        'docker',
+        ['compose', '-f', composeFile, '-p', projectName, 'rm', '-s', '-f', service],
+        { cwd: projectPath, timeout: 60000, env: appComposeEnv({ profiles }) },
+      );
+      return { success: true, output: [stdout, stderr].filter(Boolean).join('\n') };
+    } catch (error) {
       const e = error as { stdout?: string; stderr?: string; message?: string };
       const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n');
-      this.logger.warn('Compose exec failed', { projectName, service, output: output.substring(0, 1000) });
+      this.logger.warn('Failed to remove compose service', { projectName, service, output: output.substring(0, 1000) });
+      return { success: false, output };
+    }
+  }
+
+  async removeVolume(name: string): Promise<{ success: boolean; output: string }> {
+    return this.removeDockerObject('volume', name);
+  }
+
+  async removeNetwork(name: string): Promise<{ success: boolean; output: string }> {
+    return this.removeDockerObject('network', name);
+  }
+
+  /** `docker <kind> rm <name>`, treating "no such object" as success (idempotent cleanup). */
+  private async removeDockerObject(kind: 'volume' | 'network', name: string): Promise<{ success: boolean; output: string }> {
+    try {
+      const { stdout, stderr } = await execFileAsync('docker', [kind, 'rm', name], { timeout: 30000, env: appComposeEnv({}) });
+      return { success: true, output: [stdout, stderr].filter(Boolean).join('\n') };
+    } catch (error) {
+      const e = error as { stdout?: string; stderr?: string; message?: string };
+      const output = [e.stdout, e.stderr, e.message].filter(Boolean).join('\n');
+      if (/no such (volume|network)|not found/i.test(output)) return { success: true, output };
+      this.logger.warn(`Failed to remove docker ${kind}`, { name, output: output.substring(0, 500) });
       return { success: false, output };
     }
   }
@@ -940,16 +1011,59 @@ export class MockDockerService implements DockerService {
     return { success: true, output: `[mock] Project ${projectName} restarted` };
   }
 
+  /**
+   * Every `composeExec` call, in order, WITH its full argv and stdin `input`:
+   * a test asserting the joining credential travelled only on stdin needs both
+   * sides (spec 010, SC-007).
+   */
+  readonly composeExecCalls: Array<{
+    projectName: string;
+    service: string;
+    command: string[];
+    input?: string;
+    quiet?: boolean;
+    user?: string;
+    timeoutMs?: number;
+  }> = [];
+  /** Optional scripted exec result; return undefined to fall through to the default success. */
+  execHandler?: (call: { service: string; command: string[]; input?: string }) => { success: boolean; output: string } | undefined;
+  /** Order-preserving log of the spec 010 removal calls. */
+  readonly removalCalls: Array<{ kind: 'service' | 'volume' | 'network'; name: string; projectName?: string }> = [];
+  /** Optional failure injection for removals, by kind. */
+  failRemoval?: (kind: 'service' | 'volume' | 'network', name: string) => boolean;
+
   async composeExec(
     projectPath: string,
     projectName: string,
     service: string,
     command: string[],
-    opts?: { user?: string; profiles?: string[] }
+    opts?: ComposeExecOptions
   ): Promise<{ success: boolean; output: string }> {
-    this.logger.debug('Mock compose exec', { projectPath, projectName, service, command, profiles: opts?.profiles });
+    // Never log argv/input here: a Mock that logged what Real must not would hide a leak.
+    this.logger.debug('Mock compose exec', { projectName, service, quiet: opts?.quiet });
     this.composeCalls.push({ command: 'exec', projectPath, projectName, profiles: opts?.profiles });
+    this.composeExecCalls.push({ projectName, service, command, input: opts?.input, quiet: opts?.quiet, user: opts?.user, timeoutMs: opts?.timeoutMs });
+    const scripted = this.execHandler?.({ service, command, input: opts?.input });
+    if (scripted) return scripted;
     return { success: true, output: `[mock] exec ${service}: ${command.join(' ')}` };
+  }
+
+  async composeRemoveService(_projectPath: string, projectName: string, service: string): Promise<{ success: boolean; output: string }> {
+    this.removalCalls.push({ kind: 'service', name: service, projectName });
+    if (this.failRemoval?.('service', service)) return { success: false, output: '[mock] rm failed' };
+    return { success: true, output: `[mock] removed ${service}` };
+  }
+
+  async removeVolume(name: string): Promise<{ success: boolean; output: string }> {
+    this.removalCalls.push({ kind: 'volume', name });
+    if (this.failRemoval?.('volume', name)) return { success: false, output: '[mock] volume rm failed' };
+    return { success: true, output: `[mock] removed volume ${name}` };
+  }
+
+  async removeNetwork(name: string): Promise<{ success: boolean; output: string }> {
+    this.removalCalls.push({ kind: 'network', name });
+    if (this.failRemoval?.('network', name)) return { success: false, output: '[mock] network rm failed' };
+    return { success: true, output: `[mock] removed network ${name}` };
   }
 
   async getContainerLogs(containerName: string): Promise<DockerLogs> {

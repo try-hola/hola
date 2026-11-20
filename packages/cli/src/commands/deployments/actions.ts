@@ -203,12 +203,16 @@ export async function runUninstall(
     }
 
     out(opts.force ? `Force-uninstalling ${deploymentId}…` : `Uninstalling ${deploymentId}…`);
-    await sdk.deployments.delete(deploymentId, { force: opts.force === true });
+    const result = await sdk.deployments.delete(deploymentId, { force: opts.force === true });
+    // What is left for the operator to do by hand (spec 010: the private-ingress
+    // device record to delete in the Tailscale admin console). Never dropped.
+    const warnings = Array.isArray(result?.warnings) ? result.warnings : [];
 
     if (opts.json) {
-      console.log(JSON.stringify({ uninstalled: deploymentId }, null, 2));
+      console.log(JSON.stringify({ uninstalled: deploymentId, ...(warnings.length ? { warnings } : {}) }, null, 2));
     } else {
       out(`Uninstalled ${name}.`);
+      for (const w of warnings) out(`Warning: ${w}`);
     }
     await maybeNotifyUpdate(sdk, opts);
     return { uninstalled: deploymentId };

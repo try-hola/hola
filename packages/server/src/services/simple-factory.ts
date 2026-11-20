@@ -30,6 +30,7 @@ import { RealValidationService, MockValidationService, type ValidationService } 
 import { RealRoutingService, MockRoutingService, type RoutingService } from './core/routing';
 import { RealDeploymentService, MockDeploymentService, type DeploymentService } from './core/deployment';
 import { RealAuthentikProvisionerService, MockProvisionerService, NoneProvisionerService, type ProvisionerService } from './core/provisioner';
+import { RealTailscaleIngressService, MockTailscaleIngressService, type TailscaleIngressService } from './core/tailscale-ingress';
 import { authConfig } from '../config/auth';
 
 /**
@@ -55,6 +56,8 @@ export interface Services {
   validation: ValidationService;
   routing: RoutingService;
   provisioner: ProvisionerService;
+  /** Drives the opt-in private-ingress companion (spec 010). */
+  tailscaleIngress: TailscaleIngressService;
   deployments: DeploymentService;
 }
 
@@ -99,6 +102,7 @@ export function createServices(env: ServiceEnvironment): Services {
       validation: new MockValidationService(),
       routing: new MockRoutingService(),
       provisioner: new MockProvisionerService(),
+      tailscaleIngress: new MockTailscaleIngressService(),
       deployments: new MockDeploymentService(jobs),
     };
   }
@@ -138,8 +142,9 @@ export function createServices(env: ServiceEnvironment): Services {
 
     // Mock provisioner in development for safety (no calls to a real auth platform).
     const provisioner = new MockProvisionerService();
+    const tailscaleIngress = new MockTailscaleIngressService();
 
-    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials);
+    const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, undefined, tailscaleIngress);
     // Restore-on-install (spec 007): wire the back-reference draft-creation
     // needs to resolve/validate a restoreFrom choice. Set post-construction —
     // `deployments` itself takes `drafts` as a constructor argument, so this
@@ -166,6 +171,7 @@ export function createServices(env: ServiceEnvironment): Services {
       validation,
       routing,
       provisioner,
+      tailscaleIngress,
       deployments,
     };
   }
@@ -223,7 +229,8 @@ export function createServices(env: ServiceEnvironment): Services {
       ? new RealAuthentikProvisionerService(authConfig)
       : new NoneProvisionerService();
 
-  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, contractTokens);
+  const tailscaleIngress = new RealTailscaleIngressService(docker);
+  const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, provisioner, catalog, eventBus, registryCredentials, contractTokens, tailscaleIngress);
   // Restore-on-install (spec 007): see the development block above for why
   // this is a post-construction setter rather than a constructor argument.
   drafts.setDeploymentsService(deployments);
@@ -248,6 +255,7 @@ export function createServices(env: ServiceEnvironment): Services {
     validation,
     routing,
     provisioner,
+    tailscaleIngress,
     deployments,
   };
 }

@@ -1,37 +1,37 @@
 <!--
 Sync Impact Report
 ==================
-Version change: (unratified template) → 1.0.0
-Bump rationale: First ratification. All template placeholders replaced with
-  concrete, project-specific principles derived from CLAUDE.md and the current
-  implementation.
+Version change: 1.0.0 → 2.0.0
+Bump rationale: MAJOR. Principle I is redefined in a backward-incompatible way:
+  "all app traffic MUST enter through Traefik" no longer holds without exception.
+  A deployment may now carry one platform-injected, operator-enabled private
+  ingress companion (spec 010, ADR 0007) that does not pass through Traefik.
 
-Modified principles: N/A (initial adoption)
-Added sections:
-  - Core Principles (7 principles)
-  - Platform Architecture Constraints
-  - Development Workflow & Quality Gates
-  - Governance
+Modified principles:
+  I. Traefik-Only Ingress → Traefik Is the Default Ingress; a Second Path Is
+     Platform-Owned and Opt-In. The enforcement half (no host ports, pinned
+     images, validator not bypassed) is unchanged.
+Added sections: none
 Removed sections: none
 
-Principles defined:
-  I.   Traefik-Only Ingress
-  II.  Remote Catalog as Single Source of Truth
-  III. Async Deploy Lifecycle
-  IV.  Real/Mock Service Pairs
-  V.   Generic Cross-App Primitives
-  VI.  Auth Is Platform-Agnostic and Default-On
-  VII. Quality Gates Before Merge
+Templates requiring updates (checked 2026-11-20):
+  ✅ .specify/templates/plan-template.md — "Constitution Check" gate reads the
+       constitution dynamically; does not restate Principle I; no edit required.
+  ✅ .specify/templates/spec-template.md — no constitution-specific slots.
+  ✅ .specify/templates/tasks-template.md — no restatement of Principle I.
+  ✅ .specify/templates/checklist-template.md — generic.
+  ✅ .specify/templates/constitution-template.md — placeholder template.
+  ✅ CLAUDE.md, docs/ARCHITECTURE.md, docs/OPERATIONS.md — "Traefik-only"
+       wording restated as "Traefik is the default ingress", pointing at the
+       private-ingress exception (docs/adr/0007-private-tailscale-ingress.md).
 
-Templates requiring updates:
-  ✅ .specify/templates/plan-template.md — "Constitution Check" gate references
-       the constitution dynamically; no edit required.
-  ✅ .specify/templates/spec-template.md — no constitution-specific slots; aligned.
-  ✅ .specify/templates/tasks-template.md — task categories cover testing,
-       integration, and quality gates; aligned.
-  ✅ .specify/templates/checklist-template.md — generic; aligned.
+Previous report (1.0.0): first ratification; seven principles
+  (I Traefik-Only Ingress, II Remote Catalog as Single Source of Truth,
+  III Async Deploy Lifecycle, IV Real/Mock Service Pairs, V Generic Cross-App
+  Primitives, VI Auth Is Platform-Agnostic and Default-On, VII Quality Gates
+  Before Merge).
 
-Follow-up TODOs: none. RATIFICATION_DATE set to the date of first adoption.
+Follow-up TODOs: none.
 -->
 
 # Hola Constitution
@@ -44,19 +44,31 @@ coherent, safe to operate, and consistent across the Bun-workspace monorepo
 
 ## Core Principles
 
-### I. Traefik-Only Ingress
+### I. Traefik Is the Default Ingress; a Second Path Is Platform-Owned and Opt-In
 
-All app traffic MUST enter through Traefik. Apps MUST NOT publish host ports;
-reachability is granted only by emitting Traefik file-provider config
-(`/data/runtime/traefik/dynamic.yml`) and joining the app's ingress service to
-the external `hola` network. Every app image reference MUST be a pinned tag —
-never `latest` or a floating tag. The compose validator
-(`@hola/shared/compose-validate`) is the enforcement point: it MUST reject host
-ports and unpinned images, and that check MUST NOT be bypassed for convenience.
+Every deployment's normal address (`<app>.<HOLA_BASE_DOMAIN>`) MUST enter through
+Traefik. Apps MUST NOT publish host ports; reachability is granted only by emitting
+Traefik file-provider config (`/data/runtime/traefik/dynamic.yml`) and joining the
+app's ingress service to the external `hola` network. Every app image reference MUST
+be a pinned tag — never `latest` or a floating tag. The compose validator
+(`@hola/shared/compose-validate`) is the enforcement point: it MUST reject host ports
+and unpinned images, and that check MUST NOT be bypassed for convenience.
 
-**Rationale:** A single ingress path is what makes `<app>.<HOLA_BASE_DOMAIN>`
-routing, TLS, and auth gating uniform and auditable. Host ports and mutable tags
-reintroduce drift and unroutable, unreproducible deployments.
+The single permitted second path is the platform-injected private-ingress companion
+of ADR 0007 (`docs/adr/0007-private-tailscale-ingress.md`). It MUST be enabled per
+deployment by an operator, MUST NOT be declared by a bundle, MUST be added by the
+server after validation (and re-checked by the deploy-time gate), MUST run pinned
+without privileges, host ports, host networking or the container-runtime socket, and
+MUST reach only the one backend it was configured for. A deployment that has not
+opted in MUST render exactly as if the companion did not exist. Any further path that
+bypasses Traefik requires a new ADR and a further amendment of this principle.
+
+**Rationale:** One default path is what makes `<app>.<HOLA_BASE_DOMAIN>` routing, TLS,
+and auth gating uniform and auditable, and host ports and mutable tags reintroduce
+drift. A tailnet grant, however, names a destination, and a shared proxy that picks the
+app from a caller-controlled hostname cannot be a per-app destination; isolating one
+client to one app needs a per-app path. Making that path platform-owned, opt-in and
+narrow keeps the exception auditable instead of letting it become the norm.
 
 ### II. Remote Catalog as Single Source of Truth
 
@@ -183,4 +195,4 @@ convenience shortcut, this document wins.
   detail; where they and this constitution diverge on a non-negotiable, this
   constitution governs and the guidance MUST be corrected.
 
-**Version**: 1.0.0 | **Ratified**: 2026-07-06 | **Last Amended**: 2026-07-06
+**Version**: 2.0.0 | **Ratified**: 2026-07-06 | **Last Amended**: 2026-11-20

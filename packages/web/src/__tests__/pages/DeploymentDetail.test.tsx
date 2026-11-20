@@ -10,6 +10,11 @@ import type {
   PatchDeploymentResponse,
   RollbackRequest,
   RollbackTarget,
+  GetTailscaleIngressResponse,
+  SetTailscaleIngressRequest,
+  SetTailscaleIngressResponse,
+  DisableTailscaleIngressResponse,
+  TailscaleIngressSetting,
   SSEEvent,
   SSEConnectionState,
 } from '@hola/shared';
@@ -75,6 +80,51 @@ const config: GetDeploymentConfigResponse = {
   systemOverrides: { CUSTOM_DOMAIN: 'app.example.com' },
 };
 
+const tsSetting: TailscaleIngressSetting = {
+  enabled: true,
+  serviceName: 'svc:myapp',
+  tag: 'tag:hola-ingress',
+  backend: { service: 'web', port: 8080 },
+  mode: 'https',
+  listenPort: 443,
+  forwardAuthAcknowledged: false,
+  nodeName: 'hola-myapp',
+  updatedAt: '2026-11-20T00:00:00.000Z',
+};
+
+function tsOff(over: Partial<GetTailscaleIngressResponse['defaults']> = {}): GetTailscaleIngressResponse {
+  return {
+    setting: null,
+    credentialHeld: false,
+    defaults: {
+      backend: { service: 'web', port: 8080 },
+      services: ['web', 'db'],
+      tag: 'tag:hola-ingress',
+      mode: 'https',
+      listenPort: 443,
+      requiresForwardAuthAcknowledgement: false,
+      ...over,
+    },
+    status: { state: 'off', message: 'Private ingress is off.', observedAt: '2026-11-20T00:00:00.000Z' },
+    guidance: {
+      prerequisites: ['A tailnet with HTTPS enabled.'],
+      steps: [{ title: 'Define the Service', detail: 'Define svc:myapp on port 443.', snippet: '{"autoApprovers":{}}' }],
+      exampleGrant: '{}',
+      exampleAutoApprover: '{}',
+      notes: ['Tailnet policy is additive: the grant adds access, it does not remove any.'],
+    },
+  };
+}
+
+function tsOn(state: GetTailscaleIngressResponse['status']['state'], extra: Partial<GetTailscaleIngressResponse['status']> = {}): GetTailscaleIngressResponse {
+  return {
+    ...tsOff(),
+    setting: tsSetting,
+    credentialHeld: true,
+    status: { state, message: `State is ${state}.`, observedAt: '2026-11-20T00:00:00.000Z', ...extra },
+  };
+}
+
 const deploymentsApi = {
   byId: vi.fn(async () => deployment),
   config: vi.fn(async () => config),
@@ -92,6 +142,17 @@ const deploymentsApi = {
   remove: vi.fn(),
   rollback: vi.fn(async (_deploymentId: string, _body: RollbackRequest) => ({ jobId: 'j1', targetReleaseId: 'r1', previousReleaseId: 'r2' })),
   updateCheck: vi.fn(),
+  // Spec 010: private Tailscale ingress. Declared with real parameters for the
+  // same reason as `update` above.
+  tailscaleIngress: {
+    get: vi.fn(async (_id: string): Promise<GetTailscaleIngressResponse> => tsOff()),
+    set: vi.fn(async (_id: string, _body: SetTailscaleIngressRequest): Promise<SetTailscaleIngressResponse> => ({
+      ok: true as const, jobId: 'job-ts', setting: tsSetting, credentialHeld: true,
+    })),
+    disable: vi.fn(async (_id: string): Promise<DisableTailscaleIngressResponse> => ({
+      ok: true as const, jobId: 'job-ts-off', removal: { nodeName: 'hola-myapp', signedOut: null, message: 'Device removal pending.' },
+    })),
+  },
 };
 
 // #428: DeploymentDetail's Channel select reads the app's declared channels.
@@ -1084,6 +1145,18 @@ describe('DeploymentDetail remove confirmation (#446)', () => {
     await waitFor(() => expect(screen.getByText('Deployments List')).toBeInTheDocument());
   });
 
+  it('carries the server\'s removal warnings (the tailnet device to delete) to the list page', async () => {
+    deploymentsApi.remove.mockResolvedValue({ ok: true, warnings: ["Delete the device 'hola-my-app' in the Tailscale admin console."] });
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: /^remove$/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(screen.getByText('Deployments List')).toBeInTheDocument());
+    expect(screen.getByTestId('notice')).toHaveTextContent("Delete the device 'hola-my-app'");
+  });
+
   it('keeps the dialog open and shows the failure inline when removal fails', async () => {
     deploymentsApi.remove.mockRejectedValue(new Error('teardown failed'));
     renderDetail();
@@ -1255,5 +1328,220 @@ describe('DeploymentDetail rollback dialog (#584)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^rollback$/i }));
     expect(await screen.findByText('Release & job history')).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('private Tailscale ingress (spec 010)', () => {
+  const SECRET = 'tskey-auth-kABC123-VERYSECRETVALUE';
+
+  function renderOverview() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={[`/deployments/${deploymentId}?tab=overview`]}>
+          <Routes>
+            <Route path="/deployments/:deploymentId" element={<DeploymentDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  const card = async () => within(await screen.findByTestId('tailscale-ingress-card'));
+  const lastSetBody = () => {
+    const calls = deploymentsApi.tailscaleIngress.set.mock.calls;
+    const call = calls[calls.length - 1];
+    if (!call) throw new Error('set was not called');
+    return call[1];
+  };
+
+  beforeEach(() => {
+    deploymentsApi.byId.mockResolvedValue(deployment);
+    deploymentsApi.tailscaleIngress.get.mockReset();
+    deploymentsApi.tailscaleIngress.set.mockClear();
+    deploymentsApi.tailscaleIngress.disable.mockClear();
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () => tsOff());
+  });
+
+  it('off state offers Enable', async () => {
+    renderOverview();
+    const c = await card();
+    expect(await c.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
+    expect(c.queryByRole('button', { name: 'Disable' })).not.toBeInTheDocument();
+  });
+
+  it('connected shows the address and the Edit/Disable/credential controls', async () => {
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () =>
+      tsOn('connected', { dnsName: 'myapp.example.ts.net', port: 443, addresses: ['100.64.0.1'] }));
+    renderOverview();
+    const c = await card();
+    expect(await c.findByText('https://myapp.example.ts.net')).toBeInTheDocument();
+    expect(c.getByTestId('tailscale-state')).toHaveTextContent('Connected');
+    expect(c.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(c.getByRole('button', { name: 'Supply new credential' })).toBeInTheDocument();
+    expect(c.getByRole('button', { name: 'Disable' })).toBeInTheDocument();
+  });
+
+  it('waiting for approval shows the action text', async () => {
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () =>
+      tsOn('waiting-for-approval', { action: 'Approve this host for svc:myapp in the admin console.' }));
+    renderOverview();
+    const c = await card();
+    expect(await c.findByText('Approve this host for svc:myapp in the admin console.')).toBeInTheDocument();
+    expect(c.getByTestId('tailscale-state')).toHaveTextContent('Waiting for approval');
+  });
+
+  it('enable submits the right body, uses a password input, and never renders the credential back', async () => {
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    const dialog = within(await screen.findByRole('dialog'));
+
+    const key = dialog.getByLabelText('Tailscale credential') as HTMLInputElement;
+    expect(key.type).toBe('password');
+    fireEvent.change(dialog.getByLabelText('Service name'), { target: { value: 'svc:myapp' } });
+    fireEvent.change(key, { target: { value: `  ${SECRET} ` } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+
+    await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+    expect(deploymentsApi.tailscaleIngress.set.mock.calls[0]?.[0]).toBe(deploymentId);
+    expect(lastSetBody()).toEqual({
+      serviceName: 'svc:myapp',
+      tag: 'tag:hola-ingress',
+      backend: { service: 'web', port: 8080 },
+      mode: 'https',
+      listenPort: 443,
+      authKey: SECRET,
+    });
+    // Dialog closes and the credential is nowhere in the document.
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(document.body.innerHTML).not.toContain('VERYSECRET');
+    expect(await screen.findByText(/restarting to apply it/)).toBeInTheDocument();
+  });
+
+  it('requires a credential on first enable without calling the API', async () => {
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+    expect(await dialog.findByText(/credential is required/i)).toBeInTheDocument();
+    expect(deploymentsApi.tailscaleIngress.set).not.toHaveBeenCalled();
+  });
+
+  it('refuses a port that does not parse instead of silently sending the default', async () => {
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+    fireEvent.change(dialog.getByLabelText('Listen port'), { target: { value: '84a3' } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+    expect(await dialog.findByText(/listen port must be a whole number/i)).toBeInTheDocument();
+    expect(deploymentsApi.tailscaleIngress.set).not.toHaveBeenCalled();
+  });
+
+  it('a removal still in progress is shown as such, with no Enable button', async () => {
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () => ({
+      ...tsOff(),
+      setting: { ...tsSetting, enabled: false, removalPending: true },
+      status: { state: 'off', message: "Disabling: the device 'hola-myapp' will be signed out when the app restarts.", observedAt: 'x' },
+    }));
+    renderOverview();
+    const c = await card();
+    expect(await c.findByTestId('tailscale-removing')).toHaveTextContent(/Disabling/);
+    expect(c.queryByRole('button', { name: 'Enable' })).not.toBeInTheDocument();
+  });
+
+  it('clears the credential when the dialog is cancelled', async () => {
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    let dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    dialog = within(await screen.findByRole('dialog'));
+    expect((dialog.getByLabelText('Tailscale credential') as HTMLInputElement).value).toBe('');
+  });
+
+  it('shows the forward-auth acknowledgement only when required, and gates submit on it', async () => {
+    // Not required: no checkbox.
+    renderOverview();
+    let c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    let dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    cleanup();
+
+    // Required: checkbox, and submitting without it is refused client-side.
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () => tsOff({ requiresForwardAuthAcknowledgement: true }));
+    renderOverview();
+    c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+    expect(await dialog.findByText(/acknowledge that the private address bypasses forward-auth/i)).toBeInTheDocument();
+    expect(deploymentsApi.tailscaleIngress.set).not.toHaveBeenCalled();
+
+    fireEvent.click(dialog.getByRole('checkbox'));
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+    await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+    expect(lastSetBody().acknowledgeForwardAuthBypass).toBe(true);
+  });
+
+  it('supplying a new credential re-sends the current setting with only the credential changed', async () => {
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () => tsOn('needs-sign-in'));
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Supply new credential' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.queryByLabelText('Service name')).not.toBeInTheDocument();
+    fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Save credential' }));
+    await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+    expect(lastSetBody()).toMatchObject({ serviceName: 'svc:myapp', tag: 'tag:hola-ingress', backend: { service: 'web', port: 8080 }, authKey: SECRET });
+  });
+
+  it('shows a server refusal inline and keeps the dialog open', async () => {
+    deploymentsApi.tailscaleIngress.set.mockRejectedValueOnce(new Error('That service name is already used by another app.'));
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+    fireEvent.click(dialog.getByRole('button', { name: 'Enable' }));
+    expect(await dialog.findByText(/already used by another app/)).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('disable confirm names the device to delete, then disables', async () => {
+    deploymentsApi.tailscaleIngress.get.mockImplementation(async () => tsOn('connected', { dnsName: 'myapp.example.ts.net', port: 443 }));
+    renderOverview();
+    const c = await card();
+    fireEvent.click(await c.findByRole('button', { name: 'Disable' }));
+    const dialog = within(await screen.findByRole('dialog'));
+    expect(dialog.getByText(/hola-myapp/)).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole('button', { name: 'Disable' }));
+    await waitFor(() => expect(deploymentsApi.tailscaleIngress.disable).toHaveBeenCalledWith(deploymentId));
+    expect(await screen.findByText(/Device removal pending\./)).toBeInTheDocument();
+  });
+
+  it('the guide is collapsed by default, shows the additive-policy note, and has copy buttons', async () => {
+    const writeText = vi.fn(async () => {});
+    const spy = vi.spyOn(navigator.clipboard, 'writeText').mockImplementation(writeText);
+    renderOverview();
+    const c = await card();
+    expect(c.queryByText(/Tailnet policy is additive/)).not.toBeInTheDocument();
+    fireEvent.click(await c.findByRole('button', { name: /setup guide/i }));
+    expect(c.getByText(/Tailnet policy is additive/)).toBeInTheDocument();
+    expect(c.getByText('Define the Service')).toBeInTheDocument();
+    fireEvent.click(c.getByRole('button', { name: /copy snippet for define the service/i }));
+    expect(writeText).toHaveBeenCalledWith('{"autoApprovers":{}}');
+    spy.mockRestore();
   });
 });
