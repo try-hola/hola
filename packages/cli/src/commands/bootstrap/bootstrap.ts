@@ -10,6 +10,7 @@ import type { CheckResult } from '../../install/checks';
 import { systemRunner, type Runner } from '../../lib/runner';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { handoffCredentials } from '../credentials/credentials';
+import { buildVerifyCommand, interpretVerify, verifyMessage } from './verify';
 import { CLI_VERSION } from '../../version';
 
 export interface BootstrapOptions {
@@ -343,14 +344,11 @@ export async function runBootstrap(
       }
     }
 
-    // 6) Best-effort verify (warn-only: DNS/cert may still be settling).
+    // 6) Best-effort verify (warn-only: DNS/cert may still be settling). See verify.ts
+    //    for why it uses the public health route and tries a verified request first.
     if (!opts.dryRun && config.HOLA_DOMAIN) {
-      const verify = await ssh(
-        `Verify https://${config.HOLA_DOMAIN}`,
-        `curl -sk -o /dev/null -w "%{http_code}" https://${config.HOLA_DOMAIN}/api/health || true`,
-      );
-      const codeStr = verify.stdout.trim();
-      out(codeStr === '200' ? '  UI is responding (200).' : `  UI not ready yet (got "${codeStr || 'no response'}") — may take a minute for TLS/DNS.`);
+      const verify = await ssh(`Verify https://${config.HOLA_DOMAIN}`, buildVerifyCommand(config.HOLA_DOMAIN));
+      out(verifyMessage(interpretVerify(verify.stdout)));
     }
 
     // 7) Credential handoff (interactive runs only — needs a TTY to prompt and to

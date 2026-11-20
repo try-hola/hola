@@ -34,7 +34,7 @@ function makeRunner(preflight = OK_PREFLIGHT): Runner & { calls: { cmd: string; 
       if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'generated-key-123', stderr: '' };
       if (cmd.includes('Hola admin setup')) return { code: 0, stdout: 'https://auth.example.com/if/flow/recovery/abc', stderr: '' };
       if (cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD')) return { code: 0, stdout: 'akadmin-pw-xyz', stderr: '' };
-      if (cmd.includes('curl')) return { code: 0, stdout: '200', stderr: '' };
+      if (cmd.includes('curl')) return { code: 0, stdout: 'verified 200', stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     }),
     local: vi.fn(async () => ({ code: 0, stdout: '', stderr: '' })),
