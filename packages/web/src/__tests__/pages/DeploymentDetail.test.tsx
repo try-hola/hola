@@ -103,6 +103,8 @@ function tsOff(over: Partial<GetTailscaleIngressResponse['defaults']> = {}): Get
       mode: 'https',
       listenPort: 443,
       requiresForwardAuthAcknowledgement: false,
+      exposure: 'both',
+      tailscaleOnlySupported: true,
       ...over,
     },
     status: { state: 'off', message: 'Private ingress is off.', observedAt: '2026-11-20T00:00:00.000Z' },
@@ -1543,5 +1545,128 @@ describe('private Tailscale ingress (spec 010)', () => {
     fireEvent.click(c.getByRole('button', { name: /copy snippet for define the service/i }));
     expect(writeText).toHaveBeenCalledWith('{"autoApprovers":{}}');
     spy.mockRestore();
+  });
+  describe('Tailscale-only exposure (#596)', () => {
+    const connectedOn = (setting: Partial<TailscaleIngressSetting> = {}, over: Partial<GetTailscaleIngressResponse['defaults']> = {}) => {
+      deploymentsApi.tailscaleIngress.get.mockImplementation(async () => ({
+        ...tsOn('connected', { dnsName: 'myapp.example.ts.net', port: 443 }),
+        setting: { ...tsSetting, ...setting },
+        defaults: { ...tsOff().defaults, ...over },
+      }));
+    };
+    const openEdit = async () => {
+      const c = await card();
+      fireEvent.click(await c.findByRole('button', { name: 'Edit' }));
+      return within(await screen.findByRole('dialog'));
+    };
+
+    it('the card states the exposure plainly in both modes', async () => {
+      connectedOn();
+      renderOverview();
+      expect(await (await card()).findByTestId('tailscale-exposure')).toHaveTextContent('Reachable: public hostname and Tailscale');
+      cleanup();
+      connectedOn({ exposure: 'tailscale-only' });
+      renderOverview();
+      expect(await (await card()).findByTestId('tailscale-exposure')).toHaveTextContent('Reachable: Tailscale only — no public hostname');
+    });
+
+    it('the choice is disabled with the reason when the app signs in through its hostname', async () => {
+      connectedOn({}, { tailscaleOnlySupported: false, tailscaleOnlyUnsupportedReason: 'This app signs in with native-oidc, which is tied to its public hostname.' });
+      renderOverview();
+      const dialog = await openEdit();
+      expect(dialog.getByLabelText(/Tailscale only/)).toBeDisabled();
+      expect(dialog.getByTestId('tailscale-only-blocked')).toHaveTextContent('native-oidc');
+    });
+
+    it('the choice is disabled until the private address is connected', async () => {
+      deploymentsApi.tailscaleIngress.get.mockImplementation(async () => tsOn('waiting-for-approval'));
+      renderOverview();
+      const dialog = await openEdit();
+      expect(dialog.getByLabelText(/Tailscale only/)).toBeDisabled();
+      expect(dialog.getByTestId('tailscale-only-blocked')).toHaveTextContent(/Connected/);
+    });
+
+    it('is disabled on a first enable (two-step flow)', async () => {
+      renderOverview();
+      const c = await card();
+      fireEvent.click(await c.findByRole('button', { name: 'Enable' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      expect(dialog.getByLabelText(/Tailscale only/)).toBeDisabled();
+      expect(dialog.getByTestId('tailscale-only-blocked')).toHaveTextContent(/Enable private ingress first/);
+    });
+
+    it('requires the acknowledgement checkbox, then sends exposure and the acknowledgement', async () => {
+      connectedOn();
+      renderOverview();
+      const dialog = await openEdit();
+      fireEvent.click(dialog.getByLabelText(/Tailscale only/));
+      fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      expect(await dialog.findByText(/Acknowledge that Tailscale-only/)).toBeInTheDocument();
+      expect(deploymentsApi.tailscaleIngress.set).not.toHaveBeenCalled();
+      fireEvent.click(dialog.getByRole('checkbox'));
+      fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+      expect(lastSetBody()).toMatchObject({ exposure: 'tailscale-only', acknowledgeTailscaleOnly: true });
+    });
+
+    it('switching back to both sends no tailscale-only fields', async () => {
+      connectedOn({ exposure: 'tailscale-only' });
+      renderOverview();
+      const dialog = await openEdit();
+      expect(dialog.getByLabelText(/Tailscale only/)).toBeChecked();
+      fireEvent.click(dialog.getByLabelText(/Public hostname and Tailscale/));
+      fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+      expect(lastSetBody()).not.toHaveProperty('exposure');
+      expect(lastSetBody()).not.toHaveProperty('acknowledgeTailscaleOnly');
+    });
+
+    it('a credential-only login keeps a tailscale-only exposure', async () => {
+      deploymentsApi.tailscaleIngress.get.mockImplementation(async () => ({
+        ...tsOn('needs-sign-in'),
+        setting: { ...tsSetting, exposure: 'tailscale-only' as const },
+      }));
+      renderOverview();
+      const c = await card();
+      fireEvent.click(await c.findByRole('button', { name: 'Supply new credential' }));
+      const dialog = within(await screen.findByRole('dialog'));
+      fireEvent.change(dialog.getByLabelText('Tailscale credential'), { target: { value: SECRET } });
+      fireEvent.click(dialog.getByRole('button', { name: 'Save credential' }));
+      await waitFor(() => expect(deploymentsApi.tailscaleIngress.set).toHaveBeenCalledTimes(1));
+      expect(lastSetBody()).toMatchObject({ exposure: 'tailscale-only', acknowledgeTailscaleOnly: true, authKey: SECRET });
+    });
+
+    describe('the page address / Open link', () => {
+      const withUrl = (url: string | undefined, exposure: 'both' | 'tailscale-only') => {
+        deploymentsApi.byId.mockResolvedValue({
+          ...deployment,
+          ...(url ? { url } : {}),
+          tailscaleIngress: { enabled: true, serviceName: 'svc:myapp', exposure },
+        });
+      };
+
+      it('points at the tailnet name when tailscale-only and connected', async () => {
+        withUrl('https://myapp.example.ts.net', 'tailscale-only');
+        connectedOn({ exposure: 'tailscale-only' });
+        renderOverview();
+        expect((await screen.findAllByText('https://myapp.example.ts.net')).length).toBeGreaterThan(0);
+      });
+
+      it('is hidden when tailscale-only and not connected', async () => {
+        withUrl('https://myapp.example.ts.net', 'tailscale-only');
+        deploymentsApi.tailscaleIngress.get.mockImplementation(async () => ({ ...tsOn('disconnected'), setting: { ...tsSetting, exposure: 'tailscale-only' as const } }));
+        renderOverview();
+        await card();
+        await waitFor(() => expect(screen.getByTestId('tailscale-state')).toHaveTextContent('Disconnected'));
+        expect(screen.queryByText('https://myapp.example.ts.net')).not.toBeInTheDocument();
+      });
+
+      it('is unchanged for exposure both', async () => {
+        withUrl('https://myapp.local.hola', 'both');
+        connectedOn();
+        renderOverview();
+        expect((await screen.findAllByText('https://myapp.local.hola')).length).toBeGreaterThan(0);
+      });
+    });
   });
 });

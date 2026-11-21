@@ -16,7 +16,7 @@ Design record: [ADR 0007](adr/0007-private-tailscale-ingress.md). Spec and contr
 ## What it is, and is not
 
 It **is** one optional, per-deployment way in, **added beside** the app's normal address
-(`<app>.<HOLA_BASE_DOMAIN>`), which it never replaces. It is off by default and works for any
+(`<app>.<HOLA_BASE_DOMAIN>`), which it replaces only if you choose [Tailscale only](#tailscale-only). It is off by default and works for any
 app: nothing in the catalog entry or bundle needs to mention Tailscale.
 
 Why it exists: on a tailnet, access is granted to a *destination*. The only destination a Hola
@@ -184,6 +184,54 @@ and whether it was signed out; delete that record in the Tailscale admin console
 record remains is documentation-derived: V9.) On a stopped app the cleanup is done locally and
 the device cannot be signed out, so the response says so, and you should delete the record, or
 check it, with extra care.
+
+## Tailscale only
+
+By default the private address is **added beside** the normal one (`exposure: both`). For an
+app with no reason to answer on the shared hostname at all (an API or MCP server with one admin token
+and no web UI), you can remove the normal address: **Tailscale only**. The app then has no Traefik
+route; the only way in is the one your tailnet policy controls. The hostname stays reserved, so no
+other app can take it.
+
+**It is a two-step flow, on purpose.** Removing the normal address removes the fallback that makes
+a misbehaving private address harmless, so Hola only lets you switch once the private address has
+been observed `connected`:
+
+1. Enable private ingress as usual (exposure `both`) and get it to `connected` (see
+   [Status](#status-and-what-to-do)).
+2. Switch exposure to Tailscale only, and acknowledge that if the private address stops working the
+   app is unreachable. Dashboard: Edit, choose "Tailscale only" (disabled, with the reason, until it
+   is connected), tick the acknowledgement. CLI:
+   `hola tailscale enable <id> --service ... --tag ... --exposure tailscale-only --ack-tailscale-only`
+   (re-send the other settings: `enable` replaces the whole setting). API: `exposure:
+   "tailscale-only"` and `acknowledgeTailscaleOnly: true`.
+
+Enabling as Tailscale only in one step is refused (409, `TAILSCALE_ONLY_NOT_CONNECTED`, with the
+current state), as is switching while the app is stopped, since a stopped app cannot be connected.
+The app restarts briefly to apply the change.
+
+**The SSO limit.** An app that signs in through Authentik (`native-oidc`, or the `forward-auth`
+gate) has its redirect URIs and gate tied to the public hostname, so Tailscale only is refused for it
+(`TAILSCALE_ONLY_UNSUPPORTED_AUTH`). Apps with LDAP or no auth are fine. If a later upgrade or rollback
+puts a Tailscale-only app onto a release that uses one of those, Hola keeps it private (it does not
+quietly restore the public address) and the status tells you sign-in cannot work until you switch
+back.
+
+**Getting back.** Edit and choose "Public hostname and Tailscale" (`--exposure both`, or omit the
+flag: `enable` resets what you do not send), or disable private ingress. Either restores the
+normal address in the same restart job. If the private address breaks while you are Tailscale only
+(needs sign-in, waiting for approval, tailnet down), you can still supply a new credential with the
+same settings, or switch back to both.
+
+**When the app is stranded.** If the companion cannot be rendered (for example an upgrade removed the
+backend service), the app stays private with no route; the status is `error` and its action says to
+fix the backend or switch exposure to both. Hola never restores the public address by itself.
+
+**What changes elsewhere.** The dashboard's Open link and the app-registry feed (Homepage links)
+point at the private `https://<name>` address when it is known, and are omitted otherwise. The
+`${HOLA_APP_HOST}` token an app may use still resolves to the (now unserved) hostname. Anything
+that calls `<app>.<base-domain>` (including `bin/vm-*` test scripts) no longer reaches the app.
+Apps that talk to the Hola server through the contract broker are unaffected.
 
 ## Letting an app trust its private name
 

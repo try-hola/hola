@@ -48,6 +48,7 @@ import { TransientNotice } from '../components/ui/TransientNotice';
 import { contractByRef, useContractsApi } from '../hooks/useContractsApi';
 import { AppBackupCoverage } from '../components/BackupCoverage';
 import { TailscaleIngressCard } from '../components/TailscaleIngressCard';
+import { useTailscaleIngressApi } from '../hooks/useTailscaleIngressApi';
 import { subscribeDeploymentDeleted } from '../state/useGlobalQueryEvents';
 
 // `hasParamSpec` (whether a row is catalog-declared vs a deletable custom var)
@@ -131,6 +132,11 @@ export const DeploymentDetail: React.FC = () => {
     removeDeployment,
     rollbackDeployment
   } = useDeploymentDetailApi(deploymentId);
+
+  // Private-ingress status (spec 010), shared with the overview card through
+  // the same query key, so this adds no request. Needed to decide the address
+  // the page offers for a `tailscale-only` app (#596).
+  const { data: tsData } = useTailscaleIngressApi(deploymentId);
 
   // Richer, on-demand update check (#299). Only fires when the cheap
   // updateAvailable signal is set, so a bundle pull happens for an actual update
@@ -572,6 +578,19 @@ export const DeploymentDetail: React.FC = () => {
     ? ` (${deployment.latestVersionChannel})`
     : '';
 
+  // The address the page offers (#596). A `tailscale-only` app has no public
+  // hostname, so the offered address is its tailnet one, and only while the
+  // private ingress is actually connected: a dead link is worse than none.
+  const tailscaleOnly = deployment.tailscaleIngress?.enabled === true && deployment.tailscaleIngress.exposure === 'tailscale-only';
+  const tsStatus = tsData?.status;
+  const openUrl: string | undefined = !tailscaleOnly
+    ? deployment.url
+    : tsStatus?.state === 'connected'
+      ? tsStatus.dnsName && tsData?.setting?.mode !== 'tcp'
+        ? `https://${tsStatus.dnsName}${tsStatus.port && tsStatus.port !== 443 ? `:${tsStatus.port}` : ''}`
+        : deployment.url
+      : undefined;
+
   // Real facts for the Overview "Details" card.
   const facts: { label: string; value: string; mono?: boolean }[] = [
     { label: 'App', value: deployment.app, mono: true },
@@ -597,7 +616,7 @@ export const DeploymentDetail: React.FC = () => {
     // shown in exactly one place on the page (FR-006).
     ...(deployment.uptime ? [{ label: 'Uptime', value: deployment.uptime }] : []),
     { label: 'Last updated', value: deployment.lastUpdated },
-    ...(deployment.url ? [{ label: 'URL', value: deployment.url, mono: true }] : []),
+    ...(openUrl ? [{ label: 'URL', value: openUrl, mono: true }] : []),
     ...(deployment.ports.length
       ? [{ label: 'Ports', value: deployment.ports.join(', '), mono: true }]
       : []),
@@ -644,7 +663,7 @@ export const DeploymentDetail: React.FC = () => {
   const composePreview = `services:\n  ${deployment.app}:\n    image: ${deployment.app}:${deployment.version ?? 'latest'}\n    # ingress routed by Traefik (no host ports)`;
 
   const openApp = () => {
-    if (deployment.url) window.open(deployment.url, '_blank', 'noopener,noreferrer');
+    if (openUrl) window.open(openUrl, '_blank', 'noopener,noreferrer');
   };
 
   const renderTabContent = () => {
@@ -1433,13 +1452,13 @@ export const DeploymentDetail: React.FC = () => {
               <StatusDot status={deployment.status} />
               <StatusBadge status={deployment.status} dot={false} />
             </div>
-            {deployment.url && (
+            {openUrl && (
               <div
                 onClick={openApp}
                 className="inline-flex items-center gap-1.5 mt-[5px] font-mono text-[12.5px] text-primary cursor-pointer"
               >
                 <Globe className="w-3.5 h-3.5" />
-                {deployment.url}
+                {openUrl}
                 <ExternalLink className="w-3.5 h-3.5" />
               </div>
             )}

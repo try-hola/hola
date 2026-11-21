@@ -10,6 +10,9 @@ import {
   validateTailscaleIngressInput,
   buildTailscaleGuidance,
   nodeNameFor,
+  hasTraefikRoute,
+  tailnetUrlFor,
+  tailscaleExposureOf,
   type TailscaleIngressValidationContext,
   type TailscaleIngressFailure,
   type ValidatedTailscaleIngress,
@@ -49,6 +52,7 @@ describe('validateTailscaleIngressInput: valid input', () => {
       listenPort: 443,
       forwardAuthAcknowledged: false,
       nodeName: 'hola-omnigraph',
+      exposure: 'both',
       authKey: CRED,
     });
   });
@@ -247,5 +251,55 @@ describe('buildTailscaleGuidance', () => {
     expect(all).toContain('share one tailnet identity');
     expect(all).toContain('not authentication');
     expect(all).toContain('host header');
+  });
+});
+
+describe('exposure (#596)', () => {
+  const only = { ...base, exposure: 'tailscale-only', acknowledgeTailscaleOnly: true };
+
+  test('hasTraefikRoute is false ONLY for an enabled tailscale-only setting', () => {
+    expect(hasTraefikRoute(undefined)).toBe(true);
+    expect(hasTraefikRoute(null)).toBe(true);
+    expect(hasTraefikRoute({ enabled: true })).toBe(true); // absent exposure on a stored record
+    expect(hasTraefikRoute({ enabled: true, exposure: 'both' })).toBe(true);
+    expect(hasTraefikRoute({ enabled: true, exposure: 'tailscale-only' })).toBe(false);
+    // disabled / removal-pending (enabled:false) restores the route
+    expect(hasTraefikRoute({ enabled: false, exposure: 'tailscale-only' })).toBe(true);
+  });
+
+  test('absent reads as both', () => {
+    expect(tailscaleExposureOf({})).toBe('both');
+    expect(tailscaleExposureOf(undefined)).toBe('both');
+    expect(tailscaleExposureOf({ exposure: 'tailscale-only' })).toBe('tailscale-only');
+  });
+
+  test('tailnetUrlFor: https only, port shown when not 443, none without an observed name', () => {
+    expect(tailnetUrlFor({ mode: 'https', listenPort: 443, lastDnsName: 'a.b.ts.net' })).toBe('https://a.b.ts.net');
+    expect(tailnetUrlFor({ mode: 'https', listenPort: 8443, lastDnsName: 'a.b.ts.net.' })).toBe('https://a.b.ts.net:8443');
+    expect(tailnetUrlFor({ mode: 'tcp', listenPort: 5432, lastDnsName: 'a.b.ts.net' })).toBeUndefined();
+    expect(tailnetUrlFor({ mode: 'https', listenPort: 443 })).toBeUndefined();
+  });
+
+  test('defaults to both; accepts tailscale-only with the acknowledgement', () => {
+    expect((run(base) as ValidatedTailscaleIngress).value.exposure).toBe('both');
+    expect((run(only) as ValidatedTailscaleIngress).value.exposure).toBe('tailscale-only');
+  });
+
+  test('an unknown exposure is INVALID_TAILSCALE_INGRESS on the field', () => {
+    const f = fails(run({ ...base, exposure: 'public' }));
+    expect(f.code).toBe('INVALID_TAILSCALE_INGRESS');
+    expect(f.field).toBe('exposure');
+  });
+
+  test('tailscale-only without the acknowledgement -> TAILSCALE_ONLY_ACK_REQUIRED', () => {
+    expect(fails(run({ ...only, acknowledgeTailscaleOnly: undefined })).code).toBe('TAILSCALE_ONLY_ACK_REQUIRED');
+    expect(fails(run({ ...only, acknowledgeTailscaleOnly: 'yes' })).code).toBe('TAILSCALE_ONLY_ACK_REQUIRED');
+  });
+
+  test('an SSO auth mode refuses tailscale-only with details.authMode; "both" is unaffected', () => {
+    const f = fails(run(only, ctx({ tailscaleOnlyBlockedByAuth: 'native-oidc' })));
+    expect(f.code).toBe('TAILSCALE_ONLY_UNSUPPORTED_AUTH');
+    expect(f.details).toEqual({ authMode: 'native-oidc' });
+    expect(run(base, ctx({ tailscaleOnlyBlockedByAuth: 'native-oidc' })).ok).toBe(true);
   });
 });

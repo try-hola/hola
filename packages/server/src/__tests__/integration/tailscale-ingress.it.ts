@@ -15,7 +15,8 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -108,7 +109,7 @@ describe.skipIf(!dockerOk)('private Tailscale ingress (real daemon, unauthentica
     await rm(appsRoot, { recursive: true, force: true });
   });
 
-  test('companion is isolated to the backend, hardened, and removed cleanly on disable', async () => {
+  function stack() {
     const storage = new RealStorageService({ holaDir: dataRoot });
     const database = new RealDatabaseService(storage);
     const logging = new RealLoggingService(storage);
@@ -125,6 +126,11 @@ describe.skipIf(!dockerOk)('private Tailscale ingress (real daemon, unauthentica
     const drafts = new RealDraftService(storage, catalog, validation);
     const docker = new RealDockerService();
     const deployments = new RealDeploymentService(storage, jobs, docker, drafts, routing, logging, new MockProvisionerService());
+    return { storage, jobs, drafts, deployments, routing };
+  }
+
+  test('companion is isolated to the backend, hardened, and removed cleanly on disable', async () => {
+    const { jobs, drafts, deployments } = stack();
 
     // A container of "another project" on the shared hola network, to try to reach.
     await sh(`docker run -d --name ${OTHER} --network hola busybox:1.36 sleep 3600`);
@@ -205,5 +211,40 @@ describe.skipIf(!dockerOk)('private Tailscale ingress (real daemon, unauthentica
     }
     expect((await sh(`docker exec ${await cid(project, 'web')} wget -qO- http://localhost:8080/`)).stdout).toContain('HOLA_WEB_OK');
     expect((deployments as any).deployments.get(id).tailscaleIngress).toBeUndefined();
+  }, 600_000);
+  // #596: with exposure `tailscale-only` the ingress service is NOT joined to the
+  // shared `hola` network and the routing file holds no router for the app; disabling
+  // restores both in the same job.
+  test('tailscale-only: ingress service is off the hola network and unrouted; disable restores both', async () => {
+    const { jobs, drafts, deployments } = stack();
+    const { draftId } = await drafts.createDraft({ appId: 'fixture', version: '1.0.0' });
+    await drafts.updateDraft(draftId, { composeOverride: COMPOSE, ports: [{ container: 8080, protocol: 'tcp' }] });
+    await drafts.finalizeDraft(draftId);
+    const created = await deployments.createFromDraft({ draftId, name: 'fixture', options: { autoStart: false } });
+    const id = created.deploymentId;
+    project = `hola-${id}`;
+    const rec = (deployments as any).deployments.get(id);
+    rec.tailscaleIngress = {
+      enabled: true, exposure: 'tailscale-only', serviceName: 'svc:fixture', tag: 'tag:hola-ingress', backend: { service: 'web', port: 8080 },
+      mode: 'https', listenPort: 443, forwardAuthAcknowledged: false, nodeName: 'hola-fixture', updatedAt: new Date().toISOString(),
+    };
+    const job = await waitForJob(jobs, (await deployments.executeAction(id, { action: 'start' })).jobId!);
+    expect(job.error ?? '').toBe('');
+    expect(job.status).toBe('completed');
+
+    const netsOf = async (service: string) =>
+      Object.keys(JSON.parse((await sh(`docker inspect -f '{{json .NetworkSettings.Networks}}' ${await cid(project, service)}`)).stdout)).sort();
+    const webNets = await netsOf('web');
+    expect(webNets).not.toContain('hola');
+    expect(webNets).toContain(`${project}_default`);
+    expect(webNets).toContain(`${project}_hola-ts-backend`);
+    const dynamicYml = join(dataRoot, 'runtime', 'traefik', 'dynamic.yml');
+    const routed = async () => (existsSync(dynamicYml) ? (await readFile(dynamicYml, 'utf8')).includes(id) : false);
+    expect(await routed()).toBe(false);
+
+    const dis = await deployments.disableTailscaleIngress(id);
+    expect((await waitForJob(jobs, dis.jobId!)).status).toBe('completed');
+    expect(await netsOf('web')).toContain('hola');
+    expect(await routed()).toBe(true);
   }, 600_000);
 });

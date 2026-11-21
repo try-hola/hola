@@ -1,7 +1,13 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Copy } from 'lucide-react';
 
-import type { GetTailscaleIngressResponse, SetTailscaleIngressRequest, TailscaleIngressState } from '@hola/shared';
+import { tailscaleExposureOf } from '@hola/shared';
+import type {
+  GetTailscaleIngressResponse,
+  SetTailscaleIngressRequest,
+  TailscaleIngressExposure,
+  TailscaleIngressState,
+} from '@hola/shared';
 
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { useTailscaleIngressApi } from '../hooks/useTailscaleIngressApi';
@@ -36,6 +42,9 @@ interface FormState {
   mode: 'https' | 'tcp';
   listenPort: string;
   acknowledge: boolean;
+  exposure: TailscaleIngressExposure;
+  /** Acknowledges that Tailscale-only leaves no other way in (#596). */
+  acknowledgeOnly: boolean;
   authKey: string;
 }
 
@@ -54,6 +63,8 @@ function initialForm(data: GetTailscaleIngressResponse, app: string): FormState 
     mode: s?.mode ?? d.mode,
     listenPort: String(s?.listenPort ?? d.listenPort),
     acknowledge: s?.forwardAuthAcknowledged ?? false,
+    exposure: tailscaleExposureOf(s),
+    acknowledgeOnly: false,
     authKey: '',
   };
 }
@@ -104,6 +115,19 @@ export const TailscaleIngressCard: React.FC<{ deploymentId: string; appName: str
   // not "off" yet, and the server refuses a new enable until it is.
   const removing = setting?.removalPending === true;
   const firstEnable = !data.credentialHeld && !setting?.enrolledAt;
+  const exposure = tailscaleExposureOf(setting);
+  // Why Tailscale-only cannot be chosen right now (#596). The current value stays
+  // selectable so an app already there can be edited without being forced back.
+  const onlyBlockedReason: string | null =
+    exposure === 'tailscale-only'
+      ? null
+      : defaults.tailscaleOnlySupported === false
+        ? defaults.tailscaleOnlyUnsupportedReason ?? 'This app signs in through its public hostname.'
+        : !enabled
+          ? 'Enable private ingress first (as "Public hostname and Tailscale"), wait until it is Connected, then switch.'
+          : status.state !== 'connected'
+            ? `The private address must be Connected before the public hostname is removed (it is ${STATE_LABELS[status.state]}).`
+            : null;
 
   const close = () => {
     // Drop the credential from component state (and the mutation's variables).
@@ -144,6 +168,13 @@ export const TailscaleIngressCard: React.FC<{ deploymentId: string; appName: str
       setFormError('Listen port must be a whole number from 1 to 65535.');
       return;
     }
+    // Login re-sends the setting as it is: PUT replaces the whole thing, so
+    // dropping a tailscale-only exposure here would put the public route back.
+    const exposure: TailscaleIngressExposure = dialog === 'login' ? tailscaleExposureOf(setting) : form.exposure;
+    if (exposure === 'tailscale-only' && dialog === 'enable' && !form.acknowledgeOnly) {
+      setFormError('Acknowledge that Tailscale-only leaves no other way in, to continue.');
+      return;
+    }
     const body: SetTailscaleIngressRequest = {
       serviceName: form.serviceName.trim(),
       tag: form.tag.trim(),
@@ -154,6 +185,7 @@ export const TailscaleIngressCard: React.FC<{ deploymentId: string; appName: str
       mode: form.mode,
       ...(listenPortText ? { listenPort } : {}),
       ...(form.acknowledge || (dialog === 'login' && setting?.forwardAuthAcknowledged) ? { acknowledgeForwardAuthBypass: true } : {}),
+      ...(exposure === 'tailscale-only' ? { exposure, acknowledgeTailscaleOnly: true } : {}),
       ...(authKey ? { authKey } : {}),
     };
     setFormError(null);
@@ -200,6 +232,9 @@ export const TailscaleIngressCard: React.FC<{ deploymentId: string; appName: str
         </div>
       ) : (
         <>
+          <div className="text-[13px] text-text-strong mt-1" data-testid="tailscale-exposure">
+            {exposure === 'tailscale-only' ? 'Reachable: Tailscale only — no public hostname' : 'Reachable: public hostname and Tailscale'}
+          </div>
           <div className="text-[13px] text-text-muted mt-1">{status.message}</div>
           {address && (
             <div className="text-[13px] mt-2">
@@ -365,6 +400,46 @@ export const TailscaleIngressCard: React.FC<{ deploymentId: string; appName: str
                 />
                 <span>This app is protected by forward-auth at its normal address. I understand the private address does not pass through that gate.</span>
               </label>
+            )}
+            {dialog === 'enable' && (
+              <fieldset className="border border-border rounded-[9px] p-3">
+                <legend className="px-1 text-xs text-text-faint">Reachable</legend>
+                <label className="flex items-start gap-2 text-sm cursor-pointer">
+                  <input
+                    type="radio"
+                    name="ts-exposure"
+                    className="mt-[3px] accent-primary flex-none"
+                    checked={form.exposure === 'both'}
+                    onChange={() => patch({ exposure: 'both', acknowledgeOnly: false })}
+                  />
+                  <span>Public hostname and Tailscale</span>
+                </label>
+                <label className={`flex items-start gap-2 text-sm mt-2 ${onlyBlockedReason ? 'opacity-60' : 'cursor-pointer'}`}>
+                  <input
+                    type="radio"
+                    name="ts-exposure"
+                    className="mt-[3px] accent-primary flex-none"
+                    checked={form.exposure === 'tailscale-only'}
+                    disabled={onlyBlockedReason !== null}
+                    onChange={() => patch({ exposure: 'tailscale-only' })}
+                  />
+                  <span>Tailscale only — no public hostname</span>
+                </label>
+                {onlyBlockedReason && (
+                  <div className="text-xs text-text-faint mt-1 pl-6" data-testid="tailscale-only-blocked">{onlyBlockedReason}</div>
+                )}
+                {form.exposure === 'tailscale-only' && (
+                  <label className="flex items-start gap-2 text-sm cursor-pointer mt-3">
+                    <input
+                      type="checkbox"
+                      className="mt-[3px] w-4 h-4 accent-primary flex-none"
+                      checked={form.acknowledgeOnly}
+                      onChange={(e) => patch({ acknowledgeOnly: e.target.checked })}
+                    />
+                    <span>I understand this removes the normal address. If the private address stops working, this app is unreachable until I switch back.</span>
+                  </label>
+                )}
+              </fieldset>
             )}
             {/* Enter-to-submit without a visible second button. */}
             <button type="submit" className="hidden" aria-hidden="true" tabIndex={-1} />

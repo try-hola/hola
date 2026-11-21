@@ -717,6 +717,13 @@ install as **Docker Compose** stacks, orchestrated by a server and routed by
   and this companion is the one permitted, operator-enabled, platform-owned
   second path. Tailscale-side behaviour (V1–V10) is not yet verified on a real
   tailnet. Operator guide: `docs/TAILSCALE_INGRESS.md`.
+  **`exposure: 'tailscale-only'` (#596)** removes the deployment's Traefik route
+  entirely (`hasTraefikRoute`, one shared decision read by `routingRuleFor`,
+  `materializeCompose`'s `hola` attach and the registry/detail URL; the host stays
+  *held* in the routing map so no other app can claim it). Switching to it needs an
+  acknowledgement and a FRESH `connected` status, so it is two steps (enable as
+  `both`, then switch); it is refused for `native-oidc`/`forward-auth` releases, and
+  disabling or switching back restores the route in the same job.
 
 ## Conventions
 

@@ -68,6 +68,9 @@ import {
   DEFAULT_TAILSCALE_LISTEN_PORT,
   validateTailscaleIngressInput,
   buildTailscaleGuidance,
+  hasTraefikRoute,
+  tailscaleExposureOf,
+  tailnetUrlFor,
   type TailscaleIngressSetting,
   type TailscaleIngressStatus,
   type TailscaleIngressDefaults,
@@ -712,6 +715,18 @@ export interface DeploymentService extends HealthCheckable {
 // ---------------------------------------------------------------------------
 
 /** Project a stored deployment record onto the list-item shape. */
+/**
+ * The address the dashboard's "Open" and the app-registry feed publish (#596).
+ * The stored `url` is the Traefik hostname; while private ingress is enabled
+ * `tailscale-only` that name serves nothing, so publish the tailnet address if
+ * its name has been observed, and otherwise NO url rather than a dead one.
+ * Every other deployment is exactly `d.url`.
+ */
+function publishedUrl(d: EnhancedDeploymentDetail): string | undefined {
+  if (hasTraefikRoute(d.tailscaleIngress)) return d.url;
+  return tailnetUrlFor(d.tailscaleIngress);
+}
+
 function toListItem(d: EnhancedDeploymentDetail): DeploymentListItem {
   return {
     id: d.id,
@@ -724,7 +739,7 @@ function toListItem(d: EnhancedDeploymentDetail): DeploymentListItem {
     resources: d.resources,
     ports: d.ports,
     lastUpdated: d.lastUpdated,
-    url: d.url,
+    url: publishedUrl(d),
     // Release channel this deployment follows (#428); a record written before
     // this feature carries no `channel` and reads as `stable` (no migration).
     channel: d.channel ?? STABLE_CHANNEL,
@@ -744,7 +759,7 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     status: d.status,
     uptime: d.uptime,
     version: d.version,
-    url: d.url,
+    url: publishedUrl(d),
     resources: d.resources,
     ports: d.ports,
     lastUpdated: d.lastUpdated,
@@ -761,7 +776,13 @@ function toDetailResponse(d: EnhancedDeploymentDetail): GetDeploymentResponse {
     ...(d.restoredAt ? { restoredAt: d.restoredAt } : {}),
     // Private Tailscale ingress (spec 010): summary only, no exec on a detail read.
     ...(d.tailscaleIngress
-      ? { tailscaleIngress: { enabled: d.tailscaleIngress.enabled, serviceName: d.tailscaleIngress.serviceName } }
+      ? {
+          tailscaleIngress: {
+            enabled: d.tailscaleIngress.enabled,
+            serviceName: d.tailscaleIngress.serviceName,
+            exposure: tailscaleExposureOf(d.tailscaleIngress),
+          },
+        }
       : {}),
   };
 }
@@ -2771,7 +2792,13 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // is still watching.
     let content: string;
     try {
-      content = attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService });
+      // Private ingress `tailscale-only` (#596): no Traefik route, so the
+      // ingress service is NOT joined to `hola` under the routing alias — nothing
+      // routes to it. Contract-broker reach (`attachContractServicesToHolaNetwork`
+      // below, alias-less) is a different path and is untouched.
+      content = hasTraefikRoute(deployment.tailscaleIngress)
+        ? attachToHolaNetwork(raw, { alias: rule.serviceName, ingressService })
+        : raw;
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.logger.error('Could not attach app to the Traefik network', error as Error, {
@@ -3808,6 +3835,18 @@ export class RealDeploymentService extends InMemoryDeploymentService {
 
   // ───────────────────────── Private Tailscale ingress (spec 010) ─────────────────────────
 
+  /**
+   * Make the routing map agree with the private-ingress setting (#596). Called
+   * from the lifecycle job right after `up`, so a switch to or from
+   * `tailscale-only`, or a disable, changes the route in the SAME job that
+   * applied it. Only deployments that carry a setting are touched; everything
+   * else keeps exactly the route activation it had.
+   */
+  private async tsSyncRoute(deployment: EnhancedDeploymentDetail): Promise<void> {
+    if (!deployment.tailscaleIngress) return;
+    await this.routingService.activateRoute(this.routingRuleFor(deployment));
+  }
+
   private tsCredentialPath(deploymentId: string): string {
     return `deployments/${deploymentId}/tailscale/credential`;
   }
@@ -3863,6 +3902,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const service = names.includes(ingress) ? ingress : (names[0] ?? ingress);
     const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
     const port = release?.ports?.[0]?.container ?? null;
+    const blockedBy = await this.tsAuthBlockingTailscaleOnly(deployment);
     return {
       backend: { service, port },
       services: names,
@@ -3870,7 +3910,28 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       mode: 'https',
       listenPort: DEFAULT_TAILSCALE_LISTEN_PORT,
       requiresForwardAuthAcknowledgement: await this.tsRequiresForwardAuthAck(deployment),
+      exposure: 'both',
+      tailscaleOnlySupported: !blockedBy,
+      ...(blockedBy
+        ? {
+            tailscaleOnlyUnsupportedReason:
+              `This app signs in with ${blockedBy}, which is tied to its public hostname; Tailscale-only removes that hostname.`,
+          }
+        : {}),
     };
+  }
+
+  /**
+   * The active release's auth mode when it needs the Traefik hostname (#596):
+   * `native-oidc` (redirect URI) or `forward-auth` (the gate, including a
+   * `fallback: forward-auth`). `native-ldap` and no auth do not.
+   */
+  private async tsAuthBlockingTailscaleOnly(deployment: EnhancedDeploymentDetail): Promise<string | undefined> {
+    const declared = await this.readActiveAuth(deployment).catch(() => undefined);
+    const mode = declared?.mode ?? deployment.metadata?.auth?.mode;
+    if (mode === 'native-oidc' || mode === 'forward-auth') return mode;
+    if (declared?.fallback === 'forward-auth') return 'forward-auth';
+    return undefined;
   }
 
   private async tsRequiresForwardAuthAck(deployment: EnhancedDeploymentDetail): Promise<boolean> {
@@ -3952,7 +4013,35 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     };
   }
 
+  /**
+   * Status, plus the operator-facing consequences that only exist when the
+   * deployment has no Traefik route (#596). Decided at READ time from the
+   * active release, so it survives a server restart and an upgrade/rollback.
+   */
   private async tsComputeStatus(deployment: EnhancedDeploymentDetail, refresh: boolean): Promise<TailscaleIngressStatus> {
+    const status = await this.tsComputeStatusCore(deployment, refresh);
+    const setting = deployment.tailscaleIngress;
+    if (!setting?.enabled || hasTraefikRoute(setting)) return status;
+    const blockedBy = await this.tsAuthBlockingTailscaleOnly(deployment);
+    if (blockedBy) {
+      // Kept private on purpose: restoring the route here would widen exposure
+      // silently. Say plainly that sign-in cannot work, and how to fix it.
+      return {
+        ...status,
+        message: `${status.message} This release signs in with ${blockedBy}, which needs the app's public hostname; with Tailscale-only exposure sign-in cannot work.`,
+        action: 'Edit private ingress and switch exposure to "both" to restore the public address and sign-in.',
+      };
+    }
+    if (status.state === 'error') {
+      return {
+        ...status,
+        action: `${status.action ? `${status.action} ` : ''}This app has no public address (Tailscale-only), so it is unreachable until this is fixed; or switch exposure to "both" to restore the public address.`,
+      };
+    }
+    return status;
+  }
+
+  private async tsComputeStatusCore(deployment: EnhancedDeploymentDetail, refresh: boolean): Promise<TailscaleIngressStatus> {
     const observedAt = new Date().toISOString();
     const setting = deployment.tailscaleIngress;
     if (!setting || !setting.enabled) {
@@ -4019,7 +4108,25 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       }
     }
     this.tsStatusCache.set(deployment.id, { at: Date.now(), status });
+    if (status.state === 'connected' && status.dnsName) await this.tsRememberDnsName(deployment, status.dnsName);
     return status;
+  }
+
+  /** Persist the last observed tailnet name (#596); refresh the registry feed when it changed. */
+  private async tsRememberDnsName(deployment: EnhancedDeploymentDetail, dnsName: string): Promise<void> {
+    const setting = deployment.tailscaleIngress;
+    if (!setting || setting.lastDnsName === dnsName) return;
+    setting.lastDnsName = dnsName;
+    this.deployments.set(deployment.id, deployment);
+    try {
+      await this.persistDeployment(deployment);
+    } catch (error) {
+      this.logger.warn('Could not persist the observed private-ingress name', {
+        deploymentId: deployment.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!hasTraefikRoute(setting)) await this.reconcileAppRegistry();
   }
 
   override async setTailscaleIngress(deploymentId: string, body: unknown): Promise<SetTailscaleIngressResponse> {
@@ -4036,6 +4143,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       requiresForwardAuthAcknowledgement: defaults.requiresForwardAuthAcknowledgement,
       identityEnrolled: Boolean(existing?.enrolledAt),
       credentialHeld,
+      tailscaleOnlyBlockedByAuth: await this.tsAuthBlockingTailscaleOnly(deployment),
     });
     if (!result.ok) {
       // Same shape as INVALID_CHANNEL: the specific code IS the top-level code.
@@ -4047,6 +4155,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       throw err;
     }
     const v = result.value;
+    await this.tsAssertCanGoTailscaleOnly(deployment, existing, v);
     // An enrolled device keeps its name across a Service rename (the tailnet
     // already knows it by that name), so the device name is decided here, once.
     const nodeName = existing?.enrolledAt ? existing.nodeName : v.nodeName;
@@ -4102,6 +4211,8 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       listenPort: v.listenPort,
       forwardAuthAcknowledged: v.forwardAuthAcknowledged,
       nodeName,
+      exposure: v.exposure,
+      ...(existing?.lastDnsName ? { lastDnsName: existing.lastDnsName } : {}),
       ...(existing?.applied ? { applied: existing.applied } : {}),
       ...(existing?.enrolledAt ? { enrolledAt: existing.enrolledAt } : {}),
       updatedAt: new Date().toISOString(),
@@ -4119,6 +4230,9 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       ({ jobId } = await this.executeAction(deploymentId, { action: 'restart' }));
     } else {
       warnings.push('The app is not running; private ingress takes effect the next time it starts.');
+      // Saved only: no job will run. Keep the routing map agreeing with the
+      // record (the reserved/held host, or the restored route) now (#596).
+      if (deployment.currentReleaseId) await this.routingService.activateRoute(this.routingRuleFor(deployment));
     }
     return {
       ok: true,
@@ -4127,6 +4241,55 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       credentialHeld: await this.tsCredentialHeld(deploymentId),
       ...(warnings.length ? { warnings } : {}),
     };
+  }
+
+  /**
+   * The lockout guard (#596). Entering `tailscale-only` removes the only other
+   * way in, so it is refused unless a FRESH status read says the private
+   * address is `connected` right now. A stopped app, a first-time enable and an
+   * unapproved Service all fail it, which is the point: the flow is enable as
+   * `both`, get it connected, then switch.
+   *
+   * Staying `tailscale-only` with the connection settings unchanged (e.g. to
+   * supply a replacement credential) is allowed without the read — the app is
+   * already private and refusing would block the repair. Changing the Service,
+   * tag, mode, port or backend while `tailscale-only` is refused: the connection
+   * proven was the old one's.
+   */
+  private async tsAssertCanGoTailscaleOnly(
+    deployment: EnhancedDeploymentDetail,
+    existing: TailscaleIngressSetting | undefined,
+    v: { serviceName: string; tag: string; mode: string; listenPort: number; backend: { service: string; port: number }; exposure: string },
+  ): Promise<void> {
+    if (v.exposure !== 'tailscale-only') return;
+    const wasOnly = Boolean(existing?.enabled) && tailscaleExposureOf(existing) === 'tailscale-only';
+    const changed = !existing
+      || existing.serviceName !== v.serviceName || existing.tag !== v.tag || existing.mode !== v.mode
+      || existing.listenPort !== v.listenPort
+      || existing.backend.service !== v.backend.service || existing.backend.port !== v.backend.port;
+    if (wasOnly && !changed) return;
+
+    let state: TailscaleIngressStatus['state'] = 'off';
+    let message = 'Private ingress is not enabled yet; enable it with exposure "both", get it connected, then switch.';
+    let reason: 'not-connected' | 'connection-settings-changed' = 'not-connected';
+    if (wasOnly && changed) {
+      reason = 'connection-settings-changed';
+      state = 'connected';
+      message = 'The Service settings cannot change while exposure is Tailscale-only: the new Service would be untested and the app has no other way in. Switch exposure to "both", change it, get it connected, then switch back.';
+    } else if (existing?.enabled && !existing.removalPending) {
+      const status = await this.tsComputeStatus(deployment, true);
+      if (status.state === 'connected' && !changed) return;
+      state = status.state;
+      message = status.state === 'connected'
+        ? 'The Service settings changed in this request; connect with the new settings under exposure "both" first.'
+        : `The private address is not connected (${status.state}), so removing the normal address would leave the app unreachable. ${status.message}`;
+    }
+    throw new ConflictError(message, {
+      code: 'TAILSCALE_ONLY_NOT_CONNECTED',
+      reason,
+      state,
+      deploymentId: deployment.id,
+    });
   }
 
   override async disableTailscaleIngress(deploymentId: string): Promise<DisableTailscaleIngressResponse> {
@@ -4173,6 +4336,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       deployment.lastUpdated = new Date().toISOString();
       this.deployments.set(deploymentId, deployment);
       await this.persistDeployment(deployment);
+      // No job runs for a stopped app, so the route a `tailscale-only` setting
+      // withheld is restored here (#596): disabling never leaves the app without a way in.
+      if (setting.exposure === 'tailscale-only' && deployment.currentReleaseId) {
+        await this.routingService.activateRoute(this.routingRuleFor(deployment));
+      }
       this.tsInvalidate(deploymentId);
       const removal: TailscaleRemovalReport = { nodeName: setting.nodeName, signedOut, message: this.tsRemovalMessage(setting.nodeName, signedOut) };
       this.tsRemovalReports.set(deploymentId, removal);
@@ -4361,6 +4529,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
       }
       await this.tsDeleteCredential(id); // signed in: the credential is no longer needed
     }
+    if (obs.state === 'connected' && obs.dnsName) await this.tsRememberDnsName(deployment, obs.dnsName);
   }
 
   /** Absolute host base that holds every app's data root. */
@@ -5665,7 +5834,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         id: d.id,
         app: d.app,
         name: d.name,
-        url: d.url,
+        url: publishedUrl(d),
         icon: d.icon,
         status: d.status,
       }));
@@ -6691,9 +6860,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         if (!res.success) throw new Error(res.output);
         const restarted = await this.restartUntouchedServices(composeDir, projectName, before, deployment.selectedProfiles, logBoth);
         if (restarted.length > 0) output = `${output}\nRestarted: ${restarted.join(', ')}`;
+        await this.tsSyncRoute(deployment);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
         // Private ingress after-up hook (spec 010). Never fails the job.
+        const hadPrivateIngress = Boolean(deployment.tailscaleIngress);
         await this.tsAfterUp(deployment, logBoth);
+        // The published address of a `tailscale-only` app (registry feed) follows
+        // the setting and the last observed tailnet name; refresh the feed.
+        if (hadPrivateIngress) await this.reconcileAppRegistry();
         nextStatus = 'running';
         nextLifecycle = 'active';
       } else {
@@ -6787,9 +6961,14 @@ export class RealDeploymentService extends InMemoryDeploymentService {
         });
         output = res.output;
         if (!res.success) throw new Error(res.output);
+        await this.tsSyncRoute(deployment);
         if (provisioned) await this.completeAuthWiring(deployment, provisioned, projectName, logBoth);
         // Private ingress after-up hook (spec 010). Never fails the job.
+        const hadPrivateIngress = Boolean(deployment.tailscaleIngress);
         await this.tsAfterUp(deployment, logBoth);
+        // The published address of a `tailscale-only` app (registry feed) follows
+        // the setting and the last observed tailnet name; refresh the feed.
+        if (hadPrivateIngress) await this.reconcileAppRegistry();
         nextStatus = 'running';
         nextLifecycle = 'active';
       }
@@ -6826,6 +7005,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     const release = deployment.currentReleaseId ? this.releases.get(deployment.currentReleaseId) : undefined;
     const port = release?.ports?.[0]?.container;
     const rule = this.routingService.generateRule({ deploymentId: deployment.id, appName: deployment.app, subdomain: deployment.subdomain, port });
+    // Every route-producing path (activate, reconcile at startup, the
+    // forward-auth re-emit, a restart) comes through here, so this is where a
+    // `tailscale-only` deployment's route is decided ONCE (#596). The host is
+    // still reserved (`held`), but nothing is emitted for it.
+    if (!hasTraefikRoute(deployment.tailscaleIngress)) return { ...rule, held: true };
     const middleware = deployment.metadata.auth?.middleware;
     return middleware ? { ...rule, forwardAuth: middleware } : rule;
   }
@@ -7167,7 +7351,7 @@ export class RealDeploymentService extends InMemoryDeploymentService {
     // rule), defer route activation to completeAuthWiring after the deploy job
     // provisions it. Re-deploys/restarts already carry the persisted middleware, so
     // they activate immediately with the gate.
-    if (!rule.forwardAuth) {
+    if (!rule.forwardAuth && !rule.held) {
       const auth = await this.readActiveAuth(deployment);
       if (auth?.mode === 'forward-auth' || auth?.fallback === 'forward-auth') {
         this.logger.info('Deferring route activation until forward-auth is provisioned', { deploymentId });
