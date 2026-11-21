@@ -99,6 +99,15 @@ describe('hola tailscale (spec 010)', () => {
       expect(logs.join('\n')).toContain('Private Tailscale ingress: off');
     });
 
+    it('states the exposure plainly (#596)', async () => {
+      await runTailscaleShow('dep-1', {}, { sdk: asSdk(makeSdk()) });
+      expect(logs.join('\n')).toContain('Reachable: public hostname and Tailscale');
+      logs.length = 0;
+      const only = makeSdk({ get: getRes({ setting: { ...setting, exposure: 'tailscale-only' } }) });
+      await runTailscaleShow('dep-1', {}, { sdk: asSdk(only) });
+      expect(logs.join('\n')).toContain('Reachable: Tailscale only — no public hostname');
+    });
+
     it('--json prints the response body and passes refresh', async () => {
       const sdk = makeSdk();
       await runTailscaleShow('dep-1', { json: true, refresh: true }, { sdk: asSdk(sdk) });
@@ -120,6 +129,37 @@ describe('hola tailscale (spec 010)', () => {
         acknowledgeForwardAuthBypass: true, authKey: SECRET,
       });
       noSecretInOutput();
+    });
+
+    it('--exposure tailscale-only with --ack-tailscale-only sends both fields (#596)', async () => {
+      const sdk = makeSdk();
+      await runTailscaleEnable('dep-1', { ...base, exposure: 'tailscale-only', ackTailscaleOnly: true, yes: true }, { sdk: asSdk(sdk) });
+      expect((sdk.deployments.tailscaleIngress.set.mock.calls as unknown[][])[0][1]).toMatchObject({
+        exposure: 'tailscale-only', acknowledgeTailscaleOnly: true,
+      });
+    });
+
+    it('--exposure tailscale-only without the acknowledgement is refused before any request', async () => {
+      const sdk = makeSdk();
+      await runTailscaleEnable('dep-1', { ...base, exposure: 'tailscale-only', yes: true }, { sdk: asSdk(sdk) });
+      expect(sdk.deployments.tailscaleIngress.set).not.toHaveBeenCalled();
+      expect(logs.join('\n')).toContain('--ack-tailscale-only');
+    });
+
+    it('--exposure both sends no acknowledgement; an unknown value is refused', async () => {
+      const sdk = makeSdk();
+      await runTailscaleEnable('dep-1', { ...base, exposure: 'both', yes: true }, { sdk: asSdk(sdk) });
+      const body = (sdk.deployments.tailscaleIngress.set.mock.calls as unknown[][])[0][1];
+      expect(body).toMatchObject({ exposure: 'both' });
+      expect(body).not.toHaveProperty('acknowledgeTailscaleOnly');
+      await runTailscaleEnable('dep-1', { ...base, exposure: 'public', yes: true }, { sdk: asSdk(sdk) });
+      expect(sdk.deployments.tailscaleIngress.set).toHaveBeenCalledTimes(1);
+    });
+
+    it('omits exposure when not given (the server defaults it to both)', async () => {
+      const sdk = makeSdk();
+      await runTailscaleEnable('dep-1', { ...base, yes: true }, { sdk: asSdk(sdk) });
+      expect((sdk.deployments.tailscaleIngress.set.mock.calls as unknown[][])[0][1]).not.toHaveProperty('exposure');
     });
 
     it('reads the credential from stdin with --auth-key-stdin', async () => {
@@ -224,6 +264,20 @@ describe('hola tailscale (spec 010)', () => {
       expect(logs.join('\n')).toContain('Wait for it to finish');
     });
 
+    it('renders next steps for the Tailscale-only refusals (#596)', async () => {
+      let sdk = makeSdk({ setErr: new HolaApiError('ack', 400, { code: 'TAILSCALE_ONLY_ACK_REQUIRED' }) });
+      await runTailscaleEnable('dep-1', { ...base, yes: true }, { sdk: asSdk(sdk) });
+      expect(logs.join('\n')).toContain('--ack-tailscale-only');
+      logs.length = 0;
+      sdk = makeSdk({ setErr: new HolaApiError('auth', 400, { code: 'TAILSCALE_ONLY_UNSUPPORTED_AUTH', details: { authMode: 'native-oidc' } }) });
+      await runTailscaleEnable('dep-1', { ...base, yes: true }, { sdk: asSdk(sdk) });
+      expect(logs.join('\n')).toContain('native-oidc');
+      logs.length = 0;
+      sdk = makeSdk({ setErr: new HolaApiError('nc', 409, { code: 'CONFLICT', details: { code: 'TAILSCALE_ONLY_NOT_CONNECTED', state: 'off' } }) });
+      await runTailscaleEnable('dep-1', { ...base, yes: true }, { sdk: asSdk(sdk) });
+      expect(logs.join('\n')).toContain('--exposure both');
+    });
+
     it('requires --service and --tag', async () => {
       const sdk = makeSdk();
       await runTailscaleEnable('dep-1', { yes: true }, { sdk: asSdk(sdk) });
@@ -241,6 +295,14 @@ describe('hola tailscale (spec 010)', () => {
         mode: 'https', listenPort: 443, acknowledgeForwardAuthBypass: true, authKey: SECRET,
       });
       noSecretInOutput();
+    });
+
+    it('carries a tailscale-only exposure through, or a login would restore the public route (#596)', async () => {
+      const sdk = makeSdk({ get: getRes({ setting: { ...setting, exposure: 'tailscale-only' } }) });
+      await runTailscaleLogin('dep-1', { authKeyStdin: true }, { sdk: asSdk(sdk), readStdin: async () => SECRET });
+      expect((sdk.deployments.tailscaleIngress.set.mock.calls as unknown[][])[0][1]).toMatchObject({
+        exposure: 'tailscale-only', acknowledgeTailscaleOnly: true,
+      });
     });
 
     it('needs a credential source and an enabled setting', async () => {

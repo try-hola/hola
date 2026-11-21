@@ -168,6 +168,9 @@ export function reportDeployError(err: unknown, opts: { json?: boolean } = {}): 
         boundaryVersions?: string[];
         // TAILSCALE_SERVICE_NAME_TAKEN (spec 010).
         deploymentId?: string;
+        // TAILSCALE_ONLY_UNSUPPORTED_AUTH / TAILSCALE_ONLY_NOT_CONNECTED (#596).
+        authMode?: string;
+        state?: string;
       } | undefined)
     : undefined;
   // Spec 010: the 400 codes are top-level, the 409 ones ride `details.code`
@@ -267,6 +270,21 @@ export function reportDeployError(err: unknown, opts: { json?: boolean } = {}): 
     );
   } else if (tsCode === 'TAILSCALE_CREDENTIAL_REQUIRED') {
     hint('Hint: supply a Tailscale credential with --auth-key-file <path> or --auth-key-stdin (never as a flag value).');
+  } else if (tsCode === 'TAILSCALE_ONLY_ACK_REQUIRED') {
+    hint(
+      'Hint: Tailscale-only removes the normal address; if the private address stops working the app is unreachable. ' +
+        'Re-run with --ack-tailscale-only to confirm you accept that.',
+    );
+  } else if (tsCode === 'TAILSCALE_ONLY_UNSUPPORTED_AUTH') {
+    hint(
+      `Hint: this app signs in with ${typeof details?.authMode === 'string' ? details.authMode : 'SSO'}, which is tied to its public hostname. ` +
+        "Keep --exposure both (the default).",
+    );
+  } else if (tsCode === 'TAILSCALE_ONLY_NOT_CONNECTED') {
+    hint(
+      `Hint: the private address must be connected (it is: ${typeof details?.state === 'string' ? details.state : 'not connected'}) before the normal address is removed. ` +
+        "Enable it with --exposure both, wait until 'hola tailscale <deploymentId>' says connected, then re-run with --exposure tailscale-only.",
+    );
   } else if (tsCode === 'DEPLOYMENT_BUSY') {
     hint('Hint: another operation is in flight for this deployment. Wait for it to finish, then retry.');
   }

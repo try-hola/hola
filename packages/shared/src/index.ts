@@ -2909,6 +2909,10 @@ export type TraefikRoutingRule = {
   createdAt: string;
   // Present when the app is protected by forward-auth (auth mode `forward-auth`).
   forwardAuth?: ForwardAuthMiddleware;
+  // True when the host is RESERVED for this deployment but no router is emitted
+  // (private ingress in `tailscale-only` exposure, #596). The host stays
+  // unclaimable by another app; Traefik gets no route for it.
+  held?: boolean;
 };
 
 export type RoutingConflict = {

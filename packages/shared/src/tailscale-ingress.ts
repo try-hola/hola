@@ -28,6 +28,15 @@ const CREDENTIAL_RE = /^tskey-(auth|client)-[A-Za-z0-9_-]+$/;
 
 export type TailscaleIngressMode = 'https' | 'tcp';
 
+/**
+ * How reachable the app is (#596). `both` (the default, and what an absent
+ * field on a stored record means) keeps the normal Traefik route beside the
+ * private address. `tailscale-only` removes the Traefik route entirely: the
+ * tailnet is the only way in.
+ */
+export type TailscaleIngressExposure = 'both' | 'tailscale-only';
+export const DEFAULT_TAILSCALE_EXPOSURE: TailscaleIngressExposure = 'both';
+
 export interface TailscaleIngressApplied {
   serviceName: string;
   mode: TailscaleIngressMode;
@@ -45,6 +54,14 @@ export interface TailscaleIngressSetting {
   listenPort: number;
   forwardAuthAcknowledged: boolean;
   nodeName: string;
+  /** Absent on records written before #596: reads as `both`. */
+  exposure?: TailscaleIngressExposure;
+  /**
+   * The tailnet name last observed serving this Service. Remembered so surfaces
+   * that have no live status read (the app-registry feed, the deployment list)
+   * can name the private address of a `tailscale-only` app. A hint, not proof.
+   */
+  lastDnsName?: string;
   applied?: TailscaleIngressApplied;
   enrolledAt?: string;
   removalPending?: boolean;
@@ -55,6 +72,8 @@ export interface TailscaleIngressSetting {
 export interface TailscaleIngressSummary {
   enabled: boolean;
   serviceName: string;
+  /** Always present on reads from #596 on. */
+  exposure?: TailscaleIngressExposure;
 }
 
 export type TailscaleIngressState =
@@ -99,6 +118,11 @@ export interface TailscaleIngressDefaults {
   mode: TailscaleIngressMode;
   listenPort: number;
   requiresForwardAuthAcknowledgement: boolean;
+  exposure: TailscaleIngressExposure;
+  /** False when the active release's auth mode needs the Traefik hostname (#596). */
+  tailscaleOnlySupported: boolean;
+  /** Why `tailscaleOnlySupported` is false; absent when it is true. */
+  tailscaleOnlyUnsupportedReason?: string;
 }
 
 export interface TailscaleRemovalReport {
@@ -122,6 +146,10 @@ export interface SetTailscaleIngressRequest {
   mode?: TailscaleIngressMode;
   listenPort?: number;
   acknowledgeForwardAuthBypass?: boolean;
+  /** `both` when omitted. */
+  exposure?: TailscaleIngressExposure;
+  /** Required (true) whenever `exposure` is `tailscale-only`. */
+  acknowledgeTailscaleOnly?: boolean;
   authKey?: string;
 }
 
@@ -144,7 +172,9 @@ export type TailscaleIngressErrorCode =
   | 'TAILSCALE_BACKEND_UNKNOWN'
   | 'TAILSCALE_BACKEND_UNSUPPORTED'
   | 'TAILSCALE_FORWARD_AUTH_ACK_REQUIRED'
-  | 'TAILSCALE_CREDENTIAL_REQUIRED';
+  | 'TAILSCALE_CREDENTIAL_REQUIRED'
+  | 'TAILSCALE_ONLY_UNSUPPORTED_AUTH'
+  | 'TAILSCALE_ONLY_ACK_REQUIRED';
 
 export interface TailscaleIngressFailure {
   ok: false;
@@ -166,6 +196,7 @@ export interface ValidatedTailscaleIngress {
     listenPort: number;
     forwardAuthAcknowledged: boolean;
     nodeName: string;
+    exposure: TailscaleIngressExposure;
     /** Trimmed credential, when one was supplied. Transient: never persist. */
     authKey?: string;
   };
@@ -182,6 +213,11 @@ export interface TailscaleIngressValidationContext {
   identityEnrolled: boolean;
   /** True when a joining credential is already held on the server. */
   credentialHeld: boolean;
+  /**
+   * The active release's auth mode when it needs the Traefik hostname
+   * (`native-oidc` or `forward-auth`), else undefined. Refuses `tailscale-only`.
+   */
+  tailscaleOnlyBlockedByAuth?: string;
 }
 
 /** `svc:omnigraph` -> `hola-omnigraph`, truncated to a 63-character DNS label. */
@@ -209,6 +245,40 @@ export function storedTailscaleSettingProblem(s: {
   if (!isPort(s.backend?.port)) return 'backend.port';
   if (typeof s.nodeName !== 'string' || !NODE_NAME_RE.test(s.nodeName)) return 'nodeName';
   return undefined;
+}
+
+/** The exposure a stored setting means: absent reads as `both`. */
+export function tailscaleExposureOf(setting: { exposure?: TailscaleIngressExposure } | null | undefined): TailscaleIngressExposure {
+  return setting?.exposure === 'tailscale-only' ? 'tailscale-only' : 'both';
+}
+
+/**
+ * THE one decision on whether a deployment has a Traefik route (#596). Every
+ * place that produces, attaches or reserves a route asks this, so a restart or
+ * an unrelated rebuild cannot disagree with the apply path.
+ *
+ * False only while private ingress is ENABLED and `tailscale-only`. A disabled
+ * or removal-pending setting returns true, which is what restores the route in
+ * the same job that removes the companion; a companion that cannot be rendered
+ * keeps the setting enabled, so the app stays private rather than silently
+ * widening.
+ */
+export function hasTraefikRoute(
+  setting: { enabled: boolean; exposure?: TailscaleIngressExposure } | null | undefined,
+): boolean {
+  return !(setting?.enabled === true && setting.exposure === 'tailscale-only');
+}
+
+/**
+ * The private `https://` address of a setting, from the last observed name.
+ * Undefined for tcp mode (no URL scheme) or when no name has been seen.
+ */
+export function tailnetUrlFor(
+  setting: { mode: TailscaleIngressMode; listenPort: number; lastDnsName?: string } | null | undefined,
+): string | undefined {
+  if (!setting?.lastDnsName || setting.mode !== 'https') return undefined;
+  const host = setting.lastDnsName.replace(/\.$/, '');
+  return `https://${host}${setting.listenPort === 443 ? '' : `:${setting.listenPort}`}`;
 }
 
 export function isValidTailscaleCredential(value: string): boolean {
@@ -268,6 +338,11 @@ export function validateTailscaleIngressInput(
     return fail('INVALID_TAILSCALE_INGRESS', "mode must be 'https' or 'tcp'.", 'mode');
   }
 
+  const exposure = input.exposure === undefined ? DEFAULT_TAILSCALE_EXPOSURE : input.exposure;
+  if (exposure !== 'both' && exposure !== 'tailscale-only') {
+    return fail('INVALID_TAILSCALE_INGRESS', "exposure must be 'both' or 'tailscale-only'.", 'exposure');
+  }
+
   const listenPort = input.listenPort === undefined ? DEFAULT_TAILSCALE_LISTEN_PORT : input.listenPort;
   if (!isPort(listenPort)) {
     return fail('INVALID_TAILSCALE_INGRESS', 'listenPort must be an integer from 1 to 65535.', 'listenPort');
@@ -324,6 +399,24 @@ export function validateTailscaleIngressInput(
     );
   }
 
+  if (exposure === 'tailscale-only') {
+    if (ctx.tailscaleOnlyBlockedByAuth) {
+      return fail(
+        'TAILSCALE_ONLY_UNSUPPORTED_AUTH',
+        `Tailscale-only exposure is not available for an app that signs in with ${ctx.tailscaleOnlyBlockedByAuth}: its sign-in is tied to the public hostname, which Tailscale-only removes. Keep exposure as 'both'.`,
+        'exposure',
+        { authMode: ctx.tailscaleOnlyBlockedByAuth },
+      );
+    }
+    if (input.acknowledgeTailscaleOnly !== true) {
+      return fail(
+        'TAILSCALE_ONLY_ACK_REQUIRED',
+        'Tailscale-only removes the normal address entirely: if the private address stops working the app is unreachable. Acknowledge this to continue.',
+        'acknowledgeTailscaleOnly',
+      );
+    }
+  }
+
   if (ctx.requiresForwardAuthAcknowledgement && input.acknowledgeForwardAuthBypass !== true) {
     return fail(
       'TAILSCALE_FORWARD_AUTH_ACK_REQUIRED',
@@ -366,6 +459,7 @@ export function validateTailscaleIngressInput(
       listenPort,
       forwardAuthAcknowledged: input.acknowledgeForwardAuthBypass === true,
       nodeName: nodeNameFor(serviceName),
+      exposure,
       ...(authKey ? { authKey } : {}),
     },
   };

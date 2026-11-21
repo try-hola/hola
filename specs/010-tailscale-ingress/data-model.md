@@ -87,3 +87,14 @@ Returned by disable, and attached to the uninstall response as a warning.
 | `nodeName` | string |
 | `signedOut` | boolean \| null. `null` only in the immediate response to disabling a running app, where the job has not yet tried (contracts/api.md). |
 | `message` | string. Always tells the operator to delete the device record named `nodeName` in the Tailscale admin console; says so more strongly when `signedOut` is false. |
+
+## Addendum (#596): exposure
+
+`TailscaleIngressSetting` gains two optional fields. Records written before this change carry neither and read as `both` with no observed name.
+
+| Field | Type | Notes |
+|---|---|---|
+| `exposure` | `'both'` or `'tailscale-only'` | Absent reads as `both`. `tailscale-only` while `enabled` means no Traefik route (`hasTraefikRoute`). |
+| `lastDnsName` | string, optional | Last tailnet name observed `connected`; a hint used for the published URL, never proof of connectivity. |
+
+`TraefikRoutingRule` gains `held?: boolean`: the host is reserved for the deployment in the routing map, but no router/service/middleware is rendered for it. `TailscaleIngressDefaults` gains `exposure`, `tailscaleOnlySupported`, `tailscaleOnlyUnsupportedReason?`.

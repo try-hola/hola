@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { HolaSdk } from '@hola/sdk';
+import { tailscaleExposureOf } from '@hola/shared';
 import type {
   DisableTailscaleIngressResponse,
   GetDeploymentResponse,
@@ -37,6 +38,9 @@ export interface TailscaleOptions {
   authKeyFile?: string | boolean;
   authKeyStdin?: boolean;
   ackForwardAuth?: boolean;
+  /** `both` (default) or `tailscale-only` (#596). */
+  exposure?: string;
+  ackTailscaleOnly?: boolean;
   refresh?: boolean;
   /** Stray positionals / forbidden flag values land here from sade; never read for a value. */
   _?: unknown[];
@@ -189,6 +193,11 @@ export async function runTailscaleShow(
         out(`State: ${status.state}${status.message ? ` - ${status.message}` : ''}`);
         out(`Service: ${setting.serviceName} (tag ${setting.tag}, device ${setting.nodeName})`);
         out(`Backend: ${setting.backend.service}:${setting.backend.port} (${setting.mode}, listening on ${setting.listenPort})`);
+        out(
+          tailscaleExposureOf(setting) === 'tailscale-only'
+            ? 'Reachable: Tailscale only — no public hostname'
+            : 'Reachable: public hostname and Tailscale',
+        );
         out(`Credential held: ${res.credentialHeld ? 'yes' : 'no'}`);
         if (status.dnsName) {
           const scheme = setting.mode === 'https' ? 'https://' : '';
@@ -219,6 +228,15 @@ export async function runTailscaleEnable(
     if (!opts.service) abort("--service is required (e.g. --service svc:omnigraph).");
     if (!opts.tag) abort('--tag is required (e.g. --tag tag:hola-ingress).');
     if (opts.mode !== undefined && opts.mode !== 'https' && opts.mode !== 'tcp') abort("--mode must be 'https' or 'tcp'.");
+    if (opts.exposure !== undefined && opts.exposure !== 'both' && opts.exposure !== 'tailscale-only') {
+      abort("--exposure must be 'both' or 'tailscale-only'.");
+    }
+    if (opts.exposure === 'tailscale-only' && !opts.ackTailscaleOnly) {
+      abort(
+        'Tailscale-only removes the normal address entirely: if the private address stops working the app is unreachable. ' +
+          'Re-run with --ack-tailscale-only to confirm. (The private address must already be connected: enable with --exposure both first.)',
+      );
+    }
     const backend = opts.backend ? parseBackend(opts.backend) : undefined;
     const listenPort = intOpt('--port', opts.port);
 
@@ -245,6 +263,8 @@ export async function runTailscaleEnable(
       ...(opts.mode ? { mode: opts.mode as 'https' | 'tcp' } : {}),
       ...(listenPort !== undefined ? { listenPort } : {}),
       ...(opts.ackForwardAuth ? { acknowledgeForwardAuthBypass: true } : {}),
+      ...(opts.exposure ? { exposure: opts.exposure as 'both' | 'tailscale-only' } : {}),
+      ...(opts.exposure === 'tailscale-only' ? { acknowledgeTailscaleOnly: true } : {}),
       ...(authKey ? { authKey } : {}),
     };
     return await applySetting(sdk, deploymentId, body, opts);
@@ -275,6 +295,8 @@ export async function runTailscaleLogin(
       mode: s.mode,
       listenPort: s.listenPort,
       ...(s.forwardAuthAcknowledged ? { acknowledgeForwardAuthBypass: true } : {}),
+      // PUT replaces the whole setting: carry the exposure, or a login would put the public route back.
+      ...(tailscaleExposureOf(s) === 'tailscale-only' ? { exposure: 'tailscale-only' as const, acknowledgeTailscaleOnly: true } : {}),
       authKey,
     };
     return await applySetting(sdk, deploymentId, body, opts);

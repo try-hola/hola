@@ -16,3 +16,5 @@ These checks need a live tailnet and cannot run in CI. The feature is not comple
 | V10 | Host-header and address substitution land on the backend only (Story 2, SC-002) | NOT RUN | | |
 | SC-001 | Off to connected in under 10 minutes using Hola's guidance only | NOT RUN | | |
 | SC-009 | Omnigraph: an identity limited to the Service calls `/mcp`; cannot reach a second app | NOT RUN | | |
+| #596-A | Tailscale-only: from a client with no tailnet access, `<app>.<base-domain>` serves nothing for the app (no route) while the Service still answers a granted client | NOT RUN | | |
+| #596-B | Tailscale-only: Host-header and address substitution still land on the backend only (V10 re-run with exposure `tailscale-only`) | NOT RUN | | |

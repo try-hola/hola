@@ -228,6 +228,6 @@ describe('setting API (US1)', () => {
     const { deploymentId } = await sys.deploy();
     await sys.deployments.setTailscaleIngress(deploymentId, BODY);
     const d = await sys.deployments.getDeployment(deploymentId);
-    expect(d.tailscaleIngress).toEqual({ enabled: true, serviceName: 'svc:omnigraph' });
+    expect(d.tailscaleIngress).toEqual({ enabled: true, serviceName: 'svc:omnigraph', exposure: 'both' });
   });
 });

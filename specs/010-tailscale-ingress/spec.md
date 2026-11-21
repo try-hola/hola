@@ -282,3 +282,16 @@ For an app whose useful endpoint is not the one its normal route uses, the opera
 - Changing any app's source or bundle to make it reachable.
 - Managing tailnet policy, users, devices or Services on the operator's behalf.
 - Other private-network products. The setting is shaped so another could be added later, but only Tailscale is built.
+
+## Addendum (#596): Tailscale-only exposure
+
+A per-deployment `exposure` on the setting: `both` (default; an absent field on a stored record means
+`both`) or `tailscale-only`, in which the deployment has **no Traefik route** and its ingress service is
+not attached to the `hola` network for ingress.
+
+- FR-A1. While the setting is enabled and `tailscale-only`, no Traefik router or service is emitted for the deployment by any code path (apply, restart, startup rebuild, forward-auth re-emit); its hostname stays reserved.
+- FR-A2. Saving `tailscale-only` requires `acknowledgeTailscaleOnly: true` (400 `TAILSCALE_ONLY_ACK_REQUIRED`) and a fresh `connected` observation (409 `TAILSCALE_ONLY_NOT_CONNECTED`). A first-time enable as `tailscale-only` and a switch on a stopped app are therefore refused.
+- FR-A3. It is refused (400 `TAILSCALE_ONLY_UNSUPPORTED_AUTH`, `details.authMode`) when the active release's auth mode is `native-oidc` or `forward-auth`. `native-ldap` and no-auth are allowed.
+- FR-A4. Never strand the app: disabling, or switching back to `both`, restores the route in the same restart job. A companion that cannot be rendered, or a later release that declares an SSO mode, leaves the deployment private and says so in the status `message`/`action`; the route is not restored automatically.
+- FR-A5. The app-registry feed and the detail/list `url` publish the tailnet address from the last observed name (`lastDnsName`), or no URL; the dashboard's Open link shows only while the ingress is connected.
+- Out of scope: automating the tailnet side, and any change to Funnel/subnet/exit-node posture (still none).

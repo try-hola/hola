@@ -1,8 +1,13 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 → 2.0.0
-Bump rationale: MAJOR. Principle I is redefined in a backward-incompatible way:
+Version change: 2.0.0 → 2.1.0 (2026-11-21, #596); earlier: 1.0.0 → 2.0.0
+2.1.0 amendment (MINOR, #596): Principle I stays true under Tailscale-only exposure.
+  A deployment may be operator-opted into having NO Traefik route, but only
+  together with the platform companion (which is the way in instead); it is the
+  same exception, narrowed, not a new path. No principle added or removed.
+
+2.0.0 bump rationale: MAJOR. Principle I is redefined in a backward-incompatible way:
   "all app traffic MUST enter through Traefik" no longer holds without exception.
   A deployment may now carry one platform-injected, operator-enabled private
   ingress companion (spec 010, ADR 0007) that does not pass through Traefik.
@@ -47,7 +52,8 @@ coherent, safe to operate, and consistent across the Bun-workspace monorepo
 ### I. Traefik Is the Default Ingress; a Second Path Is Platform-Owned and Opt-In
 
 Every deployment's normal address (`<app>.<HOLA_BASE_DOMAIN>`) MUST enter through
-Traefik. Apps MUST NOT publish host ports; reachability is granted only by emitting
+Traefik, except a deployment the operator has explicitly opted into Tailscale-only
+exposure (below), which has no Traefik route at all. Apps MUST NOT publish host ports; reachability is granted only by emitting
 Traefik file-provider config (`/data/runtime/traefik/dynamic.yml`) and joining the
 app's ingress service to the external `hola` network. Every app image reference MUST
 be a pinned tag — never `latest` or a floating tag. The compose validator
@@ -60,7 +66,11 @@ deployment by an operator, MUST NOT be declared by a bundle, MUST be added by th
 server after validation (and re-checked by the deploy-time gate), MUST run pinned
 without privileges, host ports, host networking or the container-runtime socket, and
 MUST reach only the one backend it was configured for. A deployment that has not
-opted in MUST render exactly as if the companion did not exist. Any further path that
+opted in MUST render exactly as if the companion did not exist. Tailscale-only
+exposure (#596) MAY remove a deployment's Traefik route only while that companion is
+enabled for it, MUST keep the deployment's hostname reserved, MUST restore the route
+in the same job that disables it or switches back, and MUST be refused unless the
+private address has been observed connected. Any further path that
 bypasses Traefik requires a new ADR and a further amendment of this principle.
 
 **Rationale:** One default path is what makes `<app>.<HOLA_BASE_DOMAIN>` routing, TLS,
@@ -195,4 +205,4 @@ convenience shortcut, this document wins.
   detail; where they and this constitution diverge on a non-negotiable, this
   constitution governs and the guidance MUST be corrected.
 
-**Version**: 2.0.0 | **Ratified**: 2026-07-06 | **Last Amended**: 2026-11-20
+**Version**: 2.1.0 | **Ratified**: 2026-07-06 | **Last Amended**: 2026-11-21

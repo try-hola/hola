@@ -342,6 +342,10 @@ function renderDynamicConfig(map: TraefikRoutingMap, baseDomain: string, certRes
 
   for (const host of Object.keys(map).sort()) {
     const rule = map[host];
+    // A held host is reserved for its deployment but has no route (private
+    // ingress in `tailscale-only` exposure, #596): no router, service or
+    // middleware of any kind is emitted for it.
+    if (rule.held) continue;
     const router: Record<string, unknown> = {
       rule: `Host(\`${host}\`)`,
       service: rule.serviceName,

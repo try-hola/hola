@@ -262,3 +262,41 @@ Also unrun: SC-001 (off to connected in under ten minutes from the guidance alon
 - `specs/010-tailscale-ingress/` — spec, plan, research (R1 to R12, V1 to V10), data-model,
   `contracts/api.md`, `contracts/compose.md`, `validation.md`.
 - `docs/TAILSCALE_INGRESS.md` — the operator guide.
+
+## Addendum (2026-11-21, #596): Tailscale-only exposure
+
+The decision above keeps the normal Traefik route beside the private address. #596 adds a
+per-deployment `exposure` on the setting: `both` (the default, and what a record with no field
+means) or `tailscale-only`, which removes the deployment's Traefik route entirely so the tailnet
+policy is the only way in. It is an added option, not a replacement: SSO and ordinary browser access
+need the hostname.
+
+Decisions, as implemented:
+
+- **One route decision.** `hasTraefikRoute(setting)` is false only while the setting is enabled and
+  `tailscale-only`. The route rule, the `hola`-network attach of the ingress service, the
+  forward-auth deferral, the startup reconcile and the published URL all read it, so a restart or an
+  unrelated rebuild cannot bring the route back. Disabled and removal-pending read as "has a route":
+  disabling restores it in the same restart job. A companion that cannot be rendered keeps the
+  setting enabled, so the app stays private (status `error`, action names the way out) instead of
+  silently widening.
+- **Hostname stays reserved.** The route rule is still produced, marked `held`: the routing map keeps
+  the host (so another install is refused as `taken`) and the renderer emits nothing for it.
+- **SSO refusal.** `native-oidc` and `forward-auth` tie redirect URIs and the gate to the Traefik
+  hostname, so `tailscale-only` is refused for them (`TAILSCALE_ONLY_UNSUPPORTED_AUTH`). `native-ldap`
+  and no auth are allowed. If a later release moves a `tailscale-only` deployment onto one of those
+  modes it stays private and the status says sign-in cannot work until exposure is set back to `both`.
+- **Lockout guard.** Entering `tailscale-only` needs an acknowledgement and a fresh `connected`
+  observation at request time (`TAILSCALE_ONLY_NOT_CONNECTED` otherwise), so the flow is two steps:
+  enable as `both`, get it connected, then switch. A first-time enable as `tailscale-only` is refused.
+  While already `tailscale-only`, re-saving the same connection settings (for a new credential) is
+  allowed; changing the Service, tag, mode, port or backend is refused.
+- **Contract traffic is not ingress.** `attachContractServicesToHolaNetwork` is untouched: a provider
+  keeps its alias-less `hola` membership for broker calls.
+- **Consequences accepted.** The `${HOLA_APP_HOST}` token and the install markers still name the
+  (now unserved) hostname; the registry feed and detail `url` publish the tailnet address from the last
+  observed name, or no URL.
+
+Not verified on a real tailnet: that a client with no tailnet access cannot reach the app by any
+path, and that the Host-header substitution check (V10) still isolates it. They are recorded as NOT
+RUN in `specs/010-tailscale-ingress/validation.md`.

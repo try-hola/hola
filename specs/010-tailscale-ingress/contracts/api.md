@@ -112,3 +112,18 @@ hola tailscale disable <deploymentId> [--yes] [--json]
 - `enable` and `disable` on a running app print that the app restarts briefly and ask for confirmation unless `--yes`. Without a TTY and without `--yes` they refuse.
 - `--json` prints the response body, or the JSON error envelope on failure, as the rollback command does.
 - Command naming follows whatever the CLI's existing multi-word commands do; if the framework supports `hola tailscale enable` as a subcommand without special-casing, prefer that spelling and keep the flags.
+
+## Addendum (#596): `exposure`
+
+`GET` setting gains `exposure?: "both" | "tailscale-only"` (absent means `both`) and `lastDnsName?` (the last observed tailnet name); `defaults` gains `exposure: "both"`, `tailscaleOnlySupported: boolean` and `tailscaleOnlyUnsupportedReason?`. The detail summary gains `exposure`. `GET /api/deployments/:id` and the list carry `url` = the tailnet address (last observed name) for a `tailscale-only` deployment, and no `url` when the name is unknown.
+
+`PUT` gains `exposure?: "both" | "tailscale-only"` (default `both`; PUT still replaces the whole setting, so omitting it switches back to `both`) and `acknowledgeTailscaleOnly?: boolean`.
+
+| Status | `code` / `details.code` | When |
+|---|---|---|
+| 400 | `INVALID_TAILSCALE_INGRESS`, `details.field: "exposure"` | Value is not `both` or `tailscale-only` |
+| 400 | `TAILSCALE_ONLY_ACK_REQUIRED` | `tailscale-only` without `acknowledgeTailscaleOnly: true` |
+| 400 | `TAILSCALE_ONLY_UNSUPPORTED_AUTH`, `details.authMode` | Active release is `native-oidc` or `forward-auth` |
+| 409 | `CONFLICT` / `TAILSCALE_ONLY_NOT_CONNECTED`, `details.state`, `details.reason` | No fresh `connected` observation (first enable, stopped app, not approved, disconnected), or the Service settings changed while already `tailscale-only` (`reason: "connection-settings-changed"`) |
+
+Two-step flow: enable as `both`, wait for `connected`, then PUT `tailscale-only`. CLI: `hola tailscale enable ... --exposure both|tailscale-only --ack-tailscale-only`.
