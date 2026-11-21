@@ -66,3 +66,24 @@ updates:
       default-days: 7
     commit-message:
       prefix: "chore(docker)"
+
+  # The Tailscale companion image the server injects for private ingress
+  # (spec 010). packages/server/platform-images/tailscale/Dockerfile is never
+  # built: it is a one-line pin file the server imports as text, so a bump here
+  # changes what the server runs with no second edit. Its own entry, label and
+  # prefix (never grouped with the base images above) because a new Tailscale
+  # release can change CLI flags the server passes. Check a bump against the
+  # real-Docker integration test before merging; CI does not run it. See
+  # docs/TAILSCALE_INGRESS.md, "Updating the companion image".
+  - package-ecosystem: "docker"
+    directory: "/packages/server/platform-images/tailscale"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "tailscale-companion"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore(tailscale)"
