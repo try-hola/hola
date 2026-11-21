@@ -3,8 +3,11 @@ import { isNewerVersion } from '@hola/shared';
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 import { parseEnv } from '../../install/render-env';
 import { systemRunner, type Runner } from '../../lib/runner';
+import { shq } from '../../lib/shell-quote';
+import { buildFetchBundleCommand, classifyFetch, fetchFailureMessage } from '../../lib/bundle-fetch';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { CLI_VERSION } from '../../version';
+import { buildAccessCommand, parseAccess, accessProblem, remoteFailureMessage } from './install-access';
 import { selfUpdateCli, type SelfUpdateArgs, type SelfUpdateOutcome } from './self-update';
 
 // Self-update touches the real filesystem/network and re-execs the process, so
@@ -85,6 +88,7 @@ const DEFAULT_DIR = '/opt/hola';
 const VERSION_MARKER = '__HOLA_VERSION__=';
 const EXAMPLE_MARKER = '__HOLA_EXAMPLE__';
 const ENV_MARKER = '__HOLA_ENV__';
+const ENV_UNREADABLE = '__HOLA_ENV_UNREADABLE__';
 
 /** Stdout marker the pre-upgrade backup prints so its archive path can be parsed back out. */
 const BACKUP_PATH_MARKER = 'HOLA_BACKUP_PATH=';
@@ -293,8 +297,8 @@ export async function runUpdate(
 
     // --- `--check`: read the installed version + latest release, report, exit. ---
     if (opts.check) {
-      const read = await runner.ssh(host, `cat ${composeDir}/VERSION 2>/dev/null | tr -d ' \\t\\r\\n'`);
-      if (read.code !== 0) throw new UpdateAbort(`Could not connect to ${host} (ssh exit ${read.code}).`);
+      const read = await runner.ssh(host, `cat ${shq(composeDir)}/VERSION 2>/dev/null | tr -d ' \\t\\r\\n'`);
+      if (read.code !== 0) throw new UpdateAbort(remoteFailureMessage(host, 'Read installed version', read));
       const installed = read.stdout.trim() || null;
       const latest = await fetchLatest(repo);
       const report: UpdateCheckReport = {
@@ -309,9 +313,15 @@ export async function runUpdate(
       if (opts.json) {
         console.log(JSON.stringify(report, null, 2));
       } else {
-        out(`CLI version:       ${colors.bold(report.cli)}`);
-        out(`Installed (host):  ${colors.bold(report.installed ?? 'unknown')}`);
-        out(`Latest release:    ${colors.bold(report.latest ?? 'unavailable')}`);
+        out(`${'CLI version:'.padEnd(22)} ${colors.bold(report.cli)}`);
+        out(`${'Installed (host):'.padEnd(22)} ${colors.bold(report.installed ?? 'unknown')}`);
+        // The lookup only counts non-prerelease releases, so for a host/CLI on a
+        // prerelease (0.11.0-rc.N) "Latest release" reads as older than what is
+        // running. Say what it is.
+        const current = report.installed ?? report.cli;
+        const onPrerelease = current.includes('-');
+        const latestLabel = onPrerelease ? 'Latest stable release:' : 'Latest release:';
+        out(`${latestLabel.padEnd(22)} ${colors.bold(report.latest ?? 'unavailable')}`);
         if (report.updateAvailable) {
           out(`\n${colors.yellow('A newer Hola version')} (${colors.bold(report.latest!)}) is available.`);
           const behindLatest = isNewerVersion(report.latest!, CLI_VERSION);
@@ -376,10 +386,29 @@ export async function runUpdate(
       await ssh('Preflight host', probe);
     } else {
       const r = await ssh('Preflight host', probe);
-      if (r.code !== 0) throw new UpdateAbort(`Could not connect to ${host} (ssh exit ${r.code}).`);
+      if (r.code !== 0) throw new UpdateAbort(remoteFailureMessage(host, 'Preflight host', r));
       const p = parsePreflight(r.stdout);
       assertPreflight(p);
       out('  host OK (docker, compose, curl/tar, permissions)');
+    }
+
+    // 1.5) Can this SSH user modify the install dir? Checked before anything on the
+    //    host changes, so a mixed-ownership dir (#599) is reported with its fix
+    //    instead of surfacing later as a misleading connection/download error.
+    const accessCmd = buildAccessCommand(composeDir);
+    if (opts.dryRun) {
+      await ssh('Check install dir access', accessCmd);
+    } else {
+      const ar = await ssh('Check install dir access', accessCmd);
+      const access = parseAccess(ar.stdout);
+      if (!access) throw new UpdateAbort(remoteFailureMessage(host, 'Check install dir access', ar));
+      const problem = accessProblem(access, composeDir, host);
+      if (problem) {
+        // A missing dir is "no install", the same outcome the .env read reports below.
+        throw new UpdateAbort(
+          access.dirExists ? problem : `${problem}\nInstall first with: hola bootstrap --host ${host}` + (opts.dir ? ` --dir ${opts.dir}` : ''),
+        );
+      }
     }
 
     // 2) Read the current install: its .env (for the deployment config + auth mode)
@@ -391,7 +420,13 @@ export async function runUpdate(
       await ssh('Read current install', readStateCmd(composeDir));
     } else {
       const read = await ssh('Read current install', readStateCmd(composeDir));
-      if (read.code !== 0) throw new UpdateAbort(`Could not connect to ${host} (ssh exit ${read.code}).`);
+      if (read.code !== 0) throw new UpdateAbort(remoteFailureMessage(host, 'Read current install', read));
+      if (read.stdout.includes(ENV_UNREADABLE)) {
+        throw new UpdateAbort(
+          `Could not read ${composeDir}/.env on ${host}: permission denied for the SSH user. ` +
+            `Fix ownership on the host (sudo chown -R "$(id -un):$(id -gn)" ${shq(composeDir)}) and re-run.`,
+        );
+      }
       const parsed = parseState(read.stdout);
       if (!parsed.hasEnv) {
         throw new UpdateAbort(
@@ -477,12 +512,17 @@ export async function runUpdate(
     //    tarball carries scripts/compose/.env.example/VERSION but NOT .env or
     //    traefik/acme — extracting over the dir preserves the operator's config
     //    and the ACME cert store. The dir already exists (we just read its .env).
-    const fetchStack = `set -e; curl -fsSL ${tarballUrl} | tar xz -C ${dir}`;
+    const fetchStack = buildFetchBundleCommand(tarballUrl, dir);
     const fetchRes = await ssh(`Download Hola ${version} stack into ${composeDir}`, fetchStack, { stream: true });
     if (!opts.dryRun && fetchRes.code !== 0) {
+      const kind = classifyFetch(fetchRes.code);
+      if (kind === 'connection') {
+        throw new UpdateAbort(remoteFailureMessage(host, `Download Hola ${version} stack`, fetchRes));
+      }
       throw new UpdateAbort(
-        `Downloading the compose bundle failed (exit ${fetchRes.code}). ` +
-          `Check that release ${ref} exists and the host can reach ${tarballUrl}.`,
+        fetchFailureMessage(kind === 'ok' ? 'unknown' : kind, {
+          host, dir: composeDir, ref, url: tarballUrl, code: fetchRes.code, stderr: fetchRes.stderr,
+        }),
       );
     }
 
@@ -492,7 +532,7 @@ export async function runUpdate(
     //    Auto-managed keys (AUTHENTIK_*/COMPOSE_*, generated by install.sh) and
     //    keys that ship a default value in the example are intentionally excluded.
     if (!opts.dryRun) {
-      const ex = await ssh('Check config drift (.env.example vs .env)', `cat ${composeDir}/.env.example 2>/dev/null`);
+      const ex = await ssh('Check config drift (.env.example vs .env)', `cat ${shq(composeDir)}/.env.example 2>/dev/null`);
       const concerning = newRequiredKeys(ex.stdout, oldExampleKeys, config);
       if (concerning.length) {
         out(`  ${colors.yellow('New required config')} in this release with no default and not in your .env: ${concerning.join(', ')}`);
@@ -504,7 +544,7 @@ export async function runUpdate(
     //    the new pinned images, and recreates only the changed services. State in
     //    the hola-data volume is preserved. HOLA_BOOTSTRAP=1 silences its hints.
     steps.push('Run install.sh');
-    const installCmd = `cd ${composeDir} && HOLA_BOOTSTRAP=1 ./scripts/install.sh`;
+    const installCmd = `cd ${shq(composeDir)} && HOLA_BOOTSTRAP=1 ./scripts/install.sh`;
     if (opts.dryRun) {
       out('# Run install.sh');
       out(`  ssh ${host} ${installCmd}`);
@@ -520,7 +560,7 @@ export async function runUpdate(
       spin?.succeed(colors.green('Stack is up.'));
 
       if (!opts.json) {
-        const ps = await runner.ssh(host, `cd ${composeDir} && docker compose ps --format json 2>/dev/null`);
+        const ps = await runner.ssh(host, `cd ${shq(composeDir)} && docker compose ps --format json 2>/dev/null`);
         const table = renderContainerTable(parseComposePs(ps.stdout));
         if (table) out(`\n${table}\n`);
       }
@@ -601,12 +641,12 @@ function backupCmd(
   const lines = [
     'set -e',
     `ts=$(date -u +%Y%m%dT%H%M%SZ)`,
-    `bdir="${dir}/backups"`,
+    `bdir=${shq(dir)}/backups`,
     `mkdir -p "$bdir"`,
     `stage=$(mktemp -d)`,
     `trap 'rm -rf "$stage"' EXIT`,
-    `if [ -f "${dir}/.env" ]; then cp -p "${dir}/.env" "$stage/.env"; fi`,
-    `if [ -d "${dir}/traefik/acme" ]; then cp -a "${dir}/traefik/acme" "$stage/acme"; fi`,
+    `if [ -f ${shq(dir)}/.env ]; then cp -p ${shq(dir)}/.env "$stage/.env"; fi`,
+    `if [ -d ${shq(dir)}/traefik/acme ]; then cp -a ${shq(dir)}/traefik/acme "$stage/acme"; fi`,
     `if docker cp hola-server:/data "$stage/hola-data" >/dev/null 2>&1; then :; else echo "WARN: hola-data volume not captured (is hola-server running?)" >&2; fi`,
     `archive="$bdir/pre-update-${safeFrom}-$ts.tar.gz"`,
   ];
@@ -637,10 +677,16 @@ function parseBackupPath(stdout: string): string | null {
 
 /** Remote command that prints the install's VERSION, old .env.example, and .env behind markers, in one read. */
 function readStateCmd(dir: string): string {
+  const q = shq(dir);
+  // VERSION and .env.example are optional (older hosts), so their absence is quiet.
+  // `.env` is the one file this step exists to read: a failure to read it is NOT
+  // hidden, it is reported on stdout behind ENV_UNREADABLE so the caller can name it
+  // (the exit status of the last `cat` used to be mistaken for an SSH failure, #599).
   return (
-    `printf '%s' '${VERSION_MARKER}'; cat ${dir}/VERSION 2>/dev/null | tr -d ' \\t\\r\\n'; ` +
-    `printf '\\n%s\\n' '${EXAMPLE_MARKER}'; cat ${dir}/.env.example 2>/dev/null; ` +
-    `printf '\\n%s\\n' '${ENV_MARKER}'; cat ${dir}/.env 2>/dev/null`
+    `printf '%s' '${VERSION_MARKER}'; cat ${q}/VERSION 2>/dev/null | tr -d ' \\t\\r\\n'; ` +
+    `printf '\\n%s\\n' '${EXAMPLE_MARKER}'; cat ${q}/.env.example 2>/dev/null; ` +
+    `printf '\\n%s\\n' '${ENV_MARKER}'; ` +
+    `if [ -e ${q}/.env ]; then cat ${q}/.env 2>/dev/null || printf '%s\\n' '${ENV_UNREADABLE}'; fi; exit 0`
   );
 }
 
@@ -669,7 +715,7 @@ function parseState(
 /** Idempotent remote env_set (mirrors install.sh): replace/append each KEY=VALUE in .env. */
 function envSetCmd(dir: string, pairs: [string, string][]): string {
   const fn =
-    `cd ${dir} && set -e; ` +
+    `cd ${shq(dir)} && set -e; ` +
     `_set() { tmp=$(mktemp); grep -vE "^$1=" .env > "$tmp" 2>/dev/null || true; printf '%s=%s\\n' "$1" "$2" >> "$tmp"; mv "$tmp" .env; }; `;
   const calls = pairs.map(([k, v]) => `_set ${k} ${v}`).join('; ');
   return fn + calls;

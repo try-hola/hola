@@ -6,6 +6,9 @@ import type { Runner } from '../lib/runner';
 
 const OK_PREFLIGHT = 'docker=ok\ncurl=ok\ntar=ok\ncompose=ok\ndockerperm=ok\n';
 
+export const OK_ACCESS =
+  '__HOLA_ACCESS__\nuser=me\ngroup=me\nuid=1000\ndir=ok\nowner=me\ndirowned=ok\ndirwritable=ok\nenv=ok\n';
+
 const ENV_AUTHENTIK =
   'HOLA_DOMAIN=apps.example.com\nHOLA_BASE_DOMAIN=hola.example.com\nHOLA_AUTH_MODE=authentik\nHOLA_AUTHENTIK_DOMAIN=auth.hola.example.com\n';
 const ENV_NONE = 'HOLA_DOMAIN=apps.example.com\nHOLA_BASE_DOMAIN=hola.example.com\nHOLA_AUTH_MODE=none\n';
@@ -20,6 +23,8 @@ function makeRunner(opts?: {
   oldExample?: string;
   /** The .env.example shipped by the NEW bundle, read after extract. */
   newExample?: string;
+  /** Canned output for the install-dir access probe (defaults to a healthy, owned dir). */
+  access?: string;
 }): Runner & { calls: { cmd: string; input?: string }[] } {
   const preflight = opts?.preflight ?? OK_PREFLIGHT;
   const env = opts?.env ?? ENV_AUTHENTIK;
@@ -31,6 +36,7 @@ function makeRunner(opts?: {
     calls,
     ssh: vi.fn(async (_host: string, cmd: string, o?: { input?: string }) => {
       calls.push({ cmd, input: o?.input });
+      if (cmd.includes('__HOLA_ACCESS__')) return { code: 0, stdout: opts?.access ?? OK_ACCESS, stderr: '' };
       if (cmd.includes('command -v')) return { code: 0, stdout: preflight, stderr: '' };
       // Pre-upgrade snapshot: echo back the archive path behind its marker.
       if (cmd.includes('HOLA_BACKUP_PATH=')) {
@@ -62,6 +68,7 @@ describe('hola update', () => {
 
     expect(res.steps).toEqual([
       'Preflight host',
+      'Check install dir access',
       'Read current install',
       'Snapshot current install (.env, traefik/acme, hola-data)',
       'Download Hola 0.6.23 stack into /opt/hola',
@@ -83,10 +90,11 @@ describe('hola update', () => {
       { host: 'me@vm', ref: 'cli-v0.6.23', dir: '/opt/hola', json: true },
       { prompter: scriptedPrompter({}), runner },
     );
-    const fetch = runner.calls.find((c) => c.cmd.includes('tar xz -C /opt/hola'))!;
-    expect(fetch.cmd).toMatch(/curl -fsSL \S*releases\/download\/cli-v0\.6\.23\/hola-compose-0\.6\.23\.tar\.gz/);
+    const fetch = runner.calls.find((c) => c.cmd.includes('"$own" -C "$d"'))!;
+    expect(fetch.cmd).toMatch(/curl -fsSL -o "\$tmp" \S*releases\/download\/cli-v0\.6\.23\/hola-compose-0\.6\.23\.tar\.gz/);
     // Update never creates the dir (it must already exist) — no mkdir/sudo dance.
-    expect(fetch.cmd).not.toContain('mkdir');
+    expect(fetch.cmd).not.toContain('mkdir -p');
+    expect(fetch.cmd).toContain('d=/opt/hola');
   });
 
   it('honors --tarball-url', async () => {
@@ -95,7 +103,7 @@ describe('hola update', () => {
       { host: 'me@vm', tarballUrl: 'https://example.com/custom.tar.gz', json: true },
       { prompter: scriptedPrompter({}), runner },
     );
-    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL https://example.com/custom.tar.gz'))).toBe(true);
+    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL -o "$tmp" https://example.com/custom.tar.gz'))).toBe(true);
   });
 
   it('aborts when no install (.env) is found on the host', async () => {
@@ -195,7 +203,7 @@ describe('hola update', () => {
     // The snapshot precedes the bundle download (the rollback point is the pre-upgrade state).
     const order = runner.calls.map((c) => c.cmd);
     expect(order.findIndex((c) => c.includes('HOLA_BACKUP_PATH='))).toBeLessThan(
-      order.findIndex((c) => c.includes('tar xz -C /opt/hola')),
+      order.findIndex((c) => c.includes('--no-same-owner')),
     );
   });
 
@@ -346,7 +354,194 @@ describe('hola update', () => {
     expect(res.updateAvailable).toBe(true);
     expect(res.releaseUrl).toBe('https://example.com/r');
     // No install/extract happened.
-    expect(runner.calls.some((c) => c.cmd.includes('install.sh') || c.cmd.includes('tar xz'))).toBe(false);
+    expect(runner.calls.some((c) => c.cmd.includes('install.sh') || c.cmd.includes('tar '))).toBe(false);
+  });
+
+  // --- #599: ownership preflight + accurate errors -------------------------
+
+  /** Run an update and return what it wrote to stderr (the abort message). */
+  async function failure(
+    runner: Runner,
+    extra: Partial<Parameters<typeof runUpdate>[0]> = {},
+  ): Promise<string> {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await runUpdate(
+        { host: 'me@vm', ref: 'cli-v0.6.23', json: true, ...extra },
+        { prompter: scriptedPrompter({}), runner },
+      );
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+      return err.mock.calls.map((c) => String(c[0])).join('\n');
+    } finally {
+      err.mockRestore();
+    }
+  }
+
+  /** Wrap a runner so `fn` can answer a command; returning undefined falls through to the original. */
+  function override(runner: Runner, fn: (cmd: string) => { code: number; stdout: string; stderr: string } | undefined): void {
+    const orig = runner.ssh.bind(runner);
+    runner.ssh = async (h, cmd, o) => fn(cmd) ?? orig(h, cmd, o);
+  }
+
+  const accessOut = (lines: string) => `__HOLA_ACCESS__\nuser=me\ngroup=staff\nuid=1000\ndir=ok\nowner=root\n${lines}`;
+
+  it('stops before changing anything when the dir is owned by another user, naming the real fix', async () => {
+    const runner = makeRunner({
+      access: accessOut('dirowned=fail\ndirwritable=fail\nenv=ok\nforeign=/opt/hola/VERSION\nforeign=/opt/hola/scripts\n'),
+    });
+    const msg = await failure(runner);
+    expect(msg).toContain('/opt/hola is owned by root, not me');
+    expect(msg).toContain('me cannot write to /opt/hola');
+    expect(msg).toContain('/opt/hola/VERSION');
+    // Primary group comes from `id -gn` on the host, not an assumed same-as-user group.
+    expect(msg).toContain('sudo chown -R me:staff /opt/hola');
+    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL') || c.cmd.includes('HOLA_BACKUP_PATH') || c.cmd.includes('install.sh'))).toBe(false);
+  });
+
+  it('reports an unreadable .env from the preflight, naming the file and user', async () => {
+    const msg = await failure(makeRunner({ access: accessOut('dirowned=ok\ndirwritable=ok\nenv=unreadable\n') }));
+    expect(msg).toContain('me cannot read /opt/hola/.env (permission denied)');
+    expect(msg).not.toContain('Could not connect');
+  });
+
+  it('reports a blocked subdirectory', async () => {
+    const msg = await failure(makeRunner({ access: accessOut('dirowned=ok\ndirwritable=ok\nenv=ok\nblocked=scripts\n') }));
+    expect(msg).toContain('/opt/hola/scripts is not owned or writable by me');
+  });
+
+  it('passes for root (uid 0 reports owned + writable) and does not nag about foreign files', async () => {
+    const runner = makeRunner({
+      access: '__HOLA_ACCESS__\nuser=root\ngroup=root\nuid=0\ndir=ok\nowner=1001\ndirowned=ok\ndirwritable=ok\nenv=ok\nforeign=/opt/hola/VERSION\n',
+    });
+    const res = await runUpdate(
+      { host: 'root@vm', ref: 'cli-v0.6.23', json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    expect(res).toBeDefined();
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('quotes an install dir containing spaces in every remote command', async () => {
+    const runner = makeRunner();
+    await runUpdate(
+      { host: 'me@vm', ref: 'cli-v0.6.23', dir: "/srv/my hola's", json: true },
+      { prompter: scriptedPrompter({}), runner },
+    );
+    const q = "'/srv/my hola'\\''s'";
+    expect(runner.calls.find((c) => c.cmd.includes('__HOLA_ACCESS__'))!.cmd).toContain(`d=${q}`);
+    expect(runner.calls.find((c) => c.cmd.includes('__HOLA_ENV__'))!.cmd).toContain(`cat ${q}/.env`);
+    expect(runner.calls.find((c) => c.cmd.includes('--no-same-owner'))!.cmd).toContain(`d=${q}`);
+    expect(runner.calls.find((c) => c.cmd.includes('install.sh'))!.cmd).toContain(`cd ${q} &&`);
+  });
+
+  it('a missing install dir is reported as no install, with the bootstrap hint', async () => {
+    const msg = await failure(makeRunner({ access: '__HOLA_ACCESS__\nuser=me\ngroup=me\nuid=1000\ndir=missing\n' }));
+    expect(msg).toContain('No Hola install found at /opt/hola');
+    expect(msg).toContain('hola bootstrap --host me@vm');
+  });
+
+  it('ssh exit 255 on a step is a connection failure', async () => {
+    const runner = makeRunner();
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => ({ code: 255, stdout: '', stderr: 'ssh: connect to host vm port 22: Connection refused' }));
+    const msg = await failure(runner);
+    expect(msg).toContain('Could not connect to me@vm (ssh exit 255)');
+    expect(msg).toContain('Connection refused');
+  });
+
+  it('a non-255 exit on a step names the step, not the connection', async () => {
+    const runner = makeRunner();
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => ({ code: 1, stdout: '', stderr: 'cat: /opt/hola/VERSION: Permission denied' }));
+    const msg = await failure(runner);
+    expect(msg).not.toContain('Could not connect');
+    expect(msg).toContain('"Preflight host" failed on me@vm (exit 1)');
+    expect(msg).toContain('Permission denied');
+  });
+
+  it('an unreadable .env at the read step names the file, not the connection', async () => {
+    const runner = makeRunner();
+    override(runner, (cmd) =>
+      cmd.includes('__HOLA_ENV__')
+        ? { code: 0, stdout: '__HOLA_VERSION__=0.6.20\n__HOLA_EXAMPLE__\n\n__HOLA_ENV__\n__HOLA_ENV_UNREADABLE__\n', stderr: '' }
+        : undefined,
+    );
+    const msg = await failure(runner);
+    expect(msg).toContain('Could not read /opt/hola/.env on me@vm: permission denied');
+    expect(msg).toContain('sudo chown -R');
+    expect(msg).not.toContain('Could not connect');
+  });
+
+  it('never echoes .env contents into an error', async () => {
+    const runner = makeRunner();
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementation(async (_h: string, cmd: string) => {
+      if (cmd.includes('__HOLA_ACCESS__')) return { code: 0, stdout: OK_ACCESS, stderr: '' };
+      if (cmd.includes('command -v')) return { code: 0, stdout: OK_PREFLIGHT, stderr: '' };
+      return { code: 3, stdout: 'POSTGRES_PASSWORD=hunter2\n', stderr: 'boom' };
+    });
+    const msg = await failure(runner);
+    expect(msg).toContain('boom');
+    expect(msg).not.toContain('hunter2');
+  });
+
+  const stepFailure = (code: number, stderr: string) => {
+    const runner = makeRunner();
+    override(runner, (cmd) => (cmd.includes('--no-same-owner') ? { code, stdout: '', stderr } : undefined));
+    return runner;
+  };
+
+  it('a failed download blames the download and shows curl output', async () => {
+    const msg = await failure(stepFailure(42, 'curl: (22) The requested URL returned error: 404'));
+    expect(msg).toContain('Downloading the compose bundle failed');
+    expect(msg).toContain('Check that release cli-v0.6.23 exists');
+    expect(msg).toContain('returned error: 404');
+  });
+
+  it('a failed extract blames the extract, shows tar output, and does NOT say "check the release"', async () => {
+    const msg = await failure(stepFailure(43, 'tar: ./VERSION: Cannot open: File exists'));
+    expect(msg).toContain('could not extract it into /opt/hola');
+    expect(msg).toContain('Cannot open: File exists');
+    expect(msg).not.toContain('Check that release');
+  });
+
+  it('an ssh drop during the download is a connection failure', async () => {
+    const msg = await failure(stepFailure(255, 'client_loop: send disconnect: Broken pipe'));
+    expect(msg).toContain('Could not connect to me@vm (ssh exit 255)');
+    expect(msg).not.toContain('Check that release');
+  });
+
+  it('the extract command never restores owners', async () => {
+    const runner = makeRunner();
+    await runUpdate({ host: 'me@vm', ref: 'cli-v0.6.23', json: true }, { prompter: scriptedPrompter({}), runner });
+    const cmd = runner.calls.find((c) => c.cmd.includes('--no-same-owner'))!.cmd;
+    expect(cmd).toContain('own=--no-same-owner');
+    expect(cmd).not.toMatch(/\| *tar/);
+  });
+
+  it('--check labels the latest as stable when running a prerelease', async () => {
+    const logs: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((m) => { logs.push(String(m)); });
+    try {
+      const res = (await runUpdate(
+        { host: 'me@vm', check: true },
+        { prompter: scriptedPrompter({}), runner: makeRunner({ version: '0.11.0-rc.14' }), fetchLatest: async () => ({ version: '0.10.0', url: 'u' }) },
+      )) as UpdateCheckReport;
+      expect(res.latest).toBe('0.10.0'); // JSON field names/values unchanged
+    } finally { log.mockRestore(); }
+    expect(logs.join('\n')).toContain('Latest stable release:');
+  });
+
+  it('--check keeps the plain label for stable installs', async () => {
+    const logs: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((m) => { logs.push(String(m)); });
+    try {
+      await runUpdate(
+        { host: 'me@vm', check: true },
+        { prompter: scriptedPrompter({}), runner: makeRunner({ version: '0.6.20' }), fetchLatest: async () => ({ version: '0.6.25', url: 'u' }) },
+      );
+    } finally { log.mockRestore(); }
+    const out = logs.join('\n');
+    expect(out).toContain('Latest release:');
+    expect(out).not.toContain('stable');
   });
 
   // --- post-update changelog ------------------------------------------------

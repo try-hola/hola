@@ -7,6 +7,7 @@ import { parseEnv, renderEnv, schemaTemplate } from '../../install/render-env';
 import { secretKeys, type ConfigMap } from '../../install/schema';
 import { runWizard, WizardError } from '../../install/wizard';
 import type { CheckResult } from '../../install/checks';
+import { buildFetchBundleCommand, classifyFetch, fetchFailureMessage } from '../../lib/bundle-fetch';
 import { systemRunner, type Runner } from '../../lib/runner';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { handoffCredentials } from '../credentials/credentials';
@@ -296,7 +297,8 @@ export async function runBootstrap(
       `  elif sudo -n true 2>/dev/null; then sudo mkdir -p ${dir} && sudo chown "$(id -u):$(id -g)" ${dir}; ` +
       `  else exit 13; fi; ` +
       `fi; ` +
-      `curl -fsSL ${tarballUrl} | tar xz -C ${dir}`;
+      // Download to a temp file, then extract without restoring owners (see lib/bundle-fetch.ts, #599).
+      buildFetchBundleCommand(tarballUrl, dir);
     const fetchRes = await ssh(`Download Hola ${version} stack into ${composeDir}`, fetchStack, { stream: true });
     if (!opts.dryRun && fetchRes.code === 13) {
       throw new BootstrapAbort(
@@ -306,9 +308,13 @@ export async function runBootstrap(
       );
     }
     if (!opts.dryRun && fetchRes.code !== 0) {
+      const kind = classifyFetch(fetchRes.code);
       throw new BootstrapAbort(
-        `Downloading the compose bundle failed (exit ${fetchRes.code}). ` +
-          `Check that release ${ref} exists and the host can reach ${tarballUrl}.`,
+        kind === 'connection'
+          ? `Could not connect to ${host} (ssh exit 255).`
+          : fetchFailureMessage(kind === 'ok' ? 'unknown' : kind, {
+              host, dir, ref, url: tarballUrl, code: fetchRes.code, stderr: fetchRes.stderr,
+            }),
       );
     }
 

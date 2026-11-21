@@ -76,14 +76,15 @@ describe('hola bootstrap', () => {
     );
     expect(
       runner.calls.some((c) =>
-        /curl -fsSL \S*releases\/download\/cli-v0\.2\.0\/hola-compose-0\.2\.0\.tar\.gz.*tar xz -C \/opt\/hola/.test(c.cmd),
+        /curl -fsSL -o "\$tmp" \S*releases\/download\/cli-v0\.2\.0\/hola-compose-0\.2\.0\.tar\.gz.*tar xzf "\$tmp" "\$own" -C "\$d"/.test(c.cmd),
       ),
     ).toBe(true);
     expect(runner.calls.some((c) => c.cmd.includes('cat > /opt/hola/.env'))).toBe(true);
     expect(runner.calls.some((c) => c.cmd.includes('cd /opt/hola && HOLA_BOOTSTRAP=1 ./scripts/install.sh'))).toBe(true);
     // /opt is root-owned: the fetch step creates the dir with sudo + chown when
     // the parent isn't writable (and plain mkdir when it is).
-    const fetch = runner.calls.find((c) => c.cmd.includes('tar xz -C /opt/hola'))!;
+    const fetch = runner.calls.find((c) => c.cmd.includes('sudo mkdir -p /opt/hola'))!;
+    expect(fetch.cmd).toContain('--no-same-owner');
     expect(fetch.cmd).toContain('sudo mkdir -p /opt/hola');
     expect(fetch.cmd).toContain('chown');
   });
@@ -94,7 +95,7 @@ describe('hola bootstrap', () => {
       { host: 'me@vm', tarballUrl: 'https://example.com/custom.tar.gz', skipChecks: true, json: true },
       { prompter: scriptedPrompter(answers), runner }
     );
-    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL https://example.com/custom.tar.gz'))).toBe(true);
+    expect(runner.calls.some((c) => c.cmd.includes('curl -fsSL -o "$tmp" https://example.com/custom.tar.gz'))).toBe(true);
   });
 
   it('--dry-run connects to nothing and exits 0', async () => {
