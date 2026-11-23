@@ -624,6 +624,9 @@ async function decideSso(opts: UpdateOptions, prompter: Prompter): Promise<'enab
   return ans === 'true' ? 'enable' : 'keep';
 }
 
+/** Quote for a remote shell, keeping the historical double-quoted form for path-safe values. */
+const dq = (v: string): string => { const q = shq(v); return q === v ? `"${v}"` : q; };
+
 /**
  * Remote command for the pre-upgrade snapshot: tar `.env`, the `traefik/acme` cert
  * store, and the `hola-data` volume (captured via `docker cp` from the running
@@ -657,7 +660,7 @@ function backupCmd(
     const base = root.slice(root.lastIndexOf('/') + 1);
     // App data is tarred straight from its path (no staging copy of a large tree).
     lines.push(
-      `if [ -d "${root}" ]; then tar czf "$archive" -C "$stage" . -C "${parent}" "${base}"; else tar czf "$archive" -C "$stage" .; fi`,
+      `if [ -d ${dq(root)} ]; then tar czf "$archive" -C "$stage" . -C ${dq(parent)} ${dq(base)}; else tar czf "$archive" -C "$stage" .; fi`,
     );
   } else {
     lines.push(`tar czf "$archive" -C "$stage" .`);
@@ -718,7 +721,7 @@ function envSetCmd(dir: string, pairs: [string, string][]): string {
   const fn =
     `cd ${shq(dir)} && set -e; ` +
     `_set() { tmp=$(mktemp); grep -vE "^$1=" .env > "$tmp" 2>/dev/null || true; printf '%s=%s\\n' "$1" "$2" >> "$tmp"; mv "$tmp" .env; }; `;
-  const calls = pairs.map(([k, v]) => `_set ${k} ${v}`).join('; ');
+  const calls = pairs.map(([k, v]) => `_set ${shq(k)} ${shq(v)}`).join('; ');
   return fn + calls;
 }
 

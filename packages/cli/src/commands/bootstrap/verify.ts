@@ -15,6 +15,8 @@
 //    yet"), so curl's own verdict is kept rather than hidden behind a blanket `-k`.
 //    Without the fallback, a reachable stack would look down during that window.
 
+import { shq } from '../../lib/shell-quote';
+
 /** The single remote command. It prints `<mode> <http_code>`, with mode `verified` or `insecure`. */
 export function buildVerifyCommand(domain: string): string {
   const url = `https://${domain}/api/system/health`;
@@ -22,9 +24,9 @@ export function buildVerifyCommand(domain: string): string {
   // verification failure, as well as DNS/connect failures, which the -k retry
   // tells apart.
   return (
-    `c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 ${url} 2>/dev/null || true); ` +
+    `c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 ${shq(url)} 2>/dev/null || true); ` +
     `if [ "$c" = "000" ] || [ -z "$c" ]; then ` +
-    `c=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 15 ${url} 2>/dev/null || true); ` +
+    `c=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 15 ${shq(url)} 2>/dev/null || true); ` +
     `echo "insecure \${c:-000}"; ` +
     `else echo "verified $c"; fi`
   );
