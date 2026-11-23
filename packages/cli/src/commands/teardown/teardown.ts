@@ -1,4 +1,5 @@
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
+import { remoteFailureMessage } from '../../lib/remote-failure';
 import { systemRunner, type Runner } from '../../lib/runner';
 
 export interface TeardownOptions {
@@ -148,7 +149,7 @@ export async function runTeardown(
 
     // Connectivity probe — fail fast with a clear message.
     const probe = await runner.ssh(host, 'command -v docker >/dev/null 2>&1 && echo ok || echo nodocker');
-    if (probe.code !== 0) throw new TeardownAbort(`Could not connect to ${host} (ssh exit ${probe.code}).`);
+    if (probe.code !== 0) throw new TeardownAbort(remoteFailureMessage(host, 'Check for docker', probe));
     if (!probe.stdout.includes('ok')) out('Note: docker was not found on the host — there may be nothing to remove.');
 
     for (const s of steps) await ssh(s.title, s.cmd);

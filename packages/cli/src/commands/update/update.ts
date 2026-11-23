@@ -7,7 +7,8 @@ import { shq } from '../../lib/shell-quote';
 import { buildFetchBundleCommand, classifyFetch, fetchFailureMessage } from '../../lib/bundle-fetch';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { CLI_VERSION } from '../../version';
-import { buildAccessCommand, parseAccess, accessProblem, remoteFailureMessage } from './install-access';
+import { buildAccessCommand, parseAccess, accessProblem } from './install-access';
+import { remoteFailureMessage } from '../../lib/remote-failure';
 import { selfUpdateCli, type SelfUpdateArgs, type SelfUpdateOutcome } from './self-update';
 
 // Self-update touches the real filesystem/network and re-execs the process, so

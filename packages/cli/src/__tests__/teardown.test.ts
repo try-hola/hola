@@ -117,3 +117,39 @@ describe('hola teardown', () => {
     expect(process.exitCode).toBe(1);
   });
 });
+
+describe('hola teardown: remote probe failures (#604)', () => {
+  beforeEach(() => { process.exitCode = 0; });
+  afterEach(() => { process.exitCode = 0; });
+
+  const failing = (r: { code: number; stderr: string }): Runner & { calls: string[] } => {
+    const runner = makeRunner();
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementation(async (_h: string, cmd: string) => {
+      runner.calls.push(cmd);
+      return { code: r.code, stdout: 'POSTGRES_PASSWORD=hunter2\n', stderr: r.stderr };
+    });
+    return runner;
+  };
+  const errorOf = async (runner: Runner) => {
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)); });
+    try {
+      const res = await runTeardown({ host: 'me@vm', yes: true }, { prompter: scriptedPrompter({}), runner });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally { spy.mockRestore(); }
+    return errs.join('\n');
+  };
+
+  it('a non-255 exit is reported as a failed step, not a connection failure, with no stdout', async () => {
+    const msg = await errorOf(failing({ code: 2, stderr: 'sh: oops' }));
+    expect(msg).toContain('"Check for docker" failed on me@vm (exit 2): sh: oops');
+    expect(msg).not.toContain('Could not connect');
+    expect(msg).not.toContain('hunter2');
+  });
+
+  it('exit 255 is still a connection failure', async () => {
+    const msg = await errorOf(failing({ code: 255, stderr: 'Connection refused' }));
+    expect(msg).toContain('Could not connect to me@vm (ssh exit 255): Connection refused');
+  });
+});

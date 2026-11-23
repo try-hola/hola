@@ -24,6 +24,7 @@
 // is written by the pre-upgrade snapshot, so its writability is checked.
 // Root passes every check: it can do all of it.
 
+import { chownGuidance } from '../../lib/remote-failure';
 import { shq } from '../../lib/shell-quote';
 
 export interface InstallAccess {
@@ -118,24 +119,6 @@ export function accessProblem(a: InstallAccess, dir: string, host: string): stri
     `hola update cannot modify the install at ${dir} on ${host} as ${a.user}:\n` +
     problems.map((p) => `  - ${p}`).join('\n') +
     `\n${foreign}` +
-    `This usually means something once ran as root in that directory. The CLI never runs sudo; fix ownership on the host, then re-run:\n` +
-    `  sudo chown -R ${a.user}:${a.group} ${shq(dir)}`
+    chownGuidance(a.user, a.group, dir)
   );
-}
-
-/**
- * Message for a remote step that exited non-zero. ssh itself exits 255 on a
- * connection or authentication failure; any other code is the REMOTE command's,
- * so reporting "could not connect" for it blames the network for a command failure.
- */
-export function remoteFailureMessage(
-  host: string,
-  step: string,
-  r: { code: number; stderr?: string; signal?: string | null },
-): string {
-  const err = (r.stderr ?? '').split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join(' | ');
-  const tail = err ? `: ${err}` : '';
-  if (r.signal) return `Lost the SSH connection to ${host} during "${step}" (killed by ${r.signal}).`;
-  if (r.code === 255) return `Could not connect to ${host} (ssh exit 255)${tail}`;
-  return `"${step}" failed on ${host} (exit ${r.code})${tail}`;
 }

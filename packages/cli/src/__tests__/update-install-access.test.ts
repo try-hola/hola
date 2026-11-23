@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { buildAccessCommand, accessProblem, parseAccess, remoteFailureMessage } from '../commands/update/install-access';
+import { buildAccessCommand, accessProblem, parseAccess } from '../commands/update/install-access';
 import { buildFetchBundleCommand, classifyFetch } from '../lib/bundle-fetch';
 import { shq } from '../lib/shell-quote';
 
@@ -116,14 +116,6 @@ describe('install access probe under a real shell', () => {
   it('returns null (not a verdict) when the marker is absent', () => {
     expect(parseAccess('')).toBeNull();
     expect(parseAccess('Permission denied')).toBeNull();
-  });
-});
-
-describe('remoteFailureMessage', () => {
-  it('255 is a connection failure; other codes name the step; a signal is a lost connection', () => {
-    expect(remoteFailureMessage('h', 's', { code: 255, stderr: 'refused' })).toBe('Could not connect to h (ssh exit 255): refused');
-    expect(remoteFailureMessage('h', 'Read x', { code: 1, stderr: '' })).toBe('"Read x" failed on h (exit 1)');
-    expect(remoteFailureMessage('h', 's', { code: 1, signal: 'SIGKILL' })).toContain('Lost the SSH connection');
   });
 });
 
