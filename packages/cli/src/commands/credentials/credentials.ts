@@ -104,7 +104,7 @@ export async function handoffCredentials(config: ConfigMap, ctx: HandoffContext)
     let apiKey = config.HOLA_API_KEY?.trim() || undefined; // a pinned key needs no fetch
     if (!apiKey) {
       const fetchKey =
-        `cd ${composeDir} && for i in $(seq 1 10); do ` +
+        `cd ${shq(composeDir)} && for i in $(seq 1 10); do ` +
         `k=$(docker compose exec -T server cat /data/config/admin-api-key 2>/dev/null | tr -d '\\r\\n'); ` +
         `[ -n "$k" ] && { printf %s "$k"; break; }; sleep 2; done`;
       apiKey = (await ssh('Retrieve admin API key', fetchKey)).stdout.trim() || undefined;
@@ -168,7 +168,7 @@ export async function handoffCredentials(config: ConfigMap, ctx: HandoffContext)
             default: 'false',
           })) === 'true');
       if (reveal) {
-        const pw = (await ssh('Read akadmin password', `grep '^AUTHENTIK_BOOTSTRAP_PASSWORD=' ${composeDir}/.env | cut -d= -f2-`)).stdout.trim();
+        const pw = (await ssh('Read akadmin password', `grep '^AUTHENTIK_BOOTSTRAP_PASSWORD=' ${shq(composeDir)}/.env | cut -d= -f2-`)).stdout.trim();
         out(pw ? `  akadmin password: ${colors.bold(pw)}` : `  ${colors.yellow('Could not read it')} — re-run with --show-password once the stack is up.`);
       } else {
         out(`  Reveal it later:  ${colors.cyan(`hola credentials --host ${host} --show-password`)}`);
@@ -212,7 +212,7 @@ async function pollRecoveryLink(
   // after, then extract the recovery URL itself (it carries a `flow_token`). Also
   // emit a sentinel if the server logged that it gave up.
   const grab =
-    `cd ${composeDir} && logs=$(docker compose logs --no-color --no-log-prefix server 2>&1); ` +
+    `cd ${shq(composeDir)} && logs=$(docker compose logs --no-color --no-log-prefix server 2>&1); ` +
     `printf '%s\\n' "$logs" | grep -A1 'Hola admin setup' | grep -oE 'https?://[^" ]*flow_token=[^" ]+' | tail -1; ` +
     `printf '%s' "$logs" | grep -qE 'Could not mint admin recovery link|Gave up self-provisioning' && echo ${PROVISION_FAILED}`;
   const spin = createSpinner('Waiting for SSO provisioning to finish…');

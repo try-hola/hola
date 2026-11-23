@@ -10,6 +10,7 @@ import type { CheckResult } from '../../install/checks';
 import { buildFetchBundleCommand, classifyFetch, fetchFailureMessage } from '../../lib/bundle-fetch';
 import { remoteFailureMessage } from '../../lib/remote-failure';
 import { systemRunner, type Runner } from '../../lib/runner';
+import { shq } from '../../lib/shell-quote';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { handoffCredentials } from '../credentials/credentials';
 import { buildVerifyCommand, interpretVerify, verifyMessage } from './verify';
@@ -150,6 +151,9 @@ export async function runBootstrap(
   const dir = opts.dir ?? DEFAULT_DIR;
   const composeDir = dir;
   const envPath = `${composeDir}/.env`;
+  // Shell-quoted forms for remote commands; `dir`/`envPath` stay plain for messages.
+  const qdir = shq(dir);
+  const qEnvPath = `${qdir}/.env`;
   const tarballUrl = opts.tarballUrl ?? `${releaseBase(repo)}/releases/download/${ref}/hola-compose-${version}.tar.gz`;
   const steps: string[] = [];
 
@@ -226,7 +230,7 @@ export async function runBootstrap(
       'for c in docker curl tar; do command -v "$c" >/dev/null 2>&1 && echo "$c=ok" || echo "$c=missing"; done; ' +
       'docker compose version >/dev/null 2>&1 && echo compose=ok || echo compose=missing; ' +
       'docker ps >/dev/null 2>&1 && echo dockerperm=ok || echo dockerperm=fail; ' +
-      `[ -f ${envPath} ] && echo existing_env=present || echo existing_env=absent; ` +
+      `[ -f ${qEnvPath} ] && echo existing_env=present || echo existing_env=absent; ` +
       "docker volume ls -q 2>/dev/null | grep -qE '^hola(_|-)' && echo existing_vol=present || echo existing_vol=absent";
     if (opts.dryRun) {
       await ssh('Preflight host', probe);
@@ -235,7 +239,7 @@ export async function runBootstrap(
       if (opts.reinstall) {
         await ssh(
           'Reset existing install (down -v, remove Hola volumes)',
-          `[ -d ${dir} ] && (cd ${dir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
+          `[ -d ${qdir} ] && (cd ${qdir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
             "docker volume ls -q 2>/dev/null | grep -E '^hola(_|-)' | xargs -r docker volume rm -f 2>/dev/null || true",
         );
       }
@@ -275,7 +279,7 @@ export async function runBootstrap(
         // so the reinstall reuses the existing wildcard cert (no LE rate-limit hit).
         const reset = await ssh(
           'Reset existing install (down -v, remove Hola volumes)',
-          `[ -d ${dir} ] && (cd ${dir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
+          `[ -d ${qdir} ] && (cd ${qdir} && docker compose down -v --remove-orphans) 2>/dev/null || true; ` +
             "docker volume ls -q 2>/dev/null | grep -E '^hola(_|-)' | xargs -r docker volume rm -f 2>/dev/null || true",
           { stream: true },
         );
@@ -292,10 +296,10 @@ export async function runBootstrap(
     //    one-time manual pre-create (no write access and no passwordless sudo).
     const fetchStack =
       `set -e; ` +
-      `if [ ! -d ${dir} ]; then ` +
-      `  parent=$(dirname ${dir}); ` +
-      `  if [ -w "$parent" ]; then mkdir -p ${dir}; ` +
-      `  elif sudo -n true 2>/dev/null; then sudo mkdir -p ${dir} && sudo chown "$(id -u):$(id -g)" ${dir}; ` +
+      `if [ ! -d ${qdir} ]; then ` +
+      `  parent=$(dirname ${qdir}); ` +
+      `  if [ -w "$parent" ]; then mkdir -p ${qdir}; ` +
+      `  elif sudo -n true 2>/dev/null; then sudo mkdir -p ${qdir} && sudo chown "$(id -u):$(id -g)" ${qdir}; ` +
       `  else exit 13; fi; ` +
       `fi; ` +
       // Download to a temp file, then extract without restoring owners (see lib/bundle-fetch.ts, #599).
@@ -320,7 +324,7 @@ export async function runBootstrap(
     }
 
     // 4) Write .env — streamed over stdin so values never appear in argv/ps/history.
-    const writeRes = await ssh('Write .env (over stdin)', `cat > ${envPath} && chmod 600 ${envPath}`, { input: rendered });
+    const writeRes = await ssh('Write .env (over stdin)', `cat > ${qEnvPath} && chmod 600 ${qEnvPath}`, { input: rendered });
     if (!opts.dryRun && writeRes.code !== 0) throw new BootstrapAbort(`Writing ${envPath} failed (exit ${writeRes.code}).`);
 
     // 5) Run the installer. HOLA_BOOTSTRAP=1 silences its credential hints (the
@@ -328,7 +332,7 @@ export async function runBootstrap(
     //    clean table below). Interactively, a single spinner surfaces the latest
     //    compose line instead of scrolling dozens of "Container … Started" lines.
     steps.push('Run install.sh');
-    const installCmd = `cd ${composeDir} && HOLA_BOOTSTRAP=1 ./scripts/install.sh`;
+    const installCmd = `cd ${qdir} && HOLA_BOOTSTRAP=1 ./scripts/install.sh`;
     if (opts.dryRun) {
       out(`# Run install.sh`);
       out(`  ssh ${host} ${installCmd}`);
@@ -345,7 +349,7 @@ export async function runBootstrap(
 
       // Render the running containers as a clean table (interactive runs only).
       if (!opts.json) {
-        const ps = await runner.ssh(host, `cd ${composeDir} && docker compose ps --format json 2>/dev/null`);
+        const ps = await runner.ssh(host, `cd ${qdir} && docker compose ps --format json 2>/dev/null`);
         const table = renderContainerTable(parseComposePs(ps.stdout));
         if (table) out(`\n${table}\n`);
       }

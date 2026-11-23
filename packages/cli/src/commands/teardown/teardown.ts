@@ -1,6 +1,7 @@
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 import { remoteFailureMessage } from '../../lib/remote-failure';
 import { systemRunner, type Runner } from '../../lib/runner';
+import { shq } from '../../lib/shell-quote';
 
 export interface TeardownOptions {
   host?: string;
@@ -46,6 +47,7 @@ export async function runTeardown(
 
   const host = opts.host;
   const dir = opts.dir ?? DEFAULT_DIR;
+  const qdir = shq(dir);
   const vol = opts.keepData ? '' : '-v';
 
   // The remote steps. Force-removing by name/label keeps this robust even if the
@@ -54,7 +56,7 @@ export async function runTeardown(
   const steps: { title: string; cmd: string }[] = [
     {
       title: 'Stop the platform stack',
-      cmd: `[ -d ${dir} ] && (cd ${dir} && docker compose down ${vol} --remove-orphans) 2>/dev/null || true`,
+      cmd: `[ -d ${qdir} ] && (cd ${qdir} && docker compose down ${vol} --remove-orphans) 2>/dev/null || true`,
     },
     {
       title: 'Remove remaining Hola containers',
@@ -76,17 +78,17 @@ export async function runTeardown(
     // doesn't ship acme.json and install.sh keeps an existing one, so a preserved
     // store survives the next install untouched. `--include-certs` wipes it too.
     const wipeDir = opts.includeCerts
-      ? `rm -rf ${dir} 2>/dev/null; `
-      : `acme=${dir}/traefik/acme/acme.json; ` +
-        `if [ -f "$acme" ]; then tmp=$(mktemp); cp "$acme" "$tmp" 2>/dev/null; rm -rf ${dir} 2>/dev/null; ` +
-        `mkdir -p ${dir}/traefik/acme && mv "$tmp" "$acme" 2>/dev/null && chmod 600 "$acme"; else rm -rf ${dir} 2>/dev/null; fi; `;
+      ? `rm -rf ${qdir} 2>/dev/null; `
+      : `acme=${qdir}/traefik/acme/acme.json; ` +
+        `if [ -f "$acme" ]; then tmp=$(mktemp); cp "$acme" "$tmp" 2>/dev/null; rm -rf ${qdir} 2>/dev/null; ` +
+        `mkdir -p ${qdir}/traefik/acme && mv "$tmp" "$acme" 2>/dev/null && chmod 600 "$acme"; else rm -rf ${qdir} 2>/dev/null; fi; `;
     steps.push({
       title: `Remove data and install directories${opts.includeCerts ? '' : ' (keeping TLS certs)'}`,
       // Derive the app data root from the host .env (falls back to the default),
       // and also remove the default /srv/hola parent. App data is written by
       // containers as root, so try sudo -n first.
       cmd:
-        `apps=$(grep -E '^HOLA_APPS_BIND_ROOT=' ${dir}/.env 2>/dev/null | cut -d= -f2- | xargs); apps="\${apps:-/srv/hola/apps}"; ` +
+        `apps=$(grep -E '^HOLA_APPS_BIND_ROOT=' ${qdir}/.env 2>/dev/null | cut -d= -f2- | xargs); apps="\${apps:-/srv/hola/apps}"; ` +
         wipeDir +
         `sudo -n rm -rf "$apps" /srv/hola 2>/dev/null || rm -rf "$apps" /srv/hola 2>/dev/null || true`,
     });
