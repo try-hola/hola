@@ -8,6 +8,7 @@ import { secretKeys, type ConfigMap } from '../../install/schema';
 import { runWizard, WizardError } from '../../install/wizard';
 import type { CheckResult } from '../../install/checks';
 import { buildFetchBundleCommand, classifyFetch, fetchFailureMessage } from '../../lib/bundle-fetch';
+import { remoteFailureMessage } from '../../lib/remote-failure';
 import { systemRunner, type Runner } from '../../lib/runner';
 import { createSpinner, formatComposeLine, parseComposePs, renderContainerTable, colors } from '../../lib/ui';
 import { handoffCredentials } from '../credentials/credentials';
@@ -240,7 +241,7 @@ export async function runBootstrap(
       }
     } else {
       const r = await ssh('Preflight host', probe);
-      if (r.code !== 0) throw new BootstrapAbort(`Could not connect to ${host} (ssh exit ${r.code}).`);
+      if (r.code !== 0) throw new BootstrapAbort(remoteFailureMessage(host, 'Preflight host', r));
       const p = parsePreflight(r.stdout);
       assertPreflight(p);
       out('  host OK (docker, compose, curl/tar, permissions)');

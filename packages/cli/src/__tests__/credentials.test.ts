@@ -1,9 +1,12 @@
+import { spawnSync } from 'child_process';
+import { chmodSync, mkdirSync, mkdtempSync as mkdtempSyncFs, rmSync, writeFileSync } from 'fs';
+import os from 'os';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { runCredentials, formatElapsed } from '../commands/credentials/credentials';
+import { runCredentials, formatElapsed, buildReadEnvCommand } from '../commands/credentials/credentials';
 import { scriptedPrompter } from '../install/prompter';
 import type { Runner } from '../lib/runner';
 
@@ -27,7 +30,7 @@ function makeRunner(envContent: string): Runner & { calls: string[] } {
     calls,
     ssh: vi.fn(async (_host: string, cmd: string) => {
       calls.push(cmd);
-      if (cmd.startsWith('cat ')) return { code: 0, stdout: envContent, stderr: '' };
+      if (cmd.includes('cat -- "$f"')) return { code: 0, stdout: envContent, stderr: '' };
       if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'key-abc', stderr: '' };
       if (cmd.includes('Hola admin setup')) return { code: 0, stdout: 'https://auth.example.com/if/flow/recovery/xyz', stderr: '' };
       if (cmd.includes('AUTHENTIK_BOOTSTRAP_PASSWORD')) return { code: 0, stdout: 'akadmin-secret', stderr: '' };
@@ -86,7 +89,7 @@ describe('hola credentials', () => {
       const runner: Runner & { calls: string[] } = {
         calls: [],
         ssh: vi.fn(async (_h: string, cmd: string) => {
-          if (cmd.startsWith('cat ')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
+          if (cmd.includes('cat -- "$f"')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
           if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'key-abc', stderr: '' };
           if (cmd.includes('Hola admin setup')) {
             attempts += 1;
@@ -114,7 +117,7 @@ describe('hola credentials', () => {
       const runner: Runner & { calls: string[] } = {
         calls: [],
         ssh: vi.fn(async (_h: string, cmd: string) => {
-          if (cmd.startsWith('cat ')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
+          if (cmd.includes('cat -- "$f"')) return { code: 0, stdout: NAMED_ADMIN_ENV, stderr: '' };
           if (cmd.includes('admin-api-key')) return { code: 0, stdout: 'key-abc', stderr: '' };
           // The poll's log grab finds the server's "gave up" sentinel, no link.
           if (cmd.includes('Hola admin setup')) return { code: 0, stdout: '__HOLA_PROVISION_FAILED__\n', stderr: '' };
@@ -166,5 +169,108 @@ describe('hola credentials', () => {
       expect(res?.credsPath).toContain('hola-paul-vm.env');
       expect(res?.apiUrl).toBe('https://apps.example.com');
     });
+  });
+});
+
+describe('hola credentials: reading the host .env (#604)', () => {
+  beforeEach(() => { process.exitCode = 0; });
+  afterEach(() => { process.exitCode = 0; });
+
+  const readOf = async (r: { code: number; stdout?: string; stderr?: string }, opts: { dir?: string } = {}) => {
+    const runner = makeRunner('');
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementation(async (_h: string, cmd: string) => {
+      runner.calls.push(cmd);
+      return { code: r.code, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+    });
+    const errs: string[] = [];
+    const logs: string[] = [];
+    const e = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)); });
+    const l = vi.spyOn(console, 'log').mockImplementation((m?: unknown) => { logs.push(String(m)); });
+    try {
+      const res = await runCredentials({ host: 'paul@vm', json: true, ...opts }, { prompter: scriptedPrompter({}), runner });
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally { e.mockRestore(); l.mockRestore(); }
+    return { err: errs.join('\n'), logs: logs.join('\n'), runner };
+  };
+
+  it('a non-255 failure is a failed step with the stderr tail, never "Could not connect" or stdout', async () => {
+    const { err, logs } = await readOf({ code: 2, stdout: 'POSTGRES_PASSWORD=hunter2\n', stderr: 'cat: I/O error' });
+    expect(err).toContain('"Read install config" failed on paul@vm (exit 2): cat: I/O error');
+    expect(err).not.toContain('Could not connect');
+    expect(err + logs).not.toContain('hunter2');
+  });
+
+  it('exit 255 is still a connection failure', async () => {
+    const { err } = await readOf({ code: 255, stderr: 'Connection timed out' });
+    expect(err).toContain('Could not connect to paul@vm (ssh exit 255): Connection timed out');
+  });
+
+  it('an unreadable .env names the file, the user and the chown fix', async () => {
+    const { err, logs } = await readOf({
+      code: 45,
+      stdout: 'POSTGRES_PASSWORD=hunter2\n',
+      stderr: '__HOLA_ENV_UNREADABLE__ user=paul group=users\n',
+    });
+    expect(err).toContain('Could not read /opt/hola/.env on paul@vm: permission denied for paul.');
+    expect(err).toContain('sudo chown -R paul:users /opt/hola');
+    expect(err).not.toContain('Could not connect');
+    expect(err + logs).not.toContain('hunter2');
+  });
+
+  it('quotes an install dir with a space, in both the read command and the chown', async () => {
+    const { err, runner } = await readOf(
+      { code: 45, stderr: '__HOLA_ENV_UNREADABLE__ user=paul group=users' },
+      { dir: '/srv/my hola' },
+    );
+    expect(runner.calls[0]).toContain("d='/srv/my hola'");
+    expect(err).toContain("sudo chown -R paul:users '/srv/my hola'");
+  });
+
+  it('a missing .env keeps the "No Hola .env found" message', async () => {
+    const { err } = await readOf({ code: 44 });
+    expect(err).toContain('No Hola .env found at /opt/hola/.env on paul@vm. Install first with: hola bootstrap --host paul@vm');
+    expect(err).not.toContain('Could not connect');
+  });
+});
+
+describe('credentials .env read under a real shell (#604)', () => {
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  let tmp: string;
+  beforeEach(() => { tmp = mkdtempSyncFs(join(os.tmpdir(), 'hola-creds-sh-')); });
+  afterEach(() => {
+    spawnSync('chmod', ['-R', 'u+rwx', tmp]);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+  const run = (dir: string) =>
+    spawnSync('sh', ['-c', buildReadEnvCommand(dir)], { env: { PATH: '/usr/bin:/bin' }, encoding: 'utf8' });
+
+  it('reads a readable .env in a dir with a space', () => {
+    const dir = join(tmp, 'my hola');
+    mkdirSync(dir);
+    writeFileSync(join(dir, '.env'), 'HOLA_DOMAIN=x\n');
+    const r = run(dir);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('HOLA_DOMAIN=x\n');
+  });
+
+  it('reports a missing .env as 44', () => {
+    expect(run(tmp).status).toBe(44);
+  });
+
+  it.skipIf(isRoot)('reports an unreadable .env as 45 with the user and group, and prints nothing on stdout', () => {
+    writeFileSync(join(tmp, '.env'), 'SECRET=hunter2\n');
+    chmodSync(join(tmp, '.env'), 0o000);
+    const r = run(tmp);
+    expect(r.status).toBe(45);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toMatch(/^__HOLA_ENV_UNREADABLE__ user=\S+ group=\S+/);
+    expect(r.stderr).not.toContain('hunter2');
+  });
+
+  it.skipIf(isRoot)('reports an unsearchable install dir as 45, not as a missing .env', () => {
+    writeFileSync(join(tmp, '.env'), 'SECRET=hunter2\n');
+    chmodSync(tmp, 0o600);
+    expect(run(tmp).status).toBe(45);
   });
 });

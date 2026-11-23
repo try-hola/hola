@@ -4,7 +4,9 @@ import path from 'path';
 import { clackPrompter, PromptCancelled, type Prompter } from '../../install/prompter';
 import { parseEnv } from '../../install/render-env';
 import type { ConfigMap } from '../../install/schema';
+import { chownGuidance, remoteFailureMessage } from '../../lib/remote-failure';
 import { systemRunner, type Runner } from '../../lib/runner';
+import { shq } from '../../lib/shell-quote';
 import { createSpinner, colors } from '../../lib/ui';
 
 export interface CredentialsOptions {
@@ -27,6 +29,31 @@ export interface CredentialsResult {
 }
 
 const DEFAULT_DIR = '/opt/hola';
+
+// Exit codes the .env read uses to say WHY it did not read, so an unreadable file
+// is not mistaken for a connection failure (#604). stdout carries only the file.
+const ENV_MISSING_EXIT = 44;
+const ENV_UNREADABLE_EXIT = 45;
+const UNREADABLE_MARKER = '__HOLA_ENV_UNREADABLE__';
+
+/** Read `<dir>/.env`, telling "absent" and "not readable by this user" apart from a cat failure. */
+export function buildReadEnvCommand(dir: string): string {
+  return [
+    `d=${shq(dir)}`,
+    `f="$d/.env"`,
+    `if [ -d "$d" ] && [ ! -x "$d" ]; then echo "${UNREADABLE_MARKER} user=$(id -un) group=$(id -gn)" >&2; exit ${ENV_UNREADABLE_EXIT}; fi`,
+    `if [ ! -e "$f" ]; then exit ${ENV_MISSING_EXIT}; fi`,
+    `if [ "$(id -u)" != 0 ] && [ ! -r "$f" ]; then echo "${UNREADABLE_MARKER} user=$(id -un) group=$(id -gn)" >&2; exit ${ENV_UNREADABLE_EXIT}; fi`,
+    `cat -- "$f"`,
+  ].join('; ');
+}
+
+function parseUnreadable(stderr: string): { user: string; group: string } {
+  const line = stderr.split('\n').find((l) => l.startsWith(UNREADABLE_MARKER)) ?? '';
+  const user = /\buser=(\S+)/.exec(line)?.[1] ?? 'the SSH user';
+  const group = /\bgroup=(\S+)/.exec(line)?.[1] ?? user;
+  return { user, group };
+}
 
 /** Filesystem-safe slug for a host (paul@vm → paul-vm), for the local creds filename. */
 export function hostSlug(host: string): string {
@@ -228,9 +255,19 @@ export async function runCredentials(
     if (!host) throw new CredentialsAbort('--host user@vm is required.');
 
     // Read the host's .env to recover the deployment config.
-    const read = await runner.ssh(host, `cat ${composeDir}/.env 2>/dev/null`);
-    if (read.code !== 0) throw new CredentialsAbort(`Could not connect to ${host} (ssh exit ${read.code}).`);
-    const config = parseEnv(read.stdout);
+    const read = await runner.ssh(host, buildReadEnvCommand(composeDir));
+    if (read.code === ENV_UNREADABLE_EXIT) {
+      const who = parseUnreadable(read.stderr);
+      throw new CredentialsAbort(
+        `Could not read ${composeDir}/.env on ${host}: permission denied for ${who.user}.\n` +
+          chownGuidance(who.user, who.group, composeDir),
+      );
+    }
+    // A missing .env is the same "no install here" case as one without HOLA_DOMAIN.
+    if (read.code !== 0 && read.code !== ENV_MISSING_EXIT) {
+      throw new CredentialsAbort(remoteFailureMessage(host, 'Read install config', read));
+    }
+    const config = parseEnv(read.code === 0 ? read.stdout : '');
     if (!config.HOLA_DOMAIN) {
       throw new CredentialsAbort(
         `No Hola .env found at ${composeDir}/.env on ${host}. ` +

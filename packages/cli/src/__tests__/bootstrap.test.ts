@@ -364,3 +364,38 @@ describe('hola bootstrap', () => {
     }
   });
 });
+
+describe('hola bootstrap: preflight probe failures (#604)', () => {
+  beforeEach(() => { process.exitCode = 0; });
+  afterEach(() => { process.exitCode = 0; });
+
+  const errorOf = async (r: { code: number; stderr: string }) => {
+    const runner = makeRunner();
+    const base = (runner.ssh as ReturnType<typeof vi.fn>).getMockImplementation()! as (h: string, c: string, o?: { input?: string }) => Promise<unknown>;
+    (runner.ssh as ReturnType<typeof vi.fn>).mockImplementation(async (h: string, cmd: string, o?: { input?: string }) =>
+      cmd.includes('command -v') ? { code: r.code, stdout: 'POSTGRES_PASSWORD=hunter2\n', stderr: r.stderr } : base(h, cmd, o));
+    const errs: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((m?: unknown) => { errs.push(String(m)); });
+    try {
+      const res = await runBootstrap(
+        { host: 'me@vm', skipChecks: true, json: true },
+        { prompter: scriptedPrompter(answers), runner },
+      );
+      expect(res).toBeUndefined();
+      expect(process.exitCode).toBe(1);
+    } finally { spy.mockRestore(); }
+    return errs.join('\n');
+  };
+
+  it('a non-255 exit is reported as a failed step, not a connection failure, with no stdout', async () => {
+    const msg = await errorOf({ code: 1, stderr: 'docker: command not found' });
+    expect(msg).toContain('"Preflight host" failed on me@vm (exit 1): docker: command not found');
+    expect(msg).not.toContain('Could not connect');
+    expect(msg).not.toContain('hunter2');
+  });
+
+  it('exit 255 is still a connection failure', async () => {
+    const msg = await errorOf({ code: 255, stderr: 'Permission denied (publickey)' });
+    expect(msg).toContain('Could not connect to me@vm (ssh exit 255): Permission denied (publickey)');
+  });
+});
