@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { runUpdate, fetchReleaseNotes, type UpdateResult, type UpdateCheckReport } from '../commands/update/update';
 import { scriptedPrompter } from '../install/prompter';
@@ -205,6 +209,93 @@ describe('hola update', () => {
     expect(order.findIndex((c) => c.includes('HOLA_BACKUP_PATH='))).toBeLessThan(
       order.findIndex((c) => c.includes('--no-same-owner')),
     );
+  });
+
+  // --- Snapshot permissions (#609) -------------------------------------------
+  //
+  // The archive holds `.env` and the whole hola-data volume, so it is a secrets
+  // file. These run the generated command in a real shell: asserting the
+  // command's text would pass for a `chmod` that never takes effect.
+
+  describe('snapshot permissions (#609)', () => {
+    let work: string;
+    beforeEach(() => { work = mkdtempSync(join(tmpdir(), 'hola-snap-')); });
+    afterEach(() => { rmSync(work, { recursive: true, force: true }); });
+
+    const mode = (p: string): number => statSync(p).mode & 0o777;
+
+    /** The exact command `hola update` sends, with the install dir pointed at `work`. */
+    async function snapshotCmd(): Promise<string> {
+      const runner = makeRunner();
+      await runUpdate({ host: 'me@vm', dir: work, json: true }, { prompter: scriptedPrompter({}), runner });
+      return runner.calls.find((c) => c.cmd.includes('HOLA_BACKUP_PATH='))!.cmd;
+    }
+
+    /** Run it locally. `docker` is deliberately off PATH, so the volume capture
+     *  takes its documented warn-and-continue branch; everything else is real. */
+    function run(cmd: string, path = '/usr/bin:/bin') {
+      return spawnSync('/bin/sh', ['-c', cmd], { env: { PATH: path }, encoding: 'utf8' });
+    }
+
+    function seedInstall() {
+      writeFileSync(join(work, '.env'), 'AWS_SECRET_ACCESS_KEY=hunter2\n');
+      chmodSync(join(work, '.env'), 0o644);
+    }
+
+    it('sets umask 077 before anything is created, and states the final mode', async () => {
+      const cmd = await snapshotCmd();
+      expect(cmd.indexOf('umask 077')).toBeGreaterThan(-1);
+      expect(cmd.indexOf('umask 077')).toBeLessThan(cmd.indexOf('mkdir'));
+      expect(cmd.indexOf('umask 077')).toBeLessThan(cmd.indexOf('tar czf'));
+      expect(cmd).toContain('chmod 600 "$archive"');
+    });
+
+    it('creates the backups dir 0700 and the archive 0600 on a fresh host', async () => {
+      seedInstall();
+      const r = run(await snapshotCmd());
+      expect(r.status).toBe(0);
+      const archive = r.stdout.match(/HOLA_BACKUP_PATH=(.+)/)![1]!.trim();
+      expect(existsSync(archive)).toBe(true);
+      expect(mode(join(work, 'backups'))).toBe(0o700);
+      expect(mode(archive)).toBe(0o600);
+    });
+
+    it('re-tightens an existing world-readable dir and earlier snapshots, leaving other files alone', async () => {
+      seedInstall();
+      const bdir = join(work, 'backups');
+      mkdirSync(bdir);
+      chmodSync(bdir, 0o755);
+      const old = join(bdir, 'pre-update-0.9.1-20260816T114459Z.tar.gz');
+      writeFileSync(old, 'x'); chmodSync(old, 0o644);
+      const other = join(bdir, 'operator-notes.txt');
+      writeFileSync(other, 'mine'); chmodSync(other, 0o644);
+
+      const r = run(await snapshotCmd());
+      expect(r.status).toBe(0);
+      expect(mode(bdir)).toBe(0o700);
+      expect(mode(old)).toBe(0o600);
+      // Only `pre-update-*.tar.gz` is ours to restrict.
+      expect(mode(other)).toBe(0o644);
+    });
+
+    it('does not abort the snapshot when tightening fails — it warns and still writes a private archive', async () => {
+      seedInstall();
+      // A `chmod` that always fails stands in for files owned by another user
+      // (e.g. a root-owned leftover from a sudo run, #599).
+      const bin = join(work, 'bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'chmod'), '#!/bin/sh\nexit 1\n');
+      chmodSync(join(bin, 'chmod'), 0o755);
+
+      const r = run(await snapshotCmd(), `${bin}:/usr/bin:/bin`);
+      expect(r.status).toBe(0);
+      expect(r.stderr).toContain('WARN: could not restrict');
+      const archive = r.stdout.match(/HOLA_BACKUP_PATH=(.+)/)![1]!.trim();
+      expect(existsSync(archive)).toBe(true);
+      // umask alone made it private; no chmod was needed or available.
+      expect(mode(archive)).toBe(0o600);
+      expect(readdirSync(join(work, 'backups')).some((f) => f.endsWith('.tar.gz'))).toBe(true);
+    });
   });
 
   it('--no-backup (backup=false) skips the snapshot entirely', async () => {

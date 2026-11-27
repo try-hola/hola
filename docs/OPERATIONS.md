@@ -797,6 +797,19 @@ halts. App data lives under app-owned bind mounts and is **not** captured by def
 (it's large and `update` doesn't recreate app stacks); pass `--backup-app-data` to
 include the app-data bind root, or `--no-backup` to skip the snapshot entirely.
 
+**The snapshot is a secrets file.** It holds `.env` (DNS-provider keys, the
+Authentik database password) and the whole `hola-data` volume — the admin API
+key, every app's `runtime/.env`, and any stored registry credentials (tokens kept
+only base64-encoded). `update` therefore creates `<dir>/backups` as `0700` and each
+archive as `0600`, and **re-tightens** the snapshots an older version left
+world-readable the next time you run it (only `pre-update-*.tar.gz` — other files
+in that directory are not touched). If a directory or archive is owned by another
+user (for example left behind by a `sudo` run) it cannot be changed and `update`
+warns instead of stopping; fix the ownership with `chown`. Treat the archives like
+the `.env` they contain: revoking a token upstream does not remove it from an
+older snapshot, so delete snapshots you no longer need, and do not copy them
+somewhere less protected than the host.
+
 Keep the **same install dir** (`--dir`) across upgrades. The Let's Encrypt cert
 store is a dir-relative bind mount (`traefik/acme/acme.json`), so relocating the
 dir starts with an empty store and re-issues every cert.
