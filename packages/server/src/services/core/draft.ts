@@ -639,7 +639,18 @@ export class RealDraftService implements DraftService {
     // Validate up front (#428) so a malformed channel fails before any catalog
     // call, matching INVALID_CHANNEL's other raise site (the deployment PATCH).
     const requestedChannel = assertValidChannelName(request.channel);
-    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source, channel: requestedChannel });
+    this.logger.info('Creating draft', { draftId, appId: request.appId, version: request.version, source, channel: requestedChannel, credentialRef: request.credentialRef });
+
+    // A credential named on a catalog install is for the app's private RUNTIME
+    // image (the bundle itself is authenticated by the source's own `auth`). It
+    // rides the draft into the finalized manifest, where the deploy job reads it
+    // to pull the image. Resolve it here, as install-by-ref does, so a typo or a
+    // since-deleted credential fails now naming the id, not minutes later as a
+    // registry auth error at `compose pull`.
+    if (request.credentialRef) {
+      const credentials = await this.registryCredentials?.resolve(request.credentialRef);
+      if (!credentials) throw new ValidationError(`Unknown registry credential: ${request.credentialRef}`);
+    }
 
     try {
       // Get app info from catalog (from the requested source, default `hola`)

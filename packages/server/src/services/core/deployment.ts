@@ -539,6 +539,11 @@ export interface DeploymentService extends HealthCheckable {
    *  Not surfaced on the public DeploymentDetail; the promote/upgrade flow needs
    *  it to rebuild the draft from the same source the app came from (#340). */
   getDeploymentSource(deploymentId: string): Promise<string>;
+  /** The stored registry credential the active release pulls its runtime image
+   *  with, if the install named one. The promote/upgrade flow carries it onto
+   *  the draft it rebuilds, as it does the source — otherwise the new release
+   *  would finalize with no credential and fail at `compose pull`. */
+  getDeploymentCredentialRef(deploymentId: string): Promise<string | undefined>;
   /**
    * Resolve the upgrade target version + the deployment's channel (#428).
    * Default target (`requested` omitted) is the channel-filtered
@@ -1293,6 +1298,12 @@ abstract class InMemoryDeploymentService implements DeploymentService {
   async getDeploymentSource(deploymentId: string): Promise<string> {
     await this.ensureLoaded();
     return this.requireDeployment(deploymentId).metadata?.source ?? 'hola';
+  }
+
+  /** In-memory/mock deployments stage no manifests, so there is no credential. */
+  async getDeploymentCredentialRef(deploymentId: string): Promise<string | undefined> {
+    void deploymentId;
+    return undefined;
   }
 
   /**
@@ -3681,6 +3692,11 @@ export class RealDeploymentService extends InMemoryDeploymentService {
    * that no longer resolves (credential deleted after install) throws with a clear
    * message rather than surfacing a raw docker auth error later.
    */
+  override async getDeploymentCredentialRef(deploymentId: string): Promise<string | undefined> {
+    await this.ensureLoaded();
+    return (await this.readActiveManifest(this.requireDeployment(deploymentId)))?.credentialRef;
+  }
+
   private async resolveRegistryAuth(deployment: EnhancedDeploymentDetail): Promise<PullCredentials[] | undefined> {
     const releaseId = deployment.currentReleaseId;
     if (!releaseId) return undefined;

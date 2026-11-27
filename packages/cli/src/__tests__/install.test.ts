@@ -443,6 +443,25 @@ describe('install', () => {
     expect(sdk.drafts.create).toHaveBeenCalledWith({ appId: 'gitea', version: 'latest', channel: 'rc' });
   });
 
+  // --- Registry credential on a catalog install ---
+
+  it('--registry-cred reaches drafts.create as credentialRef on a catalog install', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { source: 'acme', registryCred: 'acme-ghcr', noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    // The credential is for the app's private runtime image; it must ride the
+    // draft (the finalized manifest is what the deploy job pulls with).
+    expect(sdk.drafts.create).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'gitea', source: 'acme', credentialRef: 'acme-ghcr',
+    }));
+  });
+
+  it('sends no credentialRef at all when --registry-cred is not given', async () => {
+    const sdk = makeSdk();
+    await runInstall('gitea', { noStream: true }, { sdk: sdk as unknown as HolaSdk });
+    const [arg] = sdk.drafts.create.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect('credentialRef' in arg).toBe(false);
+  });
+
   it('--as maps to name', async () => {
     const sdk = makeSdk();
     await runInstall('gitea', { as: 'gitea-beta', noStream: true }, { sdk: sdk as unknown as HolaSdk });
