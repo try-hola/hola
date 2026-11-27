@@ -635,6 +635,16 @@ const dq = (v: string): string => { const q = shq(v); return q === v ? `"${v}"` 
  * path behind BACKUP_PATH_MARKER. The `hola-data` capture is best-effort (warns if
  * the server container isn't running) so operator config is still snapshotted; the
  * large app-data tree is added straight from its path (no double-copy).
+ *
+ * The archive is a secrets file: it holds `.env` (DNS-provider keys, the Authentik
+ * database password) and the whole `hola-data` volume (the admin API key, every
+ * app's `runtime/.env`, stored registry credentials). So everything it creates is
+ * owner-only by construction (`umask 077`), and the step ALSO tightens what a
+ * previous version of this command left behind — a host that was upgraded with
+ * world-readable snapshots is fixed by upgrading again, not by hand (#609). The
+ * tightening is best-effort and loud: a directory or archive owned by someone else
+ * (a root-owned leftover from a `sudo` run, #599) cannot be chmod'ed by this user
+ * and must not stop the snapshot, whose own file is private regardless.
  */
 function backupCmd(
   dir: string,
@@ -644,9 +654,17 @@ function backupCmd(
   const safeFrom = (fromVersion ?? 'unknown').replace(/[^A-Za-z0-9._-]/g, '_');
   const lines = [
     'set -e',
+    // Before anything is created: the staging copy, the backups dir (when new) and
+    // the archive are all owner-only without relying on a later chmod.
+    'umask 077',
     `ts=$(date -u +%Y%m%dT%H%M%SZ)`,
     `bdir=${shq(dir)}/backups`,
     `mkdir -p "$bdir"`,
+    // Re-tighten an existing directory and the snapshots earlier versions left
+    // world-readable. Only `pre-update-*.tar.gz` — never other files an operator
+    // keeps there. Warn, don't abort, when we don't own them.
+    `chmod 700 "$bdir" 2>/dev/null || echo "WARN: could not restrict $bdir to owner-only (is it owned by another user?)" >&2`,
+    `find "$bdir" -maxdepth 1 -type f -name 'pre-update-*.tar.gz' -exec chmod 600 {} + 2>/dev/null || echo "WARN: could not restrict some existing snapshots in $bdir to owner-only" >&2`,
     `stage=$(mktemp -d)`,
     `trap 'rm -rf "$stage"' EXIT`,
     `if [ -f ${shq(dir)}/.env ]; then cp -p ${shq(dir)}/.env "$stage/.env"; fi`,
@@ -665,6 +683,9 @@ function backupCmd(
   } else {
     lines.push(`tar czf "$archive" -C "$stage" .`);
   }
+  // `umask 077` already made it 0600; this states the intent and survives a tar
+  // that ever sets its own mode.
+  lines.push(`chmod 600 "$archive" || echo "WARN: could not restrict $archive to owner-only" >&2`);
   lines.push(`echo "${BACKUP_PATH_MARKER}$archive"`);
   return lines.join('; ');
 }
