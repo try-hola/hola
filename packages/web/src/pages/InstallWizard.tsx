@@ -309,7 +309,9 @@ export const InstallWizard: React.FC = () => {
 
   // Install-by-ref mode: `/install/ref?ref=<oci>&cred=<credentialId>`. The wizard
   // is otherwise identical — the draft is seeded from the pulled bundle instead of
-  // a catalog index entry.
+  // a catalog index entry. `cred` also applies to a catalog install
+  // (`/install/<app>?source=…&cred=<credentialId>`): it names the stored
+  // credential the app's private runtime image is pulled with.
   const ociRef = searchParams.get('ref') || undefined;
   const credentialRef = searchParams.get('cred') || undefined;
   // Catalog source the app comes from (Slice 2); defaults to the built-in `hola`.
@@ -532,7 +534,7 @@ export const InstallWizard: React.FC = () => {
   const createAndSeedDraft = async (channelArg: string | undefined) => {
     const result = ociRef
       ? await createDraftHook.createDraft({ ociRef, credentialRef })
-      : await createDraftHook.createDraft({ appId, source, channel: channelArg, restoreFrom: restoreChoiceRef.current });
+      : await createDraftHook.createDraft({ appId, source, channel: channelArg, restoreFrom: restoreChoiceRef.current, credentialRef });
 
     // Auto-fill empty secrets that carry a manifest `generate` recipe —
     // these are machine tokens (runner registration keys, app secret

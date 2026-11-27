@@ -14,7 +14,8 @@ export interface InstallOptions {
   noStream?: boolean;
   json?: boolean;
   strict?: boolean;
-  /** From `--registry-cred`: stored credential id for a private OCI ref install. */
+  /** From `--registry-cred`: stored credential id for pulling the app's private
+   *  runtime image — on an OCI ref install, and on a catalog install alike. */
   registryCred?: string;
   /** From `--source`: catalog source id to install from (default: hola). */
   source?: string;
@@ -346,8 +347,15 @@ export async function runInstall(
       draftId = (await sdk.installFromRef({ ociRef: rawAppId, credentialRef: opts.registryCred })).draftId;
     } else {
       const from = opts.source && opts.source !== 'hola' ? ` (source: ${opts.source})` : '';
-      out(`Creating draft for ${appId}@${version} (from catalog${from})`);
-      draftId = ((await sdk.drafts.create({ appId, version, source: opts.source, channel: opts.channel, ...(restoreFrom ? { restoreFrom } : {}) })) as CreateDraftResponse).draftId;
+      out(`Creating draft for ${appId}@${version} (from catalog${from}${opts.registryCred ? `, credential: ${opts.registryCred}` : ''})`);
+      // The credential is for the app's private RUNTIME image: it rides the draft
+      // into the finalized manifest, which the deploy job reads at `compose pull`.
+      // (The bundle itself is authenticated by the catalog source's own `auth`.)
+      draftId = ((await sdk.drafts.create({
+        appId, version, source: opts.source, channel: opts.channel,
+        ...(opts.registryCred ? { credentialRef: opts.registryCred } : {}),
+        ...(restoreFrom ? { restoreFrom } : {}),
+      })) as CreateDraftResponse).draftId;
       if (restoreFrom) out(`Restoring from ${restoreFrom.candidateId} (carrying configuration: ${restoreFrom.carryEnv ? 'yes' : 'no'}).`);
     }
 

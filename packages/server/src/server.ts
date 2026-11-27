@@ -1505,7 +1505,12 @@ export async function route(url: URL, req: Request): Promise<Response> {
       // deployment's channel sticky through the draft/finalize round-trip so an
       // upgrade never implicitly changes what the deployment follows.
       const source = await services.deployments.getDeploymentSource(deploymentId);
-      const draft = await services.drafts.createDraft({ appId, version: targetVersion, source, channel });
+      // The registry credential the install named (for a private runtime image)
+      // must ride the rebuilt draft too: it is what the finalized manifest —
+      // and so the deploy job's `compose pull` — reads it from. Without it the
+      // upgraded release has no credential and fails at the image pull.
+      const credentialRef = await services.deployments.getDeploymentCredentialRef(deploymentId);
+      const draft = await services.drafts.createDraft({ appId, version: targetVersion, source, channel, credentialRef });
       try {
         const carried = await services.deployments.getActiveConfig(deploymentId);
         const draftDetail = await services.drafts.getDraft(draft.draftId);

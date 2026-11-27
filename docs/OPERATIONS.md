@@ -159,6 +159,32 @@ hola registry-cred add --registry ghcr.io/myorg --username <user> --token <PAT> 
 hola install <appId> --registry-cred myorg-ghcr
 ```
 
+##### A private runtime image in a catalog app
+
+The bundle (`compose.yaml` + `manifest.json`) and the container images it names
+are separate pulls, and can live in different namespaces or have different
+visibility — e.g. a public bundle in `ghcr.io/myorg/hola-*` whose compose
+references a private image in `ghcr.io/otherorg/*`. The bundle is pulled with the
+catalog source's own `auth` (if any); the **image** is pulled with the credential
+named at install:
+
+```bash
+hola registry-cred add --registry ghcr.io/myorg --username <user> --token <PAT> --id myorg-ghcr
+hola install <appId> --source myorg --registry-cred myorg-ghcr
+```
+
+The dashboard equivalent is `?cred=<id>` on the install wizard URL
+(`/install/<appId>?source=myorg&cred=myorg-ghcr`). The credential is validated
+when the draft is created, so an unknown id fails immediately
+(`Unknown registry credential: <id>`) rather than at the image pull, and it is
+recorded on the release: **an upgrade carries it forward** onto the new release,
+and a rollback re-uses the one the target release recorded.
+
+The registry credential authenticates by registry **host** (`ghcr.io`), not by
+path, so one credential covers every namespace on that host the token can read.
+Use a classic PAT with only `read:packages` — GHCR does not accept fine-grained
+tokens — and, if the organization enforces SAML SSO, authorize the token for it.
+
 For a **public** package in a first-party namespace (no token needed), either
 extend the baseline allowlist in the host `.env`:
 
